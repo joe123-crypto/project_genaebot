@@ -3,7 +3,7 @@
 # Used by cron job: checks daily and reports if anything changed
 
 ISSUE_URL="https://api.github.com/repos/openclaw/openclaw/issues/88472"
-DEFAULT_STATE_DIR="/home/joseph/.openclaw/workspace/cron/github-issue-tracker"
+DEFAULT_STATE_DIR="/home/joseph/.openclaw/runtime/cron-state/github-issue-tracker"
 STATE_FILE="${OPENCLAW_GITHUB_ISSUE_TRACKER_STATE:-$DEFAULT_STATE_DIR/state.json}"
 STATE_DIR="$(dirname "$STATE_FILE")"
 

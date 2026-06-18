@@ -17,6 +17,13 @@ definitions, deployment files, or OpenClaw config by hand.
 - `openclaw-cap account-link status --phone +213...`
 - Add `--dry-run` when you only need to verify the request shape.
 
+## Public News
+
+- `openclaw-cap public-news register --phone +213... AI scholarships Algeria`
+- `openclaw-cap public-news disable --phone +213...`
+- `openclaw-cap public-news list-enabled --allowlisted-only`
+- `openclaw-cap public-news record-delivery --phone +213... --status delivered`
+
 ## Cron Jobs
 
 - `openclaw-cap cron run algeria-exhibitions --dry-run`

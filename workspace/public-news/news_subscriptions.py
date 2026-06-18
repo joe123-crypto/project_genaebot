@@ -15,7 +15,12 @@ import tempfile
 from datetime import datetime, timezone
 
 
-DEFAULT_REGISTRY = pathlib.Path(__file__).with_name("subscriptions.json")
+DEFAULT_REGISTRY = pathlib.Path(
+    os.environ.get(
+        "OPENCLAW_PUBLIC_NEWS_REGISTRY",
+        "/home/joseph/.openclaw/runtime/public-news/subscriptions.json",
+    )
+)
 DEFAULT_OPENCLAW_CONFIG = pathlib.Path("/home/joseph/.openclaw/openclaw.json")
 
 

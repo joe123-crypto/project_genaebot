@@ -7,7 +7,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOG_FILE="${WEBETU_NOTIFY_LOG_FILE:-$SCRIPT_DIR/notification.log}"
+LOG_FILE="${WEBETU_NOTIFY_LOG_FILE:-/home/joseph/.openclaw/runtime/cron-state/webetu-meals/notification.log}"
 WORKER="${WEBETU_WORKER_BIN:-/home/joseph/projects/webetu/webetu-worker/bin/webetu-worker}"
 WORKER_CONFIG="${WEBETU_WORKER_CONFIG:-/home/joseph/projects/webetu/webetu-worker/config/webetu-worker.example.json}"
 WORKER_MODE="${WEBETU_WORKER_MODE:-sudo}"

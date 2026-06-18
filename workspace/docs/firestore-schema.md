@@ -573,7 +573,7 @@ Current local sources to migrate:
 - Agent Genaie Gmail tokens: `/home/joseph/projects/agent_genaie/data/tokens.json`
 - Webetu user registry: `/var/lib/webetu-worker/users.sqlite`
 - Webetu per-user state: `/var/lib/webetu-worker/wa-*.json`
-- Public news subscriptions: `/home/joseph/.openclaw/workspace/public-news/subscriptions.json`
+- Public news subscriptions: `/home/joseph/.openclaw/runtime/public-news/subscriptions.json`
 - Job tracker: `/home/joseph/.openclaw/workspace/jobs/tracker.json`
 - Cron jobs/state/runs: `/home/joseph/.openclaw/cron/jobs.json`, `jobs-state.json`, `runs/*.jsonl`
 - Passbolt: migrate only operational references into `credentialRefs`; do not make Firestore schema depend on Passbolt tables.

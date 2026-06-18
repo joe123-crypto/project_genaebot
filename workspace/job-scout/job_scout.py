@@ -36,6 +36,10 @@ PUBLIC_DISPATCH_FAILURE_MESSAGE = (
   "Job Scout could not finish today's job check because the service failed. "
   "I recorded it and will try again on the next run."
 )
+os.environ.setdefault(
+  "OPENCLAW_PENDING_LINKS_PATH",
+  "/home/joseph/.openclaw/runtime/account-link/pending-links.json",
+)
 ACCOUNT_LINK_DIR = WORKSPACE / "account-link"
 if str(ACCOUNT_LINK_DIR) not in sys.path:
   sys.path.insert(0, str(ACCOUNT_LINK_DIR))
@@ -110,7 +114,10 @@ def effective_user() -> str:
 
 def pending_links_path() -> Path:
   return Path(
-    os.environ.get("OPENCLAW_PENDING_LINKS_PATH", str(ACCOUNT_LINK_DIR / "pending-links.json"))
+    os.environ.get(
+      "OPENCLAW_PENDING_LINKS_PATH",
+      "/home/joseph/.openclaw/runtime/account-link/pending-links.json",
+    )
   ).expanduser()
 
 

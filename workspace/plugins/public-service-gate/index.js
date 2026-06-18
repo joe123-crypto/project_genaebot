@@ -12,8 +12,8 @@ const DEFAULT_PUBLIC_USER_SCRIPT = "~/.openclaw/workspace/whatsapp-public-user.p
 const DEFAULT_WORKER_SAFE_SCRIPT = "/usr/local/bin/webetu-worker-safe";
 const DEFAULT_WORKER_SAFE_USER = "webetu-worker";
 const DEFAULT_WORKER_SUDO_COMMAND = "sudo";
-const DEFAULT_PENDING_LINKS_PATH = "/home/joseph/.openclaw/workspace/tmp/pending-links.json";
-const DEFAULT_SERVICE_STATE_PATH = "/home/joseph/.openclaw/workspace/tmp/public-service-state.json";
+const DEFAULT_PENDING_LINKS_PATH = "/home/joseph/.openclaw/runtime/account-link/pending-links.json";
+const DEFAULT_SERVICE_STATE_PATH = "/home/joseph/.openclaw/runtime/public-service-gate/state.json";
 const RELEVANCE_GATE_ID = "whatsapp-relevance-gate";
 const DEFAULT_GREETING = `Hello there, welcome to OpenClaw Service Desk. We help with:
 

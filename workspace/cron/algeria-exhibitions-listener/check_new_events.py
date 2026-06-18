@@ -37,10 +37,9 @@ from datetime import datetime, date, timedelta
 
 API_BASE = "https://www.algeriaexhibitions.dz/en/wp-json/wp/v2/event"
 EVENT_PAGE = "https://www.algeriaexhibitions.dz/en/event/{slug}/"
-DEFAULT_STATE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATE_FILE = os.environ.get(
     "OPENCLAW_ALGERIA_EXHIBITIONS_STATE",
-    os.path.join(DEFAULT_STATE_DIR, "state.json"),
+    "/home/joseph/.openclaw/runtime/cron-state/algeria-exhibitions-listener/state.json",
 )
 GROUP_TARGET = "120363429214832655@g.us"
 BATCH_SIZE = 10

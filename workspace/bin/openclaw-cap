@@ -10,6 +10,7 @@ usage() {
 Usage:
   openclaw-cap users <add|remove|list|sync|check> [args...]
   openclaw-cap account-link <create-invite|status> [args...]
+  openclaw-cap public-news <register|disable|list-enabled|record-delivery> [args...]
   openclaw-cap cron run <algeria-exhibitions|github-issue-tracker|webetu-meals> [--dry-run]
   openclaw-cap webetu <lookup-user|check-credentials|reserve> --phone <phone> [--dry-run]
 EOF
@@ -26,7 +27,8 @@ ensure_runtime() {
     "$RUNTIME/cron-state/algeria-exhibitions-listener" \
     "$RUNTIME/cron-state/github-issue-tracker" \
     "$RUNTIME/cron-state/webetu-meals" \
-    "$RUNTIME/public-news"
+    "$RUNTIME/public-news" \
+    "$RUNTIME/public-service-gate"
 }
 
 cmd_users() {
@@ -51,6 +53,20 @@ cmd_account_link() {
       ;;
     *)
       die "unsupported account-link subcommand: $1"
+      ;;
+  esac
+}
+
+cmd_public_news() {
+  [ "$#" -ge 1 ] || die "public-news requires a subcommand"
+  case "$1" in
+    register|disable|list-enabled|record-delivery)
+      ensure_runtime
+      export OPENCLAW_PUBLIC_NEWS_REGISTRY="$RUNTIME/public-news/subscriptions.json"
+      exec python3 "$WORKSPACE/public-news/news_subscriptions.py" "$@"
+      ;;
+    *)
+      die "unsupported public-news subcommand: $1"
       ;;
   esac
 }
@@ -126,6 +142,10 @@ main() {
     account-link)
       shift
       cmd_account_link "$@"
+      ;;
+    public-news)
+      shift
+      cmd_public_news "$@"
       ;;
     cron)
       shift
