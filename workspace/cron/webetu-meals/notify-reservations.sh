@@ -19,7 +19,18 @@ if [ -f "$OPENCLAW_HOME/openclaw.json" ]; then
 else
   OPENCLAW_CONFIG="${OPENCLAW_CONFIG:-$OPENCLAW_HOME/.openclaw/openclaw.json}"
 fi
-OPENCLAW_BIN="${OPENCLAW_BIN:-/home/joseph/.npm-global/bin/openclaw}"
+OPENCLAW_BIN="${OPENCLAW_BIN:-}"
+if [ -z "$OPENCLAW_BIN" ]; then
+  if command -v openclaw >/dev/null 2>&1; then
+    OPENCLAW_BIN="$(command -v openclaw)"
+  elif [ -x /home/joseph/.npm-global/bin/openclaw ]; then
+    OPENCLAW_BIN="/home/joseph/.npm-global/bin/openclaw"
+  elif [ -x /usr/local/bin/openclaw ]; then
+    OPENCLAW_BIN="/usr/local/bin/openclaw"
+  else
+    OPENCLAW_BIN="openclaw"
+  fi
+fi
 OPENCLAW_RUN_USER="${OPENCLAW_RUN_USER:-joseph}"
 ADMIN_TARGET="${WEBETU_ADMIN_TARGET:-+213563719936}"
 DRY_RUN="${WEBETU_NOTIFY_DRY_RUN:-0}"
