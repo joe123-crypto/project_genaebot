@@ -1,0 +1,124 @@
+# Default-deny repository policy.
+# Track deterministic developer-owned source/config templates only.
+*
+
+# Repository metadata.
+!.gitignore
+!README.md
+
+# New deterministic deployment/config surface.
+!config/
+!config/**
+!deploy/
+!deploy/**
+
+# Agent identity/context docs.
+!workspace/
+!workspace/AGENTS.md
+!workspace/HEARTBEAT.md
+!workspace/IDENTITY.md
+!workspace/MEMORY.md
+!workspace/README.md
+!workspace/SOUL.md
+!workspace/TOOLS.md
+!workspace/USER.md
+
+# Developer-controlled command/source files.
+!workspace/bin/
+!workspace/bin/**
+!workspace/lib/
+!workspace/lib/*.py
+!workspace/*.py
+
+# Plugins are source-controlled deployment artifacts.
+!workspace/plugins/
+!workspace/plugins/**
+
+# Cron definitions are tracked, runtime state/logs are not.
+!workspace/cron/
+!workspace/cron/*/
+!workspace/cron/*/*.py
+!workspace/cron/*/*.sh
+
+# Service docs and source helpers.
+!workspace/docs/
+!workspace/docs/**
+!workspace/account-link/
+!workspace/account-link/*.py
+!workspace/public-news/
+!workspace/public-news/*.py
+!workspace/webetu-preferences/
+!workspace/webetu-preferences/*.py
+!workspace/job-scout/
+!workspace/job-scout/*.py
+!workspace/job-scout/scrapers/
+!workspace/job-scout/scrapers/*.py
+
+# Custom skills that are not purely reinstallable from package metadata.
+!workspace/skills/
+!workspace/skills/genaie-mail/
+!workspace/skills/genaie-mail/**
+!workspace/skills/gog/
+!workspace/skills/gog/**
+!workspace/skills/job-scout/
+!workspace/skills/job-scout/SKILL.md
+!workspace/skills/pdf-edit/
+!workspace/skills/pdf-edit/SKILL.md
+!workspace/skills/pdf-edit/pdf_edit.py
+!workspace/skills.lock.json
+
+# Never track generated/runtime/private content, even under allowed dirs.
+.git/
+workspace/.git/
+**/.git/
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.venv/
+**/node_modules/
+**/*.log
+**/*.sqlite
+**/*.sqlite-*
+**/*.db
+**/*.tmp
+**/*.bak
+**/*.bak-*
+**/*.last-good
+**/*.pre-update*
+**/state.json
+**/pending-links.json
+**/subscriptions.json
+**/dispatch-runs/
+**/users/
+**/job-scout-data/
+workspace/memory/
+workspace/tmp/
+workspace/jobs/
+workspace/invites/
+credentials/
+identity/
+devices/
+agents/
+memory/
+logs/
+state/
+plugin-state/
+flows/
+tasks/
+delivery-queue/
+media/
+npm/
+browser/
+cache/
+voice-calls/
+openclaw-runtime*
+openclaw.json
+openclaw.json*
+.env
+.env*
+gateway.systemd.env
+exec-approvals.json
+update-check.json
+gateway-supervisor-restart-handoff.json
+workspace-attestations/
+gitclaw/

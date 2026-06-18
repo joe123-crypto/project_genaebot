@@ -1,0 +1,68 @@
+{
+  "id": "whatsapp-relevance-gate",
+  "name": "WhatsApp Relevance Gate",
+  "description": "Blocks inbound WhatsApp messages unrelated to the agent's services before agent dispatch.",
+  "version": "0.1.0",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean"
+      },
+      "bypassUsers": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "serviceSummary": {
+        "type": "string"
+      },
+      "serviceKeywords": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "serviceExamples": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "shortContinuationKeywords": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "restaurantNameKeywords": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "rejectionMessage": {
+        "type": "string"
+      },
+      "useLlmFallback": {
+        "type": "boolean"
+      },
+      "llmMaxTokens": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "failOpen": {
+        "type": "boolean"
+      },
+      "maxTextLength": {
+        "type": "integer",
+        "minimum": 1
+      }
+    }
+  }
+}

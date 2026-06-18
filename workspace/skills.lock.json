@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "customSkills": [
+    {
+      "name": "genaie-mail",
+      "path": "workspace/skills/genaie-mail"
+    },
+    {
+      "name": "gog",
+      "path": "workspace/skills/gog"
+    },
+    {
+      "name": "job-scout",
+      "path": "workspace/skills/job-scout"
+    },
+    {
+      "name": "pdf-edit",
+      "path": "workspace/skills/pdf-edit"
+    }
+  ],
+  "excluded": [
+    {
+      "name": "gitclaw",
+      "reason": "Retired because this deployment uses manual Git commits and pushes."
+    }
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "agents": {
+    "defaults": {
+      "workspace": "/home/joseph/.openclaw/agent-workspace"
+    }
+  },
+  "gateway": {
+    "auth": {
+      "mode": "token",
+      "token": {
+        "source": "env",
+        "provider": "dotenv",
+        "id": "GATEWAY_AUTH_TOKEN"
+      }
+    },
+    "bind": "loopback",
+    "mode": "local",
+    "tailscale": {
+      "mode": "off"
+    }
+  },
+  "plugins": {
+    "load": {
+      "paths": [
+        "/home/joseph/.openclaw/workspace/plugins/public-service-gate",
+        "/home/joseph/.openclaw/workspace/plugins/whatsapp-relevance-gate"
+      ]
+    }
+  },
+  "secrets": {
+    "providers": {
+      "dotenv": {
+        "source": "env",
+        "allowlist": [
+          "AI_GATEWAY_API_KEY",
+          "GATEWAY_AUTH_TOKEN",
+          "AGENT_GENAI_INTERNAL_API_KEY",
+          "JSEARCH_API_KEY",
+          "JSEARCH_RAPIDAPI_KEY",
+          "JSEARCH_RAPIDAPI_HOST",
+          "JSEARCH_PROVIDER"
+        ]
+      }
+    }
+  },
+  "tools": {
+    "elevated": {
+      "enabled": false
+    }
+  }
+}

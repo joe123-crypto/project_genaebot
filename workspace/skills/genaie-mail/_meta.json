@@ -1,0 +1,9 @@
+{
+  "name": "genaie-mail",
+  "description": "Send Gmail messages through the Agent Genaie app bridge.",
+  "requires": {
+    "bins": [
+      "/home/joseph/.openclaw/workspace/bin/genaie-mail"
+    ]
+  }
+}

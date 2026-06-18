@@ -1,0 +1,69 @@
+{
+  "id": "public-service-gate",
+  "name": "Public Service Gate",
+  "description": "Handles deterministic public WhatsApp greetings before agent dispatch.",
+  "version": "0.1.0",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean"
+      },
+      "publicUsers": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "whatsappAdminUsers": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "invitesEnabled": {
+        "type": "boolean"
+      },
+      "botWhatsappNumber": {
+        "type": "string"
+      },
+      "inviteRequiredText": {
+        "type": "string"
+      },
+      "invitePendingText": {
+        "type": "string"
+      },
+      "inviteUnlockedText": {
+        "type": "string"
+      },
+      "inviteScript": {
+        "type": "string"
+      },
+      "publicUserScript": {
+        "type": "string"
+      },
+      "greetingTemplatePath": {
+        "type": "string"
+      },
+      "webetuOnboardingStartText": {
+        "type": "string"
+      },
+      "webetuGuideText": {
+        "type": "string"
+      },
+      "workerSudoCommand": {
+        "type": "string"
+      },
+      "pendingLinksPath": {
+        "type": "string"
+      },
+      "serviceStatePath": {
+        "type": "string"
+      }
+    }
+  }
+}

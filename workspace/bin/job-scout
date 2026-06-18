@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+export OPENCLAW_PENDING_LINKS_PATH="${OPENCLAW_PENDING_LINKS_PATH:-/home/joseph/.openclaw/workspace/tmp/pending-links.json}"
+mkdir -p "$(dirname "$OPENCLAW_PENDING_LINKS_PATH")"
+exec python3 /home/joseph/.openclaw/workspace/job-scout/job_scout.py "$@"

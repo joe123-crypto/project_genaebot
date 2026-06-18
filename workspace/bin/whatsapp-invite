@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Wrapper for the WhatsApp peer-invite store CLI. The store lives in the workspace
+# so it travels with the seeded volume; override with OPENCLAW_INVITES_PATH.
+export OPENCLAW_INVITES_PATH="${OPENCLAW_INVITES_PATH:-/home/joseph/.openclaw/workspace/invites/invites.json}"
+mkdir -p "$(dirname "$OPENCLAW_INVITES_PATH")"
+exec python3 /home/joseph/.openclaw/workspace/whatsapp-invite.py "$@"

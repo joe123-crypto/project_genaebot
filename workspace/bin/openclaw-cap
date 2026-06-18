@@ -1,0 +1,147 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+OC_DIR="${OPENCLAW_DIR:-/home/joseph/.openclaw}"
+WORKSPACE="$OC_DIR/workspace"
+RUNTIME="$OC_DIR/runtime"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  openclaw-cap users <add|remove|list|sync|check> [args...]
+  openclaw-cap account-link <create-invite|status> [args...]
+  openclaw-cap cron run <algeria-exhibitions|github-issue-tracker|webetu-meals> [--dry-run]
+  openclaw-cap webetu <lookup-user|check-credentials|reserve> --phone <phone> [--dry-run]
+EOF
+}
+
+die() {
+  printf 'ERROR: %s\n' "$*" >&2
+  exit 2
+}
+
+ensure_runtime() {
+  mkdir -p \
+    "$RUNTIME/account-link" \
+    "$RUNTIME/cron-state/algeria-exhibitions-listener" \
+    "$RUNTIME/cron-state/github-issue-tracker" \
+    "$RUNTIME/cron-state/webetu-meals" \
+    "$RUNTIME/public-news"
+}
+
+cmd_users() {
+  [ "$#" -ge 1 ] || die "users requires a subcommand"
+  case "$1" in
+    add|remove|list|sync|check)
+      exec "$WORKSPACE/bin/whatsapp-public-user" "$@"
+      ;;
+    *)
+      die "unsupported users subcommand: $1"
+      ;;
+  esac
+}
+
+cmd_account_link() {
+  [ "$#" -ge 1 ] || die "account-link requires a subcommand"
+  case "$1" in
+    create-invite|status)
+      ensure_runtime
+      export OPENCLAW_PENDING_LINKS_PATH="$RUNTIME/account-link/pending-links.json"
+      exec python3 "$WORKSPACE/account-link/account_link.py" "$@"
+      ;;
+    *)
+      die "unsupported account-link subcommand: $1"
+      ;;
+  esac
+}
+
+cmd_cron() {
+  [ "${1:-}" = "run" ] || die "cron only supports: run"
+  [ "$#" -ge 2 ] || die "cron run requires a job name"
+  local job="$2"
+  shift 2
+
+  ensure_runtime
+  case "$job" in
+    algeria-exhibitions)
+      export OPENCLAW_ALGERIA_EXHIBITIONS_STATE="$RUNTIME/cron-state/algeria-exhibitions-listener/state.json"
+      exec python3 "$WORKSPACE/cron/algeria-exhibitions-listener/check_new_events.py" "$@"
+      ;;
+    github-issue-tracker)
+      export OPENCLAW_GITHUB_ISSUE_TRACKER_STATE="$RUNTIME/cron-state/github-issue-tracker/state.json"
+      exec "$WORKSPACE/cron/github-issue-tracker/check_issue.sh" "$@"
+      ;;
+    webetu-meals)
+      local dry_run=0
+      if [ "${1:-}" = "--dry-run" ]; then
+        dry_run=1
+        shift
+      fi
+      [ "$#" -eq 0 ] || die "unsupported webetu-meals args: $*"
+      export WEBETU_NOTIFY_DRY_RUN="$dry_run"
+      export WEBETU_NOTIFY_LOG_FILE="$RUNTIME/cron-state/webetu-meals/notification.log"
+      exec "$WORKSPACE/cron/webetu-meals/notify-reservations.sh"
+      ;;
+    *)
+      die "unsupported cron job: $job"
+      ;;
+  esac
+}
+
+cmd_webetu() {
+  [ "$#" -ge 1 ] || die "webetu requires a subcommand"
+  local sub="$1"
+  shift
+  case "$sub" in
+    lookup-user|check-credentials)
+      exec sudo -n -u webetu-worker /usr/local/bin/webetu-worker-safe "$sub" "$@"
+      ;;
+    reserve)
+      local has_dry_run=0
+      for arg in "$@"; do
+        if [ "$arg" = "--dry-run" ]; then
+          has_dry_run=1
+        fi
+      done
+      [ "$has_dry_run" = "1" ] || die "direct webetu reserve requires --dry-run"
+      exec sudo -n -u webetu-worker /usr/local/bin/webetu-worker-safe reserve "$@"
+      ;;
+    *)
+      die "unsupported webetu subcommand: $sub"
+      ;;
+  esac
+}
+
+main() {
+  [ "$#" -ge 1 ] || {
+    usage
+    exit 2
+  }
+
+  case "$1" in
+    users)
+      shift
+      cmd_users "$@"
+      ;;
+    account-link)
+      shift
+      cmd_account_link "$@"
+      ;;
+    cron)
+      shift
+      cmd_cron "$@"
+      ;;
+    webetu)
+      shift
+      cmd_webetu "$@"
+      ;;
+    -h|--help|help)
+      usage
+      ;;
+    *)
+      die "unsupported capability: $1"
+      ;;
+  esac
+}
+
+main "$@"
