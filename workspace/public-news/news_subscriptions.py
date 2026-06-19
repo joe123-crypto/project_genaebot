@@ -22,6 +22,12 @@ DEFAULT_REGISTRY = pathlib.Path(
     )
 )
 DEFAULT_OPENCLAW_CONFIG = pathlib.Path("/home/joseph/.openclaw/openclaw.json")
+DEFAULT_INVITES_STORE = pathlib.Path(
+    os.environ.get(
+        "OPENCLAW_INVITES_PATH",
+        "/home/joseph/.openclaw/workspace/invites/invites.json",
+    )
+)
 
 
 def now_iso() -> str:
@@ -159,16 +165,37 @@ def cmd_disable(args: argparse.Namespace) -> dict:
     return with_locked_registry(args.registry, mutate)
 
 
-def load_allowlisted(config_path: pathlib.Path) -> set[str]:
-    if not config_path.exists():
+def load_unlocked_invite_members(invites_store: pathlib.Path) -> set[str]:
+    if not invites_store.exists():
         return set()
+    payload = json.loads(invites_store.read_text(encoding="utf-8"))
+    members = payload.get("members", {})
+    if not isinstance(members, dict):
+        return set()
+    allowlisted = set()
+    for phone, record in members.items():
+        if not isinstance(record, dict) or record.get("status") != "unlocked":
+            continue
+        try:
+            allowlisted.add(normalize_phone(record.get("phone") or phone))
+        except ValueError:
+            continue
+    return allowlisted
+
+
+def load_allowlisted(config_path: pathlib.Path, invites_store: pathlib.Path) -> set[str]:
+    normalized = load_unlocked_invite_members(invites_store)
+    if not config_path.exists():
+        return normalized
     config = json.loads(config_path.read_text(encoding="utf-8"))
     whatsapp = config.get("channels", {}).get("whatsapp", {})
     values = list(whatsapp.get("allowFrom", []) or [])
     direct = whatsapp.get("direct", {})
     if isinstance(direct, dict):
         values.extend(direct.keys())
-    normalized = set()
+    public_gate = config.get("plugins", {}).get("entries", {}).get("public-service-gate", {}).get("config", {})
+    values.extend(public_gate.get("publicUsers", []) or [])
+    values.extend(public_gate.get("whatsappAdminUsers", []) or [])
     for value in values:
         try:
             normalized.add(normalize_phone(value))
@@ -195,7 +222,7 @@ def sanitize_record(record: dict) -> dict:
 
 def cmd_list_enabled(args: argparse.Namespace) -> dict:
     payload = load_json(args.registry)
-    allowlisted = load_allowlisted(args.openclaw_config) if args.allowlisted_only else None
+    allowlisted = load_allowlisted(args.openclaw_config, args.invites_store) if args.allowlisted_only else None
     subscribers = []
     skipped = 0
     for record in payload.get("subscribers", {}).values():
@@ -250,6 +277,7 @@ def build_parser() -> argparse.ArgumentParser:
     list_enabled = sub.add_parser("list-enabled")
     list_enabled.add_argument("--allowlisted-only", action="store_true")
     list_enabled.add_argument("--openclaw-config", type=pathlib.Path, default=DEFAULT_OPENCLAW_CONFIG)
+    list_enabled.add_argument("--invites-store", type=pathlib.Path, default=DEFAULT_INVITES_STORE)
     list_enabled.set_defaults(func=cmd_list_enabled)
 
     record = sub.add_parser("record-delivery")

@@ -74,7 +74,7 @@ Most admin cron jobs deliver to Joe's Algerian WhatsApp: **+213563719936** (the 
 - **Location:** `plugins/public-service-gate/index.js`
 - **What it does:** Intercepts WhatsApp messages from public users BEFORE LLM dispatch. If the message matches greeting patterns or menu/service requests, it replies with the deterministic template from `docs/public-greeting.txt` — no LLM call, no token cost.
 - **Greeting patterns matched:** hi, hello, hey, salam, bonjour, good morning/afternoon/evening, start, menu, help, services, "what can you do", etc.
-- **Public users:** Defined in plugin config (`publicUsers` array) + WhatsApp direct channel users
+- **Public users:** Defined in `workspace/invites/invites.json` under unlocked `members`; `openclaw.json` only keeps stable admin/config fields.
 - **Config path:** `plugins.entries.public-service-gate.config`
 
 ### Agent-Handled vs Deterministic

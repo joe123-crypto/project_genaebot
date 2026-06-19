@@ -14,6 +14,28 @@ function registerHandler(config = {}, complete, relevanceConfig = {}) {
   let handler;
   const serviceStatePath =
     config.serviceStatePath ?? path.join(fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-state-")), "state.json");
+  let effectiveConfig = config;
+  if (!effectiveConfig.inviteScript) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-invite-"));
+    const inviteScript = path.join(dir, "whatsapp-invite");
+    writeExecutable(
+      inviteScript,
+      `#!/usr/bin/env bash
+set -eu
+case "$1" in
+  status)
+    if [ "$3" = "${MEMBER}" ]; then
+      printf '{"phone":"${MEMBER}","status":"unlocked","pending":false,"unlocked":true}\\n'
+    else
+      printf '{"phone":"%s","status":"unknown","pending":false,"unlocked":false}\\n' "$3"
+    fi
+    ;;
+  *) exit 2 ;;
+esac
+`,
+    );
+    effectiveConfig = { ...effectiveConfig, inviteScript };
+  }
   const api = {
     config: {
       plugins: {
@@ -24,7 +46,7 @@ function registerHandler(config = {}, complete, relevanceConfig = {}) {
               publicUsers: [MEMBER],
               invitesEnabled: true,
               serviceStatePath,
-              ...config,
+              ...effectiveConfig,
             },
           },
           "whatsapp-relevance-gate": {

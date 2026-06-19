@@ -12,11 +12,16 @@ from pathlib import Path
 
 DEFAULT_CONFIG_PATH = Path.home() / ".openclaw" / "openclaw.json"
 DEFAULT_PROMPT_PATH = Path.home() / ".openclaw" / "workspace" / "docs" / "public-whatsapp-system-prompt.txt"
+DEFAULT_STORE_PATH = Path.home() / ".openclaw" / "workspace" / "invites" / "invites.json"
 PUBLIC_GATE_PLUGIN = "public-service-gate"
 
 
 class ConfigError(Exception):
     pass
+
+
+def utc_now_iso():
+    return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def normalize_phone(value):
@@ -85,6 +90,7 @@ def load_prompt(path):
 
 
 def write_json_atomic(path, data, *, backup):
+    path.parent.mkdir(parents=True, exist_ok=True)
     if backup and path.exists():
         stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         shutil.copy2(path, path.with_name(f"{path.name}.bak-{stamp}"))
@@ -103,8 +109,60 @@ def write_json_atomic(path, data, *, backup):
             pass
 
 
+def load_member_store(path):
+    try:
+        data = load_json(path)
+    except ConfigError as exc:
+        if "config file not found" not in str(exc):
+            raise
+        return {"invites": {}, "members": {}}
+    if not isinstance(data, dict) or not isinstance(data.get("invites", {}), dict):
+        raise ConfigError(f"unexpected invite store shape in {path}")
+    if not isinstance(data.get("members", {}), dict):
+        raise ConfigError(f"unexpected members shape in {path}")
+    data.setdefault("invites", {})
+    data.setdefault("members", {})
+    return data
+
+
+def unlocked_member_phones(store):
+    phones = []
+    for phone, record in store.get("members", {}).items():
+        if not isinstance(record, dict) or record.get("status") != "unlocked":
+            continue
+        phones.append(normalize_phone(record.get("phone") or phone))
+    return dedupe(phones)
+
+
+def upsert_unlocked_member(store, phone, *, source):
+    members = store.setdefault("members", {})
+    now = utc_now_iso()
+    record = members.get(phone)
+    changed = False
+    if not isinstance(record, dict):
+        record = {}
+        members[phone] = record
+        changed = True
+    for key, value in {"phone": phone, "status": "unlocked"}.items():
+        if record.get(key) != value:
+            record[key] = value
+            changed = True
+    if "activatedAt" not in record:
+        record["activatedAt"] = now
+        changed = True
+    if source and record.get("source") != source:
+        record["source"] = source
+        changed = True
+    if changed:
+        record["updatedAt"] = now
+    return changed
+
+
+def remove_member(store, phone):
+    return store.setdefault("members", {}).pop(phone, None) is not None
+
+
 def open_dms_enabled(plugin_config):
-    # Same flag the public-service-gate plugin reads to switch on peer invites.
     return bool(plugin_config.get("invitesEnabled"))
 
 
@@ -140,24 +198,28 @@ def seed_admin_users(plugin_config, whatsapp, public_users):
     return [phone for phone in normalized_allow if phone not in public]
 
 
-def sync_config(cfg, prompt):
+def sync_config(cfg, prompt, store):
     plugin_config = get_plugin_config(cfg)
     whatsapp = get_whatsapp_config(cfg)
+    config_public_users = normalize_phone_list(plugin_config.get("publicUsers", []), field_name="publicUsers")
+    store_changed = False
 
-    public_users = normalize_phone_list(plugin_config.get("publicUsers", []), field_name="publicUsers")
+    if open_dms_enabled(plugin_config):
+        for phone in config_public_users:
+            store_changed = upsert_unlocked_member(store, phone, source="migrated-openclaw-json") or store_changed
+        plugin_config.pop("publicUsers", None)
+        public_users = unlocked_member_phones(store)
+    else:
+        public_users = config_public_users
+
     admin_users = seed_admin_users(plugin_config, whatsapp, public_users)
-
-    plugin_config["publicUsers"] = public_users
     plugin_config["whatsappAdminUsers"] = admin_users
 
-    # When peer invites / open DMs are enabled, the WhatsApp channel must accept any
-    # sender ("*"); membership is then enforced by the public-service-gate plugin, not
-    # the channel allowlist. publicUsers/whatsappAdminUsers stay canonical for the gate.
     if open_dms_enabled(plugin_config):
         whatsapp["dmPolicy"] = "open"
         whatsapp["allowFrom"] = ["*"]
     else:
-        # Classic allowlist mode (also reverts an "open" policy left from a prior run).
+        plugin_config["publicUsers"] = public_users
         whatsapp["dmPolicy"] = "allowlist" if whatsapp.get("dmPolicy") in (None, "open") else whatsapp["dmPolicy"]
         whatsapp["allowFrom"] = dedupe(admin_users + public_users)
 
@@ -186,37 +248,43 @@ def sync_config(cfg, prompt):
         "publicUsers": public_users,
         "whatsappAdminUsers": admin_users,
         "allowFrom": whatsapp["allowFrom"],
+        "storeChanged": store_changed,
     }
 
 
-def add_user(cfg, phone):
+def add_user(cfg, store, phone):
     plugin_config = get_plugin_config(cfg)
+    if open_dms_enabled(plugin_config):
+        return upsert_unlocked_member(store, phone, source="manual")
     public_users = normalize_phone_list(plugin_config.get("publicUsers", []), field_name="publicUsers")
     if phone in public_users:
-        changed = False
-    else:
-        public_users.append(phone)
-        changed = True
+        return False
+    public_users.append(phone)
     plugin_config["publicUsers"] = public_users
-    return changed
+    return True
 
 
-def remove_user(cfg, phone):
+def remove_user(cfg, store, phone):
     plugin_config = get_plugin_config(cfg)
+    if open_dms_enabled(plugin_config):
+        return remove_member(store, phone)
     public_users = normalize_phone_list(plugin_config.get("publicUsers", []), field_name="publicUsers")
     next_users = [value for value in public_users if value != phone]
     plugin_config["publicUsers"] = next_users
     return len(next_users) != len(public_users)
 
 
-def check_config(cfg, prompt):
+def check_config(cfg, prompt, store):
     plugin_config = get_plugin_config(cfg)
     whatsapp = get_whatsapp_config(cfg)
-    public_users = normalize_phone_list(plugin_config.get("publicUsers", []), field_name="publicUsers")
+    config_public_users = normalize_phone_list(plugin_config.get("publicUsers", []), field_name="publicUsers")
+    public_users = unlocked_member_phones(store) if open_dms_enabled(plugin_config) else config_public_users
     admin_users = normalize_phone_list(plugin_config.get("whatsappAdminUsers", []), field_name="whatsappAdminUsers")
     direct = whatsapp.get("direct") or {}
     errors = []
     if open_dms_enabled(plugin_config):
+        if config_public_users:
+            errors.append("plugins.entries.public-service-gate.config.publicUsers must be migrated to the invite member store")
         if whatsapp.get("dmPolicy") != "open":
             errors.append('channels.whatsapp.dmPolicy must be "open" when invitesEnabled is set')
         if (whatsapp.get("allowFrom") or []) != ["*"]:
@@ -251,13 +319,15 @@ def print_summary(action, phone, details, changed):
     print(f"publicUsers: {len(details['publicUsers'])}")
     print(f"whatsappAdminUsers: {len(details['whatsappAdminUsers'])}")
     print(f"allowFrom: {len(details['allowFrom'])}")
+    print(f"memberStoreChanged: {'yes' if details.get('storeChanged') else 'no'}")
     print("Reload or restart OpenClaw if the running gateway does not pick up config changes automatically.")
 
 
 def main(argv):
-    parser = argparse.ArgumentParser(description="Manage public WhatsApp users in openclaw.json.")
+    parser = argparse.ArgumentParser(description="Manage public WhatsApp users.")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH), help="Path to openclaw.json")
     parser.add_argument("--prompt", default=str(DEFAULT_PROMPT_PATH), help="Path to the shared public WhatsApp prompt")
+    parser.add_argument("--store", default=str(DEFAULT_STORE_PATH), help="Path to the WhatsApp invite/member store")
     parser.add_argument("--no-backup", action="store_true", help="Do not create a timestamped config backup before writing")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -272,25 +342,35 @@ def main(argv):
     args = parser.parse_args(argv)
     config_path = Path(args.config).expanduser()
     prompt_path = Path(args.prompt).expanduser()
+    store_path = Path(args.store).expanduser()
     cfg = load_json(config_path)
     prompt = load_prompt(prompt_path)
-    changed = False
+    store = load_member_store(store_path)
+    config_changed = False
+    store_changed = False
     phone = None
 
     if args.command == "add":
         phone = normalize_phone(args.phone)
-        changed = add_user(cfg, phone)
-        details = sync_config(cfg, prompt)
+        store_changed = add_user(cfg, store, phone)
+        before = json.dumps(cfg, sort_keys=True, ensure_ascii=False)
+        details = sync_config(cfg, prompt, store)
+        config_changed = json.dumps(cfg, sort_keys=True, ensure_ascii=False) != before
+        store_changed = details["storeChanged"] or store_changed
     elif args.command == "remove":
         phone = normalize_phone(args.phone)
-        changed = remove_user(cfg, phone)
-        details = sync_config(cfg, prompt)
+        store_changed = remove_user(cfg, store, phone)
+        before = json.dumps(cfg, sort_keys=True, ensure_ascii=False)
+        details = sync_config(cfg, prompt, store)
+        config_changed = json.dumps(cfg, sort_keys=True, ensure_ascii=False) != before
+        store_changed = details["storeChanged"] or store_changed
     elif args.command == "sync":
         before = json.dumps(cfg, sort_keys=True, ensure_ascii=False)
-        details = sync_config(cfg, prompt)
-        changed = json.dumps(cfg, sort_keys=True, ensure_ascii=False) != before
+        details = sync_config(cfg, prompt, store)
+        config_changed = json.dumps(cfg, sort_keys=True, ensure_ascii=False) != before
+        store_changed = details["storeChanged"]
     elif args.command == "list":
-        details = sync_config(cfg, prompt)
+        details = sync_config(cfg, prompt, store)
         print("Public users:")
         for value in details["publicUsers"]:
             print(f"- {value}")
@@ -299,7 +379,7 @@ def main(argv):
             print(f"- {value}")
         return 0
     elif args.command == "check":
-        errors = check_config(cfg, prompt)
+        errors = check_config(cfg, prompt, store)
         if errors:
             for error in errors:
                 print(f"ERROR: {error}", file=sys.stderr)
@@ -309,9 +389,12 @@ def main(argv):
     else:
         raise ConfigError(f"unknown command: {args.command}")
 
-    if changed:
+    if config_changed:
         write_json_atomic(config_path, cfg, backup=not args.no_backup)
-    print_summary(args.command, phone, details, changed)
+    if store_changed:
+        write_json_atomic(store_path, store, backup=False)
+    details["storeChanged"] = store_changed
+    print_summary(args.command, phone, details, config_changed or store_changed)
     return 0
 
 

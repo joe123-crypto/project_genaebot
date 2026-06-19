@@ -3,12 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 
-const DEFAULT_GREETING_TEMPLATE_PATH = "~/.openclaw/workspace/public-greeting.txt";
+const DEFAULT_GREETING_TEMPLATE_PATH = "~/.openclaw/workspace/docs/public-greeting.txt";
 const DEFAULT_NEWS_SUBSCRIPTIONS_SCRIPT = "~/.openclaw/workspace/public-news/news_subscriptions.py";
 const DEFAULT_JOB_SCOUT_SCRIPT = "~/.openclaw/workspace/bin/job-scout";
 const DEFAULT_ACCOUNT_LINK_SCRIPT = "~/.openclaw/workspace/bin/account-link";
 const DEFAULT_INVITE_SCRIPT = "~/.openclaw/workspace/bin/whatsapp-invite";
-const DEFAULT_PUBLIC_USER_SCRIPT = "~/.openclaw/workspace/whatsapp-public-user.py";
 const DEFAULT_WORKER_SAFE_SCRIPT = "/usr/local/bin/webetu-worker-safe";
 const DEFAULT_WORKER_SAFE_USER = "webetu-worker";
 const DEFAULT_WORKER_SUDO_COMMAND = "sudo";
@@ -41,7 +40,7 @@ const DEFAULT_INVITE_INVALID = `This invite link is invalid or has already been 
 const DEFAULT_INVITE_REQUIRED = `This service is invite-only. Ask a friend who is already signed in and using Genaie Service Desk to send you their invite link. Open that link and send the pre-filled JOIN message here.`;
 const DEFAULT_INVITE_PENDING = `Your WhatsApp number is activated.
 
-Your account is not unlocked yet. Type "invite link", send the link to one person, and ask them to open it and send the pre-filled JOIN message here. When they activate with your link, your access will unlock.`;
+Your account is not unlocked yet. Type "invite link", send the link to one person. When they activate with your link, your access will unlock.`;
 const DEFAULT_INVITE_UNLOCKED = `Your invited person activated their WhatsApp number. Your access to Genaie Service Desk is now unlocked.`;
 const DEFAULT_EVENT_SCOUTING_NOT_ACTIVE = `Local event scouting will be added after the news pilot.`;
 const DEFAULT_BUSY_MESSAGE = `I am handling a few requests right now. Please try again shortly.`;
@@ -731,22 +730,6 @@ function isUnlockedInviteMembership(status) {
   return Boolean(status?.unlocked || status?.status === "unlocked");
 }
 
-function getPublicUserScript(api) {
-  const pluginCfg = getPluginConfig(api);
-  const configuredPath =
-    typeof pluginCfg.publicUserScript === "string" && pluginCfg.publicUserScript.trim()
-      ? pluginCfg.publicUserScript.trim()
-      : DEFAULT_PUBLIC_USER_SCRIPT;
-  return expandHome(configuredPath);
-}
-
-// Adds a newly-invited phone to the canonical publicUsers allowlist. Reuses the
-// existing tool (which also re-syncs dmPolicy/allowFrom) rather than editing config here.
-function runPublicUserAdd(api, phone) {
-  const script = getPublicUserScript(api);
-  return helperLimiter(() => runTextCommand("python3", [script, "add", phone], { timeoutMs: HELPER_TIMEOUT_MS }));
-}
-
 function getAdminUsers(api) {
   const pluginCfg = getPluginConfig(api);
   const explicit = Array.isArray(pluginCfg.whatsappAdminUsers) ? pluginCfg.whatsappAdminUsers : [];
@@ -1422,16 +1405,17 @@ export default {
       }
 
       const admin = isWhatsAppAdmin(api, sender);
-      const configuredMember = isWhatsAppPublicUser(api, event, ctx);
+      const openInvites = invitesEnabled(api);
+      const configuredMember = !openInvites && isWhatsAppPublicUser(api, event, ctx);
       let inviteMembership;
       async function getInviteMembership() {
         if (inviteMembership !== undefined) return inviteMembership;
-        inviteMembership = invitesEnabled(api) && !admin
+        inviteMembership = openInvites && !admin
           ? await inviteMembershipStatus(api, sender)
           : { status: "unknown", pending: false, unlocked: false };
         return inviteMembership;
       }
-      const currentInviteMembership = invitesEnabled(api) && !admin
+      const currentInviteMembership = openInvites && !admin
         ? await getInviteMembership()
         : { status: "unknown", pending: false, unlocked: false };
       const pendingInviteMember = isPendingInviteMembership(currentInviteMembership);
@@ -1441,7 +1425,7 @@ export default {
       // Invite issuance for existing users and pending activated users. Claimed
       // here, ahead of the relevance gate, so an "invite link" request is never
       // blocked as off-topic.
-      if (invitesEnabled(api) && (admin || member || pendingInviteMember) && isInviteRequest(text)) {
+      if (openInvites && (admin || member || pendingInviteMember) && isInviteRequest(text)) {
         try {
           const invite = await runInviteScript(api, ["create", "--inviter", sender]);
           if (!invite.code) throw new Error("missing code");
@@ -1463,25 +1447,16 @@ export default {
       // through to the full agent.
       if (!member) {
         if (admin) return;
-        if (!invitesEnabled(api)) return; // classic allowlist mode: leave to core access control
+        if (!openInvites) return; // classic allowlist mode: leave to core access control
         const code = parseJoinCode(text);
         if (code) {
           try {
             const res = await runInviteScript(api, ["redeem", "--code", code, "--phone", sender]);
             if (res.ok) {
               const inviter = normalizePhone(res.inviter || "");
-              const inviterWasFull = Boolean(inviter && getPublicUsers(api).has(inviter));
               const inviterWasAdmin = isWhatsAppAdmin(api, inviter);
-              if (inviter && !inviterWasAdmin) {
-                try {
-                  await runPublicUserAdd(api, inviter);
-                } catch (err) {
-                  if (isQueueFullError(err)) return busyReply();
-                  api.logger?.warn?.(`public-service-gate: redeemed invite but failed to unlock inviter (${String(err)})`);
-                }
-              }
               await notifyAdminOfJoin(api, inviter, sender);
-              if (inviter && !inviterWasFull && !inviterWasAdmin) {
+              if (inviter && res.inviterUnlocked && !inviterWasAdmin) {
                 await notifyInviterUnlocked(api, inviter, sender);
               }
               api.logger?.info?.("public-service-gate: invite join handled deterministically");

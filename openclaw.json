@@ -79,23 +79,7 @@
         "enabled": true,
         "config": {
           "enabled": true,
-          "publicUsers": [
-            "+213556331202",
-            "+263785632943",
-            "+213554721051",
-            "+213562196497",
-            "+263783496308",
-            "+213541787679",
-            "+263775780179",
-            "+213782102437",
-            "+263774450052",
-            "+233559913516",
-            "+263780530251",
-            "+213551923843",
-            "+22792166655",
-            "+213660899319"
-          ],
-          "greetingTemplatePath": "/home/joseph/.openclaw/workspace/public-greeting.txt",
+          "greetingTemplatePath": "/home/joseph/.openclaw/workspace/docs/public-greeting.txt",
           "webetuOnboardingStartText": "Open this link and sign in with google:\n{setupUrl}\n\nAfter sign-in, the app will open your Credentials Vault. Save your Webetu username and password there. Do not send your Webetu username or password here.\n\nThen come back here and tell me which restaurant I should use by default for your meal reservations. I will confirm it with you before saving.",
           "whatsappAdminUsers": [
             "+213563719936"
