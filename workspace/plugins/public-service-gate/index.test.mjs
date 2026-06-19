@@ -355,7 +355,7 @@ test("member greeting still gets the normal service menu", async () => {
   assert.equal(reply.text, "Choose a service");
 });
 
-test("member off-scope text gets deterministic rejection instead of agent fallthrough", async () => {
+test("member off-scope text falls through to the relevance gate", async () => {
   let calls = 0;
   const handler = registerHandler(
     {},
@@ -371,12 +371,11 @@ test("member off-scope text gets deterministic rejection instead of agent fallth
     senderId: MEMBER,
   });
 
-  assert.equal(reply.handled, true);
-  assert.equal(reply.text, "Please choose a supported service.");
+  assert.equal(reply, undefined);
   assert.equal(calls, 0);
 });
 
-test("member off-scope text is rejected with nested live-style event fields", async () => {
+test("member off-scope text falls through with nested live-style event fields", async () => {
   const handler = registerHandler({}, undefined, { rejectionMessage: "Please choose a supported service." });
   const reply = await handler(
     {
@@ -387,8 +386,7 @@ test("member off-scope text is rejected with nested live-style event fields", as
     { channelId: "whatsapp:default" },
   );
 
-  assert.equal(reply.handled, true);
-  assert.equal(reply.text, "Please choose a supported service.");
+  assert.equal(reply, undefined);
 });
 
 test("WhatsApp message without a sender fails closed before agent dispatch", async () => {
@@ -404,6 +402,50 @@ test("admin sender still bypasses public-service gate", async () => {
   const reply = await handler(eventFor("hi", ADMIN), { channelId: "whatsapp", senderId: ADMIN });
 
   assert.equal(reply, undefined);
+});
+
+test("admin grandfather command unlocks the target and is claimed", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
+  const inviteScript = path.join(dir, "whatsapp-invite");
+  const argsLog = path.join(dir, "grandfather-args.txt");
+  writeExecutable(
+    inviteScript,
+    `#!/usr/bin/env bash
+set -eu
+case "$1" in
+  grandfather)
+    printf '%s\\n' "$*" > "${argsLog}"
+    printf '{"ok":true,"phone":"$3","status":"unlocked","changed":true}\\n'
+    ;;
+  *) exit 2 ;;
+esac
+`,
+  );
+
+  const handler = registerHandler({ whatsappAdminUsers: [ADMIN], inviteScript });
+  const reply = await handler(eventFor("grandfather +263788390903", ADMIN), {
+    channelId: "whatsapp",
+    senderId: ADMIN,
+  });
+
+  assert.equal(reply.handled, true);
+  assert.match(reply.text, /Grandfathered \+263788390903: unlocked/);
+  assert.equal(fs.readFileSync(argsLog, "utf-8").trim(), "grandfather --phone +263788390903");
+});
+
+test("non-admin grandfather command does not unlock and gets gated", async () => {
+  let calls = 0;
+  const handler = registerHandler({ whatsappAdminUsers: [ADMIN] }, async () => {
+    calls += 1;
+    return "IRRELEVANT";
+  });
+  const reply = await handler(eventFor("grandfather +263788390903", UNKNOWN), {
+    channelId: "whatsapp",
+    senderId: UNKNOWN,
+  });
+
+  assert.equal(reply.handled, true);
+  assert.doesNotMatch(reply.text ?? "", /Grandfathered/);
 });
 
 test("menu option 1 starts Webetu setup instead of falling through", async () => {

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import datetime as dt
+import glob
 import json
 import os
 import re
@@ -12,7 +13,9 @@ from pathlib import Path
 
 DEFAULT_CONFIG_PATH = Path.home() / ".openclaw" / "openclaw.json"
 DEFAULT_PROMPT_PATH = Path.home() / ".openclaw" / "workspace" / "docs" / "public-whatsapp-system-prompt.txt"
-DEFAULT_STORE_PATH = Path.home() / ".openclaw" / "workspace" / "invites" / "invites.json"
+RUNTIME_STORE_PATH = Path.home() / ".openclaw" / "runtime" / "public-service-gate" / "invites.json"
+LEGACY_STORE_PATH = Path.home() / ".openclaw" / "workspace" / "invites" / "invites.json"
+DEFAULT_STORE_PATH = RUNTIME_STORE_PATH
 PUBLIC_GATE_PLUGIN = "public-service-gate"
 
 
@@ -123,6 +126,10 @@ def load_member_store(path):
     data.setdefault("invites", {})
     data.setdefault("members", {})
     return data
+
+
+def should_import_legacy_store(path):
+    return path.expanduser() == RUNTIME_STORE_PATH and not path.exists() and LEGACY_STORE_PATH.exists()
 
 
 def unlocked_member_phones(store):
@@ -252,6 +259,100 @@ def sync_config(cfg, prompt, store):
     }
 
 
+def collect_from_invites(store):
+    phones = []
+    for record in store.get("invites", {}).values():
+        if not isinstance(record, dict):
+            continue
+        for key in ("redeemedBy", "inviter"):
+            value = record.get(key)
+            if value:
+                phones.append(value)
+    return phones
+
+
+TRANSCRIPT_SENDER_RE = re.compile(r'"from"\s*:\s*"(\+\d{8,15})"')
+
+
+def collect_from_transcripts(directory):
+    """Pull historical WhatsApp senders from the agent session registry
+    (sessions.json) in the given directory. Direct-chat records carry the
+    peer phone in origin.from; group/non-phone senders are dropped later by
+    normalize_phone."""
+    phones = []
+    base = Path(directory).expanduser()
+    if not base.is_dir():
+        return phones
+    registry = base / "sessions.json"
+    if registry.is_file():
+        try:
+            data = load_json(registry)
+        except ConfigError:
+            data = None
+        if isinstance(data, dict):
+            for record in data.values():
+                if not isinstance(record, dict):
+                    continue
+                origin = record.get("origin")
+                if isinstance(origin, dict):
+                    for key in ("from", "label"):
+                        value = origin.get(key)
+                        if value:
+                            phones.append(value)
+    # Fallback: any "from" sender embedded in raw session/transcript files.
+    for path in sorted(base.glob("*.jsonl")):
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        phones.extend(TRANSCRIPT_SENDER_RE.findall(text))
+    return phones
+
+
+def collect_from_backups(glob_pattern):
+    phones = []
+    pattern = os.path.expanduser(glob_pattern)
+    for path_str in sorted(glob.glob(pattern)):
+        try:
+            data = load_json(Path(path_str))
+        except ConfigError:
+            continue
+        try:
+            public = (
+                data.get("plugins", {})
+                .get("entries", {})
+                .get(PUBLIC_GATE_PLUGIN, {})
+                .get("config", {})
+                .get("publicUsers")
+            )
+        except AttributeError:
+            continue
+        if isinstance(public, list):
+            phones.extend(public)
+    return phones
+
+
+def is_repeated_digit(phone):
+    digits = re.sub(r"\D", "", phone)
+    return len(set(digits)) == 1
+
+
+def grandfather_users(cfg, store, candidates):
+    """Upsert each candidate phone as an unlocked member. Returns the list of
+    newly added (or re-unlocked) phones, skipping admins and existing members."""
+    plugin_config = get_plugin_config(cfg)
+    admins = set(normalize_phone_list(plugin_config.get("whatsappAdminUsers", []), field_name="whatsappAdminUsers"))
+    already = set(unlocked_member_phones(store))
+    added = []
+    for phone in candidates:
+        if phone in admins or phone in already:
+            continue
+        if upsert_unlocked_member(store, phone, source="grandfathered"):
+            added.append(phone)
+            already.add(phone)
+    return added
+
+
 def add_user(cfg, store, phone):
     plugin_config = get_plugin_config(cfg)
     if open_dms_enabled(plugin_config):
@@ -339,15 +440,33 @@ def main(argv):
     sub.add_parser("sync", help="Rebuild derived WhatsApp config from canonical lists")
     sub.add_parser("check", help="Validate config consistency without writing")
 
+    gf = sub.add_parser(
+        "grandfather",
+        help="Bulk-unlock pre-invite users from explicit numbers, a file, or recoverable history",
+    )
+    gf.add_argument("phones", nargs="*", help="Phone numbers to grandfather")
+    gf.add_argument("--file", help="Path to a file with one phone number per line (# comments ignored)")
+    gf.add_argument("--scan-invites", action="store_true", help="Include redeemers/inviters from the invite store")
+    gf.add_argument(
+        "--scan-transcripts",
+        nargs="?",
+        const=str(Path.home() / ".openclaw" / "agents" / "main" / "sessions"),
+        help="Include WhatsApp senders parsed from agent session transcripts (default dir if no value)",
+    )
+    gf.add_argument("--scan-backups", help="Glob of openclaw.json backups to read publicUsers from")
+    gf.add_argument("--skip-repeated", action="store_true", help="Skip numbers whose digits are all identical (test fixtures)")
+    gf.add_argument("--dry-run", action="store_true", help="Print the resolved union without writing")
+
     args = parser.parse_args(argv)
     config_path = Path(args.config).expanduser()
     prompt_path = Path(args.prompt).expanduser()
     store_path = Path(args.store).expanduser()
     cfg = load_json(config_path)
     prompt = load_prompt(prompt_path)
-    store = load_member_store(store_path)
+    import_legacy = should_import_legacy_store(store_path)
+    store = load_member_store(LEGACY_STORE_PATH if import_legacy else store_path)
     config_changed = False
-    store_changed = False
+    store_changed = import_legacy
     phone = None
 
     if args.command == "add":
@@ -377,6 +496,86 @@ def main(argv):
         print("WhatsApp admin users:")
         for value in details["whatsappAdminUsers"]:
             print(f"- {value}")
+        return 0
+    elif args.command == "grandfather":
+        raw = []
+        sources = {}
+        explicit = list(args.phones)
+        if args.file:
+            file_path = Path(args.file).expanduser()
+            try:
+                lines = file_path.read_text(encoding="utf-8").splitlines()
+            except FileNotFoundError as exc:
+                raise ConfigError(f"phone file not found: {file_path}") from exc
+            for line in lines:
+                value = line.split("#", 1)[0].strip()
+                if value:
+                    explicit.append(value)
+        if explicit:
+            sources["explicit"] = explicit
+            raw.extend(explicit)
+        if args.scan_invites:
+            found = collect_from_invites(store)
+            sources["scan-invites"] = found
+            raw.extend(found)
+        if args.scan_transcripts:
+            found = collect_from_transcripts(args.scan_transcripts)
+            sources["scan-transcripts"] = found
+            raw.extend(found)
+        if args.scan_backups:
+            found = collect_from_backups(args.scan_backups)
+            sources["scan-backups"] = found
+            raw.extend(found)
+        if not raw:
+            raise ConfigError("no phone numbers provided; pass numbers, --file, or a --scan-* flag")
+
+        candidates = []
+        seen = set()
+        skipped = []
+        for value in raw:
+            try:
+                phone = normalize_phone(value)
+            except ConfigError:
+                skipped.append(value)
+                continue
+            if args.skip_repeated and is_repeated_digit(phone):
+                skipped.append(value)
+                continue
+            if phone not in seen:
+                seen.add(phone)
+                candidates.append(phone)
+
+        print("Candidate sources:")
+        for name, values in sources.items():
+            print(f"- {name}: {len(values)} raw")
+        if skipped:
+            print(f"skipped (invalid/filtered): {len(skipped)}")
+
+        if args.dry_run:
+            admins = set(normalize_phone_list(get_plugin_config(cfg).get("whatsappAdminUsers", []), field_name="whatsappAdminUsers"))
+            already = set(unlocked_member_phones(store))
+            would_add = [p for p in candidates if p not in admins and p not in already]
+            print(f"resolved unique candidates: {len(candidates)}")
+            print(f"would add as unlocked members: {len(would_add)}")
+            for phone in sorted(would_add):
+                print(f"- {phone}")
+            return 0
+
+        added = grandfather_users(cfg, store, candidates)
+        store_changed = bool(added)
+        before = json.dumps(cfg, sort_keys=True, ensure_ascii=False)
+        details = sync_config(cfg, prompt, store)
+        config_changed = json.dumps(cfg, sort_keys=True, ensure_ascii=False) != before
+        store_changed = details["storeChanged"] or store_changed
+        if config_changed:
+            write_json_atomic(config_path, cfg, backup=not args.no_backup)
+        if store_changed:
+            write_json_atomic(store_path, store, backup=False)
+        print(f"grandfathered new members: {len(added)}")
+        for phone in sorted(added):
+            print(f"- {phone}")
+        details["storeChanged"] = store_changed
+        print_summary("grandfather", None, details, config_changed or store_changed)
         return 0
     elif args.command == "check":
         errors = check_config(cfg, prompt, store)

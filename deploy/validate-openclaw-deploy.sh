@@ -23,6 +23,8 @@ PYTHONPYCACHEPREFIX="$pycache" python3 -m py_compile \
   "$OC_DIR/deploy/patch-openclaw-config.py" \
   "$OC_DIR/workspace/account-link/account_link.py" \
   "$OC_DIR/workspace/account-link/pending_cache.py" \
+  "$OC_DIR/workspace/lib/whatsapp-invite.py" \
+  "$OC_DIR/workspace/lib/whatsapp-public-user.py" \
   "$OC_DIR/workspace/public-news/news_subscriptions.py" \
   "$OC_DIR/workspace/cron/algeria-exhibitions-listener/check_new_events.py"
 

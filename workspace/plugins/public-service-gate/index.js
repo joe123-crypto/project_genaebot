@@ -788,6 +788,15 @@ function parseJoinCode(text) {
   return match ? match[1].toUpperCase() : "";
 }
 
+// Admin-only in-chat command to grandfather a pre-invite user, e.g.
+// "grandfather +263788390903". Returns the normalized phone or "".
+function parseGrandfatherCommand(text) {
+  const compact = String(text ?? "").trim().replace(/\s+/g, " ");
+  if (!compact || compact.length > 60) return "";
+  const match = /^grandfather\s+(\+?[\d][\d\s-]{6,})$/i.exec(compact);
+  return match ? normalizePhone(match[1]) : "";
+}
+
 function isStateResetRequest(text) {
   const compact = String(text ?? "").trim().replace(/\s+/g, " ");
   return /^(?:menu|main\s+menu|services|service|options|help|start\s+over|restart|cancel)[\s!.?]*$/i.test(compact);
@@ -1426,6 +1435,27 @@ export default {
 
       const admin = isWhatsAppAdmin(api, sender);
       const openInvites = invitesEnabled(api);
+
+      // Admin escape hatch: unlock a pre-invite user from chat. Claimed here so
+      // the command never reaches the agent or the relevance gate.
+      if (admin && openInvites) {
+        const grandfatherTarget = parseGrandfatherCommand(text);
+        if (grandfatherTarget) {
+          try {
+            const res = await runInviteScript(api, ["grandfather", "--phone", grandfatherTarget]);
+            api.logger?.info?.("public-service-gate: admin grandfather handled deterministically");
+            return {
+              handled: true,
+              text: `Grandfathered ${grandfatherTarget}: ${res.changed ? "unlocked" : "already a member"}.`,
+            };
+          } catch (err) {
+            if (isQueueFullError(err)) return busyReply();
+            api.logger?.warn?.(`public-service-gate: failed to grandfather (${String(err)})`);
+            return { handled: true, text: DEFAULT_INVITE_FAILED };
+          }
+        }
+      }
+
       const configuredMember = !openInvites && isWhatsAppPublicUser(api, event, ctx);
       let inviteMembership;
       async function getInviteMembership() {
