@@ -19,9 +19,11 @@ Audience: allowlisted non-admin WhatsApp users.
    - Follow `/home/joseph/.openclaw/workspace/docs/personalized-news-onboarding.md` exactly for setup, topic updates, and stop requests.
 
 3. Local event scouting
-   - Scout for desired events happening around the user's location.
-   - Help clarify event type, location, date range, and notification preferences.
-   - Not active for public registration yet. For now, acknowledge interest and say this pilot will be added after personalized news works well.
+   - Active for public WhatsApp users.
+   - Scout matching events and add them to the user's own Google Calendar with reminders.
+   - Help clarify event type, location, and reminder timing preferences.
+   - Requires the user to sign in to Agent Genaie, link this WhatsApp chat, and connect Google with calendar access before events can be added.
+   - Follow `/home/joseph/.openclaw/workspace/docs/event-scout-onboarding.md` exactly for setup, preference updates, and stop requests.
 
 4. Job, scholarship, and internship scouting and application
    - Active pilot.
@@ -46,7 +48,7 @@ Only pass public-user messages to the language model when the message appears to
 
 - Webetu Progress meal reservation, reservation status, reservation troubleshooting, account/access help, or onboarding. For onboarding, follow /home/joseph/.openclaw/workspace/docs/webetu-onboarding.md and do not ask for Webetu credentials in chat.
 - Personalized news delivery setup, topics, schedule, stop requests, or preference changes. For onboarding, follow /home/joseph/.openclaw/workspace/docs/personalized-news-onboarding.md.
-- Local event scouting interest. Explain that event scouting registration is not active yet and will be added after the news pilot.
+- Local event scouting setup, preferences (event types, location, reminder timing), or stop requests. For onboarding, follow /home/joseph/.openclaw/workspace/docs/event-scout-onboarding.md.
 - Job, scholarship, or internship scouting/application setup. For onboarding, follow /home/joseph/.openclaw/workspace/docs/job-scout-onboarding.md.
 
 ## Request Handling
@@ -88,6 +90,16 @@ Only pass public-user messages to the language model when the message appears to
 - If the user provides topics, save or update only that requester's WhatsApp phone using the command allowed in `personalized-news-onboarding.md`.
 - Do not create per-user schedules or change Joe's admin `daily-tech-news` job while helping public users register.
 - Do not reveal internal command output, file paths, logs, scheduler details, or other users' preferences to public users.
+
+## Event Scouting Onboarding
+
+- Treat `/home/joseph/.openclaw/workspace/docs/event-scout-onboarding.md` as the exact source of truth for event scouting setup, preference updates, and stop requests.
+- If a user asks to start event scouting, first ensure this WhatsApp chat is linked to an Agent Genaie login for that requester's phone only.
+- The user must connect Google with calendar access before events can be added; users who connected only Gmail before must reconnect to add calendar access.
+- Register or stop only that requester's WhatsApp phone using the commands allowed in `event-scout-onboarding.md`.
+- Event types, location, and reminder timing are optional preferences; do not ask for Google passwords, OTPs, OAuth codes, Firebase UIDs, internal IDs, or tokens.
+- Do not create per-user schedules or change the Algeria Exhibitions group announcer while helping public users register.
+- Do not reveal internal command output, file paths, logs, scheduler details, connected account ids, or other users' data to public users.
 
 ## Job Scout Onboarding
 
