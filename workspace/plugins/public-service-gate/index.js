@@ -42,11 +42,9 @@ const DEFAULT_INVITE_PENDING = `Your WhatsApp number is activated.
 
 Your account is not unlocked yet. Type "invite link", send the link to one person. When they activate with your link, your access will unlock.`;
 const DEFAULT_INVITE_UNLOCKED = `Your invited person activated their WhatsApp number. Your access to Genaie Service Desk is now unlocked.`;
+const DEFAULT_INVITE_AWAITING_ACTIVATION = `Got it — waiting for them to activate. Your access unlocks as soon as they do.`;
 const DEFAULT_EVENT_SCOUTING_NOT_ACTIVE = `Local event scouting will be added after the news pilot.`;
 const DEFAULT_BUSY_MESSAGE = `I am handling a few requests right now. Please try again shortly.`;
-const DEFAULT_OUT_OF_SCOPE_REJECTION =
-  `I can help with Webetu meal reservations, personalized news, local events, ` +
-  `and job/scholarship/internship scouting. Which one do you want?`;
 const WEBETU_RESTAURANT_WAIT_REPLY = `Understood. Make manual reservations on Webetu until your restaurant shows up. When you see it, message me and I'll set it as your default and fill your next 3 days.`;
 const WEBETU_RESTAURANT_USE_SUPPORTED_REPLY = `Send the exact restaurant name from the supported list you want me to use.`;
 const WEBETU_RESTAURANT_CLARIFY_REPLY = `Do you want to use one of the supported restaurants now, or wait until your restaurant appears?`;
@@ -137,6 +135,22 @@ const INVITE_REQUEST_PATTERNS = [
   /\b(?:get|need|want|send|give|create|make|generate)\b[^.!?]*\binvite\b/i,
   /\b(?:how\s+(?:do|can)\s+i|can\s+i)\s+invite\b/i,
   /^invite(?:\s+me)?[\s!.?]*$/i,
+];
+// A pending user confirming they have shared their invite link, e.g. "Shared",
+// "Sent it", "Done". Matched as a whole message so it doesn't fire on longer
+// sentences that merely contain these words.
+const INVITE_SHARED_KEYWORDS = [
+  "shared",
+  "shared it",
+  "i shared",
+  "i shared it",
+  "sent",
+  "sent it",
+  "i sent",
+  "i sent it",
+  "forwarded",
+  "i forwarded",
+  "done",
 ];
 // A new (not-yet-allowlisted) person sending the pre-filled wa.me join message,
 // e.g. "JOIN-AB12CD34". Capture group 1 is the bare code.
@@ -389,6 +403,16 @@ function isReservationStatusRequest(text) {
   return RESERVATION_STATUS_PATTERNS.some((pattern) => pattern.test(compact));
 }
 
+function matchesSharedAck(text) {
+  const compact = String(text ?? "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase()
+    .replace(/[\s!.?]+$/, "");
+  if (!compact) return false;
+  return INVITE_SHARED_KEYWORDS.includes(compact);
+}
+
 function getShortContinuationKeywords(api) {
   const cfg = getRelevanceGateConfig(api);
   const configured = Array.isArray(cfg.shortContinuationKeywords)
@@ -510,15 +534,11 @@ function loadInviteUnlockedText(api) {
     : DEFAULT_INVITE_UNLOCKED;
 }
 
-function loadOutOfScopeRejection(api) {
-  const relevanceCfg = getRelevanceGateConfig(api);
-  if (typeof relevanceCfg.rejectionMessage === "string" && relevanceCfg.rejectionMessage.trim()) {
-    return relevanceCfg.rejectionMessage.trim();
-  }
+function loadInviteAwaitingText(api) {
   const pluginCfg = getPluginConfig(api);
-  return typeof pluginCfg.outOfScopeRejection === "string" && pluginCfg.outOfScopeRejection.trim()
-    ? pluginCfg.outOfScopeRejection.trim()
-    : DEFAULT_OUT_OF_SCOPE_REJECTION;
+  return typeof pluginCfg.inviteAwaitingActivationText === "string" && pluginCfg.inviteAwaitingActivationText.trim()
+    ? pluginCfg.inviteAwaitingActivationText.trim()
+    : DEFAULT_INVITE_AWAITING_ACTIVATION;
 }
 
 function loadWebetuOnboardingStart(api) {
@@ -1439,6 +1459,9 @@ export default {
       }
 
       if (pendingInviteMember) {
+        if (matchesSharedAck(text)) {
+          return { handled: true, text: loadInviteAwaitingText(api) };
+        }
         return { handled: true, text: loadInvitePendingText(api) };
       }
 
@@ -1588,13 +1611,14 @@ export default {
         };
       }
 
+      // No deterministic handler matched. Do NOT claim the message here — fall
+      // through to the whatsapp-relevance-gate (priority -10), which is the
+      // semantics allow/block gateway: on-topic text is passed to the agent,
+      // off-topic text is rejected there with the same canned message.
       api.logger?.info?.(
-        `public-service-gate: member WhatsApp text handled as out-of-scope sender=${sender} textLen=${text.length}`,
+        `public-service-gate: member WhatsApp text deferred to relevance gate sender=${sender} textLen=${text.length}`,
       );
-      return {
-        handled: true,
-        text: loadOutOfScopeRejection(api),
-      };
+      return;
     });
   },
 };
