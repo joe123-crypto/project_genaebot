@@ -12,6 +12,41 @@ from unittest import mock
 import job_scout
 
 
+class OpenClawBinResolutionTests(unittest.TestCase):
+  def test_openclaw_bin_env_override_wins(self) -> None:
+    with mock.patch.dict(job_scout.os.environ, {"OPENCLAW_BIN": "/custom/openclaw"}, clear=True), \
+         mock.patch.object(job_scout.shutil, "which", return_value="/usr/local/bin/openclaw"):
+      self.assertEqual(job_scout.resolve_openclaw_bin(), Path("/custom/openclaw"))
+
+  def test_openclaw_bin_uses_path_discovery(self) -> None:
+    with mock.patch.dict(job_scout.os.environ, {}, clear=True), \
+         mock.patch.object(job_scout.shutil, "which", return_value="/usr/local/bin/openclaw"):
+      self.assertEqual(job_scout.resolve_openclaw_bin(), Path("/usr/local/bin/openclaw"))
+
+  def test_openclaw_bin_uses_first_executable_fallback(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      first = root / "first" / "openclaw"
+      second = root / "second" / "openclaw"
+      first.parent.mkdir()
+      second.parent.mkdir()
+      first.write_text("#!/bin/sh\n", encoding="utf-8")
+      second.write_text("#!/bin/sh\n", encoding="utf-8")
+      first.chmod(0o755)
+      second.chmod(0o755)
+
+      with mock.patch.dict(job_scout.os.environ, {}, clear=True), \
+           mock.patch.object(job_scout.shutil, "which", return_value=None):
+        self.assertEqual(job_scout.resolve_openclaw_bin((first, second)), first)
+
+  def test_openclaw_bin_falls_back_to_command_name(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      missing = Path(tmp) / "missing" / "openclaw"
+      with mock.patch.dict(job_scout.os.environ, {}, clear=True), \
+           mock.patch.object(job_scout.shutil, "which", return_value=None):
+        self.assertEqual(job_scout.resolve_openclaw_bin((missing,)), Path("openclaw"))
+
+
 class CvStagingTests(unittest.TestCase):
   def test_stage_cv_copies_supported_file_to_user_directory(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:

@@ -31,7 +31,10 @@ DEFAULT_OPENWEBNINJA_BASE_URL = "https://api.openwebninja.com/jsearch"
 DEFAULT_RAPIDAPI_BASE_URL = "https://jsearch.p.rapidapi.com"
 DEFAULT_RAPIDAPI_HOST = "jsearch.p.rapidapi.com"
 GENAIE_MAIL_BIN = Path("/home/joseph/.openclaw/workspace/bin/genaie-mail")
-OPENCLAW_BIN = Path(os.environ.get("OPENCLAW_BIN", "/home/joseph/.npm-global/bin/openclaw"))
+OPENCLAW_BIN_FALLBACKS = (
+  Path("/usr/local/bin/openclaw"),
+  Path("/home/joseph/.npm-global/bin/openclaw"),
+)
 PUBLIC_DISPATCH_FAILURE_MESSAGE = (
   "Job Scout could not finish today's job check because the service failed. "
   "I recorded it and will try again on the next run."
@@ -62,6 +65,25 @@ from pending_cache import (
   store_pending_link,
   utc_now_iso,
 )
+
+
+def resolve_openclaw_bin(fallbacks: tuple[Path, ...] = OPENCLAW_BIN_FALLBACKS) -> Path:
+  configured = os.environ.get("OPENCLAW_BIN", "").strip()
+  if configured:
+    return Path(configured)
+
+  discovered = shutil.which("openclaw")
+  if discovered:
+    return Path(discovered)
+
+  for candidate in fallbacks:
+    if candidate.is_file() and os.access(candidate, os.X_OK):
+      return candidate
+
+  return Path("openclaw")
+
+
+OPENCLAW_BIN = resolve_openclaw_bin()
 
 
 class JSearchUnavailable(RuntimeError):
