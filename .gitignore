@@ -5,6 +5,10 @@
 # Repository metadata.
 !.gitignore
 !README.md
+!.github/
+!.github/actionlint.yaml
+!.github/workflows/
+!.github/workflows/*.yml
 
 # New deterministic deployment/config surface.
 !config/

@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: openclaw-prod-deploy /path/to/github-actions/checkout
+
+Deploys the checked-out main branch to the local OpenClaw production container.
+This wrapper is intended to be installed root-owned at:
+  /usr/local/sbin/openclaw-prod-deploy
+EOF
+}
+
+die() {
+  printf 'ERROR: %s\n' "$*" >&2
+  exit 1
+}
+
+log() {
+  printf '==> %s\n' "$*"
+}
+
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  usage
+  exit 0
+fi
+
+if [ "$#" -ne 1 ]; then
+  usage >&2
+  exit 2
+fi
+
+src="${1%/}"
+repo_slug="joe123-crypto/project_genaebot"
+service_name="${OPENCLAW_CONTAINER_SERVICE:-openclaw-gateway-container.service}"
+lock_file="/var/lock/openclaw-prod-deploy.lock"
+
+[ -d "$src/.git" ] || die "$src is not a Git checkout"
+[ -x "$src/deploy/openclaw-deploy.sh" ] || die "missing deploy/openclaw-deploy.sh in $src"
+[ -x "$src/deploy/validate-openclaw-deploy.sh" ] || die "missing deploy/validate-openclaw-deploy.sh in $src"
+
+git_cmd() {
+  git -c "safe.directory=$src" -C "$src" "$@"
+}
+
+remote_url="$(git_cmd config --get remote.origin.url || true)"
+case "$remote_url" in
+  https://github.com/${repo_slug}|https://github.com/${repo_slug}.git|git@github.com:${repo_slug}.git)
+    ;;
+  *)
+    die "refusing to deploy unexpected origin: ${remote_url:-missing}"
+    ;;
+esac
+
+git_cmd fetch --quiet origin main
+head_sha="$(git_cmd rev-parse --verify HEAD)"
+main_sha="$(git_cmd rev-parse --verify refs/remotes/origin/main)"
+[ "$head_sha" = "$main_sha" ] || die "refusing to deploy stale or non-main checkout; HEAD=$head_sha origin/main=$main_sha"
+
+if [ -n "$(git_cmd status --porcelain)" ]; then
+  git_cmd status --short >&2
+  die "refusing to deploy a dirty checkout"
+fi
+
+if crontab -l 2>/dev/null | grep -Fq '/home/joseph/.openclaw/gitclaw/auto_backup.sh'; then
+  die "GitClaw autocommit cron entry is still active"
+fi
+
+for required in git node python3 bash rsync systemctl flock; do
+  command -v "$required" >/dev/null 2>&1 || die "missing required command: $required"
+done
+
+if [ ! -e /var/lock ]; then
+  die "/var/lock is missing"
+fi
+
+exec 9>"$lock_file"
+if ! flock -n 9; then
+  die "another OpenClaw production deploy is already running"
+fi
+
+log "Deploying ${repo_slug}@${head_sha}"
+
+OPENCLAW_DIR="$src" \
+"$src/deploy/validate-openclaw-deploy.sh"
+
+OPENCLAW_DIR="$src" \
+OPENCLAW_CONTAINER_SERVICE="$service_name" \
+"$src/deploy/openclaw-deploy.sh"
+
+log "Production deploy complete"

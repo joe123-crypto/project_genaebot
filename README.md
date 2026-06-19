@@ -7,8 +7,9 @@ It does not own or patch the installed OpenClaw npm package under
 replace only package-managed files, while this repository tracks custom plugins,
 commands, skills metadata, deployment helpers, and sanitized config templates.
 
-Git is manual: review changes, commit intentionally, and push to the chosen remote
-yourself. No cron job or deploy script should auto-commit or auto-push.
+Git commits and pushes are manual, but production deploys are automated from
+GitHub: when `main` updates, the self-hosted GitHub Actions runner on this host
+validates the pushed commit and deploys it to the live container.
 
 ## Structure
 
@@ -23,6 +24,7 @@ yourself. No cron job or deploy script should auto-commit or auto-push.
 │   ├── validate-openclaw-deploy.sh
 │   ├── check-openclaw-mirror.sh  # Generated mirror freshness/runtime check
 │   ├── patch-openclaw-config.py
+│   ├── github-actions/           # Source-controlled host automation helpers
 │   ├── docker-compose.override.yml
 │   ├── agent-workspace/          # Files copied into the live agent workspace
 │   └── container/entrypoint.sh   # Tracked custom container entrypoint
@@ -83,6 +85,27 @@ git ls-files --others --exclude-standard
 
 ## Deploying Changes
 
+Normal production deploy path:
+
+```bash
+cd /home/joseph/.openclaw
+git status --short
+git commit -m "Describe the change"
+git push origin main
+```
+
+GitHub Actions then runs on this host through the `openclaw-prod` self-hosted
+runner. The workflow checks out the exact pushed commit, validates it, and runs:
+
+```bash
+sudo /usr/local/sbin/openclaw-prod-deploy "$GITHUB_WORKSPACE"
+```
+
+The sudo rule is intentionally narrow: the runner user may run only that wrapper,
+not arbitrary root commands. The wrapper refuses to deploy anything except a clean
+checkout of `joe123-crypto/project_genaebot` on `main`, and it uses a lock so two
+deploys cannot overlap.
+
 Validate without deploying:
 
 ```bash
@@ -90,14 +113,14 @@ cd /home/joseph/.openclaw
 ./deploy/validate-openclaw-deploy.sh
 ```
 
-Deploy source/config-template changes to the live Docker container:
+Manual fallback deploy for emergency/local use:
 
 ```bash
 cd /home/joseph/.openclaw
 sudo ./deploy/openclaw-deploy.sh
 ```
 
-The deploy script:
+The deploy script used by both paths:
 
 - verifies GitClaw autocommit is disabled
 - shows Git status and diff stats
@@ -113,6 +136,25 @@ The deploy script:
 - verifies `agents.defaults.workspace=/home/joseph/.openclaw/agent-workspace`
 - restarts `openclaw-gateway-container.service`
 - runs the deployment health check
+
+Host automation files:
+
+```text
+.github/workflows/deploy-main.yml
+deploy/github-actions/openclaw-prod-deploy
+deploy/github-actions/register-openclaw-runner.sh
+/usr/local/sbin/openclaw-prod-deploy
+/etc/sudoers.d/openclaw-prod-deploy
+/home/joseph/actions-runner-openclaw-prod/
+```
+
+If the runner ever needs to be registered again, get a fresh registration token
+from the GitHub repository settings and run:
+
+```bash
+cd /home/joseph/.openclaw
+sudo RUNNER_TOKEN='...' ./deploy/github-actions/register-openclaw-runner.sh
+```
 
 Do not use `--apply-container-boundary` during normal deploys. That flag installs
 the stricter Docker Compose read-only/writable mount override and should only be
@@ -210,6 +252,7 @@ Mutable service data now lives under:
 runtime/
 ├── account-link/pending-links.json
 ├── public-news/subscriptions.json
+├── public-service-gate/invites.json
 ├── public-service-gate/state.json
 └── cron-state/
     ├── algeria-exhibitions-listener/state.json

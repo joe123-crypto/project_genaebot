@@ -25,9 +25,10 @@ DEFAULT_OPENCLAW_CONFIG = pathlib.Path("/home/joseph/.openclaw/openclaw.json")
 DEFAULT_INVITES_STORE = pathlib.Path(
     os.environ.get(
         "OPENCLAW_INVITES_PATH",
-        "/home/joseph/.openclaw/workspace/invites/invites.json",
+        "/home/joseph/.openclaw/runtime/public-service-gate/invites.json",
     )
 )
+LEGACY_INVITES_STORE = pathlib.Path("/home/joseph/.openclaw/workspace/invites/invites.json")
 
 
 def now_iso() -> str:
@@ -166,6 +167,8 @@ def cmd_disable(args: argparse.Namespace) -> dict:
 
 
 def load_unlocked_invite_members(invites_store: pathlib.Path) -> set[str]:
+    if not invites_store.exists() and invites_store == DEFAULT_INVITES_STORE and LEGACY_INVITES_STORE.exists():
+        invites_store = LEGACY_INVITES_STORE
     if not invites_store.exists():
         return set()
     payload = json.loads(invites_store.read_text(encoding="utf-8"))

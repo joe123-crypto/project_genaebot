@@ -41,6 +41,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 
 source_root = Path(os.environ["OPENCLAW_MIRROR_SOURCE_ROOT"])
@@ -131,6 +132,18 @@ else:
                 continue
             if rel not in manifest_files:
                 issue(f"mirror file is not listed in manifest: {rel}")
+
+        invite_wrapper = stage_root / "workspace/bin/whatsapp-invite"
+        if invite_wrapper.exists():
+            try:
+                wrapper_text = invite_wrapper.read_text(encoding="utf-8")
+            except Exception as exc:
+                issue(f"could not read invite wrapper: {exc}")
+            else:
+                for target in re.findall(r"exec\s+python3\s+/home/joseph/\.openclaw/(workspace/[\w./-]+)", wrapper_text):
+                    target_file = stage_root / target
+                    if not target_file.exists():
+                        issue(f"invite wrapper points at unstaged workspace file: {target}")
 
 if issues:
     print("OpenClaw deploy mirror warnings:")

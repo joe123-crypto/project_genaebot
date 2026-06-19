@@ -121,13 +121,18 @@ syntax_checks() {
   node --check "$OC_DIR/workspace/plugins/whatsapp-relevance-gate/index.js"
   local pycache
   pycache="$(mktemp -d)"
-  trap 'rm -rf "$pycache"' RETURN
-  PYTHONPYCACHEPREFIX="$pycache" python3 -m py_compile \
+  if ! PYTHONPYCACHEPREFIX="$pycache" python3 -m py_compile \
     "$OC_DIR/workspace/account-link/account_link.py" \
     "$OC_DIR/workspace/account-link/pending_cache.py" \
+    "$OC_DIR/workspace/lib/whatsapp-invite.py" \
+    "$OC_DIR/workspace/lib/whatsapp-public-user.py" \
     "$OC_DIR/workspace/public-news/news_subscriptions.py" \
     "$OC_DIR/workspace/cron/algeria-exhibitions-listener/check_new_events.py" \
-    "$OC_DIR/deploy/patch-openclaw-config.py"
+    "$OC_DIR/deploy/patch-openclaw-config.py"; then
+    rm -rf "$pycache"
+    return 1
+  fi
+  rm -rf "$pycache"
   bash -n "$OC_DIR/workspace/bin/openclaw-cap"
   bash -n "$OC_DIR/workspace/cron/github-issue-tracker/check_issue.sh"
   bash -n "$OC_DIR/workspace/cron/webetu-meals/notify-reservations.sh"

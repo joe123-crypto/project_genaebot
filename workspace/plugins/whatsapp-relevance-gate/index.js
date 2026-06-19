@@ -41,6 +41,46 @@ const DEFAULT_RESTAURANT_NAME_KEYWORDS = [
   "universitaire",
 ];
 const DEFAULT_RESTAURANT_NAME_MAX_LENGTH = 180;
+// Generic acknowledgements / fillers that appear in the curated allow-list but
+// must never allow a message as a substring (e.g. "ok so what's the weather"
+// contains "ok"). They are kept in the list but only match an exact whole
+// message, where the existing continuation handling already lets them pass.
+const GENERIC_STOPWORDS = new Set([
+  "ok",
+  "okay",
+  "k",
+  "yes",
+  "yeah",
+  "yep",
+  "no",
+  "nope",
+  "hi",
+  "hie",
+  "hey",
+  "hello",
+  "now",
+  "done",
+  "finished",
+  "complete",
+  "completed",
+  "saved",
+  "run",
+  "run it",
+  "thanks",
+  "thank you",
+  "thanx",
+  "thx",
+  "thansks",
+  "merci",
+  "sure",
+  "please",
+  "wait",
+  "exactly",
+  "oi",
+  "great",
+  "ok great",
+  "do a manual run",
+]);
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const CACHE_MAX_ENTRIES = 500;
 
@@ -167,14 +207,42 @@ function shortContinuationMatch(api, normalized) {
   return getShortContinuationKeywords(api).includes(normalized);
 }
 
+// A curated keyword is "neutralized" — only matched against an exact whole
+// message, never as a substring — when it is a generic filler, a bare number,
+// or a JOIN code. This keeps such entries in the allow-list (so the list stays
+// the source of truth) without letting them wave through unrelated traffic that
+// merely contains them.
+function isNeutralizedKeyword(k) {
+  if (!k) return true;
+  if (GENERIC_STOPWORDS.has(k)) return true;
+  if (/^\d+$/.test(k)) return true;
+  if (/^join[-\s]?[a-z0-9]{4,}$/i.test(k)) return true;
+  return false;
+}
+
+// Match a normalized message against a flat keyword list, applying the
+// neutralized-keyword guard so generic/number/JOIN entries only match exactly.
+function matchKeywordList(list, normalized) {
+  if (!Array.isArray(list)) return false;
+  for (const kw of list) {
+    const k = normalizeText(kw);
+    if (!k) continue;
+    if (isNeutralizedKeyword(k)) {
+      if (normalized === k) return true; // exact whole-message match only
+      continue;
+    }
+    if (normalized.includes(k)) return true;
+  }
+  return false;
+}
+
 function keywordMatch(api, normalized) {
   const cfg = getPluginConfig(api);
   if (shortContinuationMatch(api, normalized)) return true;
-  const keywords = Array.isArray(cfg.serviceKeywords) ? cfg.serviceKeywords : [];
-  for (const kw of keywords) {
-    const k = normalizeText(kw);
-    if (k && normalized.includes(k)) return true;
-  }
+  // serviceKeywords: hand-maintained list. curatedAllowPhrases: real user
+  // phrases sourced from keywords_cleaned.txt. Both honour the same guard.
+  if (matchKeywordList(cfg.serviceKeywords, normalized)) return true;
+  if (matchKeywordList(cfg.curatedAllowPhrases, normalized)) return true;
   const examples = Array.isArray(cfg.serviceExamples) ? cfg.serviceExamples : [];
   for (const ex of examples) {
     const e = normalizeText(ex);

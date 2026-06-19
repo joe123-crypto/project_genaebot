@@ -132,7 +132,7 @@ When Joe/admin asks to add, remove, list, sync, or check public WhatsApp users, 
 - Repair derived config: `/home/joseph/.openclaw/workspace/bin/whatsapp-public-user sync`
 - Validate only: `/home/joseph/.openclaw/workspace/bin/whatsapp-public-user check`
 
-Do not edit repeated WhatsApp prompt entries by hand. Public WhatsApp members live in `workspace/invites/invites.json` under `members`, admin DM users stay in `plugins.entries.public-service-gate.config.whatsappAdminUsers`, and the shared prompt lives in `workspace/docs/public-whatsapp-system-prompt.txt`.
+Do not edit repeated WhatsApp prompt entries by hand. Public WhatsApp members live in `runtime/public-service-gate/invites.json` under `members`, admin DM users stay in `plugins.entries.public-service-gate.config.whatsappAdminUsers`, and the shared prompt lives in `workspace/docs/public-whatsapp-system-prompt.txt`.
 
 ### Admin: Check a User's Webetu Reservation State
 
