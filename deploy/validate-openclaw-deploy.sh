@@ -30,6 +30,7 @@ PYTHONPYCACHEPREFIX="$pycache" python3 -m py_compile \
 
 bash -n "$OC_DIR/deploy/openclaw-deploy.sh"
 bash -n "$OC_DIR/deploy/check-openclaw-mirror.sh"
+bash -n "$OC_DIR/deploy/github-actions/openclaw-prod-deploy"
 bash -n "$OC_DIR/deploy/container/entrypoint.sh"
 bash -n "$OC_DIR/workspace/bin/openclaw-cap"
 bash -n "$OC_DIR/workspace/cron/github-issue-tracker/check_issue.sh"
