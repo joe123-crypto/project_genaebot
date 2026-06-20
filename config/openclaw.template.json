@@ -2,7 +2,7 @@
   "agents": {
     "defaults": {
       "model": {
-        "primary": "vercel-ai-gateway/xiaomi/mimo-v2.5-pro"
+        "primary": "vercel-ai-gateway/deepseek/deepseek-v4-pro"
       },
       "workspace": "/home/joseph/.openclaw/agent-workspace"
     }
