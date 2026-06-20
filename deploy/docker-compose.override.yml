@@ -5,9 +5,17 @@ services:
       # because snap Docker cannot reliably read hidden home directories.
       - ./live-source/workspace:/home/joseph/.openclaw/workspace:ro
 
-      # Public-agent writable areas.
-      - openclaw-agent-workspace:/home/joseph/.openclaw/agent-workspace
-      - openclaw-runtime-state:/home/joseph/.openclaw/runtime
+      # Run the current entrypoint, which only chowns mutable paths and skips the
+      # read-only workspace mount above. The image may have an older baked
+      # entrypoint that blanket-chowns the whole tree and would crash on :ro.
+      - ./entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
+
+      # Public-agent writable DATA areas. Host bind-mounts (not named volumes) so
+      # the data is editable in exactly one place — the ~/projects/genaebot checkout
+      # — and stays live to the container. These subdirs are gitignored; the sources
+      # are non-hidden so snap Docker can read them.
+      - /home/joseph/projects/genaebot/agent-workspace:/home/joseph/.openclaw/agent-workspace
+      - /home/joseph/projects/genaebot/runtime:/home/joseph/.openclaw/runtime
 
       # Public-agent context files mounted read-only inside its writable workspace.
       - ./live-source/workspace/AGENTS.md:/home/joseph/.openclaw/agent-workspace/AGENTS.md:ro
@@ -18,9 +26,3 @@ services:
       - ./live-source/workspace/MEMORY.md:/home/joseph/.openclaw/agent-workspace/MEMORY.md:ro
       - ./live-source/workspace/README.md:/home/joseph/.openclaw/agent-workspace/README.md:ro
       - ./live-source/agent-workspace/COMMANDS.md:/home/joseph/.openclaw/agent-workspace/COMMANDS.md:ro
-
-volumes:
-  openclaw-agent-workspace:
-    name: openclaw-agent-workspace
-  openclaw-runtime-state:
-    name: openclaw-runtime-state
