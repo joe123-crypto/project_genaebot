@@ -193,6 +193,7 @@ const DEFAULT_SHORT_CONTINUATION_KEYWORDS = [
 ];
 const DEFAULT_RELEVANCE_MAX_TEXT_LENGTH = 400;
 const DEFAULT_RELEVANCE_LLM_MAX_TOKENS = 5;
+const FAILSAFE_STOP_PRIORITY = 100;
 
 function readOpenclawEnv() {
   try {
@@ -824,6 +825,11 @@ function isStateResetRequest(text) {
   return /^(?:menu|main\s+menu|services|service|options|help|start\s+over|restart|cancel)[\s!.?]*$/i.test(compact);
 }
 
+function isFailsafeStopCommand(text) {
+  const compact = String(text ?? "").trim().replace(/\s+/g, " ");
+  return /^stop[!.?]*$/i.test(compact);
+}
+
 function isWebetuWaitChoice(text) {
   const compact = String(text ?? "").trim().replace(/\s+/g, " ");
   return (
@@ -1444,6 +1450,31 @@ export default {
   description: "Handles deterministic public WhatsApp greetings before agent dispatch.",
   version: "0.1.0",
   register(api) {
+    api.on(
+      "before_dispatch",
+      async (event, ctx) => {
+        if (!isEnabled(api)) return;
+        const channel = getEventChannel(event, ctx);
+        if (!isWhatsAppChannel(channel)) return;
+        const text = getEventText(event);
+        if (!isFailsafeStopCommand(text)) return;
+
+        const sender = getEventSender(event, ctx);
+        if (sender) {
+          try {
+            clearServiceState(api, sender);
+          } catch (err) {
+            api.logger?.warn?.(`public-service-gate: failed to clear state for failsafe stop (${String(err)})`);
+          }
+        } else {
+          api.logger?.warn?.("public-service-gate: WhatsApp failsafe stop missing sender; handled fail-closed");
+        }
+        api.logger?.info?.("public-service-gate: failsafe stop handled before agent dispatch");
+        return { handled: true };
+      },
+      { priority: FAILSAFE_STOP_PRIORITY },
+    );
+
     api.on("before_dispatch", async (event, ctx) => {
       if (!isEnabled(api)) return;
       const channel = getEventChannel(event, ctx);

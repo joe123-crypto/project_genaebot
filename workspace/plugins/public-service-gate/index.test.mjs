@@ -11,7 +11,7 @@ const UNKNOWN = "+19995550123";
 const ADMIN = "+213563719936";
 
 function registerHandler(config = {}, complete, relevanceConfig = {}) {
-  let handler;
+  const handlers = [];
   const serviceStatePath =
     config.serviceStatePath ?? path.join(fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-state-")), "state.json");
   let effectiveConfig = config;
@@ -88,12 +88,19 @@ esac
       info() {},
       warn() {},
     },
-    on(_name, callback) {
-      handler = callback;
+    on(_name, callback, options = {}) {
+      handlers.push({ callback, priority: options?.priority ?? 0 });
     },
   };
   plugin.register(api);
-  return handler;
+  handlers.sort((a, b) => b.priority - a.priority);
+  return async function dispatch(event, ctx) {
+    for (const { callback } of handlers) {
+      const reply = await callback(event, ctx);
+      if (reply !== undefined) return reply;
+    }
+    return undefined;
+  };
 }
 
 function eventFor(text, sender = MEMBER) {
@@ -149,6 +156,81 @@ function writeServiceState(filePath, phone, service, step, options = {}) {
     ),
   );
 }
+
+test("failsafe stop command silently clears active service state before dispatch", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
+  const serviceStatePath = path.join(dir, "state.json");
+  writeServiceState(serviceStatePath, MEMBER, "webetu", "webetu.awaiting_restaurant");
+
+  const handler = registerHandler({ serviceStatePath });
+  const reply = await handler(eventFor("stop!"), { channelId: "whatsapp", senderId: MEMBER });
+  const saved = JSON.parse(fs.readFileSync(serviceStatePath, "utf8"));
+
+  assert.equal(reply.handled, true);
+  assert.equal(reply.text, undefined);
+  assert.deepEqual(saved.states, {});
+});
+
+test("failsafe stop command claims unknown sender before invite or LLM checks", async () => {
+  let calls = 0;
+  const handler = registerHandler({}, async () => {
+    calls += 1;
+    return "RELEVANT";
+  });
+  const reply = await handler(eventFor("stop!", UNKNOWN), {
+    channelId: "whatsapp",
+    senderId: UNKNOWN,
+  });
+
+  assert.equal(reply.handled, true);
+  assert.equal(reply.text, undefined);
+  assert.equal(calls, 0);
+});
+
+test("failsafe stop command claims admin before admin bypass", async () => {
+  await withAdminMode("true", async () => {
+    const handler = registerHandler({ whatsappAdminUsers: [ADMIN] });
+    const reply = await handler(eventFor("STOP", ADMIN), {
+      channelId: "whatsapp",
+      senderId: ADMIN,
+    });
+
+    assert.equal(reply.handled, true);
+    assert.equal(reply.text, undefined);
+  });
+});
+
+test("failsafe stop command requires a one-word stop message", async () => {
+  const handler = registerHandler({});
+
+  assert.equal(await handler(eventFor("please stop"), { channelId: "whatsapp", senderId: MEMBER }), undefined);
+  assert.equal(await handler(eventFor("don't stop"), { channelId: "whatsapp", senderId: MEMBER }), undefined);
+  assert.equal(await handler(eventFor("unstoppable"), { channelId: "whatsapp", senderId: MEMBER }), undefined);
+});
+
+test("stop news still follows the personalized-news stop path", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
+  const newsSubscriptionsScript = path.join(dir, "news_subscriptions.py");
+  const newsLog = path.join(dir, "news.log");
+  fs.writeFileSync(
+    newsSubscriptionsScript,
+    `#!/usr/bin/env python3
+import json
+import sys
+from pathlib import Path
+Path(${JSON.stringify(newsLog)}).write_text(" ".join(sys.argv[1:]), encoding="utf-8")
+print(json.dumps({"ok": True}))
+`,
+    { mode: 0o755 },
+  );
+
+  const handler = registerHandler({ newsSubscriptionsScript });
+  const reply = await handler(eventFor("stop news"), { channelId: "whatsapp", senderId: MEMBER });
+
+  assert.equal(reply.handled, true);
+  assert.match(reply.text, /Personalized news has been stopped/);
+  assert.equal(fs.readFileSync(newsLog, "utf8"), "disable --phone +233208864185");
+});
 
 test("unknown sender greeting gets invite-required reply instead of silence", async () => {
   let calls = 0;
@@ -417,7 +499,7 @@ test("WhatsApp message without a sender fails closed before agent dispatch", asy
 });
 
 test("admin sender still bypasses public-service gate", async () => {
-  await withAdminMode(undefined, async () => {
+  await withAdminMode("true", async () => {
     const handler = registerHandler({ whatsappAdminUsers: [ADMIN] });
     const reply = await handler(eventFor("hi", ADMIN), { channelId: "whatsapp", senderId: ADMIN });
 
@@ -436,12 +518,13 @@ test("admin sender follows public invite gate when WhatsApp admin mode is disabl
 });
 
 test("admin grandfather command unlocks the target and is claimed", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
-  const inviteScript = path.join(dir, "whatsapp-invite");
-  const argsLog = path.join(dir, "grandfather-args.txt");
-  writeExecutable(
-    inviteScript,
-    `#!/usr/bin/env bash
+  await withAdminMode("true", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
+    const inviteScript = path.join(dir, "whatsapp-invite");
+    const argsLog = path.join(dir, "grandfather-args.txt");
+    writeExecutable(
+      inviteScript,
+      `#!/usr/bin/env bash
 set -eu
 case "$1" in
   grandfather)
@@ -451,17 +534,18 @@ case "$1" in
   *) exit 2 ;;
 esac
 `,
-  );
+    );
 
-  const handler = registerHandler({ whatsappAdminUsers: [ADMIN], inviteScript });
-  const reply = await handler(eventFor("grandfather +263788390903", ADMIN), {
-    channelId: "whatsapp",
-    senderId: ADMIN,
+    const handler = registerHandler({ whatsappAdminUsers: [ADMIN], inviteScript });
+    const reply = await handler(eventFor("grandfather +263788390903", ADMIN), {
+      channelId: "whatsapp",
+      senderId: ADMIN,
+    });
+
+    assert.equal(reply.handled, true);
+    assert.match(reply.text, /Grandfathered \+263788390903: unlocked/);
+    assert.equal(fs.readFileSync(argsLog, "utf-8").trim(), "grandfather --phone +263788390903");
   });
-
-  assert.equal(reply.handled, true);
-  assert.match(reply.text, /Grandfathered \+263788390903: unlocked/);
-  assert.equal(fs.readFileSync(argsLog, "utf-8").trim(), "grandfather --phone +263788390903");
 });
 
 test("admin grandfather command is not honored when WhatsApp admin mode is disabled", async () => {
