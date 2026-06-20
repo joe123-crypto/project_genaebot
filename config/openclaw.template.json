@@ -28,6 +28,60 @@
         "/home/joseph/.openclaw/workspace/plugins/public-service-gate",
         "/home/joseph/.openclaw/workspace/plugins/whatsapp-relevance-gate"
       ]
+    },
+    "entries": {
+      "whatsapp-relevance-gate": {
+        "enabled": true,
+        "config": {
+          "enabled": true,
+          "bypassUsers": [
+            "+213563719936"
+          ],
+          "serviceSummary": "Webetu Progress meal reservations, personalized news delivery, local event scouting, and job/scholarship/internship scouting and application and inviting friends to the service",
+          "serviceKeywords": [
+            "meal",
+            "reserve",
+            "reservation",
+            "webetu",
+            "restaurant",
+            "news",
+            "subscribe",
+            "subscription",
+            "event",
+            "job",
+            "jobs",
+            "scholarship",
+            "internship",
+            "apply",
+            "application",
+            "hi",
+            "hello",
+            "hey",
+            "salam",
+            "bonjour",
+            "start",
+            "setup",
+            "help",
+            "invite",
+            "invite link",
+            "join"
+          ],
+          "serviceExamples": [
+            "reserve a meal",
+            "book a meal at webetu",
+            "subscribe me to news",
+            "start personalized news",
+            "find me a job",
+            "any scholarships",
+            "what events are near me"
+          ],
+          "useLlmFallback": false,
+          "llmMaxTokens": 5,
+          "rejectionMessage": "I can help with Webetu meal reservations, personalized news, local events, and job/scholarship/internship scouting. Which one do you want?",
+          "failOpen": false,
+          "maxTextLength": 400
+        }
+      }
     }
   },
   "secrets": {

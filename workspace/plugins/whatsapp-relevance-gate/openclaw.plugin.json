@@ -37,6 +37,12 @@
           "type": "string"
         }
       },
+      "curatedAllowPhrases": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
       "shortContinuationKeywords": {
         "type": "array",
         "items": {
