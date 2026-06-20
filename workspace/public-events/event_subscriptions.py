@@ -25,7 +25,7 @@ DEFAULT_OPENCLAW_CONFIG = pathlib.Path("/home/joseph/.openclaw/openclaw.json")
 DEFAULT_INVITES_STORE = pathlib.Path(
     os.environ.get(
         "OPENCLAW_INVITES_PATH",
-        "/home/joseph/.openclaw/workspace/invites/invites.json",
+        "/home/joseph/.openclaw/runtime/public-service-gate/invites.json",
     )
 )
 

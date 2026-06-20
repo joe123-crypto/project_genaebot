@@ -26,7 +26,10 @@ PYTHONPYCACHEPREFIX="$pycache" python3 -m py_compile \
   "$OC_DIR/workspace/lib/whatsapp-invite.py" \
   "$OC_DIR/workspace/lib/whatsapp-public-user.py" \
   "$OC_DIR/workspace/public-news/news_subscriptions.py" \
-  "$OC_DIR/workspace/cron/algeria-exhibitions-listener/check_new_events.py"
+  "$OC_DIR/workspace/cron/algeria-exhibitions-listener/check_new_events.py" \
+  "$OC_DIR/workspace/public-events/event_subscriptions.py" \
+  "$OC_DIR/workspace/cron/event-scout-dispatcher/dispatch.py" \
+  "$OC_DIR/workspace/bin/genaie-calendar"
 
 bash -n "$OC_DIR/deploy/openclaw-deploy.sh"
 bash -n "$OC_DIR/deploy/check-openclaw-mirror.sh"
