@@ -108,6 +108,25 @@ function writeExecutable(filePath, body) {
   fs.writeFileSync(filePath, body, { mode: 0o755 });
 }
 
+async function withAdminMode(value, fn) {
+  const hadValue = Object.prototype.hasOwnProperty.call(process.env, "WHATSAPP_ADMIN_ENABLED");
+  const previous = process.env.WHATSAPP_ADMIN_ENABLED;
+  if (value === undefined) {
+    delete process.env.WHATSAPP_ADMIN_ENABLED;
+  } else {
+    process.env.WHATSAPP_ADMIN_ENABLED = value;
+  }
+  try {
+    return await fn();
+  } finally {
+    if (hadValue) {
+      process.env.WHATSAPP_ADMIN_ENABLED = previous;
+    } else {
+      delete process.env.WHATSAPP_ADMIN_ENABLED;
+    }
+  }
+}
+
 function writeServiceState(filePath, phone, service, step, options = {}) {
   fs.writeFileSync(
     filePath,
@@ -398,10 +417,22 @@ test("WhatsApp message without a sender fails closed before agent dispatch", asy
 });
 
 test("admin sender still bypasses public-service gate", async () => {
-  const handler = registerHandler({ whatsappAdminUsers: [ADMIN] });
-  const reply = await handler(eventFor("hi", ADMIN), { channelId: "whatsapp", senderId: ADMIN });
+  await withAdminMode(undefined, async () => {
+    const handler = registerHandler({ whatsappAdminUsers: [ADMIN] });
+    const reply = await handler(eventFor("hi", ADMIN), { channelId: "whatsapp", senderId: ADMIN });
 
-  assert.equal(reply, undefined);
+    assert.equal(reply, undefined);
+  });
+});
+
+test("admin sender follows public invite gate when WhatsApp admin mode is disabled", async () => {
+  await withAdminMode("false", async () => {
+    const handler = registerHandler({ whatsappAdminUsers: [ADMIN] });
+    const reply = await handler(eventFor("hi", ADMIN), { channelId: "whatsapp", senderId: ADMIN });
+
+    assert.equal(reply.handled, true);
+    assert.match(reply.text, /invite-only/);
+  });
 });
 
 test("admin grandfather command unlocks the target and is claimed", async () => {
@@ -431,6 +462,37 @@ esac
   assert.equal(reply.handled, true);
   assert.match(reply.text, /Grandfathered \+263788390903: unlocked/);
   assert.equal(fs.readFileSync(argsLog, "utf-8").trim(), "grandfather --phone +263788390903");
+});
+
+test("admin grandfather command is not honored when WhatsApp admin mode is disabled", async () => {
+  await withAdminMode("false", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
+    const inviteScript = path.join(dir, "whatsapp-invite");
+    const argsLog = path.join(dir, "grandfather-args.txt");
+    writeExecutable(
+      inviteScript,
+      `#!/usr/bin/env bash
+set -eu
+case "$1" in
+  grandfather)
+    printf '%s\\n' "$*" > "${argsLog}"
+    printf '{"ok":true,"phone":"$3","status":"unlocked","changed":true}\\n'
+    ;;
+  *) exit 2 ;;
+esac
+`,
+    );
+
+    const handler = registerHandler({ whatsappAdminUsers: [ADMIN], inviteScript }, async () => "IRRELEVANT");
+    const reply = await handler(eventFor("grandfather +263788390903", ADMIN), {
+      channelId: "whatsapp",
+      senderId: ADMIN,
+    });
+
+    assert.equal(reply.handled, true);
+    assert.doesNotMatch(reply.text ?? "", /Grandfathered/);
+    assert.equal(fs.existsSync(argsLog), false);
+  });
 });
 
 test("non-admin grandfather command does not unlock and gets gated", async () => {

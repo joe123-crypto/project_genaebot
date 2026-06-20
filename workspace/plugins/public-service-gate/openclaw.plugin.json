@@ -25,6 +25,9 @@
           "type": "string"
         }
       },
+      "adminModeEnabled": {
+        "type": "boolean"
+      },
       "invitesEnabled": {
         "type": "boolean"
       },

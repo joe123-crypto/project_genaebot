@@ -1,4 +1,9 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 const PLUGIN_ID = "whatsapp-relevance-gate";
+const PUBLIC_SERVICE_GATE_ID = "public-service-gate";
 
 const DEFAULT_REJECTION =
   "I can help with Webetu meal reservations, personalized news, local events, " +
@@ -166,14 +171,75 @@ function getPluginConfig(api) {
   return live && typeof live === "object" ? live : api.pluginConfig ?? {};
 }
 
+function getPublicServiceGateConfig(api) {
+  const live = getCurrentConfig(api).plugins?.entries?.[PUBLIC_SERVICE_GATE_ID]?.config;
+  return live && typeof live === "object" ? live : {};
+}
+
 function isEnabled(api) {
   return getPluginConfig(api).enabled !== false;
+}
+
+function readOpenclawEnv() {
+  try {
+    const envPath = path.join(os.homedir(), ".openclaw", ".env");
+    const text = fs.readFileSync(envPath, "utf8");
+    const values = {};
+    for (const rawLine of text.split("\n")) {
+      let line = rawLine.trim();
+      if (!line || line.startsWith("#")) continue;
+      const eqIdx = line.indexOf("=");
+      if (eqIdx === -1) continue;
+      let key = line.slice(0, eqIdx).trim();
+      if (key.startsWith("export ")) key = key.slice(7).trim();
+      let value = line.slice(eqIdx + 1).trim();
+      if (value.length >= 2 && value[0] === value[value.length - 1] && (value[0] === '"' || value[0] === "'")) {
+        value = value.slice(1, -1);
+      }
+      if (key) values[key] = value;
+    }
+    return values;
+  } catch {
+    return {};
+  }
+}
+
+function readEnvValue(name) {
+  if (Object.prototype.hasOwnProperty.call(process.env, name)) return process.env[name];
+  return readOpenclawEnv()[name];
+}
+
+function parseBoolean(value) {
+  if (typeof value === "boolean") return value;
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "y", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "n", "off"].includes(normalized)) return false;
+  return undefined;
+}
+
+function isAdminModeEnabled(api) {
+  const envValue = parseBoolean(readEnvValue("WHATSAPP_ADMIN_ENABLED"));
+  if (envValue !== undefined) return envValue;
+  const publicServiceCfg = getPublicServiceGateConfig(api);
+  const publicServiceValue = parseBoolean(publicServiceCfg.adminModeEnabled);
+  if (publicServiceValue !== undefined) return publicServiceValue;
+  const cfgValue = parseBoolean(getPluginConfig(api).adminModeEnabled);
+  return cfgValue !== undefined ? cfgValue : true;
 }
 
 function getBypassUsers(api) {
   const cfg = getPluginConfig(api);
   const explicit = Array.isArray(cfg.bypassUsers) ? cfg.bypassUsers : [];
-  return new Set(explicit.map(normalizePhone).filter(Boolean));
+  const users = new Set(explicit.map(normalizePhone).filter(Boolean));
+  if (!isAdminModeEnabled(api)) {
+    const publicServiceCfg = getPublicServiceGateConfig(api);
+    const admins = Array.isArray(publicServiceCfg.whatsappAdminUsers) ? publicServiceCfg.whatsappAdminUsers : [];
+    for (const admin of admins.map(normalizePhone).filter(Boolean)) {
+      users.delete(admin);
+    }
+  }
+  return users;
 }
 
 function getRejectionMessage(api) {

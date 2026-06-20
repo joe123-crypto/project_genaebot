@@ -227,6 +227,20 @@ function resolveAppPublicBaseUrl() {
   return "http://localhost:3000";
 }
 
+function readEnvValue(name) {
+  if (Object.prototype.hasOwnProperty.call(process.env, name)) return process.env[name];
+  return readOpenclawEnv()[name];
+}
+
+function parseBoolean(value) {
+  if (typeof value === "boolean") return value;
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "y", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "n", "off"].includes(normalized)) return false;
+  return undefined;
+}
+
 function expandHome(input) {
   if (typeof input !== "string" || input.length === 0) return input;
   if (input === "~") return os.homedir();
@@ -756,8 +770,16 @@ function getAdminUsers(api) {
   return new Set(explicit.map(normalizePhone).filter(Boolean));
 }
 
+function isAdminModeEnabled(api) {
+  const envValue = parseBoolean(readEnvValue("WHATSAPP_ADMIN_ENABLED"));
+  if (envValue !== undefined) return envValue;
+  const pluginCfg = getPluginConfig(api);
+  return pluginCfg.adminModeEnabled !== false;
+}
+
 function isWhatsAppAdmin(api, sender) {
   if (!sender) return false;
+  if (!isAdminModeEnabled(api)) return false;
   return getAdminUsers(api).has(sender);
 }
 
