@@ -11,6 +11,37 @@ Git commits and pushes are manual, but production deploys are automated from
 GitHub: when `main` updates, the self-hosted GitHub Actions runner on this host
 validates the pushed commit and deploys it to the live container.
 
+## Working Checkout and Container Boundary
+
+This repository is checked out in two places on the host:
+
+- `/home/joseph/.openclaw/` — the original checkout and OpenClaw's runtime home.
+  The host-native gateway here is **retired** (its systemd user unit is disabled),
+  so this tree's runtime data is now **stale**. Do not edit data here.
+- `/home/joseph/projects/genaebot/` — **the editable source of truth.** Make code
+  and config edits here and push to `main`; this is also where live data is edited
+  (see below). Substitute this path for `/home/joseph/.openclaw` in the `cd`
+  commands throughout this document.
+
+The live gateway runs in the `openclaw-gateway` Docker container under a
+read/write **boundary** (`deploy/docker-compose.override.yml`, installed):
+
+- `workspace/` is mounted **read-only** from the staged `live-source` — code and
+  context the container cannot modify; it changes only via deploy.
+- `runtime/` and `agent-workspace/` are **host bind-mounts from
+  `/home/joseph/projects/genaebot/`** — editable in one place and live to the
+  container immediately (e.g. `runtime/public-service-gate/invites.json`). There is
+  no separate "host copy" to keep in sync.
+- credentials, identity, state, and `openclaw.json` stay in the base
+  `openclaw-state` Docker volume.
+- The override also mounts the current `entrypoint.sh` over the image's baked one,
+  because the baked entrypoint blanket-`chown`s the whole tree and crashes on the
+  read-only `workspace` mount.
+
+Snap Docker can read these bind sources only because `/home/joseph/projects/...` is
+non-hidden; the hidden `/home/joseph/.openclaw` cannot be bind-mounted under snap
+confinement, which is why the editable checkout lives under `projects/`.
+
 ## Structure
 
 ```text
@@ -52,7 +83,6 @@ explicitly allowed.
 
 Tracked categories:
 
-- `openclaw.json`
 - `config/openclaw.template.json`
 - `deploy/**`
 - `workspace/*.md`
@@ -68,8 +98,9 @@ Tracked categories:
 Ignored categories:
 
 - `.env`, `gateway.systemd.env`, and all secrets
-- OpenClaw backup/pre-update files such as `openclaw.json.last-good` and
-  `openclaw.json.pre-update*`
+- the live `openclaw.json` (no longer tracked; generated from
+  `config/openclaw.template.json`) and its backup/pre-update variants such as
+  `openclaw.json.last-good` and `openclaw.json.pre-update*`
 - credentials, devices, identity, sessions, memory DBs, logs, runtime DBs
 - `npm/`, media, browser data, caches, Python bytecode, virtualenvs
 - generated job/CV artifacts and runtime state files
@@ -130,8 +161,9 @@ The deploy script used by both paths:
 - stamps `live-source` with `.OPENCLAW_GENERATED` and a source manifest
 - excludes runtime files such as `state.json`, `pending-links.json`,
   `subscriptions.json`, `*.log`, caches, and bytecode
-- syncs curated source into the live container volume
-- copies agent-room docs into `agent-workspace/`
+- syncs curated source into the live container (skipped when the container
+  boundary is active — `workspace/` and agent-room docs then arrive via the
+  read-only bind mounts instead)
 - applies `config/openclaw.template.json` to the container's live config
 - verifies `agents.defaults.workspace=/home/joseph/.openclaw/agent-workspace`
 - restarts `openclaw-gateway-container.service`
@@ -156,9 +188,11 @@ cd /home/joseph/.openclaw
 sudo RUNNER_TOKEN='...' ./deploy/github-actions/register-openclaw-runner.sh
 ```
 
-Do not use `--apply-container-boundary` during normal deploys. That flag installs
-the stricter Docker Compose read-only/writable mount override and should only be
-used when intentionally testing the container-boundary model.
+The container boundary is now installed and is the standard runtime. Normal
+deploys do **not** pass `--apply-container-boundary`; the deploy detects the
+installed override and leaves it in place (and skips the in-container source sync,
+which the read-only bind mounts make redundant). The flag is only needed to
+(re)install the override from scratch.
 
 ## Deploy Mirror
 
@@ -191,9 +225,8 @@ Do not use archived `live-sync-stage` or `apply-*.sh` files for live changes.
 
 ## Config Changes
 
-The live gateway runs from Docker volumes. Editing the host copy of
-`/home/joseph/.openclaw/openclaw.json` does not automatically update the live
-container.
+`openclaw.json` lives in the base `openclaw-state` Docker volume (it is not
+bind-mounted), so editing a host copy does not update the live container.
 
 For stable deterministic config changes, edit:
 
@@ -207,9 +240,10 @@ Then deploy:
 sudo ./deploy/openclaw-deploy.sh
 ```
 
-`openclaw.json` is tracked intentionally as the current host-side configuration.
-Review it before commits because it can contain local operational settings. The
-backup and pre-update variants remain ignored.
+`openclaw.json` is no longer tracked (it is gitignored). The tracked source of
+truth for config is `config/openclaw.template.json`, which the deploy merges into
+the live `openclaw.json` via `patch-openclaw-config.py`. The backup and
+pre-update variants remain ignored.
 
 ## Operational Changes
 
@@ -260,9 +294,11 @@ runtime/
     └── webetu-meals/notification.log
 ```
 
-These files are ignored by Git and excluded from deployment staging. They should
-be treated like live data: back them up or inspect them directly when needed,
-but do not upload them as source.
+These files are ignored by Git and excluded from deployment staging. Under the
+container boundary, `runtime/` is a host bind-mount from this checkout, so editing
+a file here (e.g. `runtime/public-service-gate/invites.json`) is the live edit the
+container sees immediately. Treat them as live data: back them up or inspect them
+directly, but do not upload them as source.
 
 The deployable source list is controlled by `deploy/openclaw-deploy.sh` in
 `stage_source()`. To see what the last deploy staged, inspect:

@@ -36,6 +36,14 @@ require_file() {
   [ -f "$1" ] || die "missing required file: $1"
 }
 
+# The container boundary is active when the compose override is installed in the
+# deploy dir. Under it, workspace + context MDs reach the container as read-only
+# bind mounts and runtime/agent-workspace are writable host bind mounts, so the
+# in-container `docker cp` source sync is both redundant and impossible (ro).
+boundary_active() {
+  [ -f "$COMPOSE_OVERRIDE_DST" ]
+}
+
 git_cmd() {
   git -c "safe.directory=$OC_DIR" -C "$OC_DIR" "$@"
 }
@@ -308,6 +316,10 @@ reject_staged_runtime_files() {
 sync_source_to_container() {
   local docker
   docker="$(docker_bin)"
+  if boundary_active; then
+    log "Container boundary active; workspace + context come from read-only bind mounts. Skipping in-container source sync."
+    return 0
+  fi
   log "Sync staged source into live container volume"
   "$docker" exec "$CONTAINER" mkdir -p \
     /home/joseph/.openclaw/workspace \
