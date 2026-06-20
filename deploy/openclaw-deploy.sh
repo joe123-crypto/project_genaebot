@@ -128,6 +128,9 @@ syntax_checks() {
     "$OC_DIR/workspace/lib/whatsapp-public-user.py" \
     "$OC_DIR/workspace/public-news/news_subscriptions.py" \
     "$OC_DIR/workspace/cron/algeria-exhibitions-listener/check_new_events.py" \
+    "$OC_DIR/workspace/public-events/event_subscriptions.py" \
+    "$OC_DIR/workspace/cron/event-scout-dispatcher/dispatch.py" \
+    "$OC_DIR/workspace/bin/genaie-calendar" \
     "$OC_DIR/deploy/patch-openclaw-config.py"; then
     rm -rf "$pycache"
     return 1
@@ -170,6 +173,7 @@ stage_source() {
     --include='/docs/***' \
     --include='/account-link/***' \
     --include='/public-news/***' \
+    --include='/public-events/***' \
     --include='/webetu-preferences/***' \
     --include='/job-scout/*.py' \
     --include='/job-scout/scrapers/***' \

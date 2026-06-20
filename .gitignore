@@ -51,6 +51,8 @@
 !workspace/account-link/*.py
 !workspace/public-news/
 !workspace/public-news/*.py
+!workspace/public-events/
+!workspace/public-events/*.py
 !workspace/webetu-preferences/
 !workspace/webetu-preferences/*.py
 !workspace/job-scout/

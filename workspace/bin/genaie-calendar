@@ -1,0 +1,194 @@
+#!/usr/bin/env python3
+"""Write events into a user's Google Calendar through Agent Genaie's calendar bridge."""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+
+# Resolve the shared lib relative to this script so it works in the deployed
+# workspace and in a git worktree (bin/ and lib/ are siblings under workspace/).
+LIB_DIR = str((Path(__file__).resolve().parent.parent / "lib"))
+if LIB_DIR not in sys.path:
+    sys.path.insert(0, LIB_DIR)
+from genaie_env import env_default, calendar_write_url, calendar_status_url
+
+
+def build_event(args: argparse.Namespace) -> dict[str, object]:
+    if bool(args.start_date) == bool(args.start_datetime):
+        raise SystemExit("Provide exactly one of --start-date or --start-datetime.")
+    if bool(args.end_date) == bool(args.end_datetime):
+        raise SystemExit("Provide exactly one of --end-date or --end-datetime.")
+    if args.start_datetime and not args.timezone:
+        raise SystemExit("--start-datetime requires --timezone.")
+    if args.end_datetime and not args.timezone:
+        raise SystemExit("--end-datetime requires --timezone.")
+
+    if args.start_date:
+        start: dict[str, str] = {"date": args.start_date}
+    else:
+        start = {"dateTime": args.start_datetime, "timeZone": args.timezone}
+    if args.end_date:
+        end: dict[str, str] = {"date": args.end_date}
+    else:
+        end = {"dateTime": args.end_datetime, "timeZone": args.timezone}
+
+    event: dict[str, object] = {
+        "sourceId": args.source_id,
+        "summary": args.summary,
+        "start": start,
+        "end": end,
+    }
+    if args.location:
+        event["location"] = args.location
+    if args.source_url:
+        event["sourceUrl"] = args.source_url
+    if args.reminder_min:
+        event["reminderOverrides"] = [
+            {"method": "popup", "minutes": minutes} for minutes in args.reminder_min
+        ]
+    return event
+
+
+def build_payload(args: argparse.Namespace) -> dict[str, object]:
+    if bool(args.sender_uid) == bool(args.use_owner_auth):
+        raise SystemExit("Provide exactly one of --sender-uid or --use-owner-auth.")
+
+    payload: dict[str, object] = {"confirm": True, "event": build_event(args)}
+    if args.sender_uid:
+        payload["senderUid"] = args.sender_uid
+    if args.use_owner_auth:
+        payload["useOwnerAuth"] = True
+    return payload
+
+
+def dry_run_summary(payload: dict[str, object], api_url: str) -> dict[str, object]:
+    event = payload.get("event", {})
+    return {
+        "dryRun": True,
+        "apiUrl": api_url,
+        "senderUid": payload.get("senderUid"),
+        "useOwnerAuth": payload.get("useOwnerAuth"),
+        "event": event,
+    }
+
+
+def get_json(api_url: str, api_key: str) -> dict[str, object]:
+    request = urllib.request.Request(
+        api_url,
+        method="GET",
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            body = response.read().decode("utf-8")
+            return json.loads(body) if body else {}
+    except urllib.error.HTTPError as err:
+        body = err.read().decode("utf-8", errors="replace")
+        print(f"Agent Genaie calendar bridge failed with HTTP {err.code}: {body}", file=sys.stderr)
+        raise SystemExit(1) from err
+    except urllib.error.URLError as err:
+        print(f"Could not reach Agent Genaie calendar bridge: {err}", file=sys.stderr)
+        raise SystemExit(1) from err
+
+
+def post_json(api_url: str, api_key: str, payload: dict[str, object]) -> dict[str, object]:
+    data = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        api_url,
+        data=data,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=45) as response:
+            body = response.read().decode("utf-8")
+            return json.loads(body) if body else {}
+    except urllib.error.HTTPError as err:
+        body = err.read().decode("utf-8", errors="replace")
+        print(f"Agent Genaie calendar bridge failed with HTTP {err.code}: {body}", file=sys.stderr)
+        raise SystemExit(1) from err
+    except urllib.error.URLError as err:
+        print(f"Could not reach Agent Genaie calendar bridge: {err}", file=sys.stderr)
+        raise SystemExit(1) from err
+
+
+def status_url_with_query(api_url: str, sender_uid: str) -> str:
+    sep = "&" if "?" in api_url else "?"
+    return f"{api_url}{sep}senderUid={urllib.parse.quote(sender_uid)}"
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="genaie-calendar")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    default_write_url = calendar_write_url()
+    default_status_url = calendar_status_url()
+    default_api_key = env_default("AGENT_GENAI_INTERNAL_API_KEY", "")
+
+    write = subparsers.add_parser("write", help="write an event into a user's Google Calendar")
+    write.add_argument("--sender-uid", help="Firebase UID for the connected calendar user")
+    write.add_argument("--use-owner-auth", action="store_true", help="use the configured owner calendar")
+    write.add_argument("--source-id", required=True, help="stable dedup id, e.g. algeria-exhibitions:8531")
+    write.add_argument("--summary", required=True)
+    write.add_argument("--location")
+    write.add_argument("--source-url")
+    write.add_argument("--start-date", help="all-day start, YYYY-MM-DD")
+    write.add_argument("--start-datetime", help="timed start, RFC3339; requires --timezone")
+    write.add_argument("--end-date", help="all-day end, YYYY-MM-DD")
+    write.add_argument("--end-datetime", help="timed end, RFC3339; requires --timezone")
+    write.add_argument("--timezone", help="IANA tz for --start-datetime/--end-datetime")
+    write.add_argument("--reminder-min", action="append", default=[], type=int,
+                       help="popup reminder minutes before start; repeat for multiple")
+    write.add_argument("--api-url", default=default_write_url)
+    write.add_argument("--api-key", default=default_api_key)
+    write.add_argument("--dry-run", action="store_true", help="print sanitized payload summary and do not write")
+    write.add_argument("--force", action="store_true", help="required to actually write the event")
+
+    status = subparsers.add_parser("status", help="check whether a user connected calendar access")
+    status.add_argument("--sender-uid", required=True, help="Firebase UID to check")
+    status.add_argument("--api-url", default=default_status_url)
+    status.add_argument("--api-key", default=default_api_key)
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+    if args.command == "status":
+        if not args.api_key:
+            print("Missing AGENT_GENAI_INTERNAL_API_KEY.", file=sys.stderr)
+            return 2
+        url = status_url_with_query(args.api_url, args.sender_uid)
+        print(json.dumps(get_json(url, args.api_key), indent=2))
+        return 0
+
+    if args.command != "write":
+        parser.error("unknown command")
+
+    payload = build_payload(args)
+    if args.dry_run:
+        print(json.dumps(dry_run_summary(payload, args.api_url), indent=2))
+        return 0
+    if not args.force:
+        print("Refusing to write without --force. Use --dry-run to inspect the request.", file=sys.stderr)
+        return 2
+    if not args.api_key:
+        print("Missing AGENT_GENAI_INTERNAL_API_KEY.", file=sys.stderr)
+        return 2
+
+    result = post_json(args.api_url, args.api_key, payload)
+    print(json.dumps(result, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

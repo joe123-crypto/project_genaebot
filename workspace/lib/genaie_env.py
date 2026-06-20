@@ -116,5 +116,14 @@ def mail_url() -> str:
     return endpoint("/internal/gmail/send")
 
 
+def calendar_write_url() -> str:
+    """Calendar-write endpoint. Explicit AGENT_GENAI_CALENDAR_URL wins; else derived from base."""
+    return env_default("AGENT_GENAI_CALENDAR_URL", "") or endpoint("/internal/calendar/write")
+
+
+def calendar_status_url() -> str:
+    return endpoint("/internal/calendar/status")
+
+
 def api_key() -> str:
     return env_default("AGENT_GENAI_INTERNAL_API_KEY", "")
