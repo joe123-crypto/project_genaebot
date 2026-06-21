@@ -123,6 +123,52 @@ check_docker_access() {
   fi
 }
 
+container_status() {
+  local docker="$1"
+  "$docker" inspect -f '{{.State.Status}}' "$CONTAINER" 2>/dev/null || return 1
+}
+
+wait_container_running() {
+  local docker="$1"
+  local timeout="${2:-45}"
+  local started status elapsed
+  started="$(date +%s)"
+
+  while :; do
+    status="$(container_status "$docker" || true)"
+    if [ "$status" = "running" ] && "$docker" exec "$CONTAINER" true >/dev/null 2>&1; then
+      return 0
+    fi
+
+    elapsed=$(($(date +%s) - started))
+    if [ "$elapsed" -ge "$timeout" ]; then
+      [ -n "$status" ] || status="missing"
+      printf '%s\n' "$status"
+      return 1
+    fi
+
+    sleep 1
+  done
+}
+
+ensure_container_running() {
+  local docker status
+  docker="$(docker_bin)"
+
+  if wait_container_running "$docker" 10 >/dev/null; then
+    return 0
+  fi
+
+  status="$(container_status "$docker" || true)"
+  [ -n "$status" ] || status="missing"
+  log "Container $CONTAINER is $status before config patch; restarting $SERVICE_NAME"
+  run_systemctl restart "$SERVICE_NAME"
+
+  if ! status="$(wait_container_running "$docker" 60)"; then
+    die "container $CONTAINER did not reach running state after restart (last status: $status)"
+  fi
+}
+
 syntax_checks() {
   log "Syntax checks"
   node --check "$OC_DIR/workspace/plugins/public-service-gate/index.js"
@@ -375,6 +421,8 @@ apply_config_template() {
   local docker
   docker="$(docker_bin)"
 
+  ensure_container_running
+
   if "$docker" inspect "$CONTAINER" >/dev/null 2>&1; then
     local tmp_base="/tmp/openclaw-config-patch-$$"
     "$docker" cp "$STAGE_DIR/config/openclaw.template.json" "$CONTAINER:$tmp_base.template.json"
@@ -432,6 +480,7 @@ main() {
   syntax_checks
   stage_source
   "$OC_DIR/deploy/check-openclaw-mirror.sh" --strict
+  ensure_container_running
   sync_source_to_container
   apply_config_template
   verify_live_workspace
