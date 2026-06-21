@@ -692,12 +692,55 @@ esac
   assert.doesNotMatch(reply.text, /only help/i);
 });
 
-test("menu option 3 is handled as the event scouting selection", async () => {
-  const handler = registerHandler({});
+test("menu option 3 sends the account-link invite for event scouting when unlinked", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
+  const accountLinkScript = path.join(dir, "account-link");
+  const serviceStatePath = path.join(dir, "state.json");
+  writeExecutable(
+    accountLinkScript,
+    `#!/usr/bin/env bash
+set -eu
+case "$1" in
+  status) printf '{"linked":false}\\n' ;;
+  create-invite) printf '{"setupUrl":"https://example.test/setup?token=evt"}\\n' ;;
+  *) exit 2 ;;
+esac
+`,
+  );
+
+  const handler = registerHandler({ accountLinkScript, serviceStatePath });
   const reply = await handler(eventFor("3"), { channelId: "whatsapp", senderId: MEMBER });
 
   assert.equal(reply.handled, true);
-  assert.match(reply.text, /Local event scouting will be added after the news pilot/);
+  assert.match(reply.text, /https:\/\/example\.test\/setup/);
+  assert.doesNotMatch(reply.text, /not active|news pilot/i);
+});
+
+test("event scouting request starts setup with calendar connect link when linked", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
+  const accountLinkScript = path.join(dir, "account-link");
+  const serviceStatePath = path.join(dir, "state.json");
+  writeExecutable(
+    accountLinkScript,
+    `#!/usr/bin/env bash
+set -eu
+case "$1" in
+  status) printf '{"linked":true,"publicUserId":"usr_test"}\\n' ;;
+  *) exit 2 ;;
+esac
+`,
+  );
+
+  const handler = registerHandler({
+    accountLinkScript,
+    serviceStatePath,
+    agentGenaiePublicBaseUrl: "https://app.test",
+  });
+  const reply = await handler(eventFor("event scouting"), { channelId: "whatsapp", senderId: MEMBER });
+
+  assert.equal(reply.handled, true);
+  assert.match(reply.text, /https:\/\/app\.test\/usr_test\/connect-gmail/);
+  assert.match(reply.text, /calendar/i);
 });
 
 test("menu option 2 starts personalized news when no service state is active", async () => {
