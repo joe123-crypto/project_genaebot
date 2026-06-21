@@ -55,9 +55,6 @@
       "webetuOnboardingStartText": {
         "type": "string"
       },
-      "webetuGuideText": {
-        "type": "string"
-      },
       "workerSudoCommand": {
         "type": "string"
       },

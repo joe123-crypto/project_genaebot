@@ -52,9 +52,9 @@ def normalize_next_path(value: str) -> str:
   text = str(value or "/").strip()
   if not text or not text.startswith("/") or text.startswith("//"):
     return "/"
-  if text in {"/", "/connect-gmail", "/vault", "/onboarding"}:
+  if text in {"/", "/connect-gmail", "/vault"}:
     return text
-  match = re.match(r"^/(connect-gmail|vault|onboarding)/?(\?.*)?$", text)
+  match = re.match(r"^/(connect-gmail|vault)/?(\?.*)?$", text)
   if match:
     return f"/{match.group(1)}{match.group(2) or ''}"
   return "/"

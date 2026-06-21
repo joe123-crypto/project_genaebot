@@ -25,7 +25,7 @@
 - **Purpose:** central Firebase/Firestore database for app users, service subscriptions, provider-independent credential references, and Gmail connections.
 - **Active collections:** `users`, `publicUsers`, `phoneLinks`, `serviceSubscriptions`, `credentialRefs`, `gmailConnections`, `webetuUsers`, plus Job Scout collections.
 - **Current status:** Agent Genaie integration is live. Firebase users, WhatsApp phone links, Gmail connections, and Webetu vault credentials are mirrored to Firestore.
-- **Public URLs:** user-facing app pages use opaque `publicUserId` routes such as `/{publicUserId}/connect-gmail`, `/{publicUserId}/vault`, and `/{publicUserId}/onboarding`; if the public id is not known, send `/login?next=%2Fconnect-gmail` or `/login?next=%2Fvault`.
+- **Public URLs:** user-facing app pages use opaque `publicUserId` routes such as `/{publicUserId}/connect-gmail` and `/{publicUserId}/vault`; if the public id is not known, send `/login?next=%2Fconnect-gmail` or `/login?next=%2Fvault`.
 - **Maintenance endpoints:** `GET /internal/central-data/status` and `POST /internal/central-data/backfill`, protected by `AGENT_GENAI_INTERNAL_API_KEY`.
 - **Backfill:** completed on 2026-06-03 for 2 Firebase users and 2 Gmail connections.
 - **Secrets:** `CENTRAL_DATA_ENCRYPTION_SECRET` and `CENTRAL_DATA_KEY_VERSION` live in Agent Genaie config. Do not print or expose the encryption secret.

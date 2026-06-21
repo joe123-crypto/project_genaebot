@@ -622,14 +622,6 @@ function webetuAccountLinkStart(api, setupUrl) {
   return loadWebetuOnboardingStart(api).replaceAll("{setupUrl}", setupUrl);
 }
 
-function loadWebetuGuide(api) {
-  const pluginCfg = getPluginConfig(api);
-  if (typeof pluginCfg.webetuGuideText === "string" && pluginCfg.webetuGuideText.trim()) {
-    return pluginCfg.webetuGuideText.trim();
-  }
-  return `Visual setup guide:\n${getAgentGenaiePublicBaseUrl(api)}/onboarding`;
-}
-
 function getNewsSubscriptionsScript(api) {
   const pluginCfg = getPluginConfig(api);
   const configuredPath =
@@ -1719,19 +1711,12 @@ export default {
 
       const menuSelection = getServiceMenuSelection(text);
 
-      if (menuSelection === "1" || isWebetuOnboardingStartRequest(text)) {
+      if (menuSelection === "1" || isWebetuOnboardingStartRequest(text) || isWebetuGuideRequest(text)) {
         return await handleWebetuOnboardingStart(api, sender);
       }
 
       if (isWebetuSetupDoneRequest(text)) {
         return await handleWebetuSetupDone(api, sender);
-      }
-
-      if (isWebetuGuideRequest(text)) {
-        return {
-          handled: true,
-          text: loadWebetuGuide(api),
-        };
       }
 
       if (isReservationStatusRequest(text)) {

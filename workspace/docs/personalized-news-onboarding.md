@@ -12,12 +12,10 @@ Allowed in public chat:
 - Ask clarifying questions when the topics are too broad or unclear.
 - Confirm that personalized news is set up for this WhatsApp chat.
 - Stop personalized news when the user asks.
-- Tell the user local event scouting registration is not active yet.
 
 Not allowed in public chat:
 
 - Using technical/internal terms such as `cron`, `registry`, `script`, `CLI`, `OpenClaw config`, logs, dispatcher, or implementation details.
-- Claiming event scouting is active for public users.
 - Sending public-user news digests to admin or WhatsApp groups.
 - Revealing private user data, stored preferences for other users, raw command output, stack traces, or internal file contents.
 

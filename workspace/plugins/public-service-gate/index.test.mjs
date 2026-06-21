@@ -692,6 +692,29 @@ esac
   assert.doesNotMatch(reply.text, /only help/i);
 });
 
+test("webetu guide request starts current setup flow without onboarding guide URL", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
+  const accountLinkScript = path.join(dir, "account-link");
+  writeExecutable(
+    accountLinkScript,
+    `#!/usr/bin/env bash
+set -eu
+case "$1" in
+  status) printf '{"linked":false}\\n' ;;
+  create-invite) printf '{"setupUrl":"https://example.test/setup?token=guide"}\\n' ;;
+  *) exit 2 ;;
+esac
+`,
+  );
+
+  const handler = registerHandler({ accountLinkScript });
+  const reply = await handler(eventFor("visual guide for webetu"), { channelId: "whatsapp", senderId: MEMBER });
+
+  assert.equal(reply.handled, true);
+  assert.match(reply.text, /https:\/\/example\.test\/setup/);
+  assert.doesNotMatch(reply.text, /\/onboarding\b|Visual setup guide/i);
+});
+
 test("menu option 3 sends the account-link invite for event scouting when unlinked", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
   const accountLinkScript = path.join(dir, "account-link");
