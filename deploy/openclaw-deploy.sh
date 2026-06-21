@@ -444,10 +444,38 @@ restart_and_check() {
 
   if [ -x "$DEPLOY_DIR/ops/check-health.sh" ]; then
     log "Run health check"
-    "$DEPLOY_DIR/ops/check-health.sh"
+    if ! "$DEPLOY_DIR/ops/check-health.sh"; then
+      diagnose_health_failure || true
+      return 1
+    fi
   else
     log "Skipping health check; missing $DEPLOY_DIR/ops/check-health.sh"
   fi
+}
+
+diagnose_health_failure() {
+  local docker
+  docker="$(docker_bin)"
+
+  log "Health check failed; collecting Webetu worker diagnostics"
+  "$docker" inspect -f 'container={{.Name}} status={{.State.Status}} restarting={{.State.Restarting}} exitCode={{.State.ExitCode}}' "$CONTAINER" 2>&1 || true
+  "$docker" exec "$CONTAINER" sh -lc 'ls -l /usr/local/bin/webetu-worker-safe /opt/webetu-worker/.venv/bin/webetu-worker /etc/webetu-worker/config.json /var/lib/webetu-worker 2>&1' || true
+  "$docker" exec -u joseph "$CONTAINER" sh -lc '
+    out="$(mktemp)"
+    err="$(mktemp)"
+    if sudo -n -u webetu-worker /usr/local/bin/webetu-worker-safe list-registrations >"$out" 2>"$err"; then
+      rc=0
+    else
+      rc=$?
+    fi
+    printf "webetu-list-registrations rc=%s\n" "$rc"
+    printf "webetu-list-registrations stdout:\n"
+    sed "s/[[:space:]]\\+/ /g" "$out" | head -20
+    printf "webetu-list-registrations stderr:\n"
+    sed "s/[[:space:]]\\+/ /g" "$err" | head -20
+    rm -f "$out" "$err"
+    exit "$rc"
+  ' || true
 }
 
 verify_live_workspace() {
