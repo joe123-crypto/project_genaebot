@@ -8,6 +8,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_FILE="${WEBETU_NOTIFY_LOG_FILE:-/home/joseph/.openclaw/runtime/cron-state/webetu-meals/notification.log}"
+STATE_DIR="${WEBETU_NOTIFY_STATE_DIR:-$(dirname "$LOG_FILE")}"
+SKIP_WINDOWS_FILE="${WEBETU_NOTIFY_SKIP_WINDOWS_FILE:-$STATE_DIR/skip-windows.tsv}"
+LOCK_DIR="${WEBETU_NOTIFY_LOCK_DIR:-$STATE_DIR/notify.lock}"
 WORKER="${WEBETU_WORKER_BIN:-/home/joseph/projects/webetu/webetu-worker/bin/webetu-worker}"
 WORKER_CONFIG="${WEBETU_WORKER_CONFIG:-/home/joseph/projects/webetu/webetu-worker/config/webetu-worker.example.json}"
 WORKER_MODE="${WEBETU_WORKER_MODE:-sudo}"
@@ -37,12 +40,64 @@ DRY_RUN="${WEBETU_NOTIFY_DRY_RUN:-0}"
 HEARTBEAT_SECONDS="${WEBETU_NOTIFY_HEARTBEAT_SECONDS:-10}"
 WORKER_STEP_TIMEOUT_SECONDS="${WEBETU_WORKER_STEP_TIMEOUT_SECONDS:-90}"
 USER_FAILURE_MESSAGE="${WEBETU_USER_FAILURE_MESSAGE:-I couldn't complete today's Webetu meal reservation automatically. Please reserve manually today.}"
+BROAD_FAILURE_NOTICE_ALLOWED="${WEBETU_ALLOW_BROAD_FAILURE_NOTICE:-0}"
+
+ensure_state_dir() {
+  mkdir -p "$STATE_DIR" "$(dirname "$LOG_FILE")"
+}
 
 log() {
   local line
+  ensure_state_dir
   line="$(printf '[%s] %s' "$(date '+%Y-%m-%d %H:%M:%S %Z')" "$*")"
   printf '%s\n' "$line" >>"$LOG_FILE"
   printf '%s\n' "$line"
+}
+
+acquire_run_lock() {
+  ensure_state_dir
+  if mkdir "$LOCK_DIR" 2>/dev/null; then
+    printf '%s\n' "$$" >"$LOCK_DIR/pid"
+    return 0
+  fi
+
+  local lock_pid=""
+  if [ -f "$LOCK_DIR/pid" ]; then
+    lock_pid="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
+  fi
+  if [ -n "$lock_pid" ] && ! kill -0 "$lock_pid" 2>/dev/null; then
+    rm -rf "$LOCK_DIR"
+    if mkdir "$LOCK_DIR" 2>/dev/null; then
+      printf '%s\n' "$$" >"$LOCK_DIR/pid"
+      log "lock recovered stale_pid=$lock_pid"
+      return 0
+    fi
+  fi
+
+  log "skipped reason=run_lock_active lock_pid=${lock_pid:-unknown}"
+  printf 'Webetu notify skipped: another run is already active.\n'
+  return 1
+}
+
+release_run_lock() {
+  if [ -d "$LOCK_DIR" ] && [ "$(cat "$LOCK_DIR/pid" 2>/dev/null || true)" = "$$" ]; then
+    rm -rf "$LOCK_DIR"
+  fi
+}
+
+skip_window_marked() {
+  local window="$*"
+  local line marked
+  [ -f "$SKIP_WINDOWS_FILE" ] || return 1
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    marked="${line%%#*}"
+    marked="$(printf '%s' "$marked" | xargs)"
+    [ -z "$marked" ] && continue
+    [ "$marked" = "$window" ] && return 0
+  done <"$SKIP_WINDOWS_FILE"
+
+  return 1
 }
 
 run_worker() {
@@ -424,21 +479,11 @@ send_failure_notices() {
 }
 
 main() {
-  if [ "$WORKER_MODE" = "sudo" ] && [ ! -x "$WORKER_SAFE" ]; then
-    log "system failure reason=webetu-worker_safe_wrapper_not_found"
-    printf 'webetu-worker safe wrapper not found\n' >&2
-    return 1
-  fi
+  ensure_state_dir
 
-  if [ "$WORKER_MODE" != "sudo" ] && [ ! -x "$WORKER" ]; then
-    log "system failure reason=webetu-worker_executable_not_found"
-    printf 'webetu-worker executable not found\n' >&2
-    return 1
-  fi
-
-  if [ "$DRY_RUN" != "1" ] && [ ! -x "$OPENCLAW_BIN" ]; then
-    log "system failure reason=openclaw_executable_not_found"
-    printf 'openclaw executable not found\n' >&2
+  if [ "${1:-}" = "--failure-notice-only" ] && [ "$BROAD_FAILURE_NOTICE_ALLOWED" != "1" ]; then
+    log "failure-notice refused reason=broad_failure_notice_disabled"
+    printf 'Broad Webetu failure notices are disabled. Set WEBETU_ALLOW_BROAD_FAILURE_NOTICE=1 only for a confirmed full-system outage.\n' >&2
     return 1
   fi
 
@@ -455,6 +500,35 @@ main() {
       "$(date -d 'tomorrow + 1 day' +%Y-%m-%d)"
       "$(date -d 'tomorrow + 2 days' +%Y-%m-%d)"
     )
+  fi
+
+  if skip_window_marked "${dates[@]}"; then
+    log "skipped reason=window_suppressed dates=${dates[*]}"
+    printf 'Webetu notify skipped: date window is suppressed (%s).\n' "${dates[*]}"
+    return 0
+  fi
+
+  if ! acquire_run_lock; then
+    return 0
+  fi
+  trap release_run_lock EXIT
+
+  if [ "$WORKER_MODE" = "sudo" ] && [ ! -x "$WORKER_SAFE" ]; then
+    log "system failure reason=webetu-worker_safe_wrapper_not_found"
+    printf 'webetu-worker safe wrapper not found\n' >&2
+    return 1
+  fi
+
+  if [ "$WORKER_MODE" != "sudo" ] && [ ! -x "$WORKER" ]; then
+    log "system failure reason=webetu-worker_executable_not_found"
+    printf 'webetu-worker executable not found\n' >&2
+    return 1
+  fi
+
+  if [ "$DRY_RUN" != "1" ] && [ ! -x "$OPENCLAW_BIN" ]; then
+    log "system failure reason=openclaw_executable_not_found"
+    printf 'openclaw executable not found\n' >&2
+    return 1
   fi
 
   log "started dates=${dates[*]} dry_run=$DRY_RUN worker_mode=$WORKER_MODE heartbeat_seconds=$HEARTBEAT_SECONDS worker_step_timeout_seconds=$WORKER_STEP_TIMEOUT_SECONDS"
@@ -545,17 +619,17 @@ main() {
 
     if [ "$user_reservation_failed" -ne 0 ]; then
       reservation_failures=$((reservation_failures + 1))
-      log "delivery skipped user=$user_id phone_hash=$phone_hash source=$source reason=reservation_failure"
-      log "user done user=$user_id phone_hash=$phone_hash source=$source status=reservation_failure"
-      rm -f "$summary_file"
-      continue
     fi
 
     log "delivery start user=$user_id phone_hash=$phone_hash source=$source"
     if ! send_message "$phone" "$phone_hash" "$summary_file"; then
       delivery_failures=$((delivery_failures + 1))
     fi
-    log "user done user=$user_id phone_hash=$phone_hash source=$source"
+    if [ "$user_reservation_failed" -ne 0 ]; then
+      log "user done user=$user_id phone_hash=$phone_hash source=$source status=reservation_failure_summary_sent"
+    else
+      log "user done user=$user_id phone_hash=$phone_hash source=$source"
+    fi
     rm -f "$summary_file"
   done <<<"$rows"
 
@@ -563,7 +637,7 @@ main() {
   printf 'Webetu notify completed: processed=%s skipped=%s blocked=%s reservation_failures=%s delivery_failures=%s\n' "$processed" "$skipped" "$blocked" "$reservation_failures" "$delivery_failures"
 
   if [ "$reservation_failures" -gt 0 ] || [ "$blocked" -gt 0 ] || [ "$delivery_failures" -gt 0 ]; then
-    send_admin_alert "Run issue: reservation_failures=$reservation_failures blocked=$blocked delivery_failures=$delivery_failures. Normal reservation results were not sent to admin." || true
+    send_admin_alert "Run issue: reservation_failures=$reservation_failures blocked=$blocked delivery_failures=$delivery_failures. Per-user reservation summaries were sent where delivery was possible." || true
     return 1
   fi
 }
