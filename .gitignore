@@ -64,6 +64,8 @@
 !workspace/skills/
 !workspace/skills/genaie-mail/
 !workspace/skills/genaie-mail/**
+!workspace/skills/genaie-calendar/
+!workspace/skills/genaie-calendar/**
 !workspace/skills/gog/
 !workspace/skills/gog/**
 !workspace/skills/job-scout/
