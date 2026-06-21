@@ -88,19 +88,29 @@ esac
       info() {},
       warn() {},
     },
-    on(_name, callback, options = {}) {
-      handlers.push({ callback, priority: options?.priority ?? 0 });
+    on(name, callback, options = {}) {
+      handlers.push({ name, callback, priority: options?.priority ?? 0 });
     },
   };
   plugin.register(api);
   handlers.sort((a, b) => b.priority - a.priority);
-  return async function dispatch(event, ctx) {
-    for (const { callback } of handlers) {
+  async function dispatch(event, ctx) {
+    for (const { name, callback } of handlers) {
+      if (name !== "before_dispatch") continue;
+      const reply = await callback(event, ctx);
+      if (reply !== undefined) return reply;
+    }
+    return undefined;
+  }
+  dispatch.messageSending = async function messageSending(event, ctx) {
+    for (const { name, callback } of handlers) {
+      if (name !== "message_sending") continue;
       const reply = await callback(event, ctx);
       if (reply !== undefined) return reply;
     }
     return undefined;
   };
+  return dispatch;
 }
 
 function eventFor(text, sender = MEMBER) {
@@ -169,6 +179,71 @@ test("failsafe stop command silently clears active service state before dispatch
   assert.equal(reply.handled, true);
   assert.equal(reply.text, undefined);
   assert.deepEqual(saved.states, {});
+});
+
+test("failsafe stop command accepts transcript variants before dispatch", async () => {
+  let calls = 0;
+  const handler = registerHandler({}, async () => {
+    calls += 1;
+    return "RELEVANT";
+  });
+
+  for (const text of ["stop", "Stop", "stop!"]) {
+    const reply = await handler(eventFor(text), { channelId: "whatsapp", senderId: MEMBER });
+
+    assert.equal(reply.handled, true);
+    assert.equal(reply.text, undefined);
+  }
+  assert.equal(calls, 0);
+});
+
+test("failsafe stop command handles nested live-style event fields", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
+  const serviceStatePath = path.join(dir, "state.json");
+  writeServiceState(serviceStatePath, MEMBER, "webetu", "webetu.awaiting_restaurant");
+
+  let calls = 0;
+  const handler = registerHandler({ serviceStatePath }, async () => {
+    calls += 1;
+    return "RELEVANT";
+  });
+  const reply = await handler(
+    {
+      channel: "whatsapp:default",
+      sender: { e164: MEMBER },
+      message: { text: "Stop" },
+    },
+    { channelId: "whatsapp:default" },
+  );
+  const saved = JSON.parse(fs.readFileSync(serviceStatePath, "utf8"));
+
+  assert.equal(reply.handled, true);
+  assert.equal(reply.text, undefined);
+  assert.equal(calls, 0);
+  assert.deepEqual(saved.states, {});
+});
+
+test("failsafe stop command suppresses late WhatsApp outbound until next inbound", async () => {
+  const handler = registerHandler({});
+
+  const stopReply = await handler(eventFor("stop"), { channelId: "whatsapp", senderId: MEMBER });
+  const suppressed = await handler.messageSending(
+    { to: MEMBER, content: "Your default restaurant is Test Residence." },
+    { channelId: "whatsapp", senderId: MEMBER },
+  );
+
+  assert.equal(stopReply.handled, true);
+  assert.equal(stopReply.text, undefined);
+  assert.equal(suppressed.cancel, true);
+  assert.equal(suppressed.cancelReason, "failsafe_stop");
+
+  await handler(eventFor("Tell me a joke about school"), { channelId: "whatsapp", senderId: MEMBER });
+  const allowed = await handler.messageSending(
+    { to: MEMBER, content: "Fresh response after the next inbound message." },
+    { channelId: "whatsapp", senderId: MEMBER },
+  );
+
+  assert.equal(allowed, undefined);
 });
 
 test("failsafe stop command claims unknown sender before invite or LLM checks", async () => {

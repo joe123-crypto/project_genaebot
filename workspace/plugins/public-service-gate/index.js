@@ -194,6 +194,8 @@ const DEFAULT_SHORT_CONTINUATION_KEYWORDS = [
 const DEFAULT_RELEVANCE_MAX_TEXT_LENGTH = 400;
 const DEFAULT_RELEVANCE_LLM_MAX_TOKENS = 5;
 const FAILSAFE_STOP_PRIORITY = 100;
+const FAILSAFE_STOP_SUPPRESSION_TTL_MS = 30 * 60 * 1000;
+const failsafeStopSuppressions = new Map();
 
 function readOpenclawEnv() {
   try {
@@ -316,6 +318,52 @@ function getEventSender(event = {}, ctx = {}) {
       ctx.sender?.e164 ??
       ctx.sender?.id ??
       "",
+  );
+}
+
+function stopSuppressionKey(value) {
+  const digits = String(value ?? "").replace(/[^\d]/g, "");
+  return digits || "";
+}
+
+function markFailsafeStopSuppression(sender, now = Date.now()) {
+  const key = stopSuppressionKey(sender);
+  if (!key) return;
+  failsafeStopSuppressions.set(key, now + FAILSAFE_STOP_SUPPRESSION_TTL_MS);
+}
+
+function clearFailsafeStopSuppression(sender) {
+  const key = stopSuppressionKey(sender);
+  if (!key) return;
+  failsafeStopSuppressions.delete(key);
+}
+
+function hasFailsafeStopSuppression(value, now = Date.now()) {
+  const key = stopSuppressionKey(value);
+  if (!key) return false;
+  const expiresAt = failsafeStopSuppressions.get(key);
+  if (!expiresAt) return false;
+  if (expiresAt <= now) {
+    failsafeStopSuppressions.delete(key);
+    return false;
+  }
+  return true;
+}
+
+function getOutboundRecipient(event = {}, ctx = {}) {
+  return (
+    event.to ??
+    event.target ??
+    event.recipient ??
+    event.recipientId ??
+    event.metadata?.to ??
+    event.metadata?.recipient ??
+    ctx.senderId ??
+    ctx.sender_id ??
+    ctx.from ??
+    ctx.sender?.e164 ??
+    ctx.sender?.id ??
+    ""
   );
 }
 
@@ -1457,10 +1505,14 @@ export default {
         const channel = getEventChannel(event, ctx);
         if (!isWhatsAppChannel(channel)) return;
         const text = getEventText(event);
-        if (!isFailsafeStopCommand(text)) return;
-
         const sender = getEventSender(event, ctx);
+        if (!isFailsafeStopCommand(text)) {
+          if (sender && text) clearFailsafeStopSuppression(sender);
+          return;
+        }
+
         if (sender) {
+          markFailsafeStopSuppression(sender);
           try {
             clearServiceState(api, sender);
           } catch (err) {
@@ -1471,6 +1523,25 @@ export default {
         }
         api.logger?.info?.("public-service-gate: failsafe stop handled before agent dispatch");
         return { handled: true };
+      },
+      { priority: FAILSAFE_STOP_PRIORITY },
+    );
+
+    api.on(
+      "message_sending",
+      async (event, ctx) => {
+        if (!isEnabled(api)) return;
+        const channel = getEventChannel(event, ctx);
+        if (!isWhatsAppChannel(channel)) return;
+        const recipient = getOutboundRecipient(event, ctx);
+        if (!hasFailsafeStopSuppression(recipient)) return;
+
+        api.logger?.info?.("public-service-gate: suppressed WhatsApp outbound after failsafe stop");
+        return {
+          cancel: true,
+          cancelReason: "failsafe_stop",
+          metadata: { suppressedBy: "public-service-gate", reason: "failsafe_stop" },
+        };
       },
       { priority: FAILSAFE_STOP_PRIORITY },
     );
