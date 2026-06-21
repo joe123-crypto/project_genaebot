@@ -1,12 +1,4 @@
 {
-  "agents": {
-    "defaults": {
-      "model": {
-        "primary": "vercel-ai-gateway/deepseek/deepseek-v4-pro"
-      },
-      "workspace": "/home/joseph/.openclaw/agent-workspace"
-    }
-  },
   "gateway": {
     "auth": {
       "mode": "token",
@@ -16,27 +8,80 @@
         "id": "GATEWAY_AUTH_TOKEN"
       }
     },
-    "bind": "loopback",
     "mode": "local",
+    "bind": "loopback",
     "tailscale": {
       "mode": "off"
     }
   },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "vercel-ai-gateway/deepseek/deepseek-v4-pro",
+        "fallbacks": [
+          "vercel-ai-gateway/deepseek/deepseek-v4-pro"
+        ]
+      },
+      "workspace": "/home/joseph/.openclaw/agent-workspace",
+      "typingMode": "instant",
+      "typingIntervalSeconds": 6,
+      "blockStreamingDefault": "off",
+      "blockStreamingBreak": "text_end",
+      "blockStreamingChunk": {
+        "minChars": 500,
+        "maxChars": 900
+      },
+      "blockStreamingCoalesce": {
+        "idleMs": 1200
+      },
+      "timeoutSeconds": 1800,
+      "memorySearch": {
+        "provider": "openai-compatible",
+        "model": "google/text-embedding-005",
+        "remote": {
+          "baseUrl": "https://ai-gateway.vercel.sh/v1",
+          "apiKey": {
+            "source": "env",
+            "provider": "dotenv",
+            "id": "AI_GATEWAY_API_KEY"
+          }
+        }
+      },
+      "thinkingDefault": "max"
+    }
+  },
   "plugins": {
-    "load": {
-      "paths": [
-        "/home/joseph/.openclaw/workspace/plugins/public-service-gate",
-        "/home/joseph/.openclaw/workspace/plugins/whatsapp-relevance-gate"
-      ]
-    },
     "entries": {
+      "vercel-ai-gateway": {
+        "enabled": true
+      },
+      "whatsapp": {
+        "enabled": true
+      },
+      "voice-call": {
+        "enabled": true,
+        "config": {
+          "provider": "mock",
+          "sessionScope": "per-phone",
+          "outbound": {
+            "defaultMode": "conversation"
+          },
+          "inboundPolicy": "disabled"
+        }
+      },
+      "public-service-gate": {
+        "enabled": true,
+        "config": {
+          "enabled": true,
+          "greetingTemplatePath": "/home/joseph/.openclaw/workspace/public-greeting.txt",
+          "webetuOnboardingStartText": "Open this link and sign in with your email:\n{setupUrl}\n\nAfter sign-in, the app will open your Credentials Vault. Save your Webetu username and password there. Do not send your Webetu username or password here.\n\nThen come back here and tell me which restaurant I should use by default for your meal reservations. I will confirm it with you before saving.\n\nIf the sign-in email does not arrive, check your Spam or Junk folder.",
+          "invitesEnabled": true
+        }
+      },
       "whatsapp-relevance-gate": {
         "enabled": true,
         "config": {
           "enabled": true,
-          "bypassUsers": [
-            "+213563719936"
-          ],
           "serviceSummary": "Webetu Progress meal reservations, personalized news delivery, local event scouting, and job/scholarship/internship scouting and application and inviting friends to the service",
           "serviceKeywords": [
             "meal",
@@ -82,6 +127,192 @@
           "maxTextLength": 400
         }
       }
+    },
+    "load": {
+      "paths": [
+        "/home/joseph/.openclaw/workspace/plugins/public-service-gate",
+        "/home/joseph/.openclaw/workspace/plugins/whatsapp-relevance-gate"
+      ]
+    }
+  },
+  "web": {
+    "enabled": true,
+    "whatsapp": {
+      "keepAliveIntervalMs": 25000,
+      "connectTimeoutMs": 60000,
+      "defaultQueryTimeoutMs": 60000
+    }
+  },
+  "channels": {
+    "whatsapp": {
+      "dmPolicy": "open",
+      "selfChatMode": false,
+      "sendReadReceipts": false,
+      "blockStreaming": true,
+      "blockStreamingCoalesce": {
+        "minChars": 400,
+        "maxChars": 900,
+        "idleMs": 1200
+      },
+      "enabled": true
+    }
+  },
+  "skills": {
+    "install": {
+      "preferBrew": true
+    },
+    "entries": {
+      "1password": {
+        "enabled": false
+      },
+      "apple-notes": {
+        "enabled": false
+      },
+      "apple-reminders": {
+        "enabled": false
+      },
+      "bear-notes": {
+        "enabled": false
+      },
+      "blogwatcher": {
+        "enabled": false
+      },
+      "blucli": {
+        "enabled": false
+      },
+      "camsnap": {
+        "enabled": false
+      },
+      "clawhub": {
+        "enabled": false
+      },
+      "coding-agent": {
+        "enabled": false
+      },
+      "discord": {
+        "enabled": false
+      },
+      "eightctl": {
+        "enabled": false
+      },
+      "gemini": {
+        "enabled": false
+      },
+      "gh-issues": {
+        "enabled": false
+      },
+      "gifgrep": {
+        "enabled": false
+      },
+      "github": {
+        "enabled": false
+      },
+      "gog": {
+        "enabled": false
+      },
+      "goplaces": {
+        "enabled": false
+      },
+      "himalaya": {
+        "enabled": false
+      },
+      "imsg": {
+        "enabled": false
+      },
+      "mcporter": {
+        "enabled": false
+      },
+      "model-usage": {
+        "enabled": false
+      },
+      "nano-pdf": {
+        "enabled": false
+      },
+      "obsidian": {
+        "enabled": false
+      },
+      "openai-whisper": {
+        "enabled": false
+      },
+      "openai-whisper-api": {
+        "enabled": false
+      },
+      "openhue": {
+        "enabled": false
+      },
+      "oracle": {
+        "enabled": false
+      },
+      "ordercli": {
+        "enabled": false
+      },
+      "peekaboo": {
+        "enabled": false
+      },
+      "sag": {
+        "enabled": false
+      },
+      "session-logs": {
+        "enabled": false
+      },
+      "sherpa-onnx-tts": {
+        "enabled": false
+      },
+      "slack": {
+        "enabled": false
+      },
+      "songsee": {
+        "enabled": false
+      },
+      "sonoscli": {
+        "enabled": false
+      },
+      "spotify-player": {
+        "enabled": false
+      },
+      "summarize": {
+        "enabled": false
+      },
+      "things-mac": {
+        "enabled": false
+      },
+      "tmux": {
+        "enabled": false
+      },
+      "trello": {
+        "enabled": false
+      },
+      "video-frames": {
+        "enabled": false
+      },
+      "voice-call": {
+        "enabled": false
+      },
+      "wacli": {
+        "enabled": false
+      },
+      "xurl": {
+        "enabled": false
+      }
+    }
+  },
+  "media": {
+    "ttlHours": 168
+  },
+  "messages": {
+    "queue": {
+      "mode": "steer",
+      "byChannel": {
+        "whatsapp": "steer"
+      }
+    }
+  },
+  "session": {
+    "dmScope": "per-account-channel-peer"
+  },
+  "tools": {
+    "elevated": {
+      "enabled": false
     }
   },
   "secrets": {
@@ -98,11 +329,6 @@
           "JSEARCH_PROVIDER"
         ]
       }
-    }
-  },
-  "tools": {
-    "elevated": {
-      "enabled": false
     }
   }
 }
