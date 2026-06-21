@@ -460,10 +460,10 @@ diagnose_health_failure() {
   log "Health check failed; collecting Webetu worker diagnostics"
   "$docker" inspect -f 'container={{.Name}} status={{.State.Status}} restarting={{.State.Restarting}} exitCode={{.State.ExitCode}}' "$CONTAINER" 2>&1 || true
   "$docker" exec "$CONTAINER" sh -lc 'ls -l /usr/local/bin/webetu-worker-safe /opt/webetu-worker/.venv/bin/webetu-worker /etc/webetu-worker/config.json /var/lib/webetu-worker 2>&1' || true
-  "$docker" exec -u joseph "$CONTAINER" sh -lc '
+  "$docker" exec "$CONTAINER" sh -lc '
     out="$(mktemp)"
     err="$(mktemp)"
-    if sudo -n -u webetu-worker /usr/local/bin/webetu-worker-safe list-registrations >"$out" 2>"$err"; then
+    if runuser -u webetu-worker -- /usr/local/bin/webetu-worker-safe list-registrations >"$out" 2>"$err"; then
       rc=0
     else
       rc=$?

@@ -35,11 +35,3 @@ jobs:
 
       - name: Deploy live container
         run: sudo /usr/local/sbin/openclaw-prod-deploy "$GITHUB_WORKSPACE"
-
-      - name: Diagnose failed deploy
-        if: failure()
-        run: |
-          sudo docker ps -a
-          sudo docker logs --tail 120 openclaw-gateway || true
-          sudo docker exec openclaw-gateway sh -lc 'id; ls -l /usr/local/bin/webetu-worker-safe /opt/webetu-worker/.venv/bin/webetu-worker /etc/webetu-worker/config.json /var/lib/webetu-worker 2>&1' || true
-          sudo docker exec -u joseph openclaw-gateway sh -lc 'set +e; sudo -n -u webetu-worker /usr/local/bin/webetu-worker-safe list-registrations > /tmp/webetu.out 2> /tmp/webetu.err; rc=$?; echo "rc=$rc"; echo "stdout:"; sed "s/[[:space:]]\+/ /g" /tmp/webetu.out | head -40; echo "stderr:"; sed "s/[[:space:]]\+/ /g" /tmp/webetu.err | head -40; exit 0' || true
