@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -33,6 +34,36 @@ import check_new_events as ax  # noqa: E402  (reuse fetch_list/fetch_dates/is_up
 
 SOURCE_PREFIX = "algeria-exhibitions"
 DEFAULT_REMINDER_MINUTES = [1440, 120]
+
+# Resolving an event's dates costs one (sometimes retried) HTTP request per event, so we
+# cache resolved dates by event id under the writable runtime tree — same place the
+# listener keeps its state. Each run then only fetches dates for events that are new,
+# whose slug changed, or that still have no concrete date published.
+DATE_CACHE_FILE = os.environ.get(
+    "OPENCLAW_EVENT_SCOUT_DATE_CACHE",
+    "/home/joseph/.openclaw/runtime/cron-state/event-scout-dispatcher/date_cache.json",
+)
+
+
+def load_date_cache() -> dict:
+    try:
+        with open(DATE_CACHE_FILE, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_date_cache(cache: dict) -> None:
+    # The cache is a pure optimization; a write failure must never break a dispatch run.
+    try:
+        os.makedirs(os.path.dirname(DATE_CACHE_FILE), exist_ok=True)
+        tmp = f"{DATE_CACHE_FILE}.tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(cache, fh, ensure_ascii=False)
+        os.replace(tmp, DATE_CACHE_FILE)
+    except OSError:
+        pass
 
 
 def run_json(cmd: list[str], timeout: int = 90) -> dict:
@@ -76,14 +107,30 @@ def write_event(user_id: str, event: dict, reminder_minutes: list[int]) -> dict:
 
 
 def fetch_upcoming_events() -> list[dict]:
-    """Fetch the Algeria Exhibitions catalog once and keep upcoming, datable events."""
+    """Fetch the Algeria Exhibitions catalog once and keep upcoming, datable events.
+
+    Resolved event dates are cached by id (see DATE_CACHE_FILE): a cached entry is reused
+    only when the slug is unchanged and at least one concrete date is known, so newly
+    published dates are still picked up while already-dated events skip the per-event
+    HTTP fetch. The rebuilt cache is pruned to the current catalog before saving.
+    """
     listing = ax.fetch_list()
     if listing is None:
         raise RuntimeError("could not fetch Algeria Exhibitions event list")
+    cache = load_date_cache()
+    fresh: dict[str, dict] = {}
     events = []
     for eid, meta in listing.items():
+        key = str(eid)
         slug = meta.get("slug", "")
-        start, end = ax.fetch_dates(slug) if slug else (None, None)
+        cached = cache.get(key)
+        if cached and cached.get("slug") == slug and (cached.get("start") or cached.get("end")):
+            start, end = cached.get("start"), cached.get("end")
+        elif slug:
+            start, end = ax.fetch_dates(slug)
+        else:
+            start, end = (None, None)
+        fresh[key] = {"slug": slug, "start": start, "end": end}
         if not ax.is_upcoming(start, end):
             continue
         # A calendar entry needs at least one concrete date; without one we leave the
@@ -104,6 +151,7 @@ def fetch_upcoming_events() -> list[dict]:
                 "range": ax.fmt_range(start, end),
             }
         )
+    save_date_cache(fresh)
     return events
 
 

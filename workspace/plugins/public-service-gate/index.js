@@ -43,7 +43,7 @@ const DEFAULT_INVITE_PENDING = `Your WhatsApp number is activated.
 Your account is not unlocked yet. Type "invite link", send the link to one person. When they activate with your link, your access will unlock.`;
 const DEFAULT_INVITE_UNLOCKED = `Your invited person activated their WhatsApp number. Your access to Genaie Service Desk is now unlocked.`;
 const DEFAULT_INVITE_AWAITING_ACTIVATION = `Got it — waiting for them to activate. Your access unlocks as soon as they do.`;
-const DEFAULT_EVENT_SCOUTING_NOT_ACTIVE = `Local event scouting will be added after the news pilot.`;
+const DEFAULT_EVENT_SCOUT_SETUP_FAILED = `I couldn't start event scouting setup right now. Please try again later.`;
 const DEFAULT_BUSY_MESSAGE = `I am handling a few requests right now. Please try again shortly.`;
 const WEBETU_RESTAURANT_WAIT_REPLY = `Understood. Make manual reservations on Webetu until your restaurant shows up. When you see it, message me and I'll set it as your default and fill your next 3 days.`;
 const WEBETU_RESTAURANT_USE_SUPPORTED_REPLY = `Send the exact restaurant name from the supported list you want me to use.`;
@@ -160,6 +160,12 @@ const JOB_SCOUT_REQUEST_PATTERNS = [
   /\b(?:apply|applying)\b.*\bjobs?\b/i,
   /\b(?:find|look\s+for|search\s+for|scout)\b.*\b(?:jobs?|internships?|scholarships?)\b/i,
   /\b(?:jobs?|internships?|scholarships?)\b.*\b(?:find|search|scout|apply|application|applications?|register|subscribe|start|setup|set\s*up)\b/i,
+];
+const EVENT_SCOUT_REQUEST_PATTERNS = [
+  /\bevent\s*(?:scout|scouting)\b/i,
+  /\blocal\s+events?\b/i,
+  /\b(?:find|look\s+for|search\s+for|scout|register|subscribe|sign\s*me\s*up|start|setup|set\s*up)\b.*\bevents?\b/i,
+  /\bevents?\b.*\b(?:find|search|scout|register|subscribe|start|setup|set\s*up|calendar|remind(?:er|ers)?|near\s*me|in\s+my\s+area)\b/i,
 ];
 // Clear reservation-status phrasings only. Bare "check"/"check again" is left
 // out on purpose so it falls through to the LLM, which asks one clarifying
@@ -512,7 +518,8 @@ function isKnownServiceRequestText(text) {
       isReservationStatusRequest(text) ||
       isNewsStopRequest(text) ||
       isNewsRequest(text) ||
-      isJobScoutRequest(text),
+      isJobScoutRequest(text) ||
+      isEventScoutRequest(text),
   );
 }
 
@@ -979,6 +986,12 @@ function isJobScoutRequest(text) {
   return JOB_SCOUT_REQUEST_PATTERNS.some((pattern) => pattern.test(compact));
 }
 
+function isEventScoutRequest(text) {
+  const compact = String(text ?? "").trim().replace(/\s+/g, " ");
+  if (!compact || compact.length > 420) return false;
+  return EVENT_SCOUT_REQUEST_PATTERNS.some((pattern) => pattern.test(compact));
+}
+
 function splitTopics(value) {
   return String(value ?? "")
     .replace(/\s+(?:and|&)\s+/gi, ",")
@@ -1132,6 +1145,17 @@ Then choose one setup option here:
 2. Upload your CV and allow me to pull the details from it.
 
 I will ask only one or two questions at a time.`;
+}
+
+function eventScoutStartText(setupUrl) {
+  return `Event scouting is active.
+
+Open this setup link and sign in with your email:
+${setupUrl}
+
+After sign-in, connect Google and allow calendar access so I can add events to your calendar.
+
+Then tell me what kinds of events you want (for example tech, business, or all), and I'll add matching upcoming events to your Google Calendar with reminders before each one.`;
 }
 
 function accountLinkRequiredText(setupUrl, serviceName) {
@@ -1458,6 +1482,32 @@ async function handleJobScoutRequest(api, sender) {
   }
 }
 
+async function handleEventScoutRequest(api, sender) {
+  try {
+    const status = await accountLinkStatus(api, sender);
+    if (!status.linked) {
+      const invite = await accountLinkInvite(api, sender, "events", "/connect-gmail");
+      if (!invite.setupUrl) throw new Error("missing setupUrl");
+      return {
+        handled: true,
+        text: accountLinkRequiredText(invite.setupUrl, "Event scouting"),
+      };
+    }
+    const setupUrl = scopedAppUrl(api, status.publicUserId, "/connect-gmail");
+    return {
+      handled: true,
+      text: eventScoutStartText(setupUrl),
+    };
+  } catch (err) {
+    if (isQueueFullError(err)) return busyReply();
+    api.logger?.warn?.(`public-service-gate: failed to start event scouting (${String(err)})`);
+    return {
+      handled: true,
+      text: DEFAULT_EVENT_SCOUT_SETUP_FAILED,
+    };
+  }
+}
+
 async function handleActiveServiceState(api, sender, text, state) {
   if (!state || typeof state !== "object") return undefined;
 
@@ -1722,10 +1772,7 @@ export default {
       }
 
       if (menuSelection === "3") {
-        return {
-          handled: true,
-          text: DEFAULT_EVENT_SCOUTING_NOT_ACTIVE,
-        };
+        return await handleEventScoutRequest(api, sender);
       }
 
       if (menuSelection === "4") {
@@ -1756,6 +1803,10 @@ export default {
 
       if (isJobScoutRequest(text)) {
         return await handleJobScoutRequest(api, sender);
+      }
+
+      if (isEventScoutRequest(text)) {
+        return await handleEventScoutRequest(api, sender);
       }
 
       if (isGreetingOrServiceMenuRequest(text)) {
