@@ -8,7 +8,7 @@
 - **Auth:** OAuth token stored encrypted at `~/.config/gogcli/keyring/`
 - **Env vars** (in `~/.profile`): `GOG_KEYRING_BACKEND=file`, `GOG_KEYRING_PASSWORD=***`, `GOG_ACCOUNT=munemojoseph332@gmail.com`
 - **Installed:** 2026-05-19 via brew
-- **Current role:** legacy local/operator Google Workspace CLI. Do not use as the product email path for Agent Genaie.
+- **Current role:** legacy local/operator Google Workspace CLI. Do not use as the product email path for Agent Genaie, and do not use `gog calendar` for product calendar writes — use `genaie-calendar` (below) instead.
 
 ### genaie-mail — Agent Genaie Gmail bridge
 - **Location:** `~/.openclaw/workspace/bin/genaie-mail`
@@ -18,6 +18,17 @@
 - **Auth:** `AGENT_GENAI_INTERNAL_API_KEY` in `/home/joseph/.openclaw/.env` or process env. Do not print the key.
 - **Usage:** `genaie-mail senders` lists connected senders. `genaie-mail send --from sender@example.com --to ... --subject ... --body-file ... --attach ... --force` sends as a connected sender. Omit `--from` to use owner fallback; use `--dry-run` for sanitized inspection.
 - **Installed:** 2026-06-03
+
+### genaie-calendar — Agent Genaie calendar bridge
+- **Location:** `~/.openclaw/workspace/bin/genaie-calendar`
+- **Skill:** `~/.openclaw/workspace/skills/genaie-calendar/`
+- **Purpose:** write events into a specific user's own Google Calendar from OpenClaw through Agent Genaie's app-owned Google OAuth bridge. This is the supported product path for calendar writes — NOT `gog`.
+- **Endpoints:** `POST /internal/calendar/write` (configured by `AGENT_GENAI_CALENDAR_URL` or derived from `APP_BASE_URL`); `GET /internal/calendar/status` checks whether a user connected calendar access.
+- **Auth:** `AGENT_GENAI_INTERNAL_API_KEY` in `/home/joseph/.openclaw/.env` or process env. Do not print the key.
+- **Per-user model:** target a user with `--sender-uid <Firebase UID>`, resolved from the requester's WhatsApp phone via `account-link status --phone`. Always `genaie-calendar status --sender-uid <uid>` first and require `calendarConnected: true` before writing. Only write for the requester's own user id.
+- **Usage:** `genaie-calendar write --sender-uid <uid> --source-id <stable-dedup-id> --summary "..." --start-date YYYY-MM-DD --end-date YYYY-MM-DD [--location ...] [--source-url ...] [--reminder-min 1440 --reminder-min 120] --force`. Use `--start-datetime/--end-datetime` + `--timezone` for timed events. `--dry-run` inspects without writing; `--force` is required for real writes. Dedup is by `(senderUid, sourceId)`.
+- **Ad-hoc save flow** (user names specific events to add now): follow `docs/calendar-save-onboarding.md`. The shared event-scout cron is separate and only writes Algeria Exhibitions catalog events.
+- **Installed:** 2026-06-21
 
 ### Agent Genaie Firestore central data
 - **Schema:** `/home/joseph/.openclaw/workspace/docs/firestore-schema.md`

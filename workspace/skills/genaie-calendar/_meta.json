@@ -1,0 +1,9 @@
+{
+  "name": "genaie-calendar",
+  "description": "Write events into a connected user's Google Calendar through the Agent Genaie app bridge.",
+  "requires": {
+    "bins": [
+      "/home/joseph/.openclaw/workspace/bin/genaie-calendar"
+    ]
+  }
+}
