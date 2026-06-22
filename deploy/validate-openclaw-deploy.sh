@@ -29,6 +29,12 @@ PYTHONPYCACHEPREFIX="$pycache" python3 -m py_compile \
   "$OC_DIR/workspace/cron/algeria-exhibitions-listener/check_new_events.py" \
   "$OC_DIR/workspace/public-events/event_subscriptions.py" \
   "$OC_DIR/workspace/cron/event-scout-dispatcher/dispatch.py" \
+  "$OC_DIR/workspace/job-scout/job_scout.py" \
+  "$OC_DIR/workspace/job-scout/scrapers/__init__.py" \
+  "$OC_DIR/workspace/job-scout/scrapers/base.py" \
+  "$OC_DIR/workspace/job-scout/scrapers/iharare.py" \
+  "$OC_DIR/workspace/job-scout/scrapers/vacancybox.py" \
+  "$OC_DIR/workspace/job-scout/scrapers/vacancymail.py" \
   "$OC_DIR/workspace/bin/genaie-calendar"
 
 bash -n "$OC_DIR/deploy/openclaw-deploy.sh"

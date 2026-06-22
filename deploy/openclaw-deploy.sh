@@ -229,7 +229,9 @@ stage_source() {
     --include='/public-news/***' \
     --include='/public-events/***' \
     --include='/webetu-preferences/***' \
+    --include='/job-scout/' \
     --include='/job-scout/*.py' \
+    --include='/job-scout/scrapers/' \
     --include='/job-scout/scrapers/***' \
     --include='/cron/***' \
     --include='/skills.lock.json' \
@@ -255,6 +257,7 @@ stage_source() {
 
   write_generated_marker
   reject_staged_runtime_files
+  require_staged_workspace_files
 }
 
 write_generated_marker() {
@@ -356,6 +359,22 @@ reject_staged_runtime_files() {
       -name 'subscriptions.json' \
     \) -print >&2
     die "staged source contains runtime/cache files; refusing deploy"
+  fi
+}
+
+require_staged_workspace_files() {
+  local missing=0
+  for path in \
+    "$STAGE_DIR/workspace/bin/job-scout" \
+    "$STAGE_DIR/workspace/job-scout/job_scout.py" \
+    "$STAGE_DIR/workspace/job-scout/scrapers/__init__.py"; do
+    if [ ! -f "$path" ]; then
+      printf 'missing required staged workspace file: %s\n' "$path" >&2
+      missing=1
+    fi
+  done
+  if [ "$missing" = "1" ]; then
+    die "Job Scout wrapper or implementation is missing from staged source"
   fi
 }
 

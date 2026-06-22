@@ -133,17 +133,19 @@ else:
             if rel not in manifest_files:
                 issue(f"mirror file is not listed in manifest: {rel}")
 
-        invite_wrapper = stage_root / "workspace/bin/whatsapp-invite"
-        if invite_wrapper.exists():
+        bin_dir = stage_root / "workspace/bin"
+        wrappers = sorted(path for path in bin_dir.iterdir() if path.is_file()) if bin_dir.exists() else []
+        for invite_wrapper in wrappers:
             try:
                 wrapper_text = invite_wrapper.read_text(encoding="utf-8")
             except Exception as exc:
-                issue(f"could not read invite wrapper: {exc}")
+                issue(f"could not read wrapper {invite_wrapper.relative_to(stage_root).as_posix()}: {exc}")
             else:
                 for target in re.findall(r"exec\s+python3\s+/home/joseph/\.openclaw/(workspace/[\w./-]+)", wrapper_text):
                     target_file = stage_root / target
                     if not target_file.exists():
-                        issue(f"invite wrapper points at unstaged workspace file: {target}")
+                        wrapper_rel = invite_wrapper.relative_to(stage_root).as_posix()
+                        issue(f"{wrapper_rel} points at unstaged workspace file: {target}")
 
 if issues:
     print("OpenClaw deploy mirror warnings:")
