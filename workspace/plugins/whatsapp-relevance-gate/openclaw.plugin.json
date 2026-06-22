@@ -37,6 +37,34 @@
           "type": "string"
         }
       },
+      "relevanceMode": {
+        "type": "string",
+        "enum": ["keyword", "embedding", "off"]
+      },
+      "embeddingModel": {
+        "type": "string"
+      },
+      "relevanceFloor": {
+        "type": "number"
+      },
+      "relevanceMargin": {
+        "type": "number"
+      },
+      "embeddingFailOpen": {
+        "type": "boolean"
+      },
+      "serviceAnchors": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "offTopicAnchors": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
       "curatedAllowPhrases": {
         "type": "array",
         "items": {
