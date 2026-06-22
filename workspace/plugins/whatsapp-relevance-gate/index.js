@@ -2,7 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { classifyByEmbedding } from "./lib/embedding-classifier.js";
+
 const PLUGIN_ID = "whatsapp-relevance-gate";
+const RELEVANCE_MODE_ENV = "WHATSAPP_RELEVANCE_MODE";
+const RELEVANCE_MODES = new Set(["keyword", "embedding", "off"]);
 const PUBLIC_SERVICE_GATE_ID = "public-service-gate";
 
 const DEFAULT_REJECTION =
@@ -178,6 +182,18 @@ function getPublicServiceGateConfig(api) {
 
 function isEnabled(api) {
   return getPluginConfig(api).enabled !== false;
+}
+
+// Three-way switch: "keyword" (default, unchanged behavior), "embedding" (the
+// semantic classifier), or "off" (gate disabled — everything passes through).
+// The WHATSAPP_RELEVANCE_MODE env var wins so it can be flipped without a config
+// redeploy; the config `relevanceMode` key is the fallback default.
+function getRelevanceMode(api) {
+  const fromEnv = String(readEnvValue(RELEVANCE_MODE_ENV) ?? "").trim().toLowerCase();
+  if (RELEVANCE_MODES.has(fromEnv)) return fromEnv;
+  const fromCfg = String(getPluginConfig(api).relevanceMode ?? "").trim().toLowerCase();
+  if (RELEVANCE_MODES.has(fromCfg)) return fromCfg;
+  return "keyword";
 }
 
 function readOpenclawEnv() {
@@ -385,7 +401,7 @@ function cacheSet(normalized, verdict) {
   verdictCache.set(normalized, { verdict, expires: Date.now() + CACHE_TTL_MS });
 }
 
-async function classify(api, text) {
+export async function classify(api, text, mode = getRelevanceMode(api)) {
   const cfg = getPluginConfig(api);
   const normalized = normalizeText(text);
   if (!normalized) return "relevant"; // nothing to judge → let agent handle
@@ -393,19 +409,36 @@ async function classify(api, text) {
   const maxLen = Number.isInteger(cfg.maxTextLength) ? cfg.maxTextLength : DEFAULT_MAX_TEXT_LENGTH;
   if (normalized.length > maxLen) return failOpenVerdict(api);
 
-  const cached = cacheGet(normalized);
+  // Cache is keyed by mode so flipping the switch never returns the other
+  // method's verdict for the same text.
+  const cacheKey = `${mode}\n${normalized}`;
+  const cached = cacheGet(cacheKey);
   if (cached) return cached;
+
+  if (mode === "embedding") {
+    // Keep the cheap, safe fast-path allows so trivial replies (menu digits,
+    // continuations, restaurant names) never burn an embedding call.
+    if (shortContinuationMatch(api, normalized) || restaurantNameMatch(api, text, normalized)) {
+      cacheSet(cacheKey, "relevant");
+      return "relevant";
+    }
+    const verdict = await classifyByEmbedding(api, text);
+    cacheSet(cacheKey, verdict);
+    return verdict;
+  }
+
+  // --- keyword mode (default) — behavior unchanged ---
 
   // 1) Local keyword / example pass — free, fast, no LLM call.
   if (keywordMatch(api, normalized) || restaurantNameMatch(api, text, normalized)) {
-    cacheSet(normalized, "relevant");
+    cacheSet(cacheKey, "relevant");
     return "relevant";
   }
 
   // 2) LLM fallback for ambiguous messages.
   if (cfg.useLlmFallback === false) {
     // No semantic fallback configured → keyword miss means irrelevant.
-    cacheSet(normalized, "irrelevant");
+    cacheSet(cacheKey, "irrelevant");
     return "irrelevant";
   }
 
@@ -440,7 +473,7 @@ async function classify(api, text) {
       api.logger?.warn?.(`${PLUGIN_ID}: unparseable classifier reply; failing ${failOpenVerdict(api)}`);
       return failOpenVerdict(api);
     }
-    cacheSet(normalized, verdict);
+    cacheSet(cacheKey, verdict);
     return verdict;
   } catch (err) {
     api.logger?.warn?.(`${PLUGIN_ID}: classifier error (${String(err)}); failing ${failOpenVerdict(api)}`);
@@ -459,6 +492,9 @@ export default {
       async (event, ctx) => {
         if (!isEnabled(api)) return; // disabled → pass through
 
+        const mode = getRelevanceMode(api);
+        if (mode === "off") return; // kill switch → pass every message through
+
         const channel = getEventChannel(event, ctx);
         if (!isWhatsAppChannel(channel)) return; // only gate WhatsApp
 
@@ -472,7 +508,7 @@ export default {
         const text = getEventText(event);
         if (!text) return; // media-only / empty → let the agent handle it
 
-        const verdict = await classify(api, text);
+        const verdict = await classify(api, text, mode);
         if (verdict === "relevant") return; // pass through to agent
 
         // Irrelevant → claim the message so the agent never runs, and reply.

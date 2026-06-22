@@ -1,5 +1,19 @@
-import { getRelevanceGateConfig } from "./config.js";
+import { getRelevanceGateConfig, getRelevanceMode } from "./config.js";
 import { normalizeText } from "./events.js";
+
+// The embedding classifier lives in the sibling whatsapp-relevance-gate plugin
+// (both deploy together under ~/.openclaw/workspace/plugins). Loaded lazily so a
+// missing/unloadable module degrades to the permissive fallback instead of
+// crashing the gate.
+async function classifyUnknownSenderByEmbedding(api, text) {
+  try {
+    const mod = await import("../../whatsapp-relevance-gate/lib/embedding-classifier.js");
+    return (await mod.classifyByEmbedding(api, text)) === "relevant";
+  } catch (err) {
+    api.logger?.warn?.(`public-service-gate: embedding classifier unavailable (${String(err)}); treating as relevant`);
+    return true; // permissive: engage the unknown sender rather than silently dropping
+  }
+}
 
 const DEFAULT_SHORT_CONTINUATION_KEYWORDS = [
   "1",
@@ -76,6 +90,9 @@ function relevanceKeywordMatch(api, normalized) {
 export async function isUnknownSenderRelevant(api, text, { isKnownServiceRequest } = {}) {
   if (typeof isKnownServiceRequest === "function" && isKnownServiceRequest(text)) return true;
 
+  const mode = getRelevanceMode(api);
+  if (mode === "off") return true; // kill switch → engage everyone, no silent drop
+
   const normalized = normalizeText(text);
   if (!normalized) return false;
 
@@ -85,6 +102,14 @@ export async function isUnknownSenderRelevant(api, text, { isKnownServiceRequest
   const maxLen = Number.isInteger(cfg.maxTextLength) ? cfg.maxTextLength : DEFAULT_RELEVANCE_MAX_TEXT_LENGTH;
   if (normalized.length > maxLen) return false;
 
+  // Cheap, safe fast-path allow shared by both modes.
+  if (getShortContinuationKeywords(api).includes(normalized)) return true;
+
+  if (mode === "embedding") {
+    return classifyUnknownSenderByEmbedding(api, text);
+  }
+
+  // --- keyword mode (default) — behavior unchanged ---
   if (relevanceKeywordMatch(api, normalized)) return true;
   if (cfg.useLlmFallback === false) return false;
 

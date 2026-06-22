@@ -42,6 +42,20 @@ export function readEnvValue(name) {
   return readOpenclawEnv()[name];
 }
 
+export const RELEVANCE_MODE_ENV = "WHATSAPP_RELEVANCE_MODE";
+const RELEVANCE_MODES = new Set(["keyword", "embedding", "off"]);
+
+// Three-way relevance switch shared with the whatsapp-relevance-gate plugin:
+// "keyword" (default), "embedding", or "off". Env wins over the config default.
+export function getRelevanceMode(api) {
+  const fromEnv = String(readEnvValue(RELEVANCE_MODE_ENV) ?? "").trim().toLowerCase();
+  if (RELEVANCE_MODES.has(fromEnv)) return fromEnv;
+  const cfg = getRelevanceGateConfig(api);
+  const fromCfg = String(cfg.relevanceMode ?? "").trim().toLowerCase();
+  if (RELEVANCE_MODES.has(fromCfg)) return fromCfg;
+  return "keyword";
+}
+
 export function parseBoolean(value) {
   if (typeof value === "boolean") return value;
   if (typeof value !== "string") return undefined;
