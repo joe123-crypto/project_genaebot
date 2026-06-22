@@ -43,6 +43,7 @@ import {
   loadInviteAwaitingText,
   loadInvitePendingText,
   loadInviteRequiredText,
+  loadInviteWelcomeText,
   matchesSharedAck,
   notifyAdminOfJoin,
   notifyInviterUnlocked,
@@ -255,7 +256,7 @@ export default {
                 await notifyInviterUnlocked(api, inviter, sender);
               }
               api.logger?.info?.("public-service-gate: invite join handled deterministically");
-              return { handled: true, text: loadInvitePendingText(api) };
+              return { handled: true, text: loadInviteWelcomeText(api) };
             }
             return { handled: true, text: DEFAULT_INVITE_INVALID };
           } catch (err) {

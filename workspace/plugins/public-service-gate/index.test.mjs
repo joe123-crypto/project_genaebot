@@ -350,7 +350,7 @@ test("unknown sender unrelated text remains a silent handled drop", async () => 
   assert.equal(calls, 1);
 });
 
-test("unknown sender valid join code redeems and returns pending activation instructions", async () => {
+test("unknown sender valid join code redeems and returns the welcome message", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
   const inviteScript = path.join(dir, "whatsapp-invite");
   const publicUserScript = path.join(dir, "whatsapp-public-user.py");
@@ -373,9 +373,11 @@ esac
   });
 
   assert.equal(reply.handled, true);
+  assert.match(reply.text, /welcome to Genaie Service Desk/i);
   assert.match(reply.text, /not unlocked yet/);
   assert.match(reply.text, /Type "invite link"/);
-  assert.doesNotMatch(reply.text, /welcome to Genaie Service Desk/i);
+  // The welcome explains the service so the invitee knows what they joined.
+  assert.match(reply.text, /meal reservation/i);
 });
 
 test("unknown sender invalid join code still returns invalid invite reply", async () => {
@@ -490,7 +492,7 @@ esac
 
   assert.equal(reply.handled, true);
   assert.match(reply.text, /https:\/\/wa\.me\/263785632943\?text=JOIN-PEND1234/);
-  assert.match(reply.text, /service access will unlock/);
+  assert.match(reply.text, /your own access unlocks/);
 });
 
 test("unlocked invite member gets normal member handling without publicUsers entry", async () => {
@@ -1162,6 +1164,9 @@ test("inviteLinkText builds a one-tap wa.me invite link when bot number is confi
 
   assert.match(text, /https:\/\/wa\.me\/263785632943\?text=JOIN-4PG44766/);
   assert.match(text, /This invite works once\./);
+  // The message is a ready-to-forward invitation that describes the service.
+  assert.match(text, /forward the whole message/i);
+  assert.match(text, /meal reservation/i);
 });
 
 test("inviteLinkText falls back to the join code when bot number is blank", () => {
@@ -1173,7 +1178,7 @@ test("inviteLinkText falls back to the join code when bot number is blank", () =
 
   const text = inviteLinkText(api, "L59DGQ54");
 
-  assert.match(text, /Invite a friend by asking them to message me:/);
+  assert.match(text, /forward the whole message/i);
   assert.match(text, /\n\nJOIN-L59DGQ54\n\n/);
   assert.doesNotMatch(text, /wa\.me/);
 });

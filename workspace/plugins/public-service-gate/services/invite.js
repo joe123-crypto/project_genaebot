@@ -6,9 +6,20 @@ const DEFAULT_INVITE_SCRIPT = "~/.openclaw/workspace/bin/whatsapp-invite";
 const DEFAULT_INVITE_FAILED = `I couldn't create an invite link right now. Please try again later.`;
 const DEFAULT_INVITE_INVALID = `This invite link is invalid or has already been used. Ask your friend for a new one.`;
 const DEFAULT_INVITE_REQUIRED = `This service is invite-only. Ask a friend who is already signed in and using Genaie Service Desk to send you their invite link. Open that link and send the pre-filled JOIN message here.`;
-const DEFAULT_INVITE_PENDING = `Your WhatsApp number is activated.
+const DEFAULT_INVITE_WELCOME = `Welcome to Genaie Service Desk 🎉 A friend invited you, and your WhatsApp number is now activated.
 
-Your account is not unlocked yet. Type "invite link", send the link to one person. When they activate with your link, your access will unlock.`;
+We help you with:
+1. Webetu Progress meal reservations
+2. Personalized news delivered to your chat
+3. Local event scouting around you
+4. Job, scholarship, and internship scouting
+
+One quick step before you can use it: just like a friend invited you, you invite one person too. Your account is not unlocked yet — it unlocks the moment the person you invite activates their number.
+
+Ready? Type "invite link" and I'll send you a link to share with one person.`;
+const DEFAULT_INVITE_PENDING = `You're almost in! Your account is not unlocked yet — one step unlocks it.
+
+Type "invite link" to get your link, send it to one person, and your access unlocks the moment they activate their number.`;
 const DEFAULT_INVITE_UNLOCKED = `Your invited person activated their WhatsApp number. Your access to Genaie Service Desk is now unlocked.`;
 const DEFAULT_INVITE_AWAITING_ACTIVATION = `Got it — waiting for them to activate. Your access unlocks as soon as they do.`;
 
@@ -152,21 +163,48 @@ export function matchesSharedAck(text) {
   return INVITE_SHARED_KEYWORDS.includes(compact);
 }
 
+// One-line description of the service, reused in the forwardable invite block so
+// the invited person knows what they're joining. Mirrors greeting.js and the
+// relevance gate's serviceSummary.
+const SERVICE_BLURB =
+  "a WhatsApp assistant for Webetu Progress meal reservations, personalized news, local event scouting, and job/scholarship/internship scouting";
+
 export function inviteLinkText(api, code, options = {}) {
   const botDigits = getBotWhatsappNumber(api);
   const joinText = `JOIN-${code}`;
+  // The closing note depends on the inviter's own status: a pending inviter
+  // unlocks their access when the invitee activates; an unlocked inviter does not.
+  const closingNote = options.pending
+    ? `This invite works once. When they activate, your own access unlocks.`
+    : `This invite works once.`;
+
   if (!botDigits) {
-    // Bot number not configured: hand over the code with instructions instead of a link.
-    if (options.pending) {
-      return `Send this invite to one person by asking them to message me:\n\n${joinText}\n\nWhen they activate with it, your service access will unlock. This invite works once.`;
-    }
-    return `Invite a friend by asking them to message me:\n\n${joinText}\n\nThey will need to invite one person before using the service. This invite works once.`;
+    // Bot number not configured: hand over the code inside the forwardable block.
+    return `Invite ONE person to Genaie Service Desk — just forward the whole message below to them 👇
+
+———
+Hi! I'm using Genaie Service Desk, ${SERVICE_BLURB}, and I'm inviting you to join.
+
+To activate, message this number and send the code below exactly:
+
+${joinText}
+
+———
+
+${closingNote}`;
   }
+
   const link = `https://wa.me/${botDigits}?text=${encodeURIComponent(joinText)}`;
-  if (options.pending) {
-    return `Here's your invite link. Send it to one person. When they tap it and activate their WhatsApp number, your service access will unlock:\n\n${link}\n\nThis invite works once.`;
-  }
-  return `Here's your invite link — share it with one friend. When they tap it and activate their WhatsApp number, they will need to invite one person before using the service:\n\n${link}\n\nThis invite works once.`;
+  return `Invite ONE person to Genaie Service Desk — just forward the whole message below to them 👇
+
+———
+Hi! I'm using Genaie Service Desk, ${SERVICE_BLURB}, and I'm inviting you to join.
+
+Tap this link and send the message that opens to activate your number:
+${link}
+———
+
+${closingNote}`;
 }
 
 // Best-effort proactive notification to the admin when someone joins via invite.
@@ -208,6 +246,13 @@ export function loadInviteRequiredText(api) {
   return typeof pluginCfg.inviteRequiredText === "string" && pluginCfg.inviteRequiredText.trim()
     ? pluginCfg.inviteRequiredText.trim()
     : DEFAULT_INVITE_REQUIRED;
+}
+
+export function loadInviteWelcomeText(api) {
+  const pluginCfg = getPluginConfig(api);
+  return typeof pluginCfg.inviteWelcomeText === "string" && pluginCfg.inviteWelcomeText.trim()
+    ? pluginCfg.inviteWelcomeText.trim()
+    : DEFAULT_INVITE_WELCOME;
 }
 
 export function loadInvitePendingText(api) {

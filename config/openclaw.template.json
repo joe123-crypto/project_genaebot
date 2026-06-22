@@ -75,6 +75,7 @@
           "enabled": true,
           "greetingTemplatePath": "/home/joseph/.openclaw/workspace/public-greeting.txt",
           "webetuOnboardingStartText": "Open this link and sign in with your email:\n{setupUrl}\n\nAfter sign-in, the app will open your Credentials Vault. Save your Webetu username and password there. Do not send your Webetu username or password here.\n\nThen come back here and tell me which restaurant I should use by default for your meal reservations. I will confirm it with you before saving.\n\nIf the sign-in email does not arrive, check your Spam or Junk folder.",
+          "botWhatsappNumber": "+263785632943",
           "invitesEnabled": true
         }
       },
