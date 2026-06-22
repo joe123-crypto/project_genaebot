@@ -831,6 +831,76 @@ exit 2
   }
 });
 
+test("setup/onboard phrasings claim job scouting deterministically", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
+  const accountLinkScript = path.join(dir, "account-link");
+  const jobScoutScript = path.join(dir, "job-scout");
+  const serviceStatePath = path.join(dir, "state.json");
+  writeExecutable(
+    accountLinkScript,
+    `#!/usr/bin/env bash
+set -eu
+case "$1" in
+  status) printf '{"linked":true,"publicUserId":"usr_test"}\\n' ;;
+  *) exit 2 ;;
+esac
+`,
+  );
+  writeExecutable(
+    jobScoutScript,
+    `#!/usr/bin/env bash
+set -eu
+case "$1" in
+  create-invite) printf '{"setupUrl":"https://app.test/usr_test/connect-gmail"}\\n' ;;
+  *) exit 2 ;;
+esac
+`,
+  );
+
+  const handler = registerHandler({
+    accountLinkScript,
+    jobScoutScript,
+    serviceStatePath,
+    agentGenaiePublicBaseUrl: "https://app.test",
+  });
+
+  for (const text of ["setup job scout", "onboard me for job scouting"]) {
+    const reply = await handler(eventFor(text), { channelId: "whatsapp", senderId: MEMBER });
+    assert.equal(reply?.handled, true, `expected "${text}" to be handled`);
+    assert.match(reply.text, /https:\/\/app\.test\/usr_test\/connect-gmail/);
+  }
+});
+
+test("job questions without a setup keyword fall through to the LLM", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
+  const accountLinkScript = path.join(dir, "account-link");
+  const jobScoutScript = path.join(dir, "job-scout");
+  const serviceStatePath = path.join(dir, "state.json");
+  // If the gate ever claims one of these it would call account-link/job-scout;
+  // failing here makes that mistake obvious instead of silently passing.
+  writeExecutable(accountLinkScript, `#!/usr/bin/env bash\nset -eu\nexit 2\n`);
+  writeExecutable(jobScoutScript, `#!/usr/bin/env bash\nset -eu\nexit 2\n`);
+
+  const handler = registerHandler({
+    accountLinkScript,
+    jobScoutScript,
+    serviceStatePath,
+    agentGenaiePublicBaseUrl: "https://app.test",
+  });
+
+  for (const text of [
+    "find jobs for me",
+    "scout jobs",
+    "apply to jobs",
+    "can I change the jobs you scout?",
+    "when does job scout run?",
+    "I mean for job scout",
+  ]) {
+    const reply = await handler(eventFor(text), { channelId: "whatsapp", senderId: MEMBER });
+    assert.equal(reply, undefined, `expected "${text}" to fall through to the LLM`);
+  }
+});
+
 test("menu option 2 starts personalized news when no service state is active", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
   const accountLinkScript = path.join(dir, "account-link");
