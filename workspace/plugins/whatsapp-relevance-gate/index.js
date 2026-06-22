@@ -330,7 +330,17 @@ function getRestaurantNameKeywords(api) {
 function restaurantNameMatch(api, text, normalized) {
   const compact = String(text ?? "").trim().replace(/\s+/g, " ");
   if (!compact || compact.length > DEFAULT_RESTAURANT_NAME_MAX_LENGTH) return false;
-  return getRestaurantNameKeywords(api).some((kw) => kw && normalized.includes(kw));
+  if (getRestaurantNameKeywords(api).some((kw) => kw && normalized.includes(kw))) return true;
+
+  // Algerian Webetu restaurant names are often sent as residence shorthand,
+  // e.g. "RU 2000 Lits Tipaza" for "Residence Universitaire ...".
+  if (/\br\.?\s*u\.?\b/i.test(compact) && (/\d/.test(compact) || /\b(?:lit|lits|bed|beds)\b/i.test(compact))) {
+    return true;
+  }
+  if (/\b(?:lits?|beds?)\b/i.test(compact) && /\b(?:tipaza|kolea|koléa|alger|bab\s*ezzouar|oued\s*smar)\b/i.test(compact)) {
+    return true;
+  }
+  return false;
 }
 
 function extractLlmText(res) {

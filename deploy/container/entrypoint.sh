@@ -101,6 +101,16 @@ if [ ! -f "$WORKER_CONFIG" ] || ! grep -q '[^[:space:]]' <(sed -n 's/.*firebase_
   log "WARNING: $WORKER_CONFIG looks unset — mount the real config to enable Webetu."
 fi
 
+# If a command was passed (e.g. `docker compose run --rm openclaw openclaw channels
+# login --channel whatsapp`), run it as joseph after the setup above instead of the
+# gateway. The normal `docker compose up` path passes no command, so it falls through
+# to the gateway. This lets one-off maintenance commands (channels login, doctor, …)
+# run with the same env/ownership prep without starting a second competing gateway.
+if [ "$#" -gt 0 ]; then
+  log "running one-off command as joseph: $*"
+  exec runuser -u joseph -- "$@"
+fi
+
 # --bind lan  : listen on all container interfaces so the published port is reachable
 #               (locally Docker only publishes it to 127.0.0.1; see compose).
 # --tailscale off : no tailscaled in the container; remote access is via platform ingress.

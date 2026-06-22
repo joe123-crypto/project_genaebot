@@ -916,6 +916,20 @@ test("webetu restaurant state lets restaurant names continue to the agent", asyn
   assert.equal(reply, undefined);
 });
 
+test("webetu restaurant state lets Algerian residence shorthand continue to the agent", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
+  const serviceStatePath = path.join(dir, "state.json");
+  writeServiceState(serviceStatePath, MEMBER, "webetu", "webetu.awaiting_restaurant");
+
+  const handler = registerHandler({ serviceStatePath });
+  const reply = await handler(eventFor("RU 2000 Lits Tipaza"), {
+    channelId: "whatsapp",
+    senderId: MEMBER,
+  });
+
+  assert.equal(reply, undefined);
+});
+
 test("news topic state treats the next message as topics", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
   const accountLinkScript = path.join(dir, "account-link");
