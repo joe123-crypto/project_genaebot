@@ -759,11 +759,76 @@ esac
     serviceStatePath,
     agentGenaiePublicBaseUrl: "https://app.test",
   });
-  const reply = await handler(eventFor("event scouting"), { channelId: "whatsapp", senderId: MEMBER });
+  const reply = await handler(eventFor("setup event scouting"), { channelId: "whatsapp", senderId: MEMBER });
 
   assert.equal(reply.handled, true);
   assert.match(reply.text, /https:\/\/app\.test\/usr_test\/connect-gmail/);
   assert.match(reply.text, /calendar/i);
+});
+
+test("setup/onboard phrasings claim event scouting deterministically", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
+  const accountLinkScript = path.join(dir, "account-link");
+  const serviceStatePath = path.join(dir, "state.json");
+  writeExecutable(
+    accountLinkScript,
+    `#!/usr/bin/env bash
+set -eu
+case "$1" in
+  status) printf '{"linked":true,"publicUserId":"usr_test"}\\n' ;;
+  *) exit 2 ;;
+esac
+`,
+  );
+
+  const handler = registerHandler({
+    accountLinkScript,
+    serviceStatePath,
+    agentGenaiePublicBaseUrl: "https://app.test",
+  });
+
+  for (const text of [
+    "local event scouting setup",
+    "onboard me for event scouting",
+    "event scouting onboard",
+  ]) {
+    const reply = await handler(eventFor(text), { channelId: "whatsapp", senderId: MEMBER });
+    assert.equal(reply?.handled, true, `expected "${text}" to be handled`);
+    assert.match(reply.text, /https:\/\/app\.test\/usr_test\/connect-gmail/);
+  }
+});
+
+test("event questions without a setup keyword fall through to the LLM", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
+  const accountLinkScript = path.join(dir, "account-link");
+  const serviceStatePath = path.join(dir, "state.json");
+  // If the gate ever claims one of these it would call account-link; failing
+  // here makes that mistake obvious instead of silently passing.
+  writeExecutable(
+    accountLinkScript,
+    `#!/usr/bin/env bash
+set -eu
+exit 2
+`,
+  );
+
+  const handler = registerHandler({
+    accountLinkScript,
+    serviceStatePath,
+    agentGenaiePublicBaseUrl: "https://app.test",
+  });
+
+  for (const text of [
+    "start event scouting",
+    "scout events for me",
+    "find events near me",
+    "Can I change the types of events that you scout for me?",
+    "I mean for events scout",
+    "when does event scout run?",
+  ]) {
+    const reply = await handler(eventFor(text), { channelId: "whatsapp", senderId: MEMBER });
+    assert.equal(reply, undefined, `expected "${text}" to fall through to the LLM`);
+  }
 });
 
 test("menu option 2 starts personalized news when no service state is active", async () => {

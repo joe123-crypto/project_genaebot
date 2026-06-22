@@ -167,6 +167,15 @@ const EVENT_SCOUT_REQUEST_PATTERNS = [
   /\b(?:find|look\s+for|search\s+for|scout|register|subscribe|sign\s*me\s*up|start|setup|set\s*up)\b.*\bevents?\b/i,
   /\bevents?\b.*\b(?:find|search|scout|register|subscribe|start|setup|set\s*up|calendar|remind(?:er|ers)?|near\s*me|in\s+my\s+area)\b/i,
 ];
+// Explicit intent to set up / onboard event scouting. Only an event-scouting
+// message that ALSO carries one of these keywords gets the canned setup link;
+// every other event-related message (questions, "start/find/scout" phrasings,
+// anything ambiguous) falls through to the relevance gate -> LLM, which decides
+// how to respond from its system + public-service prompts.
+const EVENT_SCOUT_SETUP_PATTERNS = [
+  /\b(?:set\s*up|setup)\b/i,
+  /\bonboard(?:ing|ed)?\b/i,
+];
 // Clear reservation-status phrasings only. Bare "check"/"check again" is left
 // out on purpose so it falls through to the LLM, which asks one clarifying
 // question (see public-whatsapp-system-prompt.txt).
@@ -984,6 +993,16 @@ function isEventScoutRequest(text) {
   return EVENT_SCOUT_REQUEST_PATTERNS.some((pattern) => pattern.test(compact));
 }
 
+// Only an explicit "set up" / "onboard" event-scouting message is claimed
+// deterministically. Anything else about events falls through to the LLM, so we
+// no longer hijack questions like "can I change the events you scout?".
+function isEventScoutSetupCommand(text) {
+  const compact = String(text ?? "").trim().replace(/\s+/g, " ");
+  if (!compact || compact.length > 420) return false;
+  if (!EVENT_SCOUT_REQUEST_PATTERNS.some((pattern) => pattern.test(compact))) return false;
+  return EVENT_SCOUT_SETUP_PATTERNS.some((pattern) => pattern.test(compact));
+}
+
 function splitTopics(value) {
   return String(value ?? "")
     .replace(/\s+(?:and|&)\s+/gi, ",")
@@ -1790,7 +1809,7 @@ export default {
         return await handleJobScoutRequest(api, sender);
       }
 
-      if (isEventScoutRequest(text)) {
+      if (isEventScoutSetupCommand(text)) {
         return await handleEventScoutRequest(api, sender);
       }
 
