@@ -202,7 +202,7 @@ Before I continue, please note:
 
 Real employers should not ask you to pay money upfront for an application, interview, medical check, training slot, uniform, or job placement. If anyone asks you to pay first, treat it as suspicious.
 
-This service helps search and apply for jobs, but it cannot guarantee that every employer or listing is legitimate. If you are scammed by a third party, Genaie/OpenClaw is not responsible for that loss.
+This service helps search and apply for jobs, but it cannot guarantee that every employer or listing is legitimate. If you are scammed by a third party, Genaie is not responsible for that loss.
 
 Please reply: "I understand" to continue.
 ```
