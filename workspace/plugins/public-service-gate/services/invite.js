@@ -6,17 +6,11 @@ const DEFAULT_INVITE_SCRIPT = "~/.openclaw/workspace/bin/whatsapp-invite";
 const DEFAULT_INVITE_FAILED = `I couldn't create an invite link right now. Please try again later.`;
 const DEFAULT_INVITE_INVALID = `This invite link is invalid or has already been used. Ask your friend for a new one.`;
 const DEFAULT_INVITE_REQUIRED = `This service is invite-only. Ask a friend who is already signed in and using Genaie Service Desk to send you their invite link. Open that link and send the pre-filled JOIN message here.`;
-const DEFAULT_INVITE_WELCOME = `Welcome to Genaie Service Desk 🎉 A friend invited you, and your WhatsApp number is now activated.
+const DEFAULT_INVITE_WELCOME = `Welcome to Genaie Service Desk 🎉 A friend invited you, and your number is now activated. Soon you'll get meal reservations, news, local events, and job scouting.
 
-We help you with:
-1. Webetu Progress meal reservations
-2. Personalized news delivered to your chat
-3. Local event scouting around you
-4. Job, scholarship, and internship scouting
+Your account is not unlocked yet — one step unlocks it: just like you were invited, invite one person too. Your access opens the moment they activate.
 
-One quick step before you can use it: just like a friend invited you, you invite one person too. Your account is not unlocked yet — it unlocks the moment the person you invite activates their number.
-
-Ready? Type "invite link" and I'll send you a link to share with one person.`;
+Type "invite link" to get your link to share.`;
 const DEFAULT_INVITE_PENDING = `You're almost in! Your account is not unlocked yet — one step unlocks it.
 
 Type "invite link" to get your link, send it to one person, and your access unlocks the moment they activate their number.`;
@@ -179,30 +173,22 @@ export function inviteLinkText(api, code, options = {}) {
     : `This invite works once.`;
 
   if (!botDigits) {
-    // Bot number not configured: hand over the code inside the forwardable block.
-    return `Invite ONE person to Genaie Service Desk — just forward the whole message below to them 👇
-
-———
-Hi! I'm using Genaie Service Desk, ${SERVICE_BLURB}, and I'm inviting you to join.
+    // Bot number not configured: hand over the code. The whole message is forwardable.
+    return `Hi! I'm using Genaie Service Desk, ${SERVICE_BLURB}, and I'm inviting you to join.
 
 To activate, message this number and send the code below exactly:
 
 ${joinText}
 
-———
-
 ${closingNote}`;
   }
 
   const link = `https://wa.me/${botDigits}?text=${encodeURIComponent(joinText)}`;
-  return `Invite ONE person to Genaie Service Desk — just forward the whole message below to them 👇
-
-———
-Hi! I'm using Genaie Service Desk, ${SERVICE_BLURB}, and I'm inviting you to join.
+  // The whole message is forwardable as-is to the invited person.
+  return `Hi! I'm using Genaie Service Desk, ${SERVICE_BLURB}, and I'm inviting you to join.
 
 Tap this link and send the message that opens to activate your number:
 ${link}
-———
 
 ${closingNote}`;
 }
