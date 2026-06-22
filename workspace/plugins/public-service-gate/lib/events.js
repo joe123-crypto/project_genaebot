@@ -1,0 +1,100 @@
+export function normalizePhone(value) {
+  if (typeof value !== "string") return "";
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  const plus = trimmed.startsWith("+") ? "+" : "";
+  return plus + trimmed.replace(/[^\d]/g, "");
+}
+
+export function getEventChannel(event, ctx = {}) {
+  return String(event?.channel ?? ctx?.channelId ?? ctx?.channel ?? "").trim();
+}
+
+export function isWhatsAppChannel(value) {
+  const channel = String(value ?? "").trim().toLowerCase();
+  return channel === "whatsapp" || channel.startsWith("whatsapp:");
+}
+
+export function textCandidate(value) {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    return value
+      .map((part) => {
+        if (typeof part === "string") return part;
+        if (typeof part?.text === "string") return part.text;
+        if (typeof part?.content === "string") return part.content;
+        return "";
+      })
+      .join(" ");
+  }
+  return "";
+}
+
+export function getEventText(event = {}) {
+  const candidates = [
+    event.content,
+    event.body,
+    event.text,
+    event.message?.text,
+    event.message?.body,
+    event.message?.content,
+    event.payload?.text,
+    event.payload?.body,
+    event.payload?.content,
+  ];
+  for (const candidate of candidates) {
+    const text = textCandidate(candidate).trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+export function getEventSender(event = {}, ctx = {}) {
+  return normalizePhone(
+    event.senderId ??
+      event.sender_id ??
+      event.from ??
+      event.sender?.e164 ??
+      event.sender?.id ??
+      event.sender?.phone ??
+      event.message?.from ??
+      event.payload?.from ??
+      ctx.senderId ??
+      ctx.sender_id ??
+      ctx.from ??
+      ctx.sender?.e164 ??
+      ctx.sender?.id ??
+      "",
+  );
+}
+
+export function getOutboundRecipient(event = {}, ctx = {}) {
+  return (
+    event.to ??
+    event.target ??
+    event.recipient ??
+    event.recipientId ??
+    event.metadata?.to ??
+    event.metadata?.recipient ??
+    ctx.senderId ??
+    ctx.sender_id ??
+    ctx.from ??
+    ctx.sender?.e164 ??
+    ctx.sender?.id ??
+    ""
+  );
+}
+
+export function normalizeText(text) {
+  return String(text ?? "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function parseIsoTime(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+  const date = new Date(text);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
