@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Per-user event-scout dispatcher.
 
-Syncs upcoming Algeria Exhibitions events into each registered user's own Google
-Calendar through the Phase A calendar bridge, with per-user reminders.
+Syncs Algeria Exhibitions events into each registered user's own Google Calendar
+through the Phase A calendar bridge, with per-user reminders. Each run is scoped
+to the current calendar month: it only syncs events that happen between today and
+the last day of the month, so a single (weekly) run never dumps far-future events
+onto a user's calendar.
 
 Std-lib only. Reuses the Algeria Exhibitions fetch helpers from the listener cron
 (which it never mutates) and shells out to event_subscriptions.py + genaie-calendar
@@ -14,10 +17,12 @@ Mirrors the personalized-news model: one shared dispatcher, no per-user cron.
 from __future__ import annotations
 
 import argparse
+import calendar
 import json
 import os
 import subprocess
 import sys
+from datetime import date
 from pathlib import Path
 
 # bin/, lib/, public-events/, and cron/ are siblings under workspace/, so resolve
@@ -34,6 +39,22 @@ import check_new_events as ax  # noqa: E402  (reuse fetch_list/fetch_dates/is_up
 
 SOURCE_PREFIX = "algeria-exhibitions"
 DEFAULT_REMINDER_MINUTES = [1440, 120]
+
+# Each run only syncs events that happen during the current calendar month.
+# is_upcoming() already drops anything ending before today; this caps the far end
+# at the last day of the month. Computed off ax.TODAY so both bounds share one "now".
+MONTH_END = date(ax.TODAY.year, ax.TODAY.month,
+                 calendar.monthrange(ax.TODAY.year, ax.TODAY.month)[1])
+
+
+def happens_this_month(start: str, end: str) -> bool:
+    """True if the event overlaps [today, MONTH_END].
+
+    is_upcoming() already guarantees end >= today, so the only extra test is that
+    the event starts on or before month-end (missing start falls back to end).
+    """
+    start_d = ax.parse_d(start) or ax.parse_d(end)
+    return start_d is not None and start_d <= MONTH_END
 
 # Resolving an event's dates costs one (sometimes retried) HTTP request per event, so we
 # cache resolved dates by event id under the writable runtime tree — same place the
@@ -107,7 +128,10 @@ def write_event(user_id: str, event: dict, reminder_minutes: list[int]) -> dict:
 
 
 def fetch_upcoming_events() -> list[dict]:
-    """Fetch the Algeria Exhibitions catalog once and keep upcoming, datable events.
+    """Fetch the Algeria Exhibitions catalog once and keep this month's datable events.
+
+    "This month" means the event overlaps [today, last day of the current month]
+    (see happens_this_month); far-future events are left for the run in their month.
 
     Resolved event dates are cached by id (see DATE_CACHE_FILE): a cached entry is reused
     only when the slug is unchanged and at least one concrete date is known, so newly
@@ -138,6 +162,8 @@ def fetch_upcoming_events() -> list[dict]:
         start_date = start or end
         end_date = end or start
         if not start_date:
+            continue
+        if not happens_this_month(start_date, end_date):
             continue
         events.append(
             {
@@ -256,7 +282,7 @@ def dispatch(args: argparse.Namespace) -> dict:
     return {
         "dry_run": bool(args.dry_run),
         "subscribers": len(subscribers),
-        "events_upcoming": len(events),
+        "events_this_month": len(events),
         "results": results,
     }
 
