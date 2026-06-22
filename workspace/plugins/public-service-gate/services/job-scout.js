@@ -17,6 +17,14 @@ const JOB_SCOUT_REQUEST_PATTERNS = [
   /\b(?:find|look\s+for|search\s+for|scout)\b.*\b(?:jobs?|internships?|scholarships?)\b/i,
   /\b(?:jobs?|internships?|scholarships?)\b.*\b(?:find|search|scout|apply|application|applications?|register|subscribe|start|setup|set\s*up)\b/i,
 ];
+// Explicit intent to set up / onboard job scouting. Only a job-scouting message
+// that ALSO carries one of these keywords gets the canned setup link; every
+// other jobs-related message (questions, "find/scout/apply" phrasings, anything
+// ambiguous) falls through to the relevance gate -> LLM.
+const JOB_SCOUT_SETUP_PATTERNS = [
+  /\b(?:set\s*up|setup)\b/i,
+  /\bonboard(?:ing|ed)?\b/i,
+];
 
 function getJobScoutScript(api) {
   const pluginCfg = getPluginConfig(api);
@@ -50,6 +58,16 @@ export function isJobScoutRequest(text) {
   const compact = String(text ?? "").trim().replace(/\s+/g, " ");
   if (!compact || compact.length > 420) return false;
   return JOB_SCOUT_REQUEST_PATTERNS.some((pattern) => pattern.test(compact));
+}
+
+// Only an explicit "set up" / "onboard" job-scouting message is claimed
+// deterministically. Anything else about jobs falls through to the LLM, so we
+// no longer hijack questions like "can I change the jobs you scout?".
+export function isJobScoutSetupCommand(text) {
+  const compact = String(text ?? "").trim().replace(/\s+/g, " ");
+  if (!compact || compact.length > 420) return false;
+  if (!JOB_SCOUT_REQUEST_PATTERNS.some((pattern) => pattern.test(compact))) return false;
+  return JOB_SCOUT_SETUP_PATTERNS.some((pattern) => pattern.test(compact));
 }
 
 function jobScoutStartText(setupUrl) {

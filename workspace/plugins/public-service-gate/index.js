@@ -68,7 +68,7 @@ import {
   isNewsStopRequest,
   runNewsSubscriptionScript,
 } from "./services/news.js";
-import { handleJobScoutRequest, isJobScoutRequest } from "./services/job-scout.js";
+import { handleJobScoutRequest, isJobScoutRequest, isJobScoutSetupCommand } from "./services/job-scout.js";
 import {
   handleEventScoutRequest,
   isEventScoutRequest,
@@ -333,7 +333,7 @@ export default {
         return await handleNewsRequest(api, sender, text);
       }
 
-      if (isJobScoutRequest(text)) {
+      if (isJobScoutSetupCommand(text)) {
         return await handleJobScoutRequest(api, sender);
       }
 
