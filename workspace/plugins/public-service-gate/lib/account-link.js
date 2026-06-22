@@ -5,7 +5,7 @@ import { normalizePhone, parseIsoTime } from "./events.js";
 import { HELPER_TIMEOUT_MS, helperLimiter, runJsonCommand } from "./runtime.js";
 
 const DEFAULT_ACCOUNT_LINK_SCRIPT = "~/.openclaw/workspace/bin/account-link";
-const DEFAULT_PENDING_LINKS_PATH = "/home/joseph/.openclaw/runtime/account-link/pending-links.json";
+const DEFAULT_PENDING_LINKS_PATH = "~/.openclaw/runtime/account-link/pending-links.json";
 
 export function getAccountLinkScript(api) {
   const pluginCfg = getPluginConfig(api);

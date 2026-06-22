@@ -4,7 +4,7 @@ import path from "node:path";
 import { expandHome, getPluginConfig } from "./config.js";
 import { normalizePhone, parseIsoTime } from "./events.js";
 
-const DEFAULT_SERVICE_STATE_PATH = "/home/joseph/.openclaw/runtime/public-service-gate/state.json";
+const DEFAULT_SERVICE_STATE_PATH = "~/.openclaw/runtime/public-service-gate/state.json";
 const SERVICE_STATE_TTL_MS = 30 * 60 * 1000;
 
 export function getServiceStatePath(api) {

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { expandHome, getPluginConfig } from "../lib/config.js";
 
 const DEFAULT_GREETING_TEMPLATE_PATH = "~/.openclaw/workspace/docs/public-greeting.txt";
-const DEFAULT_GREETING = `Hello there, welcome to OpenClaw Service Desk. We help with:
+const DEFAULT_GREETING = `Hello there, welcome to Genaie Service Desk. We help with:
 
 1. Webetu Progress meal reservation
 2. Personalized news delivery to your inbox
@@ -14,7 +14,7 @@ Please tell me which service you need help with.`;
 
 const GREETING_PATTERNS = [
   /^(?:hi|hello|hey|hie|yo|salam|salaam|bonjour|good\s+(?:morning|afternoon|evening)|gm|morning|afternoon|evening)[\s!.?]*$/i,
-  /^(?:hi|hello|hey|hie|salam|salaam|bonjour)\s+(?:there|openclaw|bot|assistant|author)[\s!.?]*$/i,
+  /^(?:hi|hello|hey|hie|salam|salaam|bonjour)\s+(?:there|openclaw|genaie|bot|assistant|author)[\s!.?]*$/i,
   /^(?:start|menu|help|services|service|options)[\s!.?]*$/i,
   /^(?:what\s+(?:can\s+you\s+do|services\s+do\s+you\s+(?:offer|provide))|what\s+do\s+you\s+(?:do|offer|provide))[\s!.?]*$/i,
 ];

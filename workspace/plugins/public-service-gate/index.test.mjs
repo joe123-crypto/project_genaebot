@@ -375,7 +375,7 @@ esac
   assert.equal(reply.handled, true);
   assert.match(reply.text, /not unlocked yet/);
   assert.match(reply.text, /Type "invite link"/);
-  assert.doesNotMatch(reply.text, /welcome to OpenClaw Service Desk/);
+  assert.doesNotMatch(reply.text, /welcome to Genaie Service Desk/i);
 });
 
 test("unknown sender invalid join code still returns invalid invite reply", async () => {
