@@ -1164,8 +1164,8 @@ test("inviteLinkText builds a one-tap wa.me invite link when bot number is confi
 
   assert.match(text, /https:\/\/wa\.me\/263785632943\?text=JOIN-4PG44766/);
   assert.match(text, /This invite works once\./);
-  // The message is a ready-to-forward invitation that describes the service.
-  assert.match(text, /forward the whole message/i);
+  // The whole message is forwardable to the invited person and describes the service.
+  assert.match(text, /I'm inviting you to join/i);
   assert.match(text, /meal reservation/i);
 });
 
@@ -1178,7 +1178,7 @@ test("inviteLinkText falls back to the join code when bot number is blank", () =
 
   const text = inviteLinkText(api, "L59DGQ54");
 
-  assert.match(text, /forward the whole message/i);
+  assert.match(text, /I'm inviting you to join/i);
   assert.match(text, /\n\nJOIN-L59DGQ54\n\n/);
   assert.doesNotMatch(text, /wa\.me/);
 });
