@@ -49,13 +49,16 @@ Shared dispatcher -> adds matching events to that user's Google Calendar with re
 First check whether this WhatsApp chat is already linked, using the requester's WhatsApp phone only:
 
 ```bash
-account-link status --phone "<whatsapp phone>"
+/home/joseph/.openclaw/workspace/bin/account-link status --phone "<whatsapp phone>"
 ```
 
 If the user is not linked, create or reuse a setup link for this chat and send it:
 
 ```bash
-account-link create-invite --phone "<whatsapp phone>"
+/home/joseph/.openclaw/workspace/bin/account-link create-invite \
+  --phone "<whatsapp phone>" \
+  --purpose events \
+  --next-path /connect-gmail
 ```
 
 ```text
@@ -87,7 +90,7 @@ Any specific kinds of events or a location to focus on? And how early should I r
 Use the requester's WhatsApp phone number and the connected account id. Do not use another phone number.
 
 ```bash
-event_subscriptions.py register \
+python3 /home/joseph/.openclaw/workspace/public-events/event_subscriptions.py register \
   --phone "<whatsapp phone>" \
   --user-id "<connected account id>" \
   --category "<optional category>" \
@@ -129,7 +132,7 @@ You're set up for event scouting. I'll add matching events to your Google Calend
 When the user asks to stop, unsubscribe, cancel, disable, or turn off event scouting, run:
 
 ```bash
-event_subscriptions.py disable --phone "<whatsapp phone>"
+python3 /home/joseph/.openclaw/workspace/public-events/event_subscriptions.py disable --phone "<whatsapp phone>"
 ```
 
 Then reply:

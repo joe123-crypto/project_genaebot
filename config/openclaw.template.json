@@ -82,7 +82,7 @@
       "whatsapp-relevance-gate": {
         "enabled": true,
         "config": {
-          "enabled": true,
+          "enabled": false,
           "serviceSummary": "Webetu Progress meal reservations, personalized news delivery, local event scouting, and job/scholarship/internship scouting and application and inviting friends to the service",
           "serviceKeywords": [
             "meal",
@@ -121,7 +121,7 @@
             "any scholarships",
             "what events are near me"
           ],
-          "relevanceMode": "keyword",
+          "relevanceMode": "off",
           "embeddingModel": "google/text-multilingual-embedding-002",
           "relevanceFloor": 0.55,
           "relevanceMargin": 0.05,

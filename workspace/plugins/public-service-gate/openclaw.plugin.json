@@ -1,7 +1,7 @@
 {
   "id": "public-service-gate",
   "name": "Public Service Gate",
-  "description": "Handles deterministic public WhatsApp greetings before agent dispatch.",
+  "description": "Handles WhatsApp public-user safety and invite access control before agent dispatch.",
   "version": "0.1.0",
   "activation": {
     "onStartup": true

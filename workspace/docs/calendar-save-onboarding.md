@@ -55,13 +55,16 @@ First check whether this WhatsApp chat is already linked, using the requester's
 WhatsApp phone only:
 
 ```bash
-account-link status --phone "<whatsapp phone>"
+/home/joseph/.openclaw/workspace/bin/account-link status --phone "<whatsapp phone>"
 ```
 
 If the user is not linked, create or reuse a setup link for this chat and send it:
 
 ```bash
-account-link create-invite --phone "<whatsapp phone>"
+/home/joseph/.openclaw/workspace/bin/account-link create-invite \
+  --phone "<whatsapp phone>" \
+  --purpose calendar \
+  --next-path /connect-gmail
 ```
 
 ```text
