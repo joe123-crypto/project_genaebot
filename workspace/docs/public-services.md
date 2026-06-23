@@ -32,28 +32,18 @@ Audience: allowlisted non-admin WhatsApp users.
    - Requires a profile summary confirmation and scam-safety acknowledgement before the profile is treated as ready.
    - Follow `/home/joseph/.openclaw/workspace/docs/job-scout-onboarding.md` exactly for setup, profile updates, and safety rules.
 
-## Dispatch Policy
-
-The public-service-gate plugin should reply before agent dispatch only for safety and access-control cases:
-
-- Failsafe stop commands.
-- Invite membership state, JOIN code redemption, invite-link requests, and admin invite-management commands.
-- Non-member access blocking.
-
-Do not short-circuit service UX for allowlisted members. Greetings, menu numbers, setup starts, "Done" messages, status checks, stop/update requests, and ambiguous continuations should reach the language model with this policy and the service tools available.
-
 ## Agent-Handled Prompts
 
-Allowlisted member messages should reach the language model. The language model must answer only supported service requests:
+Answer only supported service requests:
 
 - Webetu Progress meal reservation, reservation status, reservation troubleshooting, account/access help, or onboarding. For onboarding, follow /home/joseph/.openclaw/workspace/docs/webetu-onboarding.md and do not ask for Webetu credentials in chat.
 - Personalized news delivery setup, topics, schedule, stop requests, or preference changes. For onboarding, follow /home/joseph/.openclaw/workspace/docs/personalized-news-onboarding.md.
 - Local event scouting setup, preferences (event types, location, reminder timing), or stop requests. For onboarding, follow /home/joseph/.openclaw/workspace/docs/event-scout-onboarding.md.
 - Job, scholarship, or internship scouting/application setup. For onboarding, follow /home/joseph/.openclaw/workspace/docs/job-scout-onboarding.md.
 
-## AI-Owned Onboarding Flows
+## Onboarding Flows
 
-Removing short-circuiting does not remove onboarding. The AI owns the conversation flow and must use the service docs and tools to continue setup from context.
+Use the service docs and tools to continue setup from context.
 
 - Webetu: create or reuse the account-link URL for the requester's WhatsApp phone, send the Credentials Vault instructions, continue when the user says they saved credentials, then validate with the allowed Webetu checks, ask for the default restaurant, confirm the restaurant, save it, and offer the immediate 3-day reservation step.
 - Personalized news: ask for topics if missing, save/update topics for the requester's WhatsApp phone, and confirm the setup. Stop news when the user asks.
