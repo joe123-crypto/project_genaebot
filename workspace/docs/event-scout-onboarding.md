@@ -55,7 +55,10 @@ openclaw-cap account-link status --phone "<whatsapp phone>"
 If the user is not linked, create or reuse a setup link for this chat and send it:
 
 ```bash
-openclaw-cap account-link create-invite --phone "<whatsapp phone>"
+openclaw-cap account-link create-invite \
+  --phone "<whatsapp phone>" \
+  --purpose events \
+  --next-path /connect-gmail
 ```
 
 ```text

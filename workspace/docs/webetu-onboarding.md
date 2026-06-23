@@ -40,10 +40,10 @@ Agent checks whether this WhatsApp chat is linked to an Agent Genaie login
 If not linked, agent creates an account-link setup URL for this phone
 User opens the link, signs in by email, and is sent to the Credentials Vault
 User saves Webetu credentials in the vault
+Agent runs sanitized credential and dry-run checks
 Agent asks for and confirms the user's default restaurant by public name
   → If restaurant is not visible: inform user, offer Club 3 Bab Ezzouar or wait path
   → If user chooses to wait: advise manual reservations, tell user to return when ready
-Agent runs sanitized credential and dry-run checks
 Agent warns user about the 3-day wait window, offers to reserve now
 If user agrees (or does not object): agent reserves meals for the next 3 days and reports results
 Automatic runs fire on the 1st, 3rd, 6th, 9th, 12th, 15th, 18th, 21st, 24th, 27th, and 30th of each month at 12:00 PM Algiers, covering all days of the year with no gaps

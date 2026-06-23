@@ -44,12 +44,23 @@ Do not short-circuit service UX for allowlisted members. Greetings, menu numbers
 
 ## Agent-Handled Prompts
 
-Only pass public-user messages to the language model when the message appears to ask for one of the supported services:
+Allowlisted member messages should reach the language model. The language model must answer only supported service requests:
 
 - Webetu Progress meal reservation, reservation status, reservation troubleshooting, account/access help, or onboarding. For onboarding, follow /home/joseph/.openclaw/workspace/docs/webetu-onboarding.md and do not ask for Webetu credentials in chat.
 - Personalized news delivery setup, topics, schedule, stop requests, or preference changes. For onboarding, follow /home/joseph/.openclaw/workspace/docs/personalized-news-onboarding.md.
 - Local event scouting setup, preferences (event types, location, reminder timing), or stop requests. For onboarding, follow /home/joseph/.openclaw/workspace/docs/event-scout-onboarding.md.
 - Job, scholarship, or internship scouting/application setup. For onboarding, follow /home/joseph/.openclaw/workspace/docs/job-scout-onboarding.md.
+
+## AI-Owned Onboarding Flows
+
+Removing short-circuiting does not remove onboarding. The AI owns the conversation flow and must use the service docs and tools to continue setup from context.
+
+- Webetu: create or reuse the account-link URL for the requester's WhatsApp phone, send the Credentials Vault instructions, continue when the user says they saved credentials, then validate with the allowed Webetu checks, ask for the default restaurant, confirm the restaurant, save it, and offer the immediate 3-day reservation step.
+- Personalized news: ask for topics if missing, save/update topics for the requester's WhatsApp phone, and confirm the setup. Stop news when the user asks.
+- Local event scouting: create or reuse the setup link, require Google Calendar access in the app, collect optional event/location/reminder preferences, register the requester's WhatsApp phone, and confirm calendar reminders.
+- Job Scout: create or reuse the setup link, require Gmail connection in the app, offer guided questions or CV autofill, stage the CV when uploaded, confirm the profile summary, require scam-safety acknowledgement, then save the profile.
+
+Short replies such as "1", "2", "Done", "yes", "no", and restaurant names are normal onboarding replies. Interpret them from the recent conversation and service state; ask one short clarifying question only when the service or next step is genuinely unclear.
 
 ## Request Handling
 
