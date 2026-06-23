@@ -49,13 +49,13 @@ Use the requester's WhatsApp phone number only.
 First check whether this WhatsApp chat is already linked to an Agent Genaie login:
 
 ```bash
-openclaw-cap account-link status --phone "<whatsapp phone>"
+/home/joseph/.openclaw/workspace/bin/account-link status --phone "<whatsapp phone>"
 ```
 
 If the status says `"linked": false`, create an account-link invite for Job Scout:
 
 ```bash
-openclaw-cap account-link create-invite \
+/home/joseph/.openclaw/workspace/bin/account-link create-invite \
   --phone "<whatsapp phone>" \
   --purpose jobs \
   --next-path /connect-gmail
@@ -77,7 +77,7 @@ Stop here until the user has opened the link and signed in. Do not collect CV/pr
 If the status says `"linked": true`, create or reuse the Job Scout setup path:
 
 ```bash
-openclaw-cap job-scout create-invite --phone "<whatsapp phone>"
+/home/joseph/.openclaw/workspace/bin/job-scout create-invite --phone "<whatsapp phone>"
 ```
 
 Send the returned `setupUrl` to the user with this public text:
@@ -143,7 +143,7 @@ Friendly field mapping:
 When the user uploads the CV, immediately stage it into durable Job Scout storage:
 
 ```bash
-openclaw-cap job-scout stage-cv \
+/home/joseph/.openclaw/workspace/bin/job-scout stage-cv \
   --phone "<whatsapp phone>" \
   --cv "<MediaPath>"
 ```
@@ -164,7 +164,7 @@ After the user uploads the CV and gives permission:
 - Immediately stage the CV into durable Job Scout storage:
 
 ```bash
-openclaw-cap job-scout stage-cv \
+/home/joseph/.openclaw/workspace/bin/job-scout stage-cv \
   --phone "<whatsapp phone>" \
   --cv "<MediaPath>"
 ```
@@ -219,7 +219,7 @@ Rules:
 After the user has provided enough details, uploaded a CV, confirmed the summary, and acknowledged the scam warning, save the profile:
 
 ```bash
-openclaw-cap job-scout save-profile \
+/home/joseph/.openclaw/workspace/bin/job-scout save-profile \
   --phone "<whatsapp phone>" \
   --cv "<cvFileRef returned by stage-cv>" \
   --target-role "General worker" \
@@ -245,7 +245,7 @@ Make sure Gmail shows Connected in the app. Once it is connected, the scout can 
 ## Verify Ready Users
 
 ```bash
-openclaw-cap job-scout list-ready
+/home/joseph/.openclaw/workspace/bin/job-scout list-ready
 ```
 
 This lists only users who have an active Job Scout profile, linked WhatsApp chat, CV reference, and connected Gmail sender.

@@ -56,13 +56,13 @@ Use only the requester's WhatsApp phone number.
 First check whether the phone is already linked:
 
 ```bash
-openclaw-cap account-link status --phone "<whatsapp phone>"
+/home/joseph/.openclaw/workspace/bin/account-link status --phone "<whatsapp phone>"
 ```
 
 If the result says `"linked": false`, create a Webetu account-link invite:
 
 ```bash
-openclaw-cap account-link create-invite \
+/home/joseph/.openclaw/workspace/bin/account-link create-invite \
   --phone "<whatsapp phone>" \
   --purpose webetu \
   --next-path /vault
@@ -117,7 +117,7 @@ I can show you the supported restaurants so you can choose one.
 List supported restaurant names:
 
 ```bash
-openclaw-cap webetu-preferences list-restaurants \
+/home/joseph/.openclaw/workspace/bin/webetu-preferences list-restaurants \
   --phone "<whatsapp phone>"
 ```
 
@@ -132,7 +132,7 @@ I will use <restaurant name> as your default Webetu restaurant. Is that correct?
 Only after the user confirms, save it:
 
 ```bash
-openclaw-cap webetu-preferences set-default \
+/home/joseph/.openclaw/workspace/bin/webetu-preferences set-default \
   --phone "<whatsapp phone>" \
   --restaurant "<confirmed restaurant name>" \
   --confirmed
@@ -172,7 +172,7 @@ You can also ask me later to use a different supported restaurant for a specific
 For a one-day override, confirm the date and restaurant before saving:
 
 ```bash
-openclaw-cap webetu-preferences set-override \
+/home/joseph/.openclaw/workspace/bin/webetu-preferences set-override \
   --phone "<whatsapp phone>" \
   --date YYYY-MM-DD \
   --restaurant "<confirmed restaurant name>" \
@@ -189,14 +189,16 @@ When a public user asks about their reservation status, upcoming meal, or whethe
 
 ```bash
 # 1. Confirm the user is linked
-openclaw-cap webetu lookup-user --phone "<whatsapp phone>"
+sudo -n -u webetu-worker /usr/local/bin/webetu-worker-safe \
+  lookup-user --phone "<whatsapp phone>"
 ```
 
 If `registration_status` is not `"active"`, the user is not set up yet — redirect to onboarding.
 
 ```bash
 # 2. Check their next scheduled reservation (no booking is made)
-openclaw-cap webetu reserve --phone "<whatsapp phone>" --dry-run
+sudo -n -u webetu-worker /usr/local/bin/webetu-worker-safe \
+  reserve --phone "<whatsapp phone>" --dry-run
 ```
 
 Translate the result into plain language. Example reply:
@@ -222,7 +224,8 @@ A user may ask to redo or override a reservation that is already booked — for 
 Look up the user's internal ID first:
 
 ```bash
-openclaw-cap webetu lookup-user --phone "<whatsapp phone>"
+sudo -n -u webetu-worker /usr/local/bin/webetu-worker-safe \
+  lookup-user --phone "<whatsapp phone>"
 ```
 
 Use the `user_id` from the result. Then run the override reservation for the requested date:
@@ -258,7 +261,8 @@ Expected sanitized result should have `"source": "firestore"`. Do not expose sou
 Then run the sanitized credential check:
 
 ```bash
-openclaw-cap webetu check-credentials --phone "<whatsapp phone>"
+sudo -n -u webetu-worker /usr/local/bin/webetu-worker-safe \
+  check-credentials --phone "<whatsapp phone>"
 ```
 
 This checks whether encrypted credentials can be loaded without printing them.
@@ -266,7 +270,8 @@ This checks whether encrypted credentials can be loaded without printing them.
 Then run a dry-run reservation check:
 
 ```bash
-openclaw-cap webetu reserve --phone "<whatsapp phone>" --dry-run
+sudo -n -u webetu-worker /usr/local/bin/webetu-worker-safe \
+  reserve --phone "<whatsapp phone>" --dry-run
 ```
 
 This authenticates privately, discovers/caches metadata, checks existing reservations, and reports what would be reserved without creating a reservation.

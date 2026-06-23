@@ -58,7 +58,7 @@ If the user previously asked to start news and then replies with topics, save th
 Use the requester's WhatsApp phone number. Do not use another phone number.
 
 ```bash
-openclaw-cap public-news register \
+python3 /home/joseph/.openclaw/workspace/public-news/news_subscriptions.py register \
   --phone "<whatsapp phone>" \
   "<topic 1>" "<topic 2>" "<topic 3>"
 ```
@@ -94,7 +94,7 @@ I'll send updates to this WhatsApp chat.
 When the user asks to stop, unsubscribe, cancel, disable, or turn off personalized news, run:
 
 ```bash
-openclaw-cap public-news disable --phone "<whatsapp phone>"
+python3 /home/joseph/.openclaw/workspace/public-news/news_subscriptions.py disable --phone "<whatsapp phone>"
 ```
 
 Then reply:

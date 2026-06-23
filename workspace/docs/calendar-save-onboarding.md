@@ -55,13 +55,13 @@ First check whether this WhatsApp chat is already linked, using the requester's
 WhatsApp phone only:
 
 ```bash
-openclaw-cap account-link status --phone "<whatsapp phone>"
+/home/joseph/.openclaw/workspace/bin/account-link status --phone "<whatsapp phone>"
 ```
 
 If the user is not linked, create or reuse a setup link for this chat and send it:
 
 ```bash
-openclaw-cap account-link create-invite \
+/home/joseph/.openclaw/workspace/bin/account-link create-invite \
   --phone "<whatsapp phone>" \
   --purpose calendar \
   --next-path /connect-gmail
@@ -82,7 +82,7 @@ access.
 ## Confirm Calendar Access
 
 Re-run the status check to capture the linked account. Use the connected account
-id from `openclaw-cap account-link status` as the user id below; never show it to the user.
+id from `account-link status` as the user id below; never show it to the user.
 Then confirm calendar access is connected:
 
 ```bash
