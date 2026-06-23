@@ -55,6 +55,20 @@ function eventFor(text, sender = MEMBER) {
   };
 }
 
+test("off mode passes WhatsApp messages through without shortcut or LLM checks", async () => {
+  let calls = 0;
+  const handler = registerHandler({ relevanceMode: "off" }, async () => {
+    calls += 1;
+    return "IRRELEVANT";
+  });
+
+  for (const text of ["Done", "1", "tell me the bitcoin price now"]) {
+    const reply = await handler(eventFor(text), { channelId: "whatsapp", senderId: MEMBER });
+    assert.equal(reply, undefined);
+  }
+  assert.equal(calls, 0);
+});
+
 async function withAdminMode(value, fn) {
   const hadValue = Object.prototype.hasOwnProperty.call(process.env, "WHATSAPP_ADMIN_ENABLED");
   const previous = process.env.WHATSAPP_ADMIN_ENABLED;

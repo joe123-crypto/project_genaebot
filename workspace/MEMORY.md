@@ -83,14 +83,14 @@ Most admin cron jobs deliver to Joe's Algerian WhatsApp: **+213563719936** (the 
 
 ### Public Service Gate Plugin
 - **Location:** `plugins/public-service-gate/index.js`
-- **What it does:** Intercepts WhatsApp messages from public users BEFORE LLM dispatch. If the message matches greeting patterns or menu/service requests, it replies with the deterministic template from `docs/public-greeting.txt` — no LLM call, no token cost.
-- **Greeting patterns matched:** hi, hello, hey, salam, bonjour, good morning/afternoon/evening, start, menu, help, services, "what can you do", etc.
+- **What it does:** Intercepts WhatsApp messages from public users BEFORE LLM dispatch only for safety and access control: failsafe stop, invite membership, JOIN redemption, invite-link issuance, and nonmember blocking.
+- **Service UX:** Allowlisted/member messages, including greetings, menu digits, "Done", onboarding starts, stop/update requests, and ambiguous continuations, now fall through to the LLM. Do not add deterministic phrase handlers for these flows.
 - **Public users:** Defined in `runtime/public-service-gate/invites.json` under unlocked `members`; `openclaw.json` only keeps stable admin/config fields.
 - **Config path:** `plugins.entries.public-service-gate.config`
 
 ### Agent-Handled vs Deterministic
-- **Deterministic (no LLM):** Simple greetings, menu requests, capability questions → `docs/public-greeting.txt` template
-- **Agent-handled (LLM):** Actual service requests about meal reservations, news delivery, event scouting, and Job Scout setup.
+- **Deterministic (no LLM):** Failsafe stop and invite/access-control handling only.
+- **Agent-handled (LLM):** Greetings, menu requests, capability questions, continuations, and actual service requests about meal reservations, news delivery, event scouting, and Job Scout setup.
 
 ### Security Boundaries (CRITICAL)
 - Public agent must NOT see, request, store, or validate Webetu credentials directly
@@ -163,8 +163,8 @@ Full procedure, credential model, and worker paths live in the **Webetu Meal Res
 **Credential model:** The public/main agent must NEVER see Webetu credentials. Users save them in Agent Genaie's Credentials Vault; encrypted refs mirror to Firestore, with the WhatsApp phone linked to a Firebase user via `phoneLinks`. The `webetu-preferences` helper resolves the phone through account-link status and calls the isolated worker by Firebase UID, so stale legacy `wa-*` registry rows can't shadow current Firestore users. The worker privately decrypts refs, logs into Webetu/ONOU, and calls ONOU `/api/getdepotres`. Empty/stale worker-registry output is NOT a repair signal — never trigger credential-store repair, admin re-adds, migration, cron edits, or config changes from it.
 
 **Public onboarding** (per WhatsApp phone, sanitized — never ask for username/password in WhatsApp, never ask for restaurant/depot/residence/wilaya IDs or API/internal values):
-1. `account-link status --phone <phone>`; if unlinked, `account-link create-invite --phone <phone> --purpose webetu --next-path /vault` and send the returned setup URL (user signs in by email, saves Webetu credentials in the Vault).
-2. Ask for the default restaurant by public name only — offer the live list via `webetu-preferences list-restaurants --phone <phone>` (returns only public names + meal availability), repeat the choice back, and save only after clear confirmation with `webetu-preferences set-default --phone <phone> --restaurant "<name>" --confirmed`. Missing preference falls back to `الإقامة الجامعية 03 باب الزوار`.
+1. `openclaw-cap account-link status --phone <phone>`; if unlinked, `openclaw-cap account-link create-invite --phone <phone> --purpose webetu --next-path /vault` and send the returned setup URL (user signs in by email, saves Webetu credentials in the Vault).
+2. Ask for the default restaurant by public name only — offer the live list via `openclaw-cap webetu-preferences list-restaurants --phone <phone>` (returns only public names + meal availability), repeat the choice back, and save only after clear confirmation with `openclaw-cap webetu-preferences set-default --phone <phone> --restaurant "<name>" --confirmed`. Missing preference falls back to `الإقامة الجامعية 03 باب الزوار`.
 3. After the user says vault setup is complete, run sanitized checks for that phone only: `lookup-user --phone`, `check-credentials --phone`, then `reserve --phone --dry-run`.
 4. On success the user is onboarded; automatic reservations include them and updates go to their WhatsApp DM.
 

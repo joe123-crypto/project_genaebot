@@ -14,7 +14,7 @@ import {
   isQueueFullError,
   runJsonCommand,
 } from "./lib/runtime.js";
-import { clearServiceState, loadServiceState } from "./lib/state.js";
+import { clearServiceState } from "./lib/state.js";
 import {
   FAILSAFE_STOP_PRIORITY,
   clearFailsafeStopSuppression,
@@ -26,8 +26,6 @@ import { isUnknownSenderRelevant } from "./lib/relevance.js";
 import {
   getServiceMenuSelection,
   isGreetingOrServiceMenuRequest,
-  isStateResetRequest,
-  loadGreeting,
 } from "./services/greeting.js";
 import {
   DEFAULT_INVITE_FAILED,
@@ -52,29 +50,17 @@ import {
   runInviteScript,
 } from "./services/invite.js";
 import {
-  handleReservationStatus,
-  handleWebetuOnboardingStart,
-  handleWebetuRestaurantChoice,
-  handleWebetuSetupDone,
   isReservationStatusRequest,
   isWebetuGuideRequest,
   isWebetuOnboardingStartRequest,
   isWebetuSetupDoneRequest,
 } from "./services/webetu.js";
 import {
-  DEFAULT_NEWS_STOPPED,
-  handleNewsRequest,
-  handleNewsTopicsContinuation,
   isNewsRequest,
   isNewsStopRequest,
-  runNewsSubscriptionScript,
 } from "./services/news.js";
-import { handleJobScoutRequest, isJobScoutRequest, isJobScoutSetupCommand } from "./services/job-scout.js";
-import {
-  handleEventScoutRequest,
-  isEventScoutRequest,
-  isEventScoutSetupCommand,
-} from "./services/event-scout.js";
+import { isJobScoutRequest } from "./services/job-scout.js";
+import { isEventScoutRequest } from "./services/event-scout.js";
 
 function isEnabled(api) {
   const pluginCfg = getPluginConfig(api);
@@ -97,24 +83,10 @@ function isKnownServiceRequestText(text) {
   );
 }
 
-async function handleActiveServiceState(api, sender, text, state) {
-  if (!state || typeof state !== "object") return undefined;
-
-  if (state.step === "webetu.awaiting_restaurant" || state.step === "webetu.restaurant_not_found") {
-    return handleWebetuRestaurantChoice(api, sender, text);
-  }
-
-  if (state.step === "news.awaiting_topics") {
-    return await handleNewsTopicsContinuation(api, sender, text);
-  }
-
-  return undefined;
-}
-
 export default {
   id: "public-service-gate",
   name: "Public Service Gate",
-  description: "Handles deterministic public WhatsApp greetings before agent dispatch.",
+  description: "Handles WhatsApp public-user safety and invite access control before agent dispatch.",
   version: "0.1.0",
   register(api) {
     api.on(
@@ -271,90 +243,11 @@ export default {
         return { handled: true }; // silent drop unrelated traffic; claim it, no reply, no agent
       }
 
-      // From here on, sender is a member: existing deterministic service handling.
-      const activeState = loadServiceState(api, sender);
-      if (activeState) {
-        if (isStateResetRequest(text)) {
-          clearServiceState(api, sender);
-          return {
-            handled: true,
-            text: loadGreeting(api),
-          };
-        }
-        const stateReply = await handleActiveServiceState(api, sender, text, activeState);
-        if (stateReply) return stateReply;
-        return;
-      }
-
-      const menuSelection = getServiceMenuSelection(text);
-
-      if (menuSelection === "1" || isWebetuOnboardingStartRequest(text) || isWebetuGuideRequest(text)) {
-        return await handleWebetuOnboardingStart(api, sender);
-      }
-
-      if (isWebetuSetupDoneRequest(text)) {
-        return await handleWebetuSetupDone(api, sender);
-      }
-
-      if (isReservationStatusRequest(text)) {
-        return await handleReservationStatus(api, sender);
-      }
-
-      if (menuSelection === "2") {
-        return await handleNewsRequest(api, sender, "news");
-      }
-
-      if (menuSelection === "3") {
-        return await handleEventScoutRequest(api, sender);
-      }
-
-      if (menuSelection === "4") {
-        return await handleJobScoutRequest(api, sender);
-      }
-
-      if (isNewsStopRequest(text)) {
-        try {
-          await runNewsSubscriptionScript(api, ["disable", "--phone", sender]);
-          clearServiceState(api, sender);
-        } catch (err) {
-          if (isQueueFullError(err)) return busyReply();
-          api.logger?.warn?.(`public-service-gate: failed to disable news (${String(err)})`);
-          return {
-            handled: true,
-            text: "I couldn't stop personalized news right now. Please try again later.",
-          };
-        }
-        return {
-          handled: true,
-          text: DEFAULT_NEWS_STOPPED,
-        };
-      }
-
-      if (isNewsRequest(text)) {
-        return await handleNewsRequest(api, sender, text);
-      }
-
-      if (isJobScoutSetupCommand(text)) {
-        return await handleJobScoutRequest(api, sender);
-      }
-
-      if (isEventScoutSetupCommand(text)) {
-        return await handleEventScoutRequest(api, sender);
-      }
-
-      if (isGreetingOrServiceMenuRequest(text)) {
-        return {
-          handled: true,
-          text: loadGreeting(api),
-        };
-      }
-
-      // No deterministic handler matched. Do NOT claim the message here — fall
-      // through to the whatsapp-relevance-gate (priority -10), which is the
-      // semantics allow/block gateway: on-topic text is passed to the agent,
-      // off-topic text is rejected there with the same canned message.
+      // From here on, sender is a member. Do not short-circuit service UX:
+      // greetings, menu digits, setup continuations, and service requests all
+      // fall through to the agent, which has the public-service docs and tools.
       api.logger?.info?.(
-        `public-service-gate: member WhatsApp text deferred to relevance gate sender=${sender} textLen=${text.length}`,
+        `public-service-gate: member WhatsApp text deferred to agent sender=${sender} textLen=${text.length}`,
       );
       return;
     });

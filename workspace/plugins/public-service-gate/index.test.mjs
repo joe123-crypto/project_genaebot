@@ -283,30 +283,6 @@ test("failsafe stop command requires a one-word stop message", async () => {
   assert.equal(await handler(eventFor("unstoppable"), { channelId: "whatsapp", senderId: MEMBER }), undefined);
 });
 
-test("stop news still follows the personalized-news stop path", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
-  const newsSubscriptionsScript = path.join(dir, "news_subscriptions.py");
-  const newsLog = path.join(dir, "news.log");
-  fs.writeFileSync(
-    newsSubscriptionsScript,
-    `#!/usr/bin/env python3
-import json
-import sys
-from pathlib import Path
-Path(${JSON.stringify(newsLog)}).write_text(" ".join(sys.argv[1:]), encoding="utf-8")
-print(json.dumps({"ok": True}))
-`,
-    { mode: 0o755 },
-  );
-
-  const handler = registerHandler({ newsSubscriptionsScript });
-  const reply = await handler(eventFor("stop news"), { channelId: "whatsapp", senderId: MEMBER });
-
-  assert.equal(reply.handled, true);
-  assert.match(reply.text, /Personalized news has been stopped/);
-  assert.equal(fs.readFileSync(newsLog, "utf8"), "disable --phone +233208864185");
-});
-
 test("unknown sender greeting gets invite-required reply instead of silence", async () => {
   let calls = 0;
   const handler = registerHandler({}, async () => {
@@ -495,7 +471,7 @@ esac
   assert.match(reply.text, /your own access unlocks/);
 });
 
-test("unlocked invite member gets normal member handling without publicUsers entry", async () => {
+test("unlocked invite member falls through to the agent without publicUsers entry", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
   const inviteScript = path.join(dir, "whatsapp-invite");
   const greetingTemplatePath = path.join(dir, "public-greeting.txt");
@@ -517,11 +493,10 @@ esac
     senderId: UNKNOWN,
   });
 
-  assert.equal(reply.handled, true);
-  assert.equal(reply.text, "Choose a service");
+  assert.equal(reply, undefined);
 });
 
-test("member greeting still gets the normal service menu", async () => {
+test("member greeting falls through to the agent", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
   const greetingTemplatePath = path.join(dir, "public-greeting.txt");
   fs.writeFileSync(greetingTemplatePath, "Choose a service");
@@ -529,11 +504,10 @@ test("member greeting still gets the normal service menu", async () => {
   const handler = registerHandler({ greetingTemplatePath });
   const reply = await handler(eventFor("hi"), { channelId: "whatsapp", senderId: MEMBER });
 
-  assert.equal(reply.handled, true);
-  assert.equal(reply.text, "Choose a service");
+  assert.equal(reply, undefined);
 });
 
-test("member off-scope text falls through to the relevance gate", async () => {
+test("member off-scope text falls through to the agent without relevance calls", async () => {
   let calls = 0;
   const handler = registerHandler(
     {},
@@ -553,7 +527,7 @@ test("member off-scope text falls through to the relevance gate", async () => {
   assert.equal(calls, 0);
 });
 
-test("member off-scope text falls through with nested live-style event fields", async () => {
+test("member text falls through with nested live-style event fields", async () => {
   const handler = registerHandler({}, undefined, { rejectionMessage: "Please choose a supported service." });
   const reply = await handler(
     {
@@ -565,6 +539,69 @@ test("member off-scope text falls through with nested live-style event fields", 
   );
 
   assert.equal(reply, undefined);
+});
+
+test("member service messages do not call deterministic service helpers", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
+  const accountLinkScript = path.join(dir, "account-link");
+  const jobScoutScript = path.join(dir, "job-scout");
+  const newsSubscriptionsScript = path.join(dir, "news_subscriptions.py");
+  const helperLog = path.join(dir, "helper.log");
+
+  for (const script of [accountLinkScript, jobScoutScript]) {
+    writeExecutable(
+      script,
+      `#!/usr/bin/env bash
+printf '%s %s\\n' "$0" "$*" >> "${helperLog}"
+exit 2
+`,
+    );
+  }
+  fs.writeFileSync(
+    newsSubscriptionsScript,
+    `#!/usr/bin/env python3
+from pathlib import Path
+Path(${JSON.stringify(helperLog)}).write_text("news helper called", encoding="utf-8")
+raise SystemExit(2)
+`,
+    { mode: 0o755 },
+  );
+
+  const handler = registerHandler({ accountLinkScript, jobScoutScript, newsSubscriptionsScript });
+  for (const text of [
+    "Hello",
+    "1",
+    "2",
+    "3",
+    "4",
+    "Done",
+    "I'm done saving credentials for webetu",
+    "start webetu",
+    "visual guide for webetu",
+    "check my reservation status",
+    "stop news",
+    "personalized news about AI",
+    "setup event scouting",
+    "setup job scout",
+  ]) {
+    const reply = await handler(eventFor(text), { channelId: "whatsapp", senderId: MEMBER });
+    assert.equal(reply, undefined, `expected "${text}" to reach the agent`);
+  }
+  assert.equal(fs.existsSync(helperLog), false);
+});
+
+test("active service state no longer short-circuits member continuations", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
+  const serviceStatePath = path.join(dir, "state.json");
+  writeServiceState(serviceStatePath, MEMBER, "webetu", "webetu.awaiting_restaurant");
+
+  const handler = registerHandler({ serviceStatePath });
+  for (const text of ["2", "menu", "Residence Test Restaurant", "RU 2000 Lits Tipaza"]) {
+    const reply = await handler(eventFor(text), { channelId: "whatsapp", senderId: MEMBER });
+    assert.equal(reply, undefined, `expected "${text}" to reach the agent`);
+  }
+  const saved = JSON.parse(fs.readFileSync(serviceStatePath, "utf8"));
+  assert.equal(saved.states[MEMBER]?.step, "webetu.awaiting_restaurant");
 });
 
 test("WhatsApp message without a sender fails closed before agent dispatch", async () => {
@@ -669,488 +706,6 @@ test("non-admin grandfather command does not unlock and gets gated", async () =>
 
   assert.equal(reply.handled, true);
   assert.doesNotMatch(reply.text ?? "", /Grandfathered/);
-});
-
-test("menu option 1 starts Webetu setup instead of falling through", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
-  const accountLinkScript = path.join(dir, "account-link");
-  writeExecutable(
-    accountLinkScript,
-    `#!/usr/bin/env bash
-set -eu
-case "$1" in
-  status) printf '{"linked":false}\\n' ;;
-  create-invite) printf '{"setupUrl":"https://example.test/setup?token=abc"}\\n' ;;
-  *) exit 2 ;;
-esac
-`,
-  );
-
-  const handler = registerHandler({ accountLinkScript });
-  const reply = await handler(eventFor("1"), { channelId: "whatsapp", senderId: MEMBER });
-
-  assert.equal(reply.handled, true);
-  assert.match(reply.text, /https:\/\/example\.test\/setup/);
-  assert.doesNotMatch(reply.text, /only help/i);
-});
-
-test("webetu guide request starts current setup flow without onboarding guide URL", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
-  const accountLinkScript = path.join(dir, "account-link");
-  writeExecutable(
-    accountLinkScript,
-    `#!/usr/bin/env bash
-set -eu
-case "$1" in
-  status) printf '{"linked":false}\\n' ;;
-  create-invite) printf '{"setupUrl":"https://example.test/setup?token=guide"}\\n' ;;
-  *) exit 2 ;;
-esac
-`,
-  );
-
-  const handler = registerHandler({ accountLinkScript });
-  const reply = await handler(eventFor("visual guide for webetu"), { channelId: "whatsapp", senderId: MEMBER });
-
-  assert.equal(reply.handled, true);
-  assert.match(reply.text, /https:\/\/example\.test\/setup/);
-  assert.doesNotMatch(reply.text, /\/onboarding\b|Visual setup guide/i);
-});
-
-test("menu option 3 sends the account-link invite for event scouting when unlinked", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
-  const accountLinkScript = path.join(dir, "account-link");
-  const serviceStatePath = path.join(dir, "state.json");
-  writeExecutable(
-    accountLinkScript,
-    `#!/usr/bin/env bash
-set -eu
-case "$1" in
-  status) printf '{"linked":false}\\n' ;;
-  create-invite) printf '{"setupUrl":"https://example.test/setup?token=evt"}\\n' ;;
-  *) exit 2 ;;
-esac
-`,
-  );
-
-  const handler = registerHandler({ accountLinkScript, serviceStatePath });
-  const reply = await handler(eventFor("3"), { channelId: "whatsapp", senderId: MEMBER });
-
-  assert.equal(reply.handled, true);
-  assert.match(reply.text, /https:\/\/example\.test\/setup/);
-  assert.doesNotMatch(reply.text, /not active|news pilot/i);
-});
-
-test("event scouting request starts setup with calendar connect link when linked", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
-  const accountLinkScript = path.join(dir, "account-link");
-  const serviceStatePath = path.join(dir, "state.json");
-  writeExecutable(
-    accountLinkScript,
-    `#!/usr/bin/env bash
-set -eu
-case "$1" in
-  status) printf '{"linked":true,"publicUserId":"usr_test"}\\n' ;;
-  *) exit 2 ;;
-esac
-`,
-  );
-
-  const handler = registerHandler({
-    accountLinkScript,
-    serviceStatePath,
-    agentGenaiePublicBaseUrl: "https://app.test",
-  });
-  const reply = await handler(eventFor("setup event scouting"), { channelId: "whatsapp", senderId: MEMBER });
-
-  assert.equal(reply.handled, true);
-  assert.match(reply.text, /https:\/\/app\.test\/usr_test\/connect-gmail/);
-  assert.match(reply.text, /calendar/i);
-});
-
-test("setup/onboard phrasings claim event scouting deterministically", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
-  const accountLinkScript = path.join(dir, "account-link");
-  const serviceStatePath = path.join(dir, "state.json");
-  writeExecutable(
-    accountLinkScript,
-    `#!/usr/bin/env bash
-set -eu
-case "$1" in
-  status) printf '{"linked":true,"publicUserId":"usr_test"}\\n' ;;
-  *) exit 2 ;;
-esac
-`,
-  );
-
-  const handler = registerHandler({
-    accountLinkScript,
-    serviceStatePath,
-    agentGenaiePublicBaseUrl: "https://app.test",
-  });
-
-  for (const text of [
-    "local event scouting setup",
-    "onboard me for event scouting",
-    "event scouting onboard",
-  ]) {
-    const reply = await handler(eventFor(text), { channelId: "whatsapp", senderId: MEMBER });
-    assert.equal(reply?.handled, true, `expected "${text}" to be handled`);
-    assert.match(reply.text, /https:\/\/app\.test\/usr_test\/connect-gmail/);
-  }
-});
-
-test("event questions without a setup keyword fall through to the LLM", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
-  const accountLinkScript = path.join(dir, "account-link");
-  const serviceStatePath = path.join(dir, "state.json");
-  // If the gate ever claims one of these it would call account-link; failing
-  // here makes that mistake obvious instead of silently passing.
-  writeExecutable(
-    accountLinkScript,
-    `#!/usr/bin/env bash
-set -eu
-exit 2
-`,
-  );
-
-  const handler = registerHandler({
-    accountLinkScript,
-    serviceStatePath,
-    agentGenaiePublicBaseUrl: "https://app.test",
-  });
-
-  for (const text of [
-    "start event scouting",
-    "scout events for me",
-    "find events near me",
-    "Can I change the types of events that you scout for me?",
-    "I mean for events scout",
-    "when does event scout run?",
-  ]) {
-    const reply = await handler(eventFor(text), { channelId: "whatsapp", senderId: MEMBER });
-    assert.equal(reply, undefined, `expected "${text}" to fall through to the LLM`);
-  }
-});
-
-test("setup/onboard phrasings claim job scouting deterministically", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
-  const accountLinkScript = path.join(dir, "account-link");
-  const jobScoutScript = path.join(dir, "job-scout");
-  const serviceStatePath = path.join(dir, "state.json");
-  writeExecutable(
-    accountLinkScript,
-    `#!/usr/bin/env bash
-set -eu
-case "$1" in
-  status) printf '{"linked":true,"publicUserId":"usr_test"}\\n' ;;
-  *) exit 2 ;;
-esac
-`,
-  );
-  writeExecutable(
-    jobScoutScript,
-    `#!/usr/bin/env bash
-set -eu
-case "$1" in
-  create-invite) printf '{"setupUrl":"https://app.test/usr_test/connect-gmail"}\\n' ;;
-  *) exit 2 ;;
-esac
-`,
-  );
-
-  const handler = registerHandler({
-    accountLinkScript,
-    jobScoutScript,
-    serviceStatePath,
-    agentGenaiePublicBaseUrl: "https://app.test",
-  });
-
-  for (const text of ["setup job scout", "onboard me for job scouting"]) {
-    const reply = await handler(eventFor(text), { channelId: "whatsapp", senderId: MEMBER });
-    assert.equal(reply?.handled, true, `expected "${text}" to be handled`);
-    assert.match(reply.text, /https:\/\/app\.test\/usr_test\/connect-gmail/);
-  }
-});
-
-test("job questions without a setup keyword fall through to the LLM", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
-  const accountLinkScript = path.join(dir, "account-link");
-  const jobScoutScript = path.join(dir, "job-scout");
-  const serviceStatePath = path.join(dir, "state.json");
-  // If the gate ever claims one of these it would call account-link/job-scout;
-  // failing here makes that mistake obvious instead of silently passing.
-  writeExecutable(accountLinkScript, `#!/usr/bin/env bash\nset -eu\nexit 2\n`);
-  writeExecutable(jobScoutScript, `#!/usr/bin/env bash\nset -eu\nexit 2\n`);
-
-  const handler = registerHandler({
-    accountLinkScript,
-    jobScoutScript,
-    serviceStatePath,
-    agentGenaiePublicBaseUrl: "https://app.test",
-  });
-
-  for (const text of [
-    "find jobs for me",
-    "scout jobs",
-    "apply to jobs",
-    "can I change the jobs you scout?",
-    "when does job scout run?",
-    "I mean for job scout",
-  ]) {
-    const reply = await handler(eventFor(text), { channelId: "whatsapp", senderId: MEMBER });
-    assert.equal(reply, undefined, `expected "${text}" to fall through to the LLM`);
-  }
-});
-
-test("menu option 2 starts personalized news when no service state is active", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
-  const accountLinkScript = path.join(dir, "account-link");
-  const serviceStatePath = path.join(dir, "state.json");
-  writeExecutable(
-    accountLinkScript,
-    `#!/usr/bin/env bash
-set -eu
-case "$1" in
-  status) printf '{"linked":true,"publicUserId":"usr_test"}\\n' ;;
-  *) exit 2 ;;
-esac
-`,
-  );
-
-  const handler = registerHandler({ accountLinkScript, serviceStatePath });
-  const reply = await handler(eventFor("2"), { channelId: "whatsapp", senderId: MEMBER });
-
-  assert.equal(reply.handled, true);
-  assert.match(reply.text, /What topics should I follow/);
-});
-
-test("webetu restaurant state makes option 2 wait instead of starting news", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
-  const accountLinkScript = path.join(dir, "account-link");
-  const serviceStatePath = path.join(dir, "state.json");
-  writeServiceState(serviceStatePath, MEMBER, "webetu", "webetu.awaiting_restaurant");
-  writeExecutable(
-    accountLinkScript,
-    `#!/usr/bin/env bash
-set -eu
-case "$1" in
-  status) printf '{"linked":true,"publicUserId":"usr_test"}\\n' ;;
-  *) exit 2 ;;
-esac
-`,
-  );
-
-  const handler = registerHandler({ accountLinkScript, serviceStatePath });
-  const reply = await handler(eventFor("2"), { channelId: "whatsapp", senderId: MEMBER });
-
-  assert.equal(reply.handled, true);
-  assert.match(reply.text, /Make manual reservations on Webetu/);
-  assert.doesNotMatch(reply.text, /What topics should I follow/);
-});
-
-test("webetu restaurant state keeps option 1 inside the webetu branch", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
-  const accountLinkScript = path.join(dir, "account-link");
-  const serviceStatePath = path.join(dir, "state.json");
-  writeServiceState(serviceStatePath, MEMBER, "webetu", "webetu.restaurant_not_found");
-  writeExecutable(
-    accountLinkScript,
-    `#!/usr/bin/env bash
-set -eu
-case "$1" in
-  status) printf '{"linked":false}\\n' ;;
-  create-invite) printf '{"setupUrl":"https://example.test/setup?token=abc"}\\n' ;;
-  *) exit 2 ;;
-esac
-`,
-  );
-
-  const handler = registerHandler({ accountLinkScript, serviceStatePath });
-  const reply = await handler(eventFor("1"), { channelId: "whatsapp", senderId: MEMBER });
-
-  assert.equal(reply.handled, true);
-  assert.match(reply.text, /exact restaurant name/);
-  assert.doesNotMatch(reply.text, /https:\/\/example\.test\/setup/);
-});
-
-test("webetu restaurant state lets restaurant names continue to the agent", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
-  const serviceStatePath = path.join(dir, "state.json");
-  writeServiceState(serviceStatePath, MEMBER, "webetu", "webetu.awaiting_restaurant");
-
-  const handler = registerHandler({ serviceStatePath });
-  const reply = await handler(eventFor("Residence Test Restaurant"), {
-    channelId: "whatsapp",
-    senderId: MEMBER,
-  });
-
-  assert.equal(reply, undefined);
-});
-
-test("webetu restaurant state lets Algerian residence shorthand continue to the agent", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
-  const serviceStatePath = path.join(dir, "state.json");
-  writeServiceState(serviceStatePath, MEMBER, "webetu", "webetu.awaiting_restaurant");
-
-  const handler = registerHandler({ serviceStatePath });
-  const reply = await handler(eventFor("RU 2000 Lits Tipaza"), {
-    channelId: "whatsapp",
-    senderId: MEMBER,
-  });
-
-  assert.equal(reply, undefined);
-});
-
-test("news topic state treats the next message as topics", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
-  const accountLinkScript = path.join(dir, "account-link");
-  const newsSubscriptionsScript = path.join(dir, "news_subscriptions.py");
-  const serviceStatePath = path.join(dir, "state.json");
-  const newsLog = path.join(dir, "news.log");
-  writeServiceState(serviceStatePath, MEMBER, "news", "news.awaiting_topics");
-  writeExecutable(
-    accountLinkScript,
-    `#!/usr/bin/env bash
-set -eu
-case "$1" in
-  status) printf '{"linked":true,"publicUserId":"usr_test"}\\n' ;;
-  *) exit 2 ;;
-esac
-`,
-  );
-  fs.writeFileSync(
-    newsSubscriptionsScript,
-    `#!/usr/bin/env python3
-import json
-import sys
-from pathlib import Path
-Path(${JSON.stringify(newsLog)}).write_text(" ".join(sys.argv[1:]), encoding="utf-8")
-print(json.dumps({"ok": True}))
-`,
-    { mode: 0o755 },
-  );
-
-  const handler = registerHandler({ accountLinkScript, newsSubscriptionsScript, serviceStatePath });
-  const reply = await handler(eventFor("AI, football"), { channelId: "whatsapp", senderId: MEMBER });
-  const newsArgs = fs.readFileSync(newsLog, "utf8");
-
-  assert.equal(reply.handled, true);
-  assert.match(reply.text, /registered for personalized news: AI, football/);
-  assert.match(newsArgs, /register --phone \+233208864185 AI football/);
-});
-
-test("active service state can be cleared with menu", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
-  const serviceStatePath = path.join(dir, "state.json");
-  const greetingTemplatePath = path.join(dir, "public-greeting.txt");
-  writeServiceState(serviceStatePath, MEMBER, "webetu", "webetu.awaiting_restaurant");
-  fs.writeFileSync(greetingTemplatePath, "Choose a service");
-
-  const handler = registerHandler({ greetingTemplatePath, serviceStatePath });
-  const reply = await handler(eventFor("menu"), { channelId: "whatsapp", senderId: MEMBER });
-  const saved = JSON.parse(fs.readFileSync(serviceStatePath, "utf8"));
-
-  assert.equal(reply.handled, true);
-  assert.equal(reply.text, "Choose a service");
-  assert.deepEqual(saved.states, {});
-});
-
-test("expired service state is ignored and pruned", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
-  const accountLinkScript = path.join(dir, "account-link");
-  const serviceStatePath = path.join(dir, "state.json");
-  writeServiceState(serviceStatePath, MEMBER, "webetu", "webetu.awaiting_restaurant", {
-    expiresAt: new Date(Date.now() - 60_000).toISOString(),
-  });
-  writeExecutable(
-    accountLinkScript,
-    `#!/usr/bin/env bash
-set -eu
-case "$1" in
-  status) printf '{"linked":true,"publicUserId":"usr_test"}\\n' ;;
-  *) exit 2 ;;
-esac
-`,
-  );
-
-  const handler = registerHandler({ accountLinkScript, serviceStatePath });
-  const reply = await handler(eventFor("2"), { channelId: "whatsapp", senderId: MEMBER });
-  const saved = JSON.parse(fs.readFileSync(serviceStatePath, "utf8"));
-
-  assert.equal(reply.handled, true);
-  assert.match(reply.text, /What topics should I follow/);
-  assert.equal(saved.states[MEMBER]?.step, "news.awaiting_topics");
-});
-
-test("Done after a pending Webetu vault link validates setup and asks for restaurant", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
-  const accountLinkScript = path.join(dir, "account-link");
-  const pendingLinksPath = path.join(dir, "pending-links.json");
-  const fakeBin = path.join(dir, "bin");
-  const sudoLog = path.join(dir, "sudo.log");
-  fs.mkdirSync(fakeBin);
-
-  fs.writeFileSync(
-    pendingLinksPath,
-    JSON.stringify({
-      version: 1,
-      links: [
-        {
-          phone: MEMBER,
-          service: "account-link",
-          purpose: "webetu",
-          nextPath: "/vault",
-          setupUrl: "https://example.test/setup?token=abc",
-          expiresAt: new Date(Date.now() + 60_000).toISOString(),
-        },
-      ],
-    }),
-  );
-  writeExecutable(
-    accountLinkScript,
-    `#!/usr/bin/env bash
-set -eu
-case "$1" in
-  status) printf '{"linked":true,"publicUserId":"usr_test"}\\n' ;;
-  create-invite) printf '{"setupUrl":"https://example.test/setup?token=abc"}\\n' ;;
-  *) exit 2 ;;
-esac
-`,
-  );
-  writeExecutable(
-    path.join(fakeBin, "sudo"),
-    `#!/usr/bin/env bash
-set -eu
-printf '%s\\n' "$*" >> "${sudoLog}"
-cmd="$5"
-case "$cmd" in
-  lookup-user) printf '{"status":"ok","registration_status":"active"}\\n' ;;
-  check-credentials) printf '{"status":"ok","has_username":true,"has_password":true}\\n' ;;
-  reserve) printf '{"status":"dry_run","date":"2026-06-15","meals_reserved":0,"restaurant":"Test Restaurant"}\\n' ;;
-  *) exit 2 ;;
-esac
-`,
-  );
-
-  const handler = registerHandler({ accountLinkScript, pendingLinksPath, workerSudoCommand: path.join(fakeBin, "sudo") });
-  const reply = await handler(eventFor("Done"), { channelId: "whatsapp", senderId: MEMBER });
-
-  assert.equal(reply.handled, true);
-  assert.match(reply.text, /Which restaurant should I use by default/);
-  const sudoCalls = fs.readFileSync(sudoLog, "utf8");
-  assert.match(sudoCalls, /lookup-user/);
-  assert.match(sudoCalls, /check-credentials/);
-  assert.match(sudoCalls, /reserve/);
-});
-
-test("Done without Webetu setup context asks for clarification", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
-  const handler = registerHandler({ pendingLinksPath: path.join(dir, "missing.json") });
-  const reply = await handler(eventFor("Done"), { channelId: "whatsapp", senderId: MEMBER });
-
-  assert.equal(reply.handled, true);
-  assert.match(reply.text, /What did you finish setting up/);
 });
 
 test("inviteLinkText builds a one-tap wa.me invite link when bot number is configured", () => {
