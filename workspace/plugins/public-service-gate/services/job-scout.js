@@ -71,7 +71,7 @@ export function isJobScoutSetupCommand(text) {
 }
 
 function jobScoutStartText(setupUrl) {
-  return `Job Scout is active as a pilot.
+  return `Job Scout is active.
 
 Open this setup link and sign in with your email:
 ${setupUrl}

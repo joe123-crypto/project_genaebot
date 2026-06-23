@@ -1,6 +1,6 @@
 # Job Scout Onboarding
 
-Purpose: onboard a public WhatsApp user for the Job Scout pilot without exposing internal implementation details or asking for private Gmail credentials in chat.
+Purpose: onboard a public WhatsApp user for Job Scout without exposing internal implementation details or asking for private Gmail credentials in chat.
 
 ## Public Boundary
 
@@ -83,7 +83,7 @@ If the status says `"linked": true`, create or reuse the Job Scout setup path:
 Send the returned `setupUrl` to the user with this public text:
 
 ```text
-Job Scout is active as a pilot.
+Job Scout is active.
 
 Open this setup link and sign in with your email:
 <setupUrl>
