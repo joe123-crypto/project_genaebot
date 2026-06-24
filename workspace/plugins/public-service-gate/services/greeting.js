@@ -14,7 +14,7 @@ Please tell me which service you need help with.`;
 
 const GREETING_PATTERNS = [
   /^(?:hi|hello|hey|hie|yo|salam|salaam|bonjour|good\s+(?:morning|afternoon|evening)|gm|morning|afternoon|evening)[\s!.?]*$/i,
-  /^(?:hi|hello|hey|hie|salam|salaam|bonjour)\s+(?:there|openclaw|genaie|bot|assistant|author)[\s!.?]*$/i,
+  /^(?:hi|hello|hey|hie|salam|salaam|bonjour)\s+(?:there|openclaw|genaie|service\s+desk|bot|assistant)[\s!.?]*$/i,
   /^(?:start|menu|help|services|service|options)[\s!.?]*$/i,
   /^(?:what\s+(?:can\s+you\s+do|services\s+do\s+you\s+(?:offer|provide))|what\s+do\s+you\s+(?:do|offer|provide))[\s!.?]*$/i,
 ];
