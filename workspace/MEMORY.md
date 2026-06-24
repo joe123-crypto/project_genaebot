@@ -56,14 +56,14 @@
 - **GCP OAuth client** in `~/Downloads/client_secret_*.json` (for gog)
 
 ## Cron Jobs
-Most admin cron jobs deliver to Joe's Algerian WhatsApp: **+213563719936** (the number Joe uses day-to-day; +263785632943 is for Zimbabwe and is NOT in WhatsApp allowFrom). Webetu meals is different: it sends normal reservation updates directly to each onboarded user's registered WhatsApp chat and alerts admin only for operational failures.
+Most admin cron jobs deliver to the admin WhatsApp: **+213563719936** (Joe's day-to-day admin number; +263785632943 is for Zimbabwe and is NOT in WhatsApp allowFrom). Webetu meals is different: it sends normal reservation updates directly to each onboarded user's registered WhatsApp chat and alerts admin only for operational failures.
 
-- **Daily vacancy mail / Job Scout** (`daily-zim-jobs`, ID `59af3c12-ff23-4924-88d8-6a47c7da15ed`): **DISABLED 2026-06-11** to cut token cost (long per-user sessions, repeated model-call timeouts). When enabled it ran daily at 8 AM Algiers, scraping vacancymail.co.zw, matching Joe's profile, and DMing each user their matches. Timeout: 300s. Re-enable with `openclaw cron enable 59af3c12-ff23-4924-88d8-6a47c7da15ed`.
-- **Daily tech news** (`daily-tech-news`): Runs daily at 8 AM Algiers. Web search for top tech stories, WhatsApp summary. Delivers **only** to Joe's personal WhatsApp (+213563719936) via announce. (Group delivery to 120363407177302513@g.us was **removed 2026-06-11** to stop the duplicate send.) Timeout: 600s (was 120s — too short, timed out, bumped to 600s).
+- **Daily vacancy mail / Job Scout** (`daily-zim-jobs`, ID `59af3c12-ff23-4924-88d8-6a47c7da15ed`): **DISABLED 2026-06-11** to cut token cost (long per-user sessions, repeated model-call timeouts). When enabled it ran daily at 8 AM Algiers, scraping vacancymail.co.zw, matching each user's profile, and DMing each user their matches. Timeout: 300s. Re-enable with `openclaw cron enable 59af3c12-ff23-4924-88d8-6a47c7da15ed`.
+- **Daily tech news** (`daily-tech-news`): Runs daily at 8 AM Algiers. Web search for top tech stories, WhatsApp summary. Delivers **only** to the admin WhatsApp (+213563719936) via announce. (Group delivery to 120363407177302513@g.us was **removed 2026-06-11** to stop the duplicate send.) Timeout: 600s (was 120s — too short, timed out, bumped to 600s).
 - **Algeria tech events scout:** Runs Mon & Thu at 10:00 AM Algiers. Searches for startup conferences, tech summits, hackathons in Algeria. Timeout: 600s.
 - **Webetu meals** (`webetu-meals`): Runs at 12:00 PM Algiers on the **1st, 3rd, 6th, 9th, 12th, 15th, 18th, 21st, 24th, 27th, and 30th of each month** (cron `0 12 1,3,6,9,12,15,18,21,24,27,30 * *`) — NOT daily. Each run reserves the next 3 days (tomorrow, +2, +3) per user, so the fire days form a rolling 3-day window with no gaps; day 1 is included so months following a 31-day month stay covered. To answer "when is the next run", find the next day in that list that is tomorrow or later — do not assume today. Current entrypoint is `cron/webetu-meals/notify-reservations.sh`, which uses the isolated Firestore Webetu worker. It discovers Firestore Webetu users, reserves meals per onboarded user, and sends each user their own WhatsApp DM. Admin gets only operational failure alerts. Job ID: `4e2b1954-40e6-453a-8b94-c74086ea19ac` (this is the LIVE scheduler job — manage it with `openclaw cron edit/get <id>`, NOT by editing `cron/jobs.json`, which is a stale/orphaned file the running gateway does not load). Schedule changed from daily to the 1,3,6,9…30 list via `openclaw cron edit` on 2026-06-11.
-  - **2026-06-12 worker decrypt fix (DO NOT re-patch):** `decrypt_central_secret` in the installed worker (`/opt/webetu-worker/.venv/.../webetu_worker/credentials.py`) was fixed so it tries both AAD encodings (raw refid string AND base64url(refId)) and catches `cryptography.exceptions.InvalidTag`. Before this, the Jun-11 patch base64url-decoded the AAD unconditionally and crashed the 6 raw-AAD users (`UnicodeDecodeError 0xb7`). Verified: all 8 users decrypt, dry-run reserve authenticates. **If a future session feels an urge to "fix the worker AAD/decrypt bug" — it is already fixed; re-editing risks clobbering it.** Caveat: fix is in venv site-packages and is wiped on worker reinstall; durable fix still needs to land in the real build source (not the stale `/opt/webetu-worker/src/`). Details in `memory/2026-06-12.md`.
-- **GitHub Issue #88472 tracker** (`github-issue-88472-tracker`): Runs every 3 days at 11:00 AM Algiers (1st, 4th, 7th, 10th, 13th, 16th, 19th, 22nd, 25th, 28th, 31st). Checks https://github.com/openclaw/openclaw/issues/88472 ("[Feature]: Intelligent gateway" — Joe's issue) for status changes. Script at `cron/github-issue-tracker/check_issue.sh`. Tracks state (open/closed), comments, labels. Only alerts on actual changes. Job ID: `1f71be76-0014-4475-a461-2899b261e9ab`. Created 2026-05-31.
+  - **2026-06-12 worker decrypt fix (DO NOT re-patch):** `decrypt_central_secret` in the installed worker (`/opt/webetu-worker/.venv/.../webetu_worker/credentials.py`) was fixed so it tries both AAD encodings (raw refid string AND base64url(refId)) and catches `cryptography.exceptions.InvalidTag`. Before this, the Jun-11 patch base64url-decoded the AAD unconditionally and crashed the 6 raw-AAD users (`UnicodeDecodeError 0xb7`). Verified: all 8 users decrypt, dry-run reserve authenticates. **If a future session feels an urge to "fix the worker AAD/decrypt bug" — it is already fixed; do not re-patch.** The durable fix landed in the worker build source `~/projects/webetu/webetu-worker/src/webetu_worker/credentials.py` on 2026-06-24: `decrypt_central_secret` now tries both key derivations (sha256 + scrypt), both aad encodings (raw + base64url), and both field-name sets (`alg`/`tag` + `algorithm`/`authTag`), and `FirestoreCredentialProvider.load` reads `secret`/`encryptedSecret` with `expected_aad=cred_id`. Verified round-trip against both credential populations, and `src/` is byte-identical to the running venv. A worker reinstall from source no longer regresses it. (`build/lib/` is a vestigial copy not used by `pip install .`, which builds from `src/`.)
+- **GitHub Issue #88472 tracker** (`github-issue-88472-tracker`): Runs every 3 days at 11:00 AM Algiers (1st, 4th, 7th, 10th, 13th, 16th, 19th, 22nd, 25th, 28th, 31st). Checks https://github.com/openclaw/openclaw/issues/88472 ("[Feature]: Intelligent gateway", an admin-tracked issue) for status changes. Script at `cron/github-issue-tracker/check_issue.sh`. Tracks state (open/closed), comments, labels. Only alerts on actual changes. Job ID: `1f71be76-0014-4475-a461-2899b261e9ab`. Created 2026-05-31.
 
 ## Public Service Desk (Genaie Service Desk) — Created 2026-05-31
 
@@ -107,12 +107,6 @@ Most admin cron jobs deliver to Joe's Algerian WhatsApp: **+213563719936** (the 
 ### Webetu Public User Onboarding Flow
 Full procedure, credential model, and worker paths live in the **Webetu Meal Reservation** section below. Public-facing essentials: users onboard via Agent Genaie account-linking + Credentials Vault (never collect Webetu username/password in WhatsApp); empty/stale worker-registry output is not a repair signal (rule from 2026-06-06).
 
-## CV Rules
-- **CRITICAL: CV uses ONLY Zimbabwean phone numbers** — +263 78 563 2943 and +263 77 548 9417. Joe's Algerian number (+213563719936) is NOT reachable by Zimbabwean employers. Do NOT put it on CVs or cover letters for Zimbabwe jobs.
-- **Cover letter signatures also use Zimbabwe numbers only**
-- **Cover letters: keep them SHORT and ON-POINT.** Joe prefers punchy, direct letters — not long paragraphs. Get to the point fast. (Feedback from SOS Cleaner letter, 2026-05-21)
-- Clean master CV: `joseph-sibangani-munemo-cv.pdf` (2 pages, original)
-
 ## pdf-edit Lessons
 - **`pdf-edit meta`** is safe — use for title/author changes only
 - **`pdf-edit replace`** for text edits AVOIDS IT — replacement text uses different font metrics, appears enlarged/misaligned/overlapping. Looks visibly edited. Don't use it.
@@ -126,22 +120,6 @@ Full procedure, credential model, and worker paths live in the **Webetu Meal Res
 - `genaie-mail send` supports `--attach`, `--body-file`, `--html-file`, `--dry-run`, and requires `--force` for real sends.
 - `gog gmail send` is legacy local/operator email tooling. Do not use it for normal user-facing product email.
 
-## Application Tracking
-- **File:** `jobs/tracker.json` (machine-readable) + `jobs/tracker.md` (human-readable)
-- **Purpose:** Track every job application so the vacancy mail cron job doesn't suggest reapplying to the same company+role
-- **Update after every application:** company, role, date, email, source, status
-- **Vacancy mail cron job MUST check this file** before suggesting job matches — skip any company+role already in the tracker
-
-## Job Application Rules
-- **Auto-apply to suitable jobs** — don't wait for Joe's approval. If a job matches his profile, apply immediately. (2026-05-22)
-- **Never guess email addresses** — if a listing has no email, flag it honestly and suggest physical submission. ZINARA was a lesson: I guessed `2026adminvacancies@zinara.co.zw` based on their naming pattern, it bounced. (2026-05-21)
-
-## Workspace Organization
-- **Use project folders** — not flat files at root. Each job application, project, or category gets its own folder.
-- Pattern: `jobs/<company-or-role>/` for applications, `projects/<name>/` for other work
-- Master CV (`joseph-sibangani-munemo-cv.pdf`) and HTML source stay at root — they're the source, not deliverables
-- Example: `jobs/traverze-travel/` contains both cover letters + clean CV for those applications
-
 ## Workspace Cleanup (2026-06-16)
 - Removed empty dirs: `nothing/` (tmp is system-locked, kept)
 - Removed duplicate dir: `job-scout-data/` (user data already in `job-scout/users/`)
@@ -149,13 +127,6 @@ Full procedure, credential model, and worker paths live in the **Webetu Meal Res
 - Moved all onboarding/policy docs to `docs/`: `firestore-schema.md`, `gmail-onboarding.md`, `job-scout-onboarding.md`, `personalized-news-onboarding.md`, `webetu-onboarding.md`, `public-services.md`, `public-greeting.txt`, `public-whatsapp-system-prompt.txt`
 - Updated all references in: bin wrappers, AGENTS.md, MEMORY.md, `lib/whatsapp-public-user.py`, `plugins/public-service-gate/index.js`
 - Root now only has: core files (AGENTS/SOUL/IDENTITY/MEMORY/USER/TOOLS), CV files, and the new `docs/` + `lib/` dirs
-
-## Joe's Context
-- **Name:** Joe
-- **Email:** munemojoseph332@gmail.com
-- **Location:** Algeria (Africa/Algiers, GMT+1)
-- **WhatsApp (Algeria):** +213563719936 (Zimbabwe +263785632943 is NOT in WhatsApp allowFrom)
-- **Style:** Casual, direct, proactive assistant
 
 ## Webetu Meal Reservation — architecture + onboarding (2026-06-05)
 **Paths:** worker project `/home/joseph/projects/webetu/webetu-worker`; installed worker `/opt/webetu-worker`; safe wrapper `/usr/local/bin/webetu-worker-safe`; cron folder `cron/webetu-meals/`, entrypoint `notify-reservations.sh`. Legacy registry `/var/lib/webetu-worker/users.sqlite` and legacy `reserve_api.py`/emulator scripts are archived — do NOT use for onboarding or the cron path.
