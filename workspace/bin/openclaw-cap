@@ -11,7 +11,7 @@ Usage:
   openclaw-cap users <add|remove|list|sync|check> [args...]
   openclaw-cap account-link <create-invite|status> [args...]
   openclaw-cap public-news <register|disable|list-enabled|record-delivery> [args...]
-  openclaw-cap public-events <register|disable|list-enabled|mark-synced|record-delivery> [args...]
+  openclaw-cap public-events <register|disable|get|list-enabled|mark-synced|record-offers|clear-pending|record-delivery> [args...]
   openclaw-cap job-scout <create-invite|stage-cv|save-profile|list-ready> [args...]
   openclaw-cap cron run <algeria-exhibitions|github-issue-tracker|webetu-meals> [--dry-run]
   openclaw-cap webetu <lookup-user|check-credentials|reserve> --phone <phone> [--dry-run]
@@ -78,7 +78,7 @@ cmd_public_news() {
 cmd_public_events() {
   [ "$#" -ge 1 ] || die "public-events requires a subcommand"
   case "$1" in
-    register|disable|list-enabled|mark-synced|record-delivery)
+    register|disable|get|list-enabled|mark-synced|record-offers|clear-pending|record-delivery)
       ensure_runtime
       export OPENCLAW_PUBLIC_EVENTS_REGISTRY="$RUNTIME/public-events/subscriptions.json"
       exec python3 "$WORKSPACE/public-events/event_subscriptions.py" "$@"

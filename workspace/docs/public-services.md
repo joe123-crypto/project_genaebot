@@ -20,8 +20,8 @@ Audience: allowlisted non-admin WhatsApp users.
 
 3. Local event scouting
    - Active for public WhatsApp users.
-   - Scout matching events and add them to the user's own Google Calendar with reminders.
-   - Help clarify event type, location, and reminder timing preferences.
+   - Scout matching events, DM them as choices, and add only the user's selected events to their own Google Calendar with reminders.
+   - Show available event categories before collecting event type, location, and reminder timing preferences.
    - Requires the user to sign in to Agent Genaie, link this WhatsApp chat, and connect Google with calendar access before events can be added.
    - Follow `/home/joseph/.openclaw/workspace/docs/event-scout-onboarding.md` exactly for setup, preference updates, and stop requests.
 
@@ -47,7 +47,7 @@ Use the service docs and tools to continue setup from context.
 
 - Webetu: create or reuse the account-link URL for the requester's WhatsApp phone, send the Credentials Vault instructions, continue when the user says they saved credentials, then validate with the allowed Webetu checks, ask for the default restaurant, confirm the restaurant, save it, and offer the immediate 3-day reservation step.
 - Personalized news: ask for topics if missing, save/update topics for the requester's WhatsApp phone, and confirm the setup. Stop news when the user asks.
-- Local event scouting: create or reuse the setup link, require Google Calendar access in the app, collect optional event/location/reminder preferences, register the requester's WhatsApp phone, and confirm calendar reminders.
+- Local event scouting: create or reuse the setup link, require Google Calendar access in the app, show available event categories, collect event/location/reminder preferences, register the requester's WhatsApp phone, immediately run a manual scout, and let the user pick which events to add.
 - Job Scout: create or reuse the setup link, require Gmail connection in the app, offer guided questions or CV autofill, stage the CV when uploaded, confirm the profile summary, require scam-safety acknowledgement, then save the profile.
 
 Short replies such as "1", "2", "Done", "yes", "no", and restaurant names are normal onboarding replies. Interpret them from the recent conversation and service state; ask one short clarifying question only when the service or next step is genuinely unclear.
@@ -99,7 +99,8 @@ Short replies such as "1", "2", "Done", "yes", "no", and restaurant names are no
 - If a user asks to start event scouting, first ensure this WhatsApp chat is linked to an Agent Genaie login for that requester's phone only.
 - The user must connect Google with calendar access before events can be added; users who connected only Gmail before must reconnect to add calendar access.
 - Register or stop only that requester's WhatsApp phone using the commands allowed in `event-scout-onboarding.md`.
-- Event types, location, and reminder timing are optional preferences; do not ask for Google passwords, OTPs, OAuth codes, Firebase UIDs, internal IDs, or tokens.
+- Show available event categories before asking for event types. Event types, location, and reminder timing are optional preferences; do not ask for Google passwords, OTPs, OAuth codes, Firebase UIDs, internal IDs, or tokens.
+- By default, DM event matches and add only selected events to Calendar. Auto-add every match only when the user explicitly asks for that behavior.
 - Do not create per-user schedules or change the shared event-scout dispatcher while helping public users register.
 - Do not reveal internal command output, file paths, logs, scheduler details, connected account ids, or other users' data to public users.
 
