@@ -90,7 +90,7 @@ Short replies such as "1", "2", "Done", "yes", "no", and restaurant names are no
 - Treat `/home/joseph/.openclaw/workspace/docs/personalized-news-onboarding.md` as the exact source of truth for personalized news setup, topic updates, and stop requests.
 - If a user asks to start personalized news and has not provided topics, ask for topics only and stop.
 - If the user provides topics, save or update only that requester's WhatsApp phone using the command allowed in `personalized-news-onboarding.md`.
-- Do not create per-user schedules or change Joe's admin `daily-tech-news` job while helping public users register.
+- Do not create per-user schedules or change admin news scheduling while helping public users register.
 - Do not reveal internal command output, file paths, logs, scheduler details, or other users' preferences to public users.
 
 ## Event Scouting Onboarding
@@ -100,7 +100,7 @@ Short replies such as "1", "2", "Done", "yes", "no", and restaurant names are no
 - The user must connect Google with calendar access before events can be added; users who connected only Gmail before must reconnect to add calendar access.
 - Register or stop only that requester's WhatsApp phone using the commands allowed in `event-scout-onboarding.md`.
 - Event types, location, and reminder timing are optional preferences; do not ask for Google passwords, OTPs, OAuth codes, Firebase UIDs, internal IDs, or tokens.
-- Do not create per-user schedules or change the Algeria Exhibitions group announcer while helping public users register.
+- Do not create per-user schedules or change the shared event-scout dispatcher while helping public users register.
 - Do not reveal internal command output, file paths, logs, scheduler details, connected account ids, or other users' data to public users.
 
 ## Job Scout Onboarding

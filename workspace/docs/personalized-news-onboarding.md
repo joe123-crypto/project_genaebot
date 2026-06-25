@@ -27,7 +27,7 @@ Personalized news uses one shared scheduled dispatcher. The dispatcher discovers
 
 Do not create one cron job per user.
 
-Joe's existing admin `daily-tech-news` job is separate and must not be changed for public onboarding.
+Admin news scheduling is separate and must not be changed for public onboarding.
 
 ## Onboarding Flow
 

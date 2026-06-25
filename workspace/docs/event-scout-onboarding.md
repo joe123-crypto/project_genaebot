@@ -29,7 +29,7 @@ Event scouting uses one shared scheduled dispatcher. It discovers registered use
 
 Do not create one cron job per user.
 
-The existing Algeria Exhibitions group announcer is separate and must not be changed for public onboarding.
+The shared event-scout dispatcher is separate and must not be changed for public onboarding.
 
 ## Onboarding Flow
 
