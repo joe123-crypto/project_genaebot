@@ -1,6 +1,6 @@
 # Local Event Scouting Onboarding
 
-Purpose: onboard a public WhatsApp user for local event scouting without creating per-user cron jobs or exposing internal implementation details in public chat. Registered users get matching Algeria Exhibitions events written into their own Google Calendar with reminders.
+Purpose: onboard a public WhatsApp user for local event scouting without creating per-user cron jobs or exposing internal implementation details in public chat. Registered users get matching Algeria Exhibitions events sent to their WhatsApp DM first. Events are written into Google Calendar only after the user picks the ones they want, unless the user explicitly asks to auto-add every match.
 
 ## Public User Boundary
 
@@ -10,8 +10,11 @@ Allowed in public chat:
 
 - Send the Agent Genaie setup link created for this WhatsApp chat.
 - Tell the user to sign in and connect Google with calendar access in the app.
-- Ask which kinds of events they want (optional category/location filters) and how early they want reminders.
+- Show the available Algeria Exhibitions event categories before asking which kinds of events they want.
+- Ask which available categories, location filters, and reminder timing they want.
 - Confirm that event scouting is set up for this WhatsApp chat.
+- Run an immediate scout after setup and show matching events as numbered choices.
+- Add selected offered events to the requester's calendar when they reply with numbers.
 - Stop event scouting when the user asks.
 
 Not allowed in public chat:
@@ -25,7 +28,7 @@ Public replies must be short. Give the minimum useful information and the next a
 
 ## Current Operational Model
 
-Event scouting uses one shared scheduled dispatcher. It discovers registered users and writes matching upcoming events into each user's own Google Calendar with their chosen reminders.
+Event scouting uses one shared scheduled dispatcher. It discovers registered users and sends matching upcoming events to each user's own WhatsApp DM as numbered choices. Calendar writes happen only after the user picks events, unless the user explicitly opts into auto-add mode.
 
 Do not create one cron job per user.
 
@@ -39,9 +42,13 @@ Agent -> checks if this WhatsApp chat is linked to an Agent Genaie login
 Agent -> if not linked, sends the setup link for this chat
 User -> signs in and connects Google with calendar access
 Agent -> confirms calendar access is connected
-Agent -> asks optional event preferences (types, location, reminder timing)
-Agent -> registers event scouting for the requester's WhatsApp phone
-Shared dispatcher -> adds matching events to that user's Google Calendar with reminders
+Agent -> shows available Algeria Exhibitions categories
+Agent -> asks event preferences (available categories, location, reminder timing)
+Agent -> registers event scouting for the requester's WhatsApp phone in approval mode
+Agent -> runs an immediate manual scout and shows numbered matching events
+User -> replies with event numbers to save
+Agent -> writes only selected events to that user's Google Calendar with reminders
+Shared dispatcher -> later DMs new matching events as numbered choices
 ```
 
 ## Start Setup
@@ -77,12 +84,22 @@ Re-run the status check to capture the linked account and confirm calendar acces
 
 The user must have connected Google **with calendar access**. Users who previously connected only Gmail must reconnect to add calendar access on the current Agent Genaie app. If calendar access is not connected yet, ask the user to finish connecting in the app before registering.
 
-## Collect Preferences (optional)
+## Show Available Categories
 
-Ask one short question to capture optional filters and reminder timing. All are optional; empty means all events and default reminders (1 day and 2 hours before).
+Before asking for event types, fetch the catalogue categories:
+
+```bash
+python3 /home/joseph/.openclaw/workspace/cron/event-scout-dispatcher/dispatch.py --list-categories
+```
+
+The output contains `categories` and `locations`. Show a short human list of the available category names, not raw JSON. If the user asks for a category that is not in the list, tell them the catalogue does not use that category and ask them to choose from the available categories. For example, if the user asks for `tech` and `tech` is not available, do not register `tech` as a category filter.
+
+## Collect Preferences
+
+Ask one short question to capture filters and reminder timing. Category filters must come from the available catalogue categories. Empty categories mean all event types. Empty reminders mean the default reminders (1 day and 2 hours before).
 
 ```text
-Any specific kinds of events or a location to focus on? And how early should I remind you (for example 1 day and 2 hours before)?
+These are the event types currently available: <short category list>. Which ones should I watch, and should I focus on a location? Default reminders are 1 day and 2 hours before.
 ```
 
 ## Register Event Scouting
@@ -96,10 +113,11 @@ python3 /home/joseph/.openclaw/workspace/public-events/event_subscriptions.py re
   --category "<optional category>" \
   --location "<optional location>" \
   --reminder-min 1440 \
-  --reminder-min 120
+  --reminder-min 120 \
+  --delivery-mode approval
 ```
 
-`--category` and `--reminder-min` may be repeated; omit `--category`/`--location` to match all events; omit `--reminder-min` to use the default reminders (1440 and 120 minutes before).
+`--category` and `--reminder-min` may be repeated; omit `--category`/`--location` to match all events; omit `--reminder-min` to use the default reminders (1440 and 120 minutes before). Use `--delivery-mode approval` unless the user explicitly asks for every matching event to be added automatically. If they explicitly ask for auto-add, use `--delivery-mode auto_add`.
 
 Expected sanitized result:
 
@@ -114,18 +132,77 @@ Expected sanitized result:
     "categories": ["<category>"],
     "location": "<location>",
     "reminder_minutes": [1440, 120],
+    "delivery_mode": "approval",
     "synced_event_ids": [],
+    "pending_offers": [],
     "last_synced_at": null,
     "last_status": null
   }
 }
 ```
 
-After registering, tell the user:
+## Manual Scout After Setup
+
+Immediately after registering, run a manual scout for this requester's phone:
+
+```bash
+python3 /home/joseph/.openclaw/workspace/cron/event-scout-dispatcher/dispatch.py \
+  --phone "<whatsapp phone>" \
+  --no-dm
+```
+
+Use the first item in the JSON result's `results` list to reply in WhatsApp. Do not show raw JSON or internal IDs.
+
+If that result item has `status: "offered"`, show `added_offers` as a numbered list using each offer's `choice_number`, title, date range, location, category, and link. Then ask the user to reply with the numbers they want added.
 
 ```text
-You're set up for event scouting. I'll add matching events to your Google Calendar with reminders.
+You're set up for event scouting. I found these matching events:
+
+1. <event title> - <date range> - <location> - <category>
+<link>
+
+Reply with the numbers you want in your calendar.
 ```
+
+If that result item has `status: "no_matches"`, say:
+
+```text
+You're set up for event scouting. I don't see matching events right now, but I'll send you new matches here when they appear.
+```
+
+If that result item has `status: "needs-category-choice"`, show the available categories and ask the user to choose again.
+
+## Save Selected Events
+
+When the user replies with event numbers from a pending offer list, run:
+
+```bash
+python3 /home/joseph/.openclaw/workspace/cron/event-scout-dispatcher/dispatch.py \
+  --phone "<whatsapp phone>" \
+  --select "<number>"
+```
+
+Repeat `--select` for multiple numbers, or pass a comma-separated number list if that is easier.
+
+If the result has `status: "saved"`, name the saved events:
+
+```text
+Added <event names> to your Google Calendar with reminders.
+```
+
+If the result has `status: "invalid_selection"`, say:
+
+```text
+Please pick one of the event numbers I showed.
+```
+
+If the result has `status: "needs_selection"` and there are no pending events, say:
+
+```text
+I don't have any event choices waiting right now. Want me to check again?
+```
+
+If calendar access is no longer connected, ask the user to reconnect Google with calendar access in the app before adding events.
 
 ## Stop Event Scouting
 

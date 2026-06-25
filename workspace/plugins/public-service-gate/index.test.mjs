@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import plugin, { createLimiter, inviteLinkText, isQueueFullError, runJsonCommand } from "./index.js";
+import { handleEventScoutRequest } from "./services/event-scout.js";
 
 const MEMBER = "+233208864185";
 const UNKNOWN = "+19995550123";
@@ -588,6 +589,48 @@ raise SystemExit(2)
     assert.equal(reply, undefined, `expected "${text}" to reach the agent`);
   }
   assert.equal(fs.existsSync(helperLog), false);
+});
+
+test("event scout setup copy promises user selection before calendar saves", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-events-"));
+  const accountLinkScript = path.join(dir, "account-link");
+  writeExecutable(
+    accountLinkScript,
+    `#!/usr/bin/env bash
+set -eu
+case "$1" in
+  status)
+    printf '{"linked":true,"publicUserId":"public-123"}\\n'
+    ;;
+  *) exit 2 ;;
+esac
+`,
+  );
+  const api = {
+    config: {
+      plugins: {
+        entries: {
+          "public-service-gate": {
+            config: {
+              enabled: true,
+              accountLinkScript,
+              agentGenaiePublicBaseUrl: "https://app.example.test",
+            },
+          },
+        },
+      },
+    },
+    logger: {
+      warn() {},
+    },
+  };
+
+  const reply = await handleEventScoutRequest(api, MEMBER);
+
+  assert.equal(reply.handled, true);
+  assert.match(reply.text, /send matching events here/i);
+  assert.match(reply.text, /pick which ones go into your calendar/i);
+  assert.doesNotMatch(reply.text, /I'll add matching upcoming events/i);
 });
 
 test("active service state no longer short-circuits member continuations", async () => {

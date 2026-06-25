@@ -31,6 +31,19 @@ DEFAULT_INVITES_STORE = pathlib.Path(
 
 # Stored as minutes-before-start to match the Phase A calendar API reminderOverrides.
 DEFAULT_REMINDER_MINUTES = [1440, 120]
+DEFAULT_DELIVERY_MODE = "approval"
+DELIVERY_MODES = {"approval", "auto_add"}
+MAX_STORED_EVENT_IDS = 500
+OFFER_FIELDS = (
+    "source_id",
+    "summary",
+    "location",
+    "source_url",
+    "category",
+    "start_date",
+    "end_date",
+    "range",
+)
 
 
 def now_iso() -> str:
@@ -123,6 +136,66 @@ def normalize_reminders(values: list[int]) -> list[int]:
     return deduped
 
 
+def normalize_delivery_mode(value: str | None) -> str:
+    value = re.sub(r"[\s-]+", "_", str(value or DEFAULT_DELIVERY_MODE).strip().lower())
+    aliases = {
+        "manual": "approval",
+        "pick": "approval",
+        "approval": "approval",
+        "auto": "auto_add",
+        "auto_add": "auto_add",
+        "autoadd": "auto_add",
+    }
+    mode = aliases.get(value, value)
+    if mode not in DELIVERY_MODES:
+        raise ValueError(f"delivery_mode must be one of: {', '.join(sorted(DELIVERY_MODES))}")
+    return mode
+
+
+def normalize_offer(raw: dict) -> dict:
+    if not isinstance(raw, dict):
+        raise ValueError("event offer must be an object")
+    offer = {field: re.sub(r"\s+", " ", str(raw.get(field, "") or "")).strip() for field in OFFER_FIELDS}
+    if not offer["source_id"]:
+        raise ValueError("event offer source_id is required")
+    if not offer["summary"]:
+        raise ValueError("event offer summary is required")
+    if not offer["start_date"] or not offer["end_date"]:
+        raise ValueError("event offer dates are required")
+    if not offer["range"]:
+        offer["range"] = offer["start_date"] if offer["start_date"] == offer["end_date"] else f"{offer['start_date']} to {offer['end_date']}"
+    return offer
+
+
+def normalize_pending_offers(values: list[dict]) -> list[dict]:
+    offers = []
+    seen = set()
+    for raw in values or []:
+        try:
+            offer = normalize_offer(raw)
+        except ValueError:
+            continue
+        if offer["source_id"] in seen:
+            continue
+        seen.add(offer["source_id"])
+        offers.append(offer)
+    return offers
+
+
+def with_choice_numbers(offers: list[dict]) -> list[dict]:
+    return [{**offer, "choice_number": index} for index, offer in enumerate(offers, start=1)]
+
+
+def parse_offers_json(value: str) -> list[dict]:
+    try:
+        payload = json.loads(value or "[]")
+    except json.JSONDecodeError as err:
+        raise ValueError("events_json must be valid JSON") from err
+    if not isinstance(payload, list):
+        raise ValueError("events_json must be a JSON list")
+    return [normalize_offer(item) for item in payload]
+
+
 def subscriber_record(phone: str, existing: dict | None = None) -> dict:
     record = dict(existing or {})
     record["phone"] = phone
@@ -141,6 +214,7 @@ def cmd_register(args: argparse.Namespace) -> dict:
     categories = normalize_categories(args.category)
     location = re.sub(r"\s+", " ", str(args.location or "")).strip()
     reminders = normalize_reminders(args.reminder_min) or list(DEFAULT_REMINDER_MINUTES)
+    delivery_mode = normalize_delivery_mode(args.delivery_mode)
 
     def mutate(payload: dict) -> dict:
         subscribers = payload["subscribers"]
@@ -153,11 +227,14 @@ def cmd_register(args: argparse.Namespace) -> dict:
                 "categories": categories,
                 "location": location,
                 "reminder_minutes": reminders,
+                "delivery_mode": delivery_mode,
                 "updated_at": now_iso(),
             }
         )
         events.setdefault("created_at", now_iso())
         events.setdefault("synced_event_ids", [])
+        events.setdefault("offered_event_ids", [])
+        events.setdefault("pending_offers", [])
         events.setdefault("last_synced_at", None)
         events.setdefault("last_status", None)
         record["services"]["events"] = events
@@ -183,6 +260,19 @@ def cmd_disable(args: argparse.Namespace) -> dict:
     return with_locked_registry(args.registry, mutate)
 
 
+def cmd_get(args: argparse.Namespace) -> dict:
+    phone = normalize_phone(args.phone)
+    payload = load_json(args.registry)
+    record = payload.get("subscribers", {}).get(phone)
+    if not record:
+        record = {
+            "phone": phone,
+            "phone_hash": phone_hash(phone),
+            "services": {"events": {}},
+        }
+    return sanitize_record(record)
+
+
 def cmd_mark_synced(args: argparse.Namespace) -> dict:
     phone = normalize_phone(args.phone)
     event_ids = [eid for eid in (str(e).strip() for e in (args.event_id or [])) if eid]
@@ -206,6 +296,74 @@ def cmd_mark_synced(args: argparse.Namespace) -> dict:
         events["updated_at"] = now_iso()
         record["updated_at"] = now_iso()
         return sanitize_record(record)
+
+    return with_locked_registry(args.registry, mutate)
+
+
+def cmd_record_offers(args: argparse.Namespace) -> dict:
+    phone = normalize_phone(args.phone)
+    offers = parse_offers_json(args.events_json)
+    if not offers:
+        raise ValueError("at least one event offer is required")
+
+    def mutate(payload: dict) -> dict:
+        subscribers = payload["subscribers"]
+        if phone not in subscribers:
+            raise ValueError("subscriber not found")
+        record = subscribers[phone]
+        events = record.setdefault("services", {}).setdefault("events", {})
+        pending = normalize_pending_offers(events.get("pending_offers", []))
+        pending_seen = {offer["source_id"] for offer in pending}
+        synced = set(events.get("synced_event_ids", []))
+        offered = [str(event_id) for event_id in events.get("offered_event_ids", []) if str(event_id)]
+        offered_seen = set(offered)
+        added = []
+        for offer in offers:
+            source_id = offer["source_id"]
+            if source_id in synced or source_id in pending_seen or source_id in offered_seen:
+                continue
+            pending.append(offer)
+            pending_seen.add(source_id)
+            offered.append(source_id)
+            offered_seen.add(source_id)
+            added.append({**offer, "choice_number": len(pending)})
+        events["pending_offers"] = pending
+        events["offered_event_ids"] = offered[-MAX_STORED_EVENT_IDS:]
+        if added:
+            events["last_offered_at"] = now_iso()
+            events["last_status"] = "offered"
+            events["last_message"] = f"offered {len(added)}"
+        events["updated_at"] = now_iso()
+        record["updated_at"] = now_iso()
+        sanitized = sanitize_record(record)
+        sanitized["added"] = len(added)
+        sanitized["added_offers"] = added
+        return sanitized
+
+    return with_locked_registry(args.registry, mutate)
+
+
+def cmd_clear_pending(args: argparse.Namespace) -> dict:
+    phone = normalize_phone(args.phone)
+    event_ids = {eid for eid in (str(e).strip() for e in (args.event_id or [])) if eid}
+    if not event_ids:
+        raise ValueError("at least one --event-id is required")
+
+    def mutate(payload: dict) -> dict:
+        subscribers = payload["subscribers"]
+        if phone not in subscribers:
+            raise ValueError("subscriber not found")
+        record = subscribers[phone]
+        events = record.setdefault("services", {}).setdefault("events", {})
+        pending = normalize_pending_offers(events.get("pending_offers", []))
+        remaining = [offer for offer in pending if offer["source_id"] not in event_ids]
+        removed = len(pending) - len(remaining)
+        events["pending_offers"] = remaining
+        events["updated_at"] = now_iso()
+        record["updated_at"] = now_iso()
+        sanitized = sanitize_record(record)
+        sanitized["removed"] = removed
+        return sanitized
 
     return with_locked_registry(args.registry, mutate)
 
@@ -270,6 +428,11 @@ def load_allowlisted(config_path: pathlib.Path, invites_store: pathlib.Path) -> 
 
 def sanitize_record(record: dict) -> dict:
     events = dict(record.get("services", {}).get("events", {}))
+    try:
+        delivery_mode = normalize_delivery_mode(events.get("delivery_mode"))
+    except ValueError:
+        delivery_mode = DEFAULT_DELIVERY_MODE
+    pending_offers = normalize_pending_offers(events.get("pending_offers", []))
     return {
         "phone": record.get("phone"),
         "phone_hash": record.get("phone_hash"),
@@ -279,9 +442,14 @@ def sanitize_record(record: dict) -> dict:
             "categories": list(events.get("categories", [])),
             "location": events.get("location", ""),
             "reminder_minutes": list(events.get("reminder_minutes", []) or DEFAULT_REMINDER_MINUTES),
+            "delivery_mode": delivery_mode,
             "synced_event_ids": list(events.get("synced_event_ids", [])),
+            "offered_event_ids": [str(event_id) for event_id in events.get("offered_event_ids", []) if str(event_id)],
+            "pending_offers": with_choice_numbers(pending_offers),
             "last_synced_at": events.get("last_synced_at"),
+            "last_offered_at": events.get("last_offered_at"),
             "last_status": events.get("last_status"),
+            "last_message": events.get("last_message", ""),
         },
     }
 
@@ -316,6 +484,9 @@ def build_parser() -> argparse.ArgumentParser:
     register.add_argument("--location", default="", help="optional location filter")
     register.add_argument("--reminder-min", action="append", default=[], type=int,
                           help="reminder minutes before start; repeat for multiple")
+    register.add_argument("--delivery-mode", default=DEFAULT_DELIVERY_MODE,
+                          choices=sorted(DELIVERY_MODES),
+                          help="approval asks the user before writing; auto_add writes all matches")
     register.set_defaults(func=cmd_register)
 
     disable = sub.add_parser("disable")
@@ -328,15 +499,32 @@ def build_parser() -> argparse.ArgumentParser:
     list_enabled.add_argument("--invites-store", type=pathlib.Path, default=DEFAULT_INVITES_STORE)
     list_enabled.set_defaults(func=cmd_list_enabled)
 
+    get = sub.add_parser("get")
+    get.add_argument("--phone", required=True)
+    get.set_defaults(func=cmd_get)
+
     mark_synced = sub.add_parser("mark-synced")
     mark_synced.add_argument("--phone", required=True)
     mark_synced.add_argument("--event-id", action="append", default=[],
                              help="synced sourceId, e.g. algeria-exhibitions:8531; repeat for multiple")
     mark_synced.set_defaults(func=cmd_mark_synced)
 
+    record_offers = sub.add_parser("record-offers")
+    record_offers.add_argument("--phone", required=True)
+    record_offers.add_argument("--events-json", required=True,
+                               help="JSON list of pending event snapshots to offer")
+    record_offers.set_defaults(func=cmd_record_offers)
+
+    clear_pending = sub.add_parser("clear-pending")
+    clear_pending.add_argument("--phone", required=True)
+    clear_pending.add_argument("--event-id", action="append", default=[],
+                               help="pending sourceId to clear after a confirmed calendar save")
+    clear_pending.set_defaults(func=cmd_clear_pending)
+
     record = sub.add_parser("record-delivery")
     record.add_argument("--phone", required=True)
-    record.add_argument("--status", required=True, choices=["delivered", "failed", "skipped"])
+    record.add_argument("--status", required=True,
+                        choices=["delivered", "failed", "skipped", "offered", "saved", "no_matches"])
     record.add_argument("--message", default="")
     record.set_defaults(func=cmd_record_delivery)
     return parser

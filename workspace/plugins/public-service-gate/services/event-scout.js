@@ -48,7 +48,7 @@ ${setupUrl}
 
 After sign-in, connect Google and allow calendar access so I can add events to your calendar.
 
-Then tell me what kinds of events you want (for example tech, business, or all), and I'll add matching upcoming events to your Google Calendar with reminders before each one.`;
+Then I'll show the available event types, ask what to watch, and send matching events here so you can pick which ones go into your calendar.`;
 }
 
 export async function handleEventScoutRequest(api, sender) {
