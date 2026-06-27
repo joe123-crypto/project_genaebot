@@ -26,9 +26,12 @@ import os
 import re
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from collections import Counter
 from datetime import date
 from pathlib import Path
+from urllib.parse import urlencode
 
 # bin/, lib/, public-events/, and cron/ are siblings under workspace/, so resolve
 # everything relative to this file (works in the deployed tree and in a worktree).
@@ -46,6 +49,8 @@ SOURCE_PREFIX = "algeria-exhibitions"
 DEFAULT_REMINDER_MINUTES = [1440, 120]
 DEFAULT_DELIVERY_MODE = "approval"
 WP_API_BASE = "https://www.algeriaexhibitions.dz/en/wp-json/wp/v2"
+TAXONOMY_PAGE_SIZES = (50, 10, None)
+TAXONOMY_TIMEOUT_SECONDS = 4
 
 # Each run only syncs events that happen during the current calendar month.
 # is_upcoming() already drops anything ending before today; this caps the far end
@@ -160,18 +165,63 @@ def normalize_taxonomy_slug(value: str) -> str:
     return re.sub(r"\s+", " ", str(value or "").replace("-", " ")).strip().lower()
 
 
-def fetch_taxonomy_terms(taxonomy: str) -> list[dict]:
-    url = f"{WP_API_BASE}/{taxonomy}?per_page=100&_fields=id,name,slug,count"
-    body, _ = ax.http_get(url)
+def taxonomy_url(taxonomy: str, page_size: int | None, page: int) -> str:
+    params = {"_fields": "id,name,slug,count", "page": str(page)}
+    if page_size:
+        params["per_page"] = str(page_size)
+    return f"{WP_API_BASE}/{taxonomy}?{urlencode(params)}"
+
+
+def header_int(headers, name: str, default: int) -> int:
+    if headers is None:
+        return default
+    try:
+        return int(headers.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def taxonomy_http_get(url: str) -> tuple[str | None, object, str]:
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": ax.UA})
+        with urllib.request.urlopen(req, timeout=TAXONOMY_TIMEOUT_SECONDS) as resp:
+            return resp.read().decode("utf-8", "ignore"), resp.headers, ""
+    except urllib.error.HTTPError as err:
+        return None, None, f"HTTP {err.code}: {err.reason}"
+    except Exception as err:
+        return None, None, f"{type(err).__name__}: {err}"
+
+
+def fetch_taxonomy_page(taxonomy: str, page_size: int | None, page: int) -> tuple[list[dict], object]:
+    body, headers, error = taxonomy_http_get(taxonomy_url(taxonomy, page_size, page))
     if body is None:
-        raise RuntimeError(f"could not fetch Algeria Exhibitions {taxonomy} terms")
+        label = f"per_page={page_size}" if page_size else "default page size"
+        detail = f": {error}" if error else ""
+        raise RuntimeError(f"could not fetch {taxonomy} terms with {label}, page {page}{detail}")
     try:
         payload = json.loads(body)
     except json.JSONDecodeError as err:
         raise RuntimeError(f"invalid Algeria Exhibitions {taxonomy} term payload") from err
     if not isinstance(payload, list):
         raise RuntimeError(f"unexpected Algeria Exhibitions {taxonomy} term payload")
-    return payload
+    return payload, headers
+
+
+def fetch_taxonomy_terms(taxonomy: str) -> list[dict]:
+    errors = []
+    for page_size in TAXONOMY_PAGE_SIZES:
+        try:
+            first_page, headers = fetch_taxonomy_page(taxonomy, page_size, 1)
+            total_pages = max(1, header_int(headers, "X-WP-TotalPages", 1))
+            terms = list(first_page)
+            for page in range(2, total_pages + 1):
+                page_terms, _ = fetch_taxonomy_page(taxonomy, page_size, page)
+                terms.extend(page_terms)
+            return terms
+        except RuntimeError as err:
+            label = f"per_page={page_size}" if page_size else "default"
+            errors.append(f"{label}: {err}")
+    raise RuntimeError(f"could not verify Algeria Exhibitions {taxonomy} terms ({'; '.join(errors)})")
 
 
 def catalog_options_from_taxonomy() -> dict:
@@ -183,7 +233,13 @@ def catalog_options_from_taxonomy() -> dict:
         categories.append({"name": slug, "count": int(term.get("count") or 0)})
 
     locations = []
-    for term in fetch_taxonomy_terms("location"):
+    location_error = ""
+    try:
+        location_terms = fetch_taxonomy_terms("location")
+    except RuntimeError as err:
+        location_terms = []
+        location_error = str(err)
+    for term in location_terms:
         slug = normalize_taxonomy_slug(term.get("slug"))
         if not slug:
             continue
@@ -194,16 +250,12 @@ def catalog_options_from_taxonomy() -> dict:
         "categories": sorted(categories, key=lambda item: (-item["count"], item["name"])),
         "locations": sorted(locations, key=lambda item: (-item["count"], item["name"])),
         "source": "taxonomy",
+        "location_error": location_error,
     }
 
 
 def fetch_catalog_options() -> dict:
-    try:
-        return catalog_options_from_taxonomy()
-    except RuntimeError:
-        options = catalog_options_from_listing(fetch_catalog_listing())
-        options["source"] = "event-list"
-        return options
+    return catalog_options_from_taxonomy()
 
 
 def should_fetch_taxonomy_categories(subscribers: list[dict], available_categories: set[str]) -> bool:
@@ -411,7 +463,24 @@ def process_auto_add(sub: dict, events: list[dict], dry_run: bool, send_dms: boo
     return result
 
 
-def process_approval(sub: dict, events: list[dict], available_categories: set[str], dry_run: bool, send_dms: bool) -> dict:
+def category_check_unavailable_result(sub: dict, categories: list[str], reason: str) -> dict:
+    return {
+        "phone_hash": sub.get("phone_hash"),
+        "status": "category-check-unavailable",
+        "requested_categories": categories,
+        "reason": reason[:240],
+    }
+
+
+def process_approval(
+    sub: dict,
+    events: list[dict],
+    available_categories: set[str],
+    dry_run: bool,
+    send_dms: bool,
+    categories_verified: bool = True,
+    category_verification_error: str = "",
+) -> dict:
     phone = sub.get("phone")
     info = sub.get("events", {})
     user_id = info.get("user_id")
@@ -425,6 +494,12 @@ def process_approval(sub: dict, events: list[dict], available_categories: set[st
     location = info.get("location", "")
     missing_categories = unavailable_categories(categories, available_categories)
     if missing_categories:
+        if not categories_verified:
+            return category_check_unavailable_result(
+                sub,
+                categories,
+                category_verification_error or "available categories could not be verified",
+            )
         result.update(
             status="needs-category-choice",
             unavailable_categories=missing_categories,
@@ -466,10 +541,24 @@ def process_approval(sub: dict, events: list[dict], available_categories: set[st
     return result
 
 
-def process_subscriber(sub: dict, events: list[dict], available_categories: set[str], dry_run: bool, send_dms: bool) -> dict:
+def process_subscriber(
+    sub: dict,
+    events: list[dict],
+    available_categories: set[str],
+    dry_run: bool,
+    send_dms: bool,
+    categories_verified: bool = True,
+    category_verification_error: str = "",
+) -> dict:
     info = sub.get("events", {})
     missing_categories = unavailable_categories(info.get("categories", []), available_categories)
     if missing_categories:
+        if not categories_verified:
+            return category_check_unavailable_result(
+                sub,
+                info.get("categories", []),
+                category_verification_error or "available categories could not be verified",
+            )
         return {
             "phone_hash": sub.get("phone_hash"),
             "status": "needs-category-choice",
@@ -479,7 +568,15 @@ def process_subscriber(sub: dict, events: list[dict], available_categories: set[
     mode = sub.get("events", {}).get("delivery_mode") or DEFAULT_DELIVERY_MODE
     if mode == "auto_add":
         return process_auto_add(sub, events, dry_run=dry_run, send_dms=send_dms)
-    return process_approval(sub, events, available_categories, dry_run=dry_run, send_dms=send_dms)
+    return process_approval(
+        sub,
+        events,
+        available_categories,
+        dry_run=dry_run,
+        send_dms=send_dms,
+        categories_verified=categories_verified,
+        category_verification_error=category_verification_error,
+    )
 
 
 def parse_selection_values(values: list[str]) -> tuple[list[int], list[str]]:
@@ -582,6 +679,8 @@ def dispatch(args: argparse.Namespace) -> dict:
     listing = fetch_catalog_listing()
     options = catalog_options_from_listing(listing)
     available_categories = {item["name"] for item in options["categories"]}
+    category_verification_error = ""
+    categories_verified = False
     events = build_upcoming_events(listing)
     if args.phone:
         sub = subs_cmd("get", "--phone", args.phone)
@@ -592,12 +691,25 @@ def dispatch(args: argparse.Namespace) -> dict:
         subscribers = subs.get("subscribers", [])
         skipped_not_allowlisted = subs.get("skipped_not_allowlisted", 0)
     if should_fetch_taxonomy_categories(subscribers, available_categories):
-        taxonomy_options = fetch_catalog_options()
-        available_categories.update(item["name"] for item in taxonomy_options["categories"])
-        options["available_category_source"] = taxonomy_options.get("source", "taxonomy")
+        try:
+            taxonomy_options = fetch_catalog_options()
+        except RuntimeError as err:
+            category_verification_error = str(err)
+        else:
+            available_categories.update(item["name"] for item in taxonomy_options["categories"])
+            options["available_category_source"] = taxonomy_options.get("source", "taxonomy")
+            categories_verified = True
 
     results = [
-        process_subscriber(sub, events, available_categories, dry_run=args.dry_run, send_dms=not args.no_dm)
+        process_subscriber(
+            sub,
+            events,
+            available_categories,
+            dry_run=args.dry_run,
+            send_dms=not args.no_dm,
+            categories_verified=categories_verified,
+            category_verification_error=category_verification_error,
+        )
         for sub in subscribers
     ]
     return {
@@ -607,6 +719,8 @@ def dispatch(args: argparse.Namespace) -> dict:
         "events_this_month": len(events),
         "available_categories": options["categories"],
         "available_locations": options["locations"],
+        "category_check_verified": categories_verified,
+        "category_verification_error": category_verification_error,
         "results": results,
     }
 

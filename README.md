@@ -245,6 +245,12 @@ truth for config is `config/openclaw.template.json`, which the deploy merges int
 the live `openclaw.json` via `patch-openclaw-config.py`. The backup and
 pre-update variants remain ignored.
 
+The public WhatsApp system prompt is tracked separately at
+`workspace/docs/public-whatsapp-system-prompt.txt`. Every deployment injects it
+into `channels.whatsapp.direct["*"].systemPrompt` while preserving runtime user
+data and peer-specific overrides. Reverting a prompt commit and redeploying
+therefore restores the earlier prompt without a manual volume edit.
+
 ## Operational Changes
 
 Runtime/user operations should go through approved commands instead of hand-editing

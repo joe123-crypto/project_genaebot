@@ -9,7 +9,7 @@ import {
 } from "../lib/account-link.js";
 
 const DEFAULT_JOB_SCOUT_SCRIPT = "~/.openclaw/workspace/bin/job-scout";
-const DEFAULT_JOB_SCOUT_SETUP_FAILED = `I couldn't start Job Scout setup right now. Please try again later.`;
+const DEFAULT_JOB_SCOUT_SETUP_FAILED = `I couldn't start Job Scout. Try again later.`;
 
 const JOB_SCOUT_REQUEST_PATTERNS = [
   /\bjob\s*(?:scout|scouting|application|applications?)\b/i,
@@ -71,18 +71,11 @@ export function isJobScoutSetupCommand(text) {
 }
 
 function jobScoutStartText(setupUrl) {
-  return `Job Scout is active.
-
-Open this setup link and sign in with your email:
+  return `Connect Gmail here:
 ${setupUrl}
 
-After sign-in, the app will open Gmail connection automatically.
-
-Then choose one setup option here:
 1. Answer a few short questions.
-2. Upload your CV and allow me to pull the details from it.
-
-I will ask only one or two questions at a time.`;
+2. Upload your CV.`;
 }
 
 export async function handleJobScoutRequest(api, sender) {

@@ -4,10 +4,10 @@ import { clearServiceState, saveServiceState } from "../lib/state.js";
 import { accountLinkInvite, accountLinkRequiredText, accountLinkStatus } from "../lib/account-link.js";
 
 const DEFAULT_NEWS_SUBSCRIPTIONS_SCRIPT = "~/.openclaw/workspace/public-news/news_subscriptions.py";
-const DEFAULT_NEWS_TOPIC_PROMPT = `What topics should I follow for you?
+const DEFAULT_NEWS_TOPIC_PROMPT = `Which topics should I follow?
 
-Example: AI, football, business, scholarships, Zimbabwe news.`;
-const DEFAULT_NEWS_STOPPED = `Personalized news has been stopped for this WhatsApp chat.`;
+For example: AI, football, business, or scholarships.`;
+const DEFAULT_NEWS_STOPPED = `Personalized news is off.`;
 
 const NEWS_STOP_PATTERNS = [
   /\b(?:stop|unsubscribe|cancel|disable|turn\s+off)\b.*\b(?:personalized\s+)?news\b/i,
@@ -98,7 +98,7 @@ export async function handleNewsRequest(api, sender, text) {
     api.logger?.warn?.(`public-service-gate: failed to check news account link (${String(err)})`);
     return {
       handled: true,
-      text: "I couldn't start personalized news setup right now. Please try again later.",
+      text: "I couldn't start personalized news. Try again later.",
     };
   }
 
@@ -118,14 +118,14 @@ export async function handleNewsRequest(api, sender, text) {
     api.logger?.warn?.(`public-service-gate: failed to register news (${String(err)})`);
     return {
       handled: true,
-      text: "I couldn't save your news topics right now. Please try again later.",
+      text: "I couldn't save those topics. Try again later.",
     };
   }
 
   clearServiceState(api, sender);
   return {
     handled: true,
-    text: `You're registered for personalized news: ${newsTopicsLabel(topics)}.\n\nI'll send updates to this WhatsApp chat.`,
+    text: `Personalized news is set for: ${newsTopicsLabel(topics)}. I'll send updates here.`,
   };
 }
 
@@ -146,7 +146,7 @@ export async function handleNewsTopicsContinuation(api, sender, text) {
     api.logger?.warn?.(`public-service-gate: failed to check news account link (${String(err)})`);
     return {
       handled: true,
-      text: "I couldn't start personalized news setup right now. Please try again later.",
+      text: "I couldn't start personalized news. Try again later.",
     };
   }
 
@@ -165,13 +165,13 @@ export async function handleNewsTopicsContinuation(api, sender, text) {
     api.logger?.warn?.(`public-service-gate: failed to register news (${String(err)})`);
     return {
       handled: true,
-      text: "I couldn't save your news topics right now. Please try again later.",
+      text: "I couldn't save those topics. Try again later.",
     };
   }
 
   clearServiceState(api, sender);
   return {
     handled: true,
-    text: `You're registered for personalized news: ${newsTopicsLabel(topics)}.\n\nI'll send updates to this WhatsApp chat.`,
+    text: `Personalized news is set for: ${newsTopicsLabel(topics)}. I'll send updates here.`,
   };
 }

@@ -195,6 +195,20 @@ syntax_checks() {
   bash -n "$OC_DIR/workspace/cron/webetu-meals/notify-reservations.sh"
   python3 -m json.tool "$OC_DIR/config/openclaw.template.json" >/dev/null
   python3 -m json.tool "$COMPOSE_OVERRIDE_SRC" >/dev/null 2>&1 || true
+  pycache="$(mktemp -d)"
+  if ! PYTHONPYCACHEPREFIX="$pycache" python3 -m unittest discover \
+    -s "$OC_DIR/deploy" \
+    -p 'test_patch_openclaw_config.py' || \
+    ! PYTHONPYCACHEPREFIX="$pycache" python3 -m unittest discover \
+      -s "$OC_DIR/workspace/public-events" \
+      -p 'test_event_subscriptions.py' || \
+    ! PYTHONPYCACHEPREFIX="$pycache" python3 -m unittest discover \
+      -s "$OC_DIR/workspace/cron/event-scout-dispatcher" \
+      -p 'test_dispatch.py'; then
+    rm -rf "$pycache"
+    return 1
+  fi
+  rm -rf "$pycache"
 }
 
 stage_source() {
@@ -446,10 +460,15 @@ apply_config_template() {
     local tmp_base="/tmp/openclaw-config-patch-$$"
     "$docker" cp "$STAGE_DIR/config/openclaw.template.json" "$CONTAINER:$tmp_base.template.json"
     "$docker" cp "$STAGE_DIR/deploy/patch-openclaw-config.py" "$CONTAINER:$tmp_base.py"
+    "$docker" cp "$STAGE_DIR/workspace/docs/public-whatsapp-system-prompt.txt" "$CONTAINER:$tmp_base.prompt.txt"
     "$docker" exec -u joseph "$CONTAINER" python3 "$tmp_base.py" \
       "$tmp_base.template.json" \
-      "/home/joseph/.openclaw/openclaw.json"
-    "$docker" exec "$CONTAINER" rm -f "$tmp_base.template.json" "$tmp_base.py"
+      "/home/joseph/.openclaw/openclaw.json" \
+      "$tmp_base.prompt.txt"
+    "$docker" exec "$CONTAINER" rm -f \
+      "$tmp_base.template.json" \
+      "$tmp_base.py" \
+      "$tmp_base.prompt.txt"
     return 0
   fi
 

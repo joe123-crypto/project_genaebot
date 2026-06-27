@@ -11,6 +11,10 @@ the template (so PII never enters git and runtime state is never clobbered).
 These ``PRESERVE_PATHS`` are carried over from the existing live config on each
 apply. This list must mirror exactly the paths omitted when the template is
 generated from the live config.
+
+The public WhatsApp system prompt is tracked outside the JSON template to avoid
+duplicating a large string. Each deploy injects that prompt after preserving
+runtime-managed configuration.
 """
 
 from __future__ import annotations
@@ -61,30 +65,54 @@ def set_path(d: dict, path: list[str], value) -> None:
     cur[path[-1]] = value
 
 
-def apply_template(live: dict, template: dict) -> dict:
+def set_public_whatsapp_prompt(config: dict, prompt: str) -> None:
+    """Install the tracked wildcard prompt without changing peer overrides."""
+    prompt = prompt.strip()
+    if not prompt:
+        raise ValueError("public WhatsApp prompt is empty")
+
+    channels = config.setdefault("channels", {})
+    if not isinstance(channels, dict):
+        raise ValueError("channels must be an object")
+    whatsapp = channels.setdefault("whatsapp", {})
+    if not isinstance(whatsapp, dict):
+        raise ValueError("channels.whatsapp must be an object")
+    direct = whatsapp.setdefault("direct", {})
+    if not isinstance(direct, dict):
+        raise ValueError("channels.whatsapp.direct must be an object")
+    wildcard = direct.setdefault("*", {})
+    if not isinstance(wildcard, dict):
+        raise ValueError('channels.whatsapp.direct["*"] must be an object')
+    wildcard["systemPrompt"] = prompt
+
+
+def apply_template(live: dict, template: dict, public_whatsapp_prompt: str) -> dict:
     """Authoritative apply of the template, preserving runtime/PII paths from live."""
     merged = json.loads(json.dumps(template))  # deep copy
     for path in PRESERVE_PATHS:
         found, value = get_path(live, path)
         if found:
-            set_path(merged, path, value)
+            set_path(merged, path, json.loads(json.dumps(value)))
+    set_public_whatsapp_prompt(merged, public_whatsapp_prompt)
     return merged
 
 
 def main() -> int:
-    if len(sys.argv) != 3:
-        print("usage: patch-openclaw-config.py TEMPLATE LIVE_CONFIG", file=sys.stderr)
+    if len(sys.argv) != 4:
+        print("usage: patch-openclaw-config.py TEMPLATE LIVE_CONFIG PUBLIC_WHATSAPP_PROMPT", file=sys.stderr)
         return 2
 
     template_path = Path(sys.argv[1])
     live_path = Path(sys.argv[2])
+    prompt_path = Path(sys.argv[3])
 
     template = json.loads(template_path.read_text(encoding="utf-8"))
     live = json.loads(live_path.read_text(encoding="utf-8")) if live_path.exists() else {}
     if not isinstance(template, dict) or not isinstance(live, dict):
         raise SystemExit("template and live config must be JSON objects")
 
-    merged = apply_template(live, template)
+    prompt = prompt_path.read_text(encoding="utf-8")
+    merged = apply_template(live, template, prompt)
 
     with NamedTemporaryFile("w", encoding="utf-8", dir=str(live_path.parent), delete=False) as fh:
         json.dump(merged, fh, indent=2, ensure_ascii=False)

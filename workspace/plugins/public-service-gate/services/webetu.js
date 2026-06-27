@@ -21,20 +21,14 @@ const DEFAULT_WORKER_SAFE_SCRIPT = "/usr/local/bin/webetu-worker-safe";
 const DEFAULT_WORKER_SAFE_USER = "webetu-worker";
 const DEFAULT_WORKER_SUDO_COMMAND = "sudo";
 
-const DEFAULT_WEBETU_ONBOARDING_START = `Open this link and sign in with your email:
+const DEFAULT_WEBETU_ONBOARDING_START = `Sign in here and save your Webetu details in the Credentials Vault:
 {setupUrl}
 
-After sign-in, the app will open your Credentials Vault. Save your Webetu username and password there. Do not send your Webetu username or password here.
-
-Then come back here after saving your credentials. I will fetch your supported Webetu restaurants and confirm your default restaurant before saving it.
-
-If the sign-in email does not arrive, check your Spam or Junk folder.`;
-const WEBETU_RESTAURANT_WAIT_REPLY = `Understood. Make manual reservations on Webetu until your restaurant shows up. When you see it, message me and I'll set it as your default and fill your next 3 days.`;
-const WEBETU_RESTAURANT_USE_SUPPORTED_REPLY = `Send the exact restaurant name from the supported list you want me to use.`;
-const WEBETU_RESTAURANT_CLARIFY_REPLY = `Do you want to use one of the supported restaurants now, or wait until your restaurant appears?`;
-const WEBETU_SETUP_NOT_CONFIRMED = `I couldn't confirm your Webetu setup yet.
-
-Open your Credentials Vault and make sure your Webetu username and password are saved there. Then message me again.`;
+Don't send those details here. Check Spam if the sign-in email doesn't arrive.`;
+const WEBETU_RESTAURANT_WAIT_REPLY = `Make reservations yourself until your restaurant appears. Message me when it does.`;
+const WEBETU_RESTAURANT_USE_SUPPORTED_REPLY = `Send the restaurant name you want from the supported list.`;
+const WEBETU_RESTAURANT_CLARIFY_REPLY = `Use a supported restaurant now, or wait for yours to appear?`;
+const WEBETU_SETUP_NOT_CONFIRMED = `I couldn't confirm your Webetu setup. Check that your details are saved in the Credentials Vault.`;
 
 const WEBETU_ONBOARDING_PATTERNS = [
   /\bwebetu\b.*\b(?:onboard|onboarding|setup|set\s*up|register|start|activate)\b/i,
@@ -125,14 +119,10 @@ function webetuAccountLinkStart(api, setupUrl) {
 }
 
 function webetuVaultReadyText(api, publicUserId) {
-  return `Your WhatsApp chat is already linked.
-
-Open your Credentials Vault here:
+  return `Save your Webetu details here, then message me:
 ${scopedAppUrl(api, publicUserId, "/vault")}
 
-Save your Webetu username and password there. Do not send your Webetu username or password here.
-
-Then come back here after saving your credentials. I will fetch your supported Webetu restaurants and confirm your default restaurant before saving it.`;
+Don't send those details in this chat.`;
 }
 
 function getWorkerSafeScript(api) {
@@ -247,7 +237,7 @@ export async function handleWebetuOnboardingStart(api, sender) {
     api.logger?.warn?.(`public-service-gate: failed to create webetu account link (${String(err)})`);
     return {
       handled: true,
-      text: "I couldn't start Webetu setup right now. Please try again later.",
+      text: "I couldn't start Webetu setup. Try again later.",
     };
   }
 }
@@ -282,9 +272,7 @@ export async function handleWebetuSetupDone(api, sender) {
     saveServiceState(api, sender, "webetu", "webetu.awaiting_restaurant");
     return {
       handled: true,
-      text:
-        "Your Webetu credentials are saved and the first check passed.\n\n" +
-        "Which restaurant should I use by default for your Webetu meal reservations?",
+      text: "Your Webetu details are saved. Which restaurant should I use by default?",
     };
   } catch (err) {
     if (isQueueFullError(err)) return busyReply();
@@ -312,7 +300,7 @@ export async function handleReservationStatus(api, sender) {
         logWorkerFailure(api, "reservation status onboarding redirect", err);
         return {
           handled: true,
-          text: "You're not set up for meal reservations yet. Say \"start webetu\" and I'll help you set it up.",
+          text: "Meal reservations aren't set up yet. Send \"start webetu\" to begin.",
         };
       }
     }
@@ -326,7 +314,7 @@ export async function handleReservationStatus(api, sender) {
     logWorkerFailure(api, "reservation status", err);
     return {
       handled: true,
-      text: "I couldn't check your reservation right now. Please try again later.",
+      text: "I couldn't check your reservation. Try again later.",
     };
   }
 }

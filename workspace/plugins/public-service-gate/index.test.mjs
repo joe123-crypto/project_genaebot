@@ -5,6 +5,8 @@ import path from "node:path";
 import test from "node:test";
 
 import plugin, { createLimiter, inviteLinkText, isQueueFullError, runJsonCommand } from "./index.js";
+import { accountLinkRequiredText } from "./lib/account-link.js";
+import { busyReply } from "./lib/runtime.js";
 import { handleEventScoutRequest } from "./services/event-scout.js";
 
 const MEMBER = "+233208864185";
@@ -350,11 +352,9 @@ esac
   });
 
   assert.equal(reply.handled, true);
-  assert.match(reply.text, /welcome to Genaie Service Desk/i);
-  assert.match(reply.text, /not unlocked yet/);
+  assert.match(reply.text, /welcome to Genaie/i);
+  assert.match(reply.text, /unlock your access/i);
   assert.match(reply.text, /Type "invite link"/);
-  // The welcome explains the service so the invitee knows what they joined.
-  assert.match(reply.text, /meal reservation/i);
 });
 
 test("unknown sender invalid join code still returns invalid invite reply", async () => {
@@ -378,7 +378,7 @@ esac
   });
 
   assert.equal(reply.handled, true);
-  assert.match(reply.text, /invalid or has already been used/);
+  assert.match(reply.text, /invalid or was already used/);
 });
 
 test("pending invite member gets activation instructions instead of service menu", async () => {
@@ -404,7 +404,7 @@ esac
   });
 
   assert.equal(reply.handled, true);
-  assert.match(reply.text, /not unlocked yet/);
+  assert.match(reply.text, /unlock your access/);
   assert.match(reply.text, /Type "invite link"/);
   assert.doesNotMatch(reply.text, /Choose a service/);
 });
@@ -442,7 +442,7 @@ esac
   });
 
   assert.equal(reply.handled, true);
-  assert.match(reply.text, /not unlocked yet/);
+  assert.match(reply.text, /unlock your access/);
   assert.doesNotMatch(reply.text, /https:\/\/example\.test\/setup/);
 });
 
@@ -763,7 +763,7 @@ test("inviteLinkText builds a one-tap wa.me invite link when bot number is confi
   assert.match(text, /https:\/\/wa\.me\/263785632943\?text=JOIN-4PG44766/);
   assert.match(text, /This invite works once\./);
   // The whole message is forwardable to the invited person and describes the service.
-  assert.match(text, /I'm inviting you to join/i);
+  assert.match(text, /I'm inviting you to Genaie/i);
   assert.match(text, /meal reservation/i);
 });
 
@@ -776,7 +776,7 @@ test("inviteLinkText falls back to the join code when bot number is blank", () =
 
   const text = inviteLinkText(api, "L59DGQ54");
 
-  assert.match(text, /I'm inviting you to join/i);
+  assert.match(text, /I'm inviting you to Genaie/i);
   assert.match(text, /\n\nJOIN-L59DGQ54\n\n/);
   assert.doesNotMatch(text, /wa\.me/);
 });
@@ -785,6 +785,52 @@ test("runJsonCommand parses JSON stdout", async () => {
   const result = await runJsonCommand("/bin/echo", ['{"status":"ok","count":2}']);
 
   assert.deepEqual(result, { status: "ok", count: 2 });
+});
+
+test("public canned replies use the concise style", () => {
+  assert.equal(
+    accountLinkRequiredText("https://example.test/setup", "Event scouting"),
+    "Sign in here to set up Event scouting:\nhttps://example.test/setup\n\nCheck Spam if the sign-in email doesn't arrive.",
+  );
+  assert.equal(busyReply().text, "I'm busy right now. Try again shortly.");
+
+  const files = [
+    "lib/account-link.js",
+    "lib/runtime.js",
+    "services/invite.js",
+    "services/greeting.js",
+    "services/webetu.js",
+    "services/news.js",
+    "services/event-scout.js",
+    "services/job-scout.js",
+  ];
+  for (const file of files) {
+    const source = fs.readFileSync(new URL(file, import.meta.url), "utf8");
+    assert.doesNotMatch(source, /\u2014/, `${file} contains an em dash`);
+  }
+
+  const docs = [
+    "public-whatsapp-system-prompt.txt",
+    "public-services.md",
+    "public-greeting.txt",
+    "calendar-save-onboarding.md",
+    "event-scout-onboarding.md",
+    "gmail-onboarding.md",
+    "job-scout-onboarding.md",
+    "personalized-news-onboarding.md",
+    "webetu-onboarding.md",
+  ];
+  for (const file of docs) {
+    const source = fs.readFileSync(new URL(`../../docs/${file}`, import.meta.url), "utf8");
+    assert.doesNotMatch(source, /\u2014/, `${file} contains an em dash`);
+  }
+
+  const prompt = fs.readFileSync(
+    new URL("../../docs/public-whatsapp-system-prompt.txt", import.meta.url),
+    "utf8",
+  );
+  assert.match(prompt, /use 1-2 short sentences by default/i);
+  assert.match(prompt, /Do not use em dashes/i);
 });
 
 test("runJsonCommand rejects non-JSON stdout with stdout attached", async () => {

@@ -47,6 +47,15 @@ bash -n "$OC_DIR/workspace/cron/webetu-meals/notify-reservations.sh"
 
 python3 -m json.tool "$OC_DIR/config/openclaw.template.json" >/dev/null
 python3 -m json.tool "$OC_DIR/workspace/skills.lock.json" >/dev/null
+PYTHONPYCACHEPREFIX="$pycache" python3 -m unittest discover \
+  -s "$OC_DIR/deploy" \
+  -p 'test_patch_openclaw_config.py'
+PYTHONPYCACHEPREFIX="$pycache" python3 -m unittest discover \
+  -s "$OC_DIR/workspace/public-events" \
+  -p 'test_event_subscriptions.py'
+PYTHONPYCACHEPREFIX="$pycache" python3 -m unittest discover \
+  -s "$OC_DIR/workspace/cron/event-scout-dispatcher" \
+  -p 'test_dispatch.py'
 
 "$OC_DIR/workspace/bin/openclaw-cap" --help >/dev/null
 "$OC_DIR/deploy/check-openclaw-mirror.sh"

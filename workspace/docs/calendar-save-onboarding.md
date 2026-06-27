@@ -33,8 +33,8 @@ Not allowed in public chat:
 - Writing to a calendar for a phone other than the requester's, or for another
   user.
 
-Public replies must be short. Give the minimum useful information and the next
-action only.
+Use 1-2 short sentences by default. Give only the answer or next action, use
+plain language, and never use em dashes.
 
 ## Flow
 
@@ -68,12 +68,11 @@ If the user is not linked, create or reuse a setup link for this chat and send i
 ```
 
 ```text
-To add those to your calendar, please open this link, sign in, and connect Google
-with calendar access:
+Sign in, connect Google Calendar, then reply when it's done:
 
 <setup link>
 
-Your sign-in email may land in Spam or Junk. Tell me once you've connected.
+Check Spam if the sign-in email doesn't arrive.
 ```
 
 Stop here until the user confirms they have signed in and connected calendar
@@ -100,7 +99,7 @@ For each event the user named, determine:
 - A clear `summary` (the event name).
 - The date(s). Use all-day dates (`YYYY-MM-DD`) unless a specific start/end time
   is known. If a date is unknown, resolve it (web search for the official event
-  page) or ask the user one short question — do not guess a date.
+  page) or ask the user one short question. Do not guess a date.
 - Optionally a `location` and a `source-url` (official event link).
 
 Pick a stable `source-id` per event so re-adding the same event does not create a
@@ -160,7 +159,7 @@ If linking, checking calendar access, or writing fails, do not show command
 output or internal errors. Reply:
 
 ```text
-I couldn't add those to your calendar right now. Please try again later.
+I couldn't add those to your calendar. Try again later.
 ```
 
 If only some events were added, name the ones that succeeded and offer to retry

@@ -1,6 +1,6 @@
 # Webetu Progress Meal Reservation Onboarding
 
-> **URL note:** App links use `APP_BASE_URL` (`https://agent-genaie.vercel.app`) from `~/.openclaw/.env` — the same source the account-link helper resolves. Do not use the ngrok dev tunnel in `/home/joseph/projects/agent_genaie/.env`; it is a stale local-dev value and returns 404. If a link fails, verify `APP_BASE_URL` in `~/.openclaw/.env` first.
+> **URL note:** App links use `APP_BASE_URL` (`https://agent-genaie.vercel.app`) from `~/.openclaw/.env`, the same source the account-link helper resolves. Do not use the ngrok dev tunnel in `/home/joseph/projects/agent_genaie/.env`; it is a stale local-dev value and returns 404. If a link fails, verify `APP_BASE_URL` in `~/.openclaw/.env` first.
 
 Purpose: onboard a public WhatsApp user for Webetu Progress meal reservation through Agent Genaie without exposing the user's Webetu credentials to OpenClaw or the WhatsApp chat.
 
@@ -30,7 +30,7 @@ Not allowed in public chat:
 - Printing raw helper output that contains internals, stack traces, file paths, config values, or implementation details.
 - Running broad repair, migration, credential-store discovery, cron, service, or config changes for a public onboarding request.
 
-Public replies must be short. Give the minimum useful information and the next action only.
+Use 1-2 short sentences by default. Give only the answer or next action, use plain language, and never use em dashes.
 
 ## Current Flow
 
@@ -71,23 +71,17 @@ If the result says `"linked": false`, create a Webetu account-link invite:
 Send the returned `setupUrl` to the user:
 
 ```text
-Open this link and sign in with your email:
+Sign in here and save your Webetu details in the Credentials Vault:
 <setupUrl>
 
-After sign-in, the app will open your Credentials Vault. Save your Webetu username and password there.
-
-Do not send your Webetu username or password here. If the sign-in email does not arrive, check your Spam or Junk folder.
+Don't send those details here. Check Spam if the sign-in email doesn't arrive.
 ```
 
 If the status result says `"linked": true`, send the vault link instead:
 
 ```text
-Your WhatsApp chat is already linked.
-
-Open your Credentials Vault here:
+Save or update your Webetu details here:
 https://agent-genaie.vercel.app/<publicUserId>/vault
-
-Save or update your Webetu username and password there. Do not send those details here.
 ```
 
 If `publicUserId` is not available, use:
@@ -126,7 +120,7 @@ Show only the public restaurant names and meal availability from the result. Do 
 After the user chooses, confirm before saving:
 
 ```text
-I will use <restaurant name> as your default Webetu restaurant. Is that correct?
+Use <restaurant name> as your default restaurant?
 ```
 
 Only after the user confirms, save it:
@@ -145,20 +139,19 @@ If the helper rejects the restaurant, tell the user it is not supported yet and 
 If the user's intended restaurant does not appear in the list returned by `list-restaurants`, inform them plainly:
 
 ```text
-Your restaurant isn't showing on Webetu right now. This happens sometimes — not all restaurants appear at all times. It's beyond my control.
+Your restaurant isn't showing on Webetu right now.
 
-You have two options:
 1. Use Club 3 Bab Ezzouar (the default) and I'll set up and reserve now.
-2. Wait — I'll skip setup for now and you can make manual reservations until your restaurant shows up. When it does, message me and I'll set it as your default and fill your next 3 days.
+2. Wait and make reservations yourself until your restaurant appears.
 
-Which do you prefer?
+Which option do you want?
 ```
 
 - If the user chooses option 1 (use default): save `set-default --restaurant "Club 3 Bab Ezzouar" --confirmed` and continue to the reservation step.
 - If the user says anything like "wait", "skip for now", "I'll wait for my restaurant", "do not reserve yet": do NOT save a default restaurant and do NOT attempt any reservation. Reply:
 
 ```text
-Understood. Make manual reservations on Webetu until your restaurant shows up. When you see it, message me and I'll set it as your default and fill your next 3 days.
+Make reservations yourself until your restaurant appears. Message me when it does.
 ```
 
 Do not attempt to probe, retry, or repair the restaurant list. The intermittent availability is a Webetu API issue outside the agent's control.
@@ -183,9 +176,9 @@ Existing users may not have a saved default restaurant yet. That is not an error
 
 ## Check Reservation Status (User Request)
 
-This is a normal allowed user action, not an admin action. Never refuse it as admin-only or tell the user you need admin access — just run the checks below for the requester's own phone and reply with a short plain-language summary.
+This is a normal allowed user action, not an admin action. Never refuse it as admin-only or tell the user you need admin access. Run the checks below for the requester's own phone and reply with a short plain-language summary.
 
-When a public user asks about their reservation status, upcoming meal, or whether their reservation is active, run these commands using only the **requesting user's own WhatsApp phone** — never another user's phone.
+When a public user asks about their reservation status, upcoming meal, or whether their reservation is active, run these commands using only the **requesting user's own WhatsApp phone**, never another user's phone.
 
 ```bash
 # 1. Confirm the user is linked
@@ -193,7 +186,7 @@ sudo -n -u webetu-worker /usr/local/bin/webetu-worker-safe \
   lookup-user --phone "<whatsapp phone>"
 ```
 
-If `registration_status` is not `"active"`, the user is not set up yet — redirect to onboarding.
+If `registration_status` is not `"active"`, the user is not set up yet. Redirect to onboarding.
 
 ```bash
 # 2. Check their next scheduled reservation (no booking is made)
@@ -217,9 +210,9 @@ Do not expose `user_id`, `source`, `status` codes, raw JSON, file paths, or work
 
 ## Override an Existing Reservation
 
-A user may ask to redo or override a reservation that is already booked — for example, after changing their restaurant preference for a specific day.
+A user may ask to redo or override a reservation that is already booked, for example after changing their restaurant preference for a specific day.
 
-**Date constraint:** Overrides are only valid for tomorrow or later. Never override a reservation for today or a past date — meals for today are already active. If the user asks for today, explain that today's reservation cannot be changed and offer to override tomorrow's instead.
+**Date constraint:** Overrides are only valid for tomorrow or later. Never override a reservation for today or a past date because meals for today are already active. If the user asks for today, explain that today's reservation cannot be changed and offer to override tomorrow's instead.
 
 Look up the user's internal ID first:
 
@@ -243,7 +236,7 @@ Confirm with the user before running:
 I'll override your reservation for <date>. This will replace your existing booking for that day. Shall I go ahead?
 ```
 
-Only run after the user confirms. Report success or failure from the worker output. Do not expose raw worker output — summarise: which date was overridden and how many meals were confirmed.
+Only run after the user confirms. Report success or failure from the worker output. Do not expose raw worker output. Summarise which date was overridden and how many meals were confirmed.
 
 ## After The User Saves Credentials
 
@@ -303,15 +296,13 @@ Today Jan 31   → next run Feb 1st
 When the dry-run check passes and a default restaurant has been saved, warn the user before reserving:
 
 ```text
-Setup is complete. I'll now try to reserve your meals for the next 3 days at <restaurant name>.
-
-If you'd prefer I don't reserve right now, say so. The next automatic run is on <look up the next fire date from the Automatic Schedule table above, e.g. "June 12"> at 12:00 PM — if you skip now, you'll need to make manual reservations until then.
+Setup is complete. Should I reserve the next 3 days at <restaurant name> now?
 ```
 
-If the user says anything like "don't reserve", "wait", "do it later", "I'll do it manually", or any instruction to pause — respect it immediately without reserving:
+If the user says anything like "don't reserve", "wait", "do it later", "I'll do it manually", or any instruction to pause, respect it immediately without reserving:
 
 ```text
-Understood. I won't reserve now. Make reservations manually until the next scheduled run. When you're ready for me to take over, just say so.
+I won't reserve now. Make reservations yourself until the next run on <next run date>.
 ```
 
 If the user agrees or does not object, run reservations for the next 3 days using the requester's WhatsApp phone:
@@ -338,11 +329,11 @@ Done. Your meals are reserved for the next 3 days at <restaurant name>. The next
 If some fail:
 
 ```text
-I reserved meals for <date1> and <date2>, but <date3> failed. Please reserve <date3> manually.
+I reserved meals for <date1> and <date2>, but <date3> failed. Reserve <date3> yourself.
 The next automatic run is on <look up the next fire date from the Automatic Schedule table above>.
 ```
 
-If no default restaurant was saved (user chose to wait for their restaurant): skip this section entirely — the user was already advised to make manual reservations.
+If no default restaurant was saved because the user chose to wait for their restaurant, skip this section entirely. The user was already advised to make manual reservations.
 
 ## Failure Handling
 

@@ -1,9 +1,8 @@
-Welcome to Genaie Service Desk.
+Hi! I can help with:
 
-Choose a service:
 1. Webetu meal reservation
 2. Personalized news
 3. Local event scouting
 4. Job, scholarship, and internship scouting
 
-What do you need help with?
+Which one do you need?

@@ -1,6 +1,6 @@
 # Gmail Sender Onboarding
 
-> **URL note:** App links use `APP_BASE_URL` (`https://agent-genaie.vercel.app`) from `~/.openclaw/.env` — the same source the account-link helper resolves. Do not use the ngrok dev tunnel in `/home/joseph/projects/agent_genaie/.env`; it is a stale local-dev value and returns 404. If a link fails, verify `APP_BASE_URL` in `~/.openclaw/.env` first.
+> **URL note:** App links use `APP_BASE_URL` (`https://agent-genaie.vercel.app`) from `~/.openclaw/.env`, the same source the account-link helper resolves. Do not use the ngrok dev tunnel in `/home/joseph/projects/agent_genaie/.env`; it is a stale local-dev value and returns 404. If a link fails, verify `APP_BASE_URL` in `~/.openclaw/.env` first.
 
 Purpose: onboard a user so OpenClaw/Agent Genaie can send job scout or application emails from that user's own Gmail account after the user explicitly connects Gmail in the web app.
 
@@ -30,7 +30,7 @@ Not allowed in chat:
 - Revealing internal API keys, Firebase configuration, Google OAuth secrets, stack traces, logs, or implementation details to public users.
 - Using `gog gmail send` for Agent Genaie product email.
 
-Public replies must be short. Give the minimum useful information and the next action only.
+Use 1-2 short sentences by default. Give only the answer or next action, use plain language, and never use em dashes.
 
 ## Onboarding Flow
 
@@ -52,20 +52,16 @@ Only Firebase-registered users who have completed Gmail OAuth through their scop
 When a user asks to connect Gmail, reply:
 
 ```text
-Open this link to connect Gmail:
+Connect Gmail with the email you want to send from:
 https://agent-genaie.vercel.app/login?next=%2Fconnect-gmail
 
-Sign in with the email address you want the agent to send from, then click Connect Gmail and approve Google access.
-
-Do not send your Gmail password, OTP, or Google codes here. If the sign-in email does not arrive, check your Spam or Junk folder. Reply when Gmail shows Connected.
+Don't send your password or Google codes here. Check Spam if the sign-in email doesn't arrive.
 ```
 
 If the user asks why this is needed, reply:
 
 ```text
-This lets the job scout send application emails from your own Gmail account after you approve access in Google.
-
-Please connect it here:
+This lets Job Scout send approved applications from your Gmail:
 https://agent-genaie.vercel.app/login?next=%2Fconnect-gmail
 ```
 
@@ -80,13 +76,13 @@ After the user says Gmail is connected, list connected senders:
 If the user's email appears in the list, reply:
 
 ```text
-Your Gmail is connected. I can now use that email address as a sender when you approve an email task.
+Gmail is connected. I'll use it only for emails you approve.
 ```
 
 If the user's email does not appear, reply:
 
 ```text
-I don't see that Gmail connected yet. Please reopen the link, sign in with the same email, and make sure Gmail status says Connected:
+Gmail isn't connected yet. Reopen the link with the same email and check that it says Connected:
 https://agent-genaie.vercel.app/login?next=%2Fconnect-gmail
 ```
 

@@ -6,7 +6,7 @@ import {
   scopedAppUrl,
 } from "../lib/account-link.js";
 
-const DEFAULT_EVENT_SCOUT_SETUP_FAILED = `I couldn't start event scouting setup right now. Please try again later.`;
+const DEFAULT_EVENT_SCOUT_SETUP_FAILED = `I couldn't start event scouting. Try again later.`;
 
 const EVENT_SCOUT_REQUEST_PATTERNS = [
   /\bevent\s*(?:scout|scouting)\b/i,
@@ -41,14 +41,10 @@ export function isEventScoutSetupCommand(text) {
 }
 
 function eventScoutStartText(setupUrl) {
-  return `Event scouting is active.
-
-Open this setup link and sign in with your email:
+  return `Connect Google Calendar here:
 ${setupUrl}
 
-After sign-in, connect Google and allow calendar access so I can add events to your calendar.
-
-Then I'll show the available event types, ask what to watch, and send matching events here so you can pick which ones go into your calendar.`;
+I'll send matching events here so you can pick which ones go into your calendar; check Spam if the sign-in email doesn't arrive.`;
 }
 
 export async function handleEventScoutRequest(api, sender) {

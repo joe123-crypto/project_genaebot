@@ -24,7 +24,7 @@ Not allowed in public chat:
 - Using technical/internal terms such as `cron`, `registry`, `script`, `CLI`, `OpenClaw config`, logs, or dispatcher.
 - Sending other users' data, or writing to a calendar for a phone other than the requester's.
 
-Public replies must be short. Give the minimum useful information and the next action only.
+Public replies must use 1-2 short sentences by default. Give only the answer or next action, use plain language, and never use em dashes.
 
 ## Current Operational Model
 
@@ -69,11 +69,11 @@ If the user is not linked, create or reuse a setup link for this chat and send i
 ```
 
 ```text
-To scout events for you, please open this link, sign in, and connect Google with calendar access:
+Sign in, connect Google Calendar, then reply when it's done:
 
 <setup link>
 
-Your sign-in email may land in Spam or Junk. Tell me once you've connected.
+Check Spam if the sign-in email doesn't arrive.
 ```
 
 Stop here until the user confirms they have signed in and connected calendar access.
@@ -92,14 +92,16 @@ Before asking for event types, fetch the catalogue categories:
 python3 /home/joseph/.openclaw/workspace/cron/event-scout-dispatcher/dispatch.py --list-categories
 ```
 
-The output contains `categories` and `locations`. Show a short human list of the available category names, not raw JSON. If the user asks for a category that is not in the list, tell them the catalogue does not use that category and ask them to choose from the available categories. For example, if the user asks for `tech` and `tech` is not available, do not register `tech` as a category filter.
+The output contains taxonomy-backed `categories` and `locations`. Show a short human list of the available category names, not raw JSON. If this command fails, do not use remembered or cached category lists and do not claim that a requested category is unavailable. Tell the user you cannot verify the catalogue categories right now and ask them to try again shortly.
+
+If the user asks whether a category exists, run the category command again and answer only from that fresh output. If a requested category is not in the fresh category list, tell them the catalogue does not use that category and ask them to choose from the available categories. Do not register unavailable category filters.
 
 ## Collect Preferences
 
 Ask one short question to capture filters and reminder timing. Category filters must come from the available catalogue categories. Empty categories mean all event types. Empty reminders mean the default reminders (1 day and 2 hours before).
 
 ```text
-These are the event types currently available: <short category list>. Which ones should I watch, and should I focus on a location? Default reminders are 1 day and 2 hours before.
+Which event types and locations should I watch? Reminders default to 1 day and 2 hours before.
 ```
 
 ## Register Event Scouting
@@ -156,7 +158,7 @@ Use the first item in the JSON result's `results` list to reply in WhatsApp. Do 
 If that result item has `status: "offered"`, show `added_offers` as a numbered list using each offer's `choice_number`, title, date range, location, category, and link. Then ask the user to reply with the numbers they want added.
 
 ```text
-You're set up for event scouting. I found these matching events:
+Event scouting is ready. I found these matches:
 
 1. <event title> - <date range> - <location> - <category>
 <link>
@@ -167,10 +169,16 @@ Reply with the numbers you want in your calendar.
 If that result item has `status: "no_matches"`, say:
 
 ```text
-You're set up for event scouting. I don't see matching events right now, but I'll send you new matches here when they appear.
+Event scouting is ready. I'll message you when I find a match.
 ```
 
 If that result item has `status: "needs-category-choice"`, show the available categories and ask the user to choose again.
+
+If that result item has `status: "category-check-unavailable"`, say:
+
+```text
+I can't check event types right now. Try again in a bit.
+```
 
 ## Save Selected Events
 
@@ -193,13 +201,13 @@ Added <event names> to your Google Calendar with reminders.
 If the result has `status: "invalid_selection"`, say:
 
 ```text
-Please pick one of the event numbers I showed.
+Pick one of the event numbers I sent.
 ```
 
 If the result has `status: "needs_selection"` and there are no pending events, say:
 
 ```text
-I don't have any event choices waiting right now. Want me to check again?
+There aren't any event choices waiting. Want me to check again?
 ```
 
 If calendar access is no longer connected, ask the user to reconnect Google with calendar access in the app before adding events.
@@ -223,11 +231,11 @@ Event scouting has been stopped for this WhatsApp chat.
 If linking, registering, or stopping fails, do not show command output or internal errors. Reply:
 
 ```text
-I couldn't set up event scouting right now. Please try again later.
+I couldn't set up event scouting. Try again later.
 ```
 
 For stop failures, reply:
 
 ```text
-I couldn't stop event scouting right now. Please try again later.
+I couldn't stop event scouting. Try again later.
 ```

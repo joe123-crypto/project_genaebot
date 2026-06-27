@@ -5,7 +5,7 @@ export const HELPER_TIMEOUT_MS = 15000;
 export const NEWS_HELPER_TIMEOUT_MS = 10000;
 export const WEBETU_TIMEOUT_MS = 30000;
 
-const DEFAULT_BUSY_MESSAGE = `I am handling a few requests right now. Please try again shortly.`;
+const DEFAULT_BUSY_MESSAGE = `I'm busy right now. Try again shortly.`;
 
 export class QueueFullError extends Error {
   constructor(name) {

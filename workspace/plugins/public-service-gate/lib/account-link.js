@@ -53,12 +53,10 @@ export function scopedAppUrl(api, publicUserId, suffix = "") {
 }
 
 export function accountLinkRequiredText(setupUrl, serviceName) {
-  return `${serviceName} needs to link this WhatsApp chat to your app login first.
-
-Open this link and sign in with your email:
+  return `Sign in here to set up ${serviceName}:
 ${setupUrl}
 
-If the sign-in email does not arrive, check your Spam or Junk folder.`;
+Check Spam if the sign-in email doesn't arrive.`;
 }
 
 export function getPendingLinksPath(api) {

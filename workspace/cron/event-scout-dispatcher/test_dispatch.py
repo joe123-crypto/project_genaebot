@@ -68,9 +68,7 @@ class EventScoutDispatchTest(unittest.TestCase):
         self.assertIn({"name": "SAFEX, Algiers", "count": 2}, options["locations"])
 
     def test_catalog_options_from_taxonomy_uses_canonical_matching_names(self):
-        original_http_get = dispatch.ax.http_get
-
-        def fake_http_get(url, *args, **kwargs):
+        def fake_taxonomy_http_get(url):
             if "/eventcat?" in url:
                 return (
                     json.dumps(
@@ -80,20 +78,52 @@ class EventScoutDispatchTest(unittest.TestCase):
                         ]
                     ),
                     None,
+                    "",
                 )
             if "/location?" in url:
-                return (json.dumps([{"id": 3, "name": "SAFEX", "slug": "safex", "count": 83}]), None)
+                return (
+                    json.dumps([{"id": 3, "name": "SAFEX", "slug": "safex", "count": 83}]),
+                    None,
+                    "",
+                )
             raise AssertionError(f"unexpected URL: {url}")
 
-        try:
-            dispatch.ax.http_get = fake_http_get
+        with PatchDispatch(taxonomy_http_get=fake_taxonomy_http_get):
             options = dispatch.catalog_options_from_taxonomy()
-        finally:
-            dispatch.ax.http_get = original_http_get
 
         self.assertEqual(options["source"], "taxonomy")
         self.assertEqual(options["categories"], [{"name": "agri food", "count": 6}, {"name": "art en", "count": 2}])
         self.assertEqual(options["locations"], [{"name": "SAFEX, Algiers", "count": 83}])
+
+    def test_taxonomy_fetch_retries_smaller_page_sizes(self):
+        calls = []
+
+        def fake_taxonomy_http_get(url):
+            calls.append(url)
+            if "per_page=50" in url:
+                return (None, None, "HTTP 502: Bad Gateway")
+            if "per_page=10" in url:
+                return (
+                    json.dumps([{"id": 1, "name": "Technology", "slug": "technology", "count": 3}]),
+                    {"X-WP-TotalPages": "1"},
+                    "",
+                )
+            raise AssertionError(f"unexpected URL: {url}")
+
+        with PatchDispatch(taxonomy_http_get=fake_taxonomy_http_get):
+            terms = dispatch.fetch_taxonomy_terms("eventcat")
+
+        self.assertEqual(terms[0]["slug"], "technology")
+        self.assertIn("per_page=50", calls[0])
+        self.assertIn("per_page=10", calls[1])
+
+    def test_fetch_catalog_options_does_not_fall_back_to_event_list(self):
+        with PatchDispatch(
+            catalog_options_from_taxonomy=lambda: (_ for _ in ()).throw(RuntimeError("taxonomy down")),
+            fetch_catalog_listing=lambda: self.fail("event-list fallback should not run"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "taxonomy down"):
+                dispatch.fetch_catalog_options()
 
     def test_approval_mode_offers_events_without_calendar_write(self):
         calls = []
@@ -151,6 +181,25 @@ class EventScoutDispatchTest(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "no_matches")
+
+    def test_dispatch_does_not_mark_category_unavailable_when_taxonomy_fails(self):
+        def fake_subs_cmd(*args):
+            self.assertEqual(args[0], "get")
+            return subscriber(categories=["technology"])
+
+        with PatchDispatch(
+            fetch_catalog_listing=lambda: {1: {"category": "business", "location": "SAFEX, Algiers"}},
+            build_upcoming_events=lambda listing: [EVENT],
+            subs_cmd=fake_subs_cmd,
+            fetch_catalog_options=lambda: (_ for _ in ()).throw(RuntimeError("taxonomy down")),
+        ):
+            result = dispatch.dispatch(
+                argparse.Namespace(phone="+213555000111", dry_run=False, no_dm=True)
+            )
+
+        self.assertFalse(result["category_check_verified"])
+        self.assertIn("taxonomy down", result["category_verification_error"])
+        self.assertEqual(result["results"][0]["status"], "category-check-unavailable")
 
     def test_dispatch_knows_when_taxonomy_categories_are_needed(self):
         self.assertTrue(

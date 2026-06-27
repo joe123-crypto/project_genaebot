@@ -19,7 +19,7 @@ Not allowed in public chat:
 - Sending public-user news digests to admin or WhatsApp groups.
 - Revealing private user data, stored preferences for other users, raw command output, stack traces, or internal file contents.
 
-Public replies must be short. Give the minimum useful information and the next action only.
+Use 1-2 short sentences by default. Give only the answer or next action, use plain language, and never use em dashes.
 
 ## Current Operational Model
 
@@ -44,9 +44,9 @@ Daily dispatcher -> sends personalized updates to that user's WhatsApp chat
 When a public user asks to start personalized news and has not provided topics, reply:
 
 ```text
-What topics should I follow for you?
+Which topics should I follow?
 
-Example: AI, football, business, scholarships, Zimbabwe news.
+For example: AI, football, business, or scholarships.
 ```
 
 If the user provides topics in the first request, save them immediately.
@@ -84,9 +84,7 @@ Expected sanitized result:
 After saving topics, tell the user:
 
 ```text
-You're registered for personalized news: <topics>.
-
-I'll send updates to this WhatsApp chat.
+Personalized news is set for: <topics>. I'll send updates here.
 ```
 
 ## Stop Personalized News
@@ -100,7 +98,7 @@ python3 /home/joseph/.openclaw/workspace/public-news/news_subscriptions.py disab
 Then reply:
 
 ```text
-Personalized news has been stopped for this WhatsApp chat.
+Personalized news is off.
 ```
 
 ## Topic Guidance
@@ -123,11 +121,11 @@ If the user gives too many topics, save the most important ones and keep the con
 If saving or stopping fails, do not show command output or internal errors. Reply:
 
 ```text
-I couldn't save your news setup right now. Please try again later.
+I couldn't save your news setup. Try again later.
 ```
 
 For stop failures, reply:
 
 ```text
-I couldn't stop personalized news right now. Please try again later.
+I couldn't stop personalized news. Try again later.
 ```

@@ -3,19 +3,15 @@ import { getEventChannel, getEventSender, isWhatsAppChannel, normalizePhone } fr
 import { HELPER_TIMEOUT_MS, helperLimiter, isQueueFullError, runJsonCommand, runTextCommand } from "../lib/runtime.js";
 
 const DEFAULT_INVITE_SCRIPT = "~/.openclaw/workspace/bin/whatsapp-invite";
-const DEFAULT_INVITE_FAILED = `I couldn't create an invite link right now. Please try again later.`;
-const DEFAULT_INVITE_INVALID = `This invite link is invalid or has already been used. Ask your friend for a new one.`;
-const DEFAULT_INVITE_REQUIRED = `This service is invite-only. Ask a friend who is already signed in and using Genaie Service Desk to send you their invite link. Open that link and send the pre-filled JOIN message here.`;
-const DEFAULT_INVITE_WELCOME = `Welcome to Genaie Service Desk 🎉 A friend invited you, and your number is now activated. Soon you'll get meal reservations, news, local events, and job scouting.
+const DEFAULT_INVITE_FAILED = `I couldn't create an invite link. Try again later.`;
+const DEFAULT_INVITE_INVALID = `That invite link is invalid or was already used. Ask your friend for a new one.`;
+const DEFAULT_INVITE_REQUIRED = `Genaie is invite-only. Ask a member for an invite link, then send the pre-filled JOIN message here.`;
+const DEFAULT_INVITE_WELCOME = `Welcome to Genaie 🎉 Invite one person to unlock your access.
 
-Your account is not unlocked yet — one step unlocks it: just like you were invited, invite one person too. Your access opens the moment they activate.
-
-Type "invite link" to get your link to share.`;
-const DEFAULT_INVITE_PENDING = `You're almost in! Your account is not unlocked yet — one step unlocks it.
-
-Type "invite link" to get your link, send it to one person, and your access unlocks the moment they activate their number.`;
-const DEFAULT_INVITE_UNLOCKED = `Your invited person activated their WhatsApp number. Your access to Genaie Service Desk is now unlocked.`;
-const DEFAULT_INVITE_AWAITING_ACTIVATION = `Got it — waiting for them to activate. Your access unlocks as soon as they do.`;
+Type "invite link" to get a link to share.`;
+const DEFAULT_INVITE_PENDING = `Invite one person to unlock your access. Type "invite link" to get a link to share.`;
+const DEFAULT_INVITE_UNLOCKED = `Your invite was activated, so your Genaie access is unlocked.`;
+const DEFAULT_INVITE_AWAITING_ACTIVATION = `I'll unlock your access when they activate their invite.`;
 
 // An existing user (member or admin) asking for a link to invite someone else.
 const INVITE_REQUEST_PATTERNS = [
@@ -160,8 +156,7 @@ export function matchesSharedAck(text) {
 // One-line description of the service, reused in the forwardable invite block so
 // the invited person knows what they're joining. Mirrors greeting.js and the
 // relevance gate's serviceSummary.
-const SERVICE_BLURB =
-  "a WhatsApp assistant for Webetu Progress meal reservations, personalized news, local event scouting, and job/scholarship/internship scouting";
+const SERVICE_BLURB = "meal reservations, personalized news, local events, and opportunity scouting";
 
 export function inviteLinkText(api, code, options = {}) {
   const botDigits = getBotWhatsappNumber(api);
@@ -174,9 +169,7 @@ export function inviteLinkText(api, code, options = {}) {
 
   if (!botDigits) {
     // Bot number not configured: hand over the code. The whole message is forwardable.
-    return `Hi! I'm using Genaie Service Desk, ${SERVICE_BLURB}, and I'm inviting you to join.
-
-To activate, message this number and send the code below exactly:
+    return `I'm inviting you to Genaie for ${SERVICE_BLURB}. Send this code to activate:
 
 ${joinText}
 
@@ -185,9 +178,7 @@ ${closingNote}`;
 
   const link = `https://wa.me/${botDigits}?text=${encodeURIComponent(joinText)}`;
   // The whole message is forwardable as-is to the invited person.
-  return `Hi! I'm using Genaie Service Desk, ${SERVICE_BLURB}, and I'm inviting you to join.
-
-Tap this link and send the message that opens to activate your number:
+  return `I'm inviting you to Genaie for ${SERVICE_BLURB}. Open this link and send the message:
 ${link}
 
 ${closingNote}`;
