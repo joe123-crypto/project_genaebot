@@ -55,6 +55,9 @@
       "webetuOnboardingStartText": {
         "type": "string"
       },
+      "jobScoutOnboardingEnabled": {
+        "type": "boolean"
+      },
       "workerSudoCommand": {
         "type": "string"
       },

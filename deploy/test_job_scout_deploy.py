@@ -33,6 +33,16 @@ class JobScoutDeploymentTests(unittest.TestCase):
     self.assertLess(restart, optional)
     self.assertIn("core gateway remains available", deploy)
 
+  def test_live_source_bind_mount_is_refreshed_safely(self) -> None:
+    deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")
+    stage = deploy[deploy.index("stage_source()") : deploy.index("write_generated_marker()")]
+    recreate = deploy.index("  recreate_boundary_stack\n", deploy.index("main()"))
+    ensure_running = deploy.index("  ensure_container_running\n", deploy.index("main()"))
+
+    self.assertNotIn('rm -rf "$STAGE_DIR"', stage)
+    self.assertIn('mkdir -p "$STAGE_DIR/workspace"', stage)
+    self.assertLess(recreate, ensure_running)
+
 
 if __name__ == "__main__":
   unittest.main()
