@@ -57,6 +57,9 @@
 !workspace/webetu-preferences/*.py
 !workspace/job-scout/
 !workspace/job-scout/*.py
+!workspace/job-scout/*.mjs
+!workspace/job-scout/package.json
+!workspace/job-scout/package-lock.json
 !workspace/job-scout/scrapers/
 !workspace/job-scout/scrapers/*.py
 

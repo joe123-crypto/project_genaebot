@@ -37,6 +37,14 @@ read/write **boundary** (`deploy/docker-compose.override.yml`, installed):
 - The override also mounts the current `entrypoint.sh` over the image's baked one,
   because the baked entrypoint blanket-`chown`s the whole tree and crashes on the
   read-only `workspace` mount.
+- URL-only Job Scout applications run in the separate non-root
+  `job-scout-browser` Playwright container. It has no published port, receives CVs
+  through a read-only runtime mount, and returns only submitted/action-required/
+  failed outcomes to the dispatcher. The worker uses Docker's default seccomp
+  profile, drops all capabilities, keeps its root filesystem read-only, and has
+  only `/tmp` writable. On this snap-Docker host, `no-new-privileges` prevents
+  even the image entrypoint from executing, so Chromium readiness is enforced by
+  the deep `/ready` probe instead.
 
 Snap Docker can read these bind sources only because `/home/joseph/projects/...` is
 non-hidden; the hidden `/home/joseph/.openclaw` cannot be bind-mounted under snap
@@ -151,6 +159,56 @@ cd /home/joseph/.openclaw
 sudo ./deploy/openclaw-deploy.sh
 ```
 
+Job Scout pilot activation is deliberately separate from a normal gateway
+deploy. Use this order:
+
+1. Add these private values to `/home/joseph/openclaw-deploy/.env`:
+
+```text
+JOB_SCOUT_BROWSER_TOKEN=<at least 32 random bytes>
+JOB_SCOUT_PILOT_USER_IDS=<comma-separated Firebase UIDs for the two pilot users>
+```
+
+   Do not put either value in Git. The same Compose interpolation supplies the
+   browser token to the gateway and worker, preventing mismatched delivery paths.
+
+2. Deploy the Agent Genaie API schema change, then deploy this repository. The
+   core gateway starts independently. The optional browser is built afterward;
+   failure leaves Job Scout degraded but does not stop WhatsApp or other services.
+
+3. One existing CV can be recovered from the legacy Docker volume. Preview and
+   then migrate it without retrying historical applications:
+
+```bash
+OPENCLAW_ENV_PATH=/home/joseph/openclaw-deploy/.env \
+PYTHONPATH=workspace/lib:workspace/account-link \
+python3 workspace/job-scout/job_scout.py migrate-runtime-cvs \
+  --legacy-root /var/snap/docker/common/var-lib-docker/volumes/openclaw-state/_data/workspace/job-scout/users \
+  --storage-root /home/joseph/projects/genaebot/runtime/job-scout/users \
+  --stored-ref-root /home/joseph/.openclaw/runtime/job-scout/users \
+  --pilot-only --dry-run
+# Remove --dry-run only after reviewing the aggregate result.
+```
+
+   CV migration is intentionally not part of deployment: it reads a
+   host-specific legacy Docker volume and updates user profile records. A code
+   deploy must not silently mutate that data. The recoverable CV has already
+   been migrated on this host.
+
+4. The second pilot user has no recoverable CV and must upload it again through
+   the normal Job Scout profile flow.
+
+5. Install or update the pilot schedule:
+
+```bash
+sudo ./deploy/install-job-scout-pilot.sh
+```
+
+The installer refuses to enable the cron unless the worker is healthy, the
+gateway and worker tokens match, the allowlist resolves to ready subscribers,
+and every pilot CV is accessible. It prints the failing readiness check, runs
+daily at `09:00 Africa/Harare`, and leaves wider onboarding unchanged.
+
 The deploy script used by both paths:
 
 - verifies GitClaw autocommit is disabled
@@ -158,6 +216,8 @@ The deploy script used by both paths:
 - rejects staged runtime/secret files
 - runs syntax and JSON checks
 - stages curated source into `/home/joseph/openclaw-deploy/live-source`
+- preserves the `live-source` root inode so Docker's read-only bind mount cannot
+  become detached from the newly staged files
 - stamps `live-source` with `.OPENCLAW_GENERATED` and a source manifest
 - excludes runtime files such as `state.json`, `pending-links.json`,
   `subscriptions.json`, `*.log`, caches, and bytecode
@@ -168,6 +228,9 @@ The deploy script used by both paths:
 - verifies `agents.defaults.workspace=/home/joseph/.openclaw/agent-workspace`
 - restarts `openclaw-gateway-container.service`
 - runs the deployment health check
+- best-effort builds and readiness-checks the optional Job Scout browser after
+  the core gateway is healthy; failure is reported without failing the gateway
+  deployment
 
 Host automation files:
 

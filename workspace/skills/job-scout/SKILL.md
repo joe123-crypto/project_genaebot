@@ -17,7 +17,7 @@ Commands:
 - List applications: `/home/joseph/.openclaw/workspace/bin/job-scout list-applications --user-id "<firebase uid>"`
 - Record application: `/home/joseph/.openclaw/workspace/bin/job-scout record-application --user-id "<firebase uid>" --company "..." --role "..." --status applied`
 - Fetch JSearch candidates for a profile: `/home/joseph/.openclaw/workspace/bin/job-scout fetch-candidates --target-role "..." --location "..."`
-- Fetch JSearch candidates for ready users: `/home/joseph/.openclaw/workspace/bin/job-scout dispatch-jsearch --dry-run`
+- Preview candidates for ready users: `/home/joseph/.openclaw/workspace/bin/job-scout dispatch-jsearch --dry-run --pilot-only`
 
 Rules:
 
@@ -26,4 +26,7 @@ Rules:
 - Never ask for Gmail passwords, OTPs, OAuth codes, tokens, API keys, or Firebase UIDs in public chat.
 - Do not expose raw helper output, Firestore paths, internal API keys, logs, stack traces, or other users' data to public users.
 - Real application email sends go through `genaie-mail --from <connected sender>`.
+- Website applications go only through the isolated browser worker. Report `applied` only after its `submitted` result; login, CAPTCHA, declarations, payments, and unknown required questions are `action_required`.
+- Never claim that an `action_required`, historical `physical_submission`, or failed record was submitted.
+- Pilot dispatch must use `--pilot-only`; `JOB_SCOUT_PILOT_USER_IDS` is the allowlist.
 - Job discovery must use the deterministic JSearch dispatcher only. Default search country is Algeria (`dz`) and default language is French (`fr`).

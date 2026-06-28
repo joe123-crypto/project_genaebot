@@ -16,6 +16,10 @@ git -C "$OC_DIR" rev-parse --is-inside-work-tree >/dev/null
 
 node --check "$OC_DIR/workspace/plugins/public-service-gate/index.js"
 node --check "$OC_DIR/workspace/plugins/whatsapp-relevance-gate/index.js"
+node --test "$OC_DIR/workspace/plugins/public-service-gate/index.test.mjs"
+node --check "$OC_DIR/workspace/job-scout/web_apply.mjs"
+node --check "$OC_DIR/workspace/job-scout/web_apply_server.mjs"
+node --test "$OC_DIR/workspace/job-scout/web_apply.test.mjs"
 
 pycache="$(mktemp -d)"
 trap 'rm -rf "$pycache"' EXIT
@@ -41,21 +45,28 @@ bash -n "$OC_DIR/deploy/openclaw-deploy.sh"
 bash -n "$OC_DIR/deploy/check-openclaw-mirror.sh"
 bash -n "$OC_DIR/deploy/github-actions/openclaw-prod-deploy"
 bash -n "$OC_DIR/deploy/container/entrypoint.sh"
+bash -n "$OC_DIR/deploy/install-job-scout-pilot.sh"
 bash -n "$OC_DIR/workspace/bin/openclaw-cap"
 bash -n "$OC_DIR/workspace/cron/github-issue-tracker/check_issue.sh"
 bash -n "$OC_DIR/workspace/cron/webetu-meals/notify-reservations.sh"
 
 python3 -m json.tool "$OC_DIR/config/openclaw.template.json" >/dev/null
 python3 -m json.tool "$OC_DIR/workspace/skills.lock.json" >/dev/null
+python3 -m json.tool "$OC_DIR/workspace/job-scout/package.json" >/dev/null
+python3 -m json.tool "$OC_DIR/workspace/job-scout/package-lock.json" >/dev/null
 PYTHONPYCACHEPREFIX="$pycache" python3 -m unittest discover \
   -s "$OC_DIR/deploy" \
-  -p 'test_patch_openclaw_config.py'
+  -p 'test_*.py'
 PYTHONPYCACHEPREFIX="$pycache" python3 -m unittest discover \
   -s "$OC_DIR/workspace/public-events" \
   -p 'test_event_subscriptions.py'
 PYTHONPYCACHEPREFIX="$pycache" python3 -m unittest discover \
   -s "$OC_DIR/workspace/cron/event-scout-dispatcher" \
   -p 'test_dispatch.py'
+PYTHONPATH="$OC_DIR/workspace/lib:$OC_DIR/workspace/account-link" \
+PYTHONPYCACHEPREFIX="$pycache" python3 -m unittest discover \
+  -s "$OC_DIR/workspace/job-scout" \
+  -p 'test_job_scout.py'
 
 "$OC_DIR/workspace/bin/openclaw-cap" --help >/dev/null
 "$OC_DIR/deploy/check-openclaw-mirror.sh"

@@ -21,9 +21,13 @@ import urllib.request
 
 
 WORKSPACE = Path("/home/joseph/.openclaw/workspace")
-DEFAULT_STORAGE_ROOT = WORKSPACE / "job-scout" / "users"
-DEFAULT_DISPATCH_ROOT = WORKSPACE / "job-scout" / "dispatch-runs"
-DISPATCH_STATUSES = {"applied", "physical_submission", "no_matches", "failed"}
+RUNTIME_ROOT = Path(os.environ.get("JOB_SCOUT_RUNTIME_ROOT", "/home/joseph/.openclaw/runtime/job-scout"))
+DEFAULT_STORAGE_ROOT = RUNTIME_ROOT / "users"
+DEFAULT_DISPATCH_ROOT = RUNTIME_ROOT / "dispatch-runs"
+DISPATCH_STATUSES = {"applied", "action_required", "physical_submission", "no_matches", "failed"}
+TERMINAL_APPLICATION_STATUSES = {"applied", "skipped", "action_required", "physical_submission"}
+MAX_APPLICATION_ATTEMPTS = 3
+DEFAULT_WEB_APPLY_URL = "http://job-scout-browser:8787/apply"
 DEFAULT_JSEARCH_COUNTRY = "dz"
 DEFAULT_JSEARCH_LANGUAGE = "fr"
 DEFAULT_JSEARCH_DATE_POSTED = "3days"
@@ -425,7 +429,19 @@ def application_key(value: dict) -> tuple[str, str]:
 
 def filter_candidates(candidates: list[dict], preferences: dict, applications: list[dict], limit: int) -> list[dict]:
   exclusions = [item.casefold() for item in clean_items(profile_values(preferences, "exclusions"))]
-  existing = {application_key(item) for item in applications}
+  existing: set[tuple[str, str]] = set()
+  for application in applications:
+    status = str(application.get("status") or "").strip().lower()
+    try:
+      attempts = int(application.get("attemptCount") or 0)
+    except (TypeError, ValueError):
+      attempts = 0
+    # Historical records without a status and manual-submission records are
+    # deliberately terminal: users may already have applied after receiving the URL.
+    if not status or status in TERMINAL_APPLICATION_STATUSES:
+      existing.add(application_key(application))
+    elif status == "failed" and attempts >= MAX_APPLICATION_ATTEMPTS:
+      existing.add(application_key(application))
   seen: set[str] = set()
   output: list[dict] = []
   for candidate in candidates:
@@ -642,6 +658,47 @@ def cmd_check_runtime(args: argparse.Namespace) -> dict:
   if not has_api_key:
     errors.append("Missing AGENT_GENAI_INTERNAL_API_KEY.")
 
+  runtime_probe = RUNTIME_ROOT / f".runtime-{os.getpid()}.check"
+  try:
+    RUNTIME_ROOT.mkdir(parents=True, exist_ok=True)
+    runtime_probe.write_text("ok\n", encoding="utf-8")
+  except OSError as err:
+    errors.append(f"Job Scout runtime root is not writable: {err}")
+  finally:
+    try:
+      runtime_probe.unlink()
+    except OSError:
+      pass
+
+  browser_ok = None
+  if getattr(args, "check_browser", False):
+    apply_url = env_default("JOB_SCOUT_WEB_APPLY_URL", DEFAULT_WEB_APPLY_URL)
+    parsed = urllib.parse.urlsplit(apply_url)
+    health_url = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, "/ready", "", ""))
+    try:
+      with urllib.request.urlopen(health_url, timeout=10) as response:
+        browser_ok = response.status == 200
+    except (urllib.error.URLError, TimeoutError, OSError):
+      browser_ok = False
+    if not browser_ok:
+      errors.append("website application worker health check failed")
+
+  subscriber_count = None
+  accessible_cv_count = None
+  if getattr(args, "check_subscribers", False) and has_api_key:
+    try:
+      ready = cmd_list_ready(argparse.Namespace(limit=100)).get("subscribers", [])
+      ready = ready if isinstance(ready, list) else []
+      ready = restrict_to_pilot(ready, bool(getattr(args, "pilot_only", False)))
+      subscriber_count = len(ready)
+      accessible_cv_count = sum(1 for subscriber in ready if Path(str(subscriber.get("cvFileRef") or "")).is_file())
+      if subscriber_count == 0:
+        errors.append("no pilot subscribers are ready")
+      elif accessible_cv_count != subscriber_count:
+        errors.append("one or more pilot CV files are unavailable; re-upload is required")
+    except (SystemExit, RuntimeError) as err:
+      errors.append(public_text(err, 240))
+
   result = {
     "ok": not errors,
     "effectiveUser": effective_user(),
@@ -652,6 +709,10 @@ def cmd_check_runtime(args: argparse.Namespace) -> dict:
     "hasInternalApiKey": has_api_key,
     "agentBaseUrl": agent_base_url(),
     "agentBaseUrlSource": agent_base_url_source(),
+    "runtimeRoot": str(RUNTIME_ROOT),
+    "browserHealthy": browser_ok,
+    "subscriberCount": subscriber_count,
+    "accessibleCvCount": accessible_cv_count,
     "errors": errors,
   }
   if errors:
@@ -704,6 +765,45 @@ def cmd_save_profile(args: argparse.Namespace) -> dict:
   return result
 
 
+def cmd_migrate_runtime_cvs(args: argparse.Namespace) -> dict:
+  ready = cmd_list_ready(argparse.Namespace(limit=100)).get("subscribers", [])
+  ready = ready if isinstance(ready, list) else []
+  ready = restrict_to_pilot(ready, args.pilot_only)
+  migrated = 0
+  missing = 0
+  users: list[dict] = []
+  marker = "/workspace/job-scout/users/"
+  for subscriber in ready:
+    old_ref = str(subscriber.get("cvFileRef") or "")
+    relative = old_ref.split(marker, 1)[1] if marker in old_ref else ""
+    source = args.legacy_root / relative if relative else Path(old_ref)
+    if not source.is_file():
+      missing += 1
+      users.append({"userKey": user_key(subscriber_user_id(subscriber)), "status": "missing"})
+      continue
+    suffix = safe_cv_suffix(source)
+    relative_ref = Path(phone_hash(subscriber_phone(subscriber))) / f"cv{suffix}"
+    new_ref = str(args.stored_ref_root / relative_ref)
+    if not args.dry_run:
+      store_cv(subscriber_phone(subscriber), str(source), args.storage_root)
+      request_json("POST", endpoint("/internal/job-scout/profile"), {
+        "phone": subscriber_phone(subscriber),
+        "userId": subscriber_user_id(subscriber),
+        "preferences": subscriber_preferences(subscriber),
+        "cvFileRef": new_ref,
+      })
+    migrated += 1
+    users.append({"userKey": user_key(subscriber_user_id(subscriber)), "status": "migrated"})
+  return {
+    "ok": missing == 0,
+    "dryRun": args.dry_run,
+    "subscriberCount": len(ready),
+    "migratedCount": migrated,
+    "missingCount": missing,
+    "users": users,
+  }
+
+
 def cmd_list_ready(args: argparse.Namespace) -> dict:
   query = urllib.parse.urlencode({"limit": args.limit})
   return request_json("GET", endpoint(f"/internal/job-scout/subscribers?{query}"))
@@ -727,6 +827,11 @@ def cmd_record_application(args: argparse.Namespace) -> dict:
     "messageId": args.message_id,
     "closing": args.closing,
     "matchReason": args.match_reason,
+    "submissionMethod": getattr(args, "submission_method", None),
+    "applicationUrl": getattr(args, "application_url", None),
+    "blockerCode": getattr(args, "blocker_code", None),
+    "attemptCount": getattr(args, "attempt_count", None),
+    "evidence": getattr(args, "evidence", None),
     "replace": args.replace,
   }
   return request_json("POST", endpoint("/internal/job-scout/applications"), payload)
@@ -777,6 +882,19 @@ def applications_from_response(result: dict) -> list[dict]:
   return []
 
 
+def candidate_attempt(applications: list[dict], candidate: dict) -> tuple[int, bool]:
+  key = application_key(candidate)
+  for application in applications:
+    if application_key(application) != key:
+      continue
+    try:
+      previous = int(application.get("attemptCount") or 0)
+    except (TypeError, ValueError):
+      previous = 0
+    return min(previous + 1, MAX_APPLICATION_ATTEMPTS), True
+  return 1, False
+
+
 def public_text(value: object, max_len: int = 180) -> str:
   text = re.sub(r"[\r\n\t]+", " ", str(value or ""))
   text = re.sub(r"\s+", " ", text).strip()
@@ -821,6 +939,8 @@ def subscriber_cv_file(subscriber: dict) -> str:
   cv = str(subscriber.get("cvFileRef") or "").strip()
   if not cv:
     raise RuntimeError("subscriber is missing cvFileRef")
+  if not Path(cv).is_file():
+    raise RuntimeError("subscriber CV is unavailable; re-upload is required")
   return cv
 
 
@@ -960,6 +1080,73 @@ def result_message_id(result: dict) -> str | None:
   return None
 
 
+def candidate_application_url(candidate: dict) -> str | None:
+  links = candidate.get("applyLinks")
+  if isinstance(links, list):
+    for value in links:
+      link = str(value or "").strip()
+      if link.startswith(("https://", "http://")):
+        return link
+  source = str(candidate.get("sourceUrl") or "").strip()
+  return source if source.startswith(("https://", "http://")) else None
+
+
+def applicant_name(subscriber: dict) -> tuple[str, str]:
+  parts = display_name(subscriber).split()
+  if len(parts) <= 1:
+    return (parts[0] if parts else "Applicant", "")
+  return parts[0], " ".join(parts[1:])
+
+
+def web_apply_payload(subscriber: dict, preferences: dict, candidate: dict, cover_letter: Path) -> dict:
+  first_name, last_name = applicant_name(subscriber)
+  locations = clean_items(profile_values(preferences, "locations"))
+  return {
+    "attemptId": candidate_key(candidate),
+    "applicationUrl": candidate_application_url(candidate),
+    "applicant": {
+      "firstName": first_name,
+      "lastName": last_name,
+      "fullName": display_name(subscriber),
+      "email": subscriber_sender_email(subscriber),
+      "phone": subscriber_phone(subscriber),
+      "location": locations[0] if locations else "",
+    },
+    "cvPath": subscriber_cv_file(subscriber),
+    "coverLetterPath": str(cover_letter),
+    "autoSubmit": True,
+  }
+
+
+def request_web_application(payload: dict, timeout: int = 180) -> dict:
+  url = env_default("JOB_SCOUT_WEB_APPLY_URL", DEFAULT_WEB_APPLY_URL).strip()
+  token = env_default("JOB_SCOUT_BROWSER_TOKEN", "").strip()
+  if not url:
+    raise RuntimeError("website application worker is not configured")
+  if not token:
+    raise RuntimeError("website application worker token is not configured")
+  request = urllib.request.Request(
+    url,
+    data=json.dumps(payload).encode("utf-8"),
+    method="POST",
+    headers={
+      "Content-Type": "application/json",
+      "Accept": "application/json",
+      "Authorization": f"Bearer {token}",
+    },
+  )
+  try:
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+      data = json.loads(response.read().decode("utf-8") or "{}")
+  except urllib.error.HTTPError as err:
+    raise RuntimeError(f"website application worker returned HTTP {err.code}") from err
+  except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as err:
+    raise RuntimeError("website application worker is unavailable") from err
+  if not isinstance(data, dict) or data.get("outcome") not in {"submitted", "action_required", "failed"}:
+    raise RuntimeError("website application worker returned an invalid result")
+  return data
+
+
 def record_candidate_application(
   user_id: str,
   candidate: dict,
@@ -967,6 +1154,12 @@ def record_candidate_application(
   notes: str | None = None,
   message_id: str | None = None,
   match: str | None = None,
+  submission_method: str | None = None,
+  application_url: str | None = None,
+  blocker_code: str | None = None,
+  attempt_count: int | None = None,
+  evidence: dict | None = None,
+  replace: bool = False,
 ) -> dict:
   return cmd_record_application(argparse.Namespace(
     user_id=user_id,
@@ -980,22 +1173,32 @@ def record_candidate_application(
     message_id=message_id,
     closing=candidate.get("closing"),
     match_reason=match,
-    replace=False,
+    submission_method=submission_method,
+    application_url=application_url,
+    blocker_code=blocker_code,
+    attempt_count=attempt_count,
+    evidence=evidence,
+    replace=replace,
   ))
 
 
-def physical_instruction(candidate: dict) -> str:
-  links = candidate.get("applyLinks")
-  link = None
-  if isinstance(links, list) and links:
-    link = str(links[0] or "").strip()
-  link = link or str(candidate.get("sourceUrl") or "").strip()
+def action_instruction(candidate: dict, blocker_code: str | None = None) -> str:
+  link = candidate_application_url(candidate)
+  reasons = {
+    "login_required": "The site requires you to sign in.",
+    "captcha_required": "The site requires a CAPTCHA.",
+    "unknown_required_field": "The form asks a required question I cannot answer safely.",
+    "legal_declaration": "The form requires a declaration only you should confirm.",
+    "payment_required": "The site asks for payment; I will never submit or pay it.",
+    "unsupported_site": "This site's application form is not safely automatable yet.",
+  }
+  prefix = reasons.get(str(blocker_code or ""), "This application needs your input.")
   if link:
-    return f"Apply manually here: {link}"
-  return "Manual follow-up is needed; no application email was listed."
+    return f"{prefix} Continue here: {link}"
+  return prefix
 
 
-def build_user_summary(date_label: str, applied: list[dict], physical: list[dict], failed_note: str | None = None) -> str:
+def build_user_summary(date_label: str, applied: list[dict], action_required: list[dict], failed_note: str | None = None) -> str:
   lines = [f"Job Scout - {date_label}", ""]
   if applied:
     for index, item in enumerate(applied, 1):
@@ -1014,19 +1217,35 @@ def build_user_summary(date_label: str, applied: list[dict], physical: list[dict
       if reason:
         lines.append(f"Why: {reason}")
       lines.append("")
-  if physical:
-    for candidate in physical:
+  if action_required:
+    for item in action_required:
+      candidate = item["candidate"] if isinstance(item, dict) and "candidate" in item else item
+      blocker_code = item.get("blockerCode") if isinstance(item, dict) else None
       lines.extend([
-        f"- {public_text(candidate.get('role'), 100)} - manual submission needed",
+        f"- {public_text(candidate.get('role'), 100)} - ACTION NEEDED",
         f"Company: {public_text(candidate.get('company'), 100)}",
-        physical_instruction(candidate),
+        action_instruction(candidate, blocker_code),
         "",
       ])
   if failed_note:
     lines.append(PUBLIC_DISPATCH_FAILURE_MESSAGE)
-  if not applied and not physical and not failed_note:
+  if not applied and not action_required and not failed_note:
     lines.append("No strong matches today. I will keep checking.")
   return "\n".join(line for line in lines).strip()
+
+
+def pilot_user_ids() -> set[str]:
+  raw = env_default("JOB_SCOUT_PILOT_USER_IDS", "")
+  return {item.strip() for item in raw.split(",") if item.strip()}
+
+
+def restrict_to_pilot(subscribers: list[dict], enabled: bool) -> list[dict]:
+  if not enabled:
+    return subscribers
+  allowed = pilot_user_ids()
+  if not allowed:
+    raise SystemExit("JOB_SCOUT_PILOT_USER_IDS is required with --pilot-only")
+  return [subscriber for subscriber in subscribers if subscriber_user_id(subscriber) in allowed]
 
 
 def cmd_dispatch_jsearch(args: argparse.Namespace) -> dict:
@@ -1034,6 +1253,7 @@ def cmd_dispatch_jsearch(args: argparse.Namespace) -> dict:
   subscribers = ready_result.get("subscribers") if isinstance(ready_result, dict) else []
   if not isinstance(subscribers, list):
     subscribers = []
+  subscribers = restrict_to_pilot(subscribers, bool(getattr(args, "pilot_only", False)))
   run_id = args.run_id or f"job-scout-jsearch-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
   run_id = safe_run_id(run_id)
   ready_count = len(subscribers)
@@ -1043,7 +1263,7 @@ def cmd_dispatch_jsearch(args: argparse.Namespace) -> dict:
   processed_count = 0
   failed_count = 0
   no_matches_count = 0
-  physical_count = 0
+  action_required_count = 0
   applied_count = 0
   users: list[dict] = []
   date_label = datetime.now(timezone.utc).date().isoformat()
@@ -1056,7 +1276,8 @@ def cmd_dispatch_jsearch(args: argparse.Namespace) -> dict:
     queries = search_queries(preferences)
     auto_apply = preferences.get("autoApply", True) is not False
     user_applied: list[dict] = []
-    user_physical: list[dict] = []
+    user_action_required: list[dict] = []
+    applications: list[dict] = []
     failed_note = None
     if per_user_limit <= 0 or not queries:
       status = "no_matches"
@@ -1097,12 +1318,12 @@ def cmd_dispatch_jsearch(args: argparse.Namespace) -> dict:
     if candidates:
       for candidate in candidates:
         reason = match_reason(preferences, candidate)
+        attempt_count, replace_existing = candidate_attempt(applications, candidate)
         email = str(candidate.get("applicationEmail") or "").strip()
-        links = candidate.get("applyLinks") if isinstance(candidate.get("applyLinks"), list) else []
-        can_send = bool(email and auto_apply)
-        if can_send:
+        application_url = candidate_application_url(candidate)
+        if email and auto_apply:
           if args.dry_run:
-            user_applied.append({"candidate": candidate, "reason": reason, "dryRun": True})
+            user_applied.append({"candidate": candidate, "reason": reason, "method": "email", "dryRun": True})
             continue
           try:
             cover_letter = write_cover_letter(subscriber, preferences, candidate)
@@ -1113,8 +1334,11 @@ def cmd_dispatch_jsearch(args: argparse.Namespace) -> dict:
               "applied",
               message_id=result_message_id(send_result),
               match=reason,
+              submission_method="email",
+              attempt_count=attempt_count,
+              replace=replace_existing,
             )
-            user_applied.append({"candidate": candidate, "reason": reason})
+            user_applied.append({"candidate": candidate, "reason": reason, "method": "email"})
           except Exception as err:
             failed_note = public_text(err)
             try:
@@ -1124,46 +1348,117 @@ def cmd_dispatch_jsearch(args: argparse.Namespace) -> dict:
                 "failed",
                 notes=failed_note,
                 match=reason,
+                submission_method="email",
+                attempt_count=attempt_count,
+                replace=replace_existing,
               )
             except Exception:
               pass
             break
-        elif links or candidate.get("sourceUrl"):
+        elif application_url and auto_apply:
+          if args.dry_run:
+            user_action_required.append({
+              "candidate": candidate,
+              "blockerCode": "dry_run",
+              "dryRun": True,
+            })
+            continue
+          web_result: dict = {}
+          try:
+            cover_letter = write_cover_letter(subscriber, preferences, candidate)
+            web_result = request_web_application(web_apply_payload(subscriber, preferences, candidate, cover_letter))
+            outcome = web_result["outcome"]
+            if outcome == "submitted":
+              record_candidate_application(
+                user_id,
+                candidate,
+                "applied",
+                notes=public_text(web_result.get("confirmation"), 300) or None,
+                match=reason,
+                submission_method="website",
+                application_url=application_url,
+                attempt_count=attempt_count,
+                replace=replace_existing,
+                evidence=web_result.get("evidence") if isinstance(web_result.get("evidence"), dict) else None,
+              )
+              user_applied.append({"candidate": candidate, "reason": reason, "method": "website"})
+            elif outcome == "action_required":
+              blocker_code = str(web_result.get("blockerCode") or "unsupported_site")
+              record_candidate_application(
+                user_id,
+                candidate,
+                "action_required",
+                notes=action_instruction(candidate, blocker_code),
+                match=reason,
+                submission_method="website",
+                application_url=application_url,
+                blocker_code=blocker_code,
+                attempt_count=attempt_count,
+                replace=replace_existing,
+              )
+              user_action_required.append({"candidate": candidate, "blockerCode": blocker_code})
+            else:
+              raise RuntimeError(public_text(web_result.get("error") or "website submission failed", 240))
+          except Exception as err:
+            failed_note = public_text(err)
+            try:
+              record_candidate_application(
+                user_id,
+                candidate,
+                "failed",
+                notes=failed_note,
+                match=reason,
+                submission_method="website",
+                application_url=application_url,
+                blocker_code=str(web_result.get("blockerCode") or "worker_failure"),
+                attempt_count=attempt_count,
+                replace=True,
+              )
+            except Exception:
+              pass
+            break
+        elif application_url:
+          blocker_code = "auto_apply_disabled"
           if not args.dry_run:
             record_candidate_application(
               user_id,
               candidate,
-              "physical_submission",
-              notes=physical_instruction(candidate),
+              "action_required",
+              notes=action_instruction(candidate, blocker_code),
               match=reason,
+              submission_method="manual",
+              application_url=application_url,
+              blocker_code=blocker_code,
+              attempt_count=0,
             )
-          user_physical.append(candidate)
+          user_action_required.append({"candidate": candidate, "blockerCode": blocker_code})
 
-    if failed_note:
-      status = "failed"
-      failed_count += 1
-    elif user_applied:
+    if user_applied:
       status = "applied"
       applied_count += len(user_applied)
-    elif user_physical:
-      status = "physical_submission"
-      physical_count += len(user_physical)
+      action_required_count += len(user_action_required)
+    elif user_action_required:
+      status = "action_required"
+      action_required_count += len(user_action_required)
+    elif failed_note:
+      status = "failed"
+      failed_count += 1
     else:
       status = "no_matches"
       no_matches_count += 1
 
     if not args.dry_run:
       try:
-        send_whatsapp_summary(subscriber_phone(subscriber), build_user_summary(date_label, user_applied, user_physical, failed_note))
+        send_whatsapp_summary(subscriber_phone(subscriber), build_user_summary(date_label, user_applied, user_action_required, failed_note))
       except Exception as err:
         if status != "failed":
           status = "failed"
           failed_count += 1
           if user_applied:
             applied_count -= len(user_applied)
-          elif user_physical:
-            physical_count -= len(user_physical)
-          else:
+          if user_action_required:
+            action_required_count -= len(user_action_required)
+          if not user_applied and not user_action_required:
             no_matches_count -= 1
         failed_note = public_text(err)
         users.append({
@@ -1171,7 +1466,7 @@ def cmd_dispatch_jsearch(args: argparse.Namespace) -> dict:
           "status": status,
           "candidateCount": len(candidates),
           "appliedCount": len(user_applied),
-          "physicalCount": len(user_physical),
+          "actionRequiredCount": len(user_action_required),
           "error": failed_note,
         })
         if not args.dry_run:
@@ -1197,7 +1492,7 @@ def cmd_dispatch_jsearch(args: argparse.Namespace) -> dict:
       "language": preference_code(preferences, "language", DEFAULT_JSEARCH_LANGUAGE),
       "candidateCount": len(candidates),
       "appliedCount": len(user_applied),
-      "physicalCount": len(user_physical),
+      "actionRequiredCount": len(user_action_required),
       "status": status,
       "candidates": candidates,
     }
@@ -1207,7 +1502,7 @@ def cmd_dispatch_jsearch(args: argparse.Namespace) -> dict:
       "status": status,
       "candidateCount": len(candidates),
       "appliedCount": len(user_applied),
-      "physicalCount": len(user_physical),
+      "actionRequiredCount": len(user_action_required),
       "artifactPath": artifact_path,
       "error": failed_note,
     })
@@ -1217,7 +1512,8 @@ def cmd_dispatch_jsearch(args: argparse.Namespace) -> dict:
         user_id=user_id,
         status=status,
         applied_count=len(user_applied) if status != "failed" else 0,
-        physical_count=len(user_physical) if status != "failed" else 0,
+        action_required_count=len(user_action_required) if status != "failed" else 0,
+        physical_count=0,
         dispatch_root=args.dispatch_root,
       ))
 
@@ -1227,7 +1523,8 @@ def cmd_dispatch_jsearch(args: argparse.Namespace) -> dict:
       ready_count=ready_count,
       processed_count=processed_count,
       applied_count=applied_count,
-      physical_count=physical_count,
+      action_required_count=action_required_count,
+      physical_count=0,
       failed_count=failed_count,
       no_matches_count=no_matches_count,
       dispatch_root=args.dispatch_root,
@@ -1240,9 +1537,10 @@ def cmd_dispatch_jsearch(args: argparse.Namespace) -> dict:
     "runId": run_id,
     "readyCount": ready_count,
     "processedCount": processed_count,
-    "candidateCount": applied_count + physical_count,
+    "candidateCount": applied_count + action_required_count,
     "appliedCount": applied_count,
-    "physicalCount": physical_count,
+    "actionRequiredCount": action_required_count,
+    "physicalCount": 0,
     "failedCount": failed_count,
     "noMatchesCount": no_matches_count,
     "users": users,
@@ -1275,7 +1573,10 @@ def cmd_record_dispatch_outcome(args: argparse.Namespace) -> dict:
   outcomes[key] = {
     "status": status,
     "appliedCount": count_arg(args.applied_count, "applied-count"),
-    "physicalCount": count_arg(args.physical_count, "physical-count"),
+    "actionRequiredCount": count_arg(
+      getattr(args, "action_required_count", getattr(args, "physical_count", 0)),
+      "action-required-count",
+    ),
     "recordedAt": utc_now(),
   }
   data["updatedAt"] = utc_now()
@@ -1290,7 +1591,10 @@ def cmd_finish_dispatch(args: argparse.Namespace) -> dict:
     "readyCount": count_arg(args.ready_count, "ready-count"),
     "processedCount": count_arg(args.processed_count, "processed-count"),
     "appliedCount": count_arg(args.applied_count, "applied-count"),
-    "physicalCount": count_arg(args.physical_count, "physical-count"),
+    "actionRequiredCount": count_arg(
+      getattr(args, "action_required_count", getattr(args, "physical_count", 0)),
+      "action-required-count",
+    ),
     "failedCount": count_arg(args.failed_count, "failed-count"),
     "noMatchesCount": count_arg(args.no_matches_count, "no-matches-count"),
   }
@@ -1329,7 +1633,7 @@ def cmd_verify_dispatch(args: argparse.Namespace) -> dict:
       errors.append("recorded outcome count does not match processedCount")
     outcome_status_counts = {status: 0 for status in DISPATCH_STATUSES}
     applied_total = 0
-    physical_total = 0
+    action_required_total = 0
     for outcome in outcomes.values():
       status = outcome.get("status")
       if status not in DISPATCH_STATUSES:
@@ -1337,11 +1641,11 @@ def cmd_verify_dispatch(args: argparse.Namespace) -> dict:
         continue
       outcome_status_counts[status] += 1
       applied_total += int(outcome.get("appliedCount", 0))
-      physical_total += int(outcome.get("physicalCount", 0))
+      action_required_total += int(outcome.get("actionRequiredCount", outcome.get("physicalCount", 0)))
     if int(final_counts.get("appliedCount", -1)) != applied_total:
       errors.append("appliedCount does not match recorded outcomes")
-    if int(final_counts.get("physicalCount", -1)) != physical_total:
-      errors.append("physicalCount does not match recorded outcomes")
+    if int(final_counts.get("actionRequiredCount", final_counts.get("physicalCount", -1))) != action_required_total:
+      errors.append("actionRequiredCount does not match recorded outcomes")
     if int(final_counts.get("failedCount", -1)) != outcome_status_counts["failed"]:
       errors.append("failedCount does not match recorded outcomes")
     if int(final_counts.get("noMatchesCount", -1)) != outcome_status_counts["no_matches"]:
@@ -1371,6 +1675,9 @@ def build_parser() -> argparse.ArgumentParser:
   invite.set_defaults(func=cmd_create_invite)
 
   check_runtime = subparsers.add_parser("check-runtime", help="check Job Scout runtime prerequisites")
+  check_runtime.add_argument("--check-browser", action="store_true")
+  check_runtime.add_argument("--check-subscribers", action="store_true")
+  check_runtime.add_argument("--pilot-only", action="store_true")
   check_runtime.set_defaults(func=cmd_check_runtime)
 
   stage = subparsers.add_parser("stage-cv", help="copy an uploaded CV into durable Job Scout storage")
@@ -1399,6 +1706,14 @@ def build_parser() -> argparse.ArgumentParser:
   profile.add_argument("--dry-run", action="store_true")
   profile.set_defaults(func=cmd_save_profile)
 
+  migrate_cvs = subparsers.add_parser("migrate-runtime-cvs", help="move legacy pilot CVs into writable runtime storage")
+  migrate_cvs.add_argument("--legacy-root", type=Path, required=True)
+  migrate_cvs.add_argument("--storage-root", type=Path, default=DEFAULT_STORAGE_ROOT)
+  migrate_cvs.add_argument("--stored-ref-root", type=Path, default=DEFAULT_STORAGE_ROOT)
+  migrate_cvs.add_argument("--pilot-only", action="store_true")
+  migrate_cvs.add_argument("--dry-run", action="store_true")
+  migrate_cvs.set_defaults(func=cmd_migrate_runtime_cvs)
+
   ready = subparsers.add_parser("list-ready", help="list ready Job Scout subscribers")
   ready.add_argument("--limit", type=int, default=10)
   ready.set_defaults(func=cmd_list_ready)
@@ -1411,7 +1726,11 @@ def build_parser() -> argparse.ArgumentParser:
   record.add_argument("--user-id", required=True)
   record.add_argument("--company", required=True)
   record.add_argument("--role", required=True)
-  record.add_argument("--status", choices=["applied", "skipped", "physical_submission", "failed"], required=True)
+  record.add_argument(
+    "--status",
+    choices=["applied", "skipped", "action_required", "physical_submission", "failed"],
+    required=True,
+  )
   record.add_argument("--application-email")
   record.add_argument("--source", default="")
   record.add_argument("--source-url")
@@ -1419,6 +1738,11 @@ def build_parser() -> argparse.ArgumentParser:
   record.add_argument("--message-id")
   record.add_argument("--closing")
   record.add_argument("--match-reason")
+  record.add_argument("--submission-method", choices=["email", "website", "manual"])
+  record.add_argument("--application-url")
+  record.add_argument("--blocker-code")
+  record.add_argument("--attempt-count", type=int)
+  record.add_argument("--evidence", type=json.loads)
   record.add_argument("--replace", action="store_true")
   record.set_defaults(func=cmd_record_application)
 
@@ -1437,6 +1761,7 @@ def build_parser() -> argparse.ArgumentParser:
   dispatch_jsearch.add_argument("--limit-ready", type=int, default=10)
   dispatch_jsearch.add_argument("--max-candidates-per-user", type=int, default=5)
   dispatch_jsearch.add_argument("--dispatch-root", type=Path, default=DEFAULT_DISPATCH_ROOT)
+  dispatch_jsearch.add_argument("--pilot-only", action="store_true")
   dispatch_jsearch.add_argument("--dry-run", action="store_true")
   dispatch_jsearch.set_defaults(func=cmd_dispatch_jsearch)
 
@@ -1451,7 +1776,7 @@ def build_parser() -> argparse.ArgumentParser:
   dispatch_outcome.add_argument("--user-id", required=True)
   dispatch_outcome.add_argument("--status", choices=sorted(DISPATCH_STATUSES), required=True)
   dispatch_outcome.add_argument("--applied-count", type=int, default=0)
-  dispatch_outcome.add_argument("--physical-count", type=int, default=0)
+  dispatch_outcome.add_argument("--action-required-count", type=int, default=0)
   dispatch_outcome.add_argument("--dispatch-root", type=Path, default=DEFAULT_DISPATCH_ROOT)
   dispatch_outcome.set_defaults(func=cmd_record_dispatch_outcome)
 
@@ -1460,7 +1785,7 @@ def build_parser() -> argparse.ArgumentParser:
   finish_dispatch.add_argument("--ready-count", type=int, required=True)
   finish_dispatch.add_argument("--processed-count", type=int, required=True)
   finish_dispatch.add_argument("--applied-count", type=int, required=True)
-  finish_dispatch.add_argument("--physical-count", type=int, required=True)
+  finish_dispatch.add_argument("--action-required-count", type=int, required=True)
   finish_dispatch.add_argument("--failed-count", type=int, required=True)
   finish_dispatch.add_argument("--no-matches-count", type=int, required=True)
   finish_dispatch.add_argument("--dispatch-root", type=Path, default=DEFAULT_DISPATCH_ROOT)

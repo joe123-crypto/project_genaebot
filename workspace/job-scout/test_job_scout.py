@@ -211,6 +211,23 @@ class JSearchTests(unittest.TestCase):
 
     self.assertEqual(filtered, [candidates[3]])
 
+  def test_filter_retries_failed_but_not_historical_manual_records(self) -> None:
+    candidates = [
+      {"company": "A", "role": "Driver", "sourceUrl": "https://a.test", "candidateId": "1"},
+      {"company": "B", "role": "Clerk", "sourceUrl": "https://b.test", "candidateId": "2"},
+    ]
+    applications = [
+      {"company": "A", "role": "Driver", "status": "failed", "attemptCount": 1},
+      {"company": "B", "role": "Clerk", "status": "physical_submission"},
+    ]
+
+    self.assertEqual(job_scout.filter_candidates(candidates, {}, applications, 5), [candidates[0]])
+
+  def test_pilot_filter_applies_allowlist(self) -> None:
+    subscribers = [{"userId": "one"}, {"userId": "two"}]
+    with mock.patch.dict(job_scout.os.environ, {"JOB_SCOUT_PILOT_USER_IDS": "two"}):
+      self.assertEqual(job_scout.restrict_to_pilot(subscribers, True), [subscribers[1]])
+
 
 class JSearchDispatchTests(unittest.TestCase):
   def subscriber(self, auto_apply: bool = True) -> dict:
@@ -238,6 +255,7 @@ class JSearchDispatchTests(unittest.TestCase):
       max_candidates_per_user=5,
       dispatch_root=root,
       dry_run=dry_run,
+      pilot_only=False,
     )
 
   def candidate(self, email: str | None = "hr@example.dz", link: str = "https://jobs.example/apply") -> dict:
@@ -256,7 +274,14 @@ class JSearchDispatchTests(unittest.TestCase):
       "description": "Delivery role.",
     }
 
-  def dispatch_with(self, root: Path, candidates: list[dict], auto_apply: bool = True, send_error: Exception | None = None) -> dict:
+  def dispatch_with(
+    self,
+    root: Path,
+    candidates: list[dict],
+    auto_apply: bool = True,
+    send_error: Exception | None = None,
+    web_result: dict | None = None,
+  ) -> dict:
     subscriber = self.subscriber(auto_apply=auto_apply)
     with (
       mock.patch.object(job_scout, "cmd_list_ready", return_value={"subscribers": [subscriber]}),
@@ -264,6 +289,12 @@ class JSearchDispatchTests(unittest.TestCase):
       mock.patch.object(job_scout, "fetch_jsearch_candidates", return_value=candidates),
       mock.patch.object(job_scout, "jsearch_provider", return_value="rapidapi"),
       mock.patch.object(job_scout, "write_cover_letter", return_value=root / "cover-letter.txt"),
+      mock.patch.object(job_scout, "web_apply_payload", return_value={"applicationUrl": "https://jobs.example/apply"}),
+      mock.patch.object(
+        job_scout,
+        "request_web_application",
+        return_value=web_result or {"outcome": "action_required", "blockerCode": "login_required"},
+      ) as web_apply,
       mock.patch.object(job_scout, "send_whatsapp_summary", return_value={"ok": True}) as whatsapp,
       mock.patch.object(job_scout, "cmd_record_application", return_value={"ok": True}) as record,
     ):
@@ -276,6 +307,7 @@ class JSearchDispatchTests(unittest.TestCase):
     result["_record_calls"] = record.call_args_list
     result["_send_calls"] = send.call_args_list
     result["_whatsapp_calls"] = whatsapp.call_args_list
+    result["_web_calls"] = web_apply.call_args_list
     return result
 
   def test_dispatch_applies_email_candidate_and_records_outcome(self) -> None:
@@ -291,16 +323,35 @@ class JSearchDispatchTests(unittest.TestCase):
       self.assertEqual(record_args.status, "applied")
       self.assertEqual(record_args.source, "jsearch")
 
-  def test_dispatch_records_physical_submission_when_no_email(self) -> None:
+  def test_dispatch_records_action_required_when_site_needs_login(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
       result = self.dispatch_with(Path(tmp), [self.candidate(email=None)])
 
       self.assertEqual(result["appliedCount"], 0)
-      self.assertEqual(result["physicalCount"], 1)
-      self.assertEqual(result["users"][0]["status"], "physical_submission")
+      self.assertEqual(result["actionRequiredCount"], 1)
+      self.assertEqual(result["physicalCount"], 0)
+      self.assertEqual(result["users"][0]["status"], "action_required")
       record_args = result["_record_calls"][0].args[0]
-      self.assertEqual(record_args.status, "physical_submission")
-      self.assertIn("https://jobs.example/apply", record_args.notes)
+      self.assertEqual(record_args.status, "action_required")
+      self.assertEqual(record_args.blocker_code, "login_required")
+
+  def test_dispatch_submits_website_candidate_without_email(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      result = self.dispatch_with(
+        Path(tmp),
+        [self.candidate(email=None)],
+        web_result={
+          "outcome": "submitted",
+          "confirmation": "Application submitted",
+          "evidence": {"finalUrl": "https://jobs.example/done", "filledFields": ["email", "cv"]},
+        },
+      )
+
+      self.assertEqual(result["appliedCount"], 1)
+      self.assertEqual(result["actionRequiredCount"], 0)
+      record_args = result["_record_calls"][0].args[0]
+      self.assertEqual(record_args.status, "applied")
+      self.assertEqual(record_args.submission_method, "website")
 
   def test_dispatch_records_no_matches(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
@@ -331,7 +382,8 @@ class JSearchDispatchTests(unittest.TestCase):
   def test_send_application_email_uses_subscriber_uid_sender_selector(self) -> None:
     subscriber = self.subscriber()
     candidate = self.candidate()
-    with mock.patch.object(job_scout, "run_json_command", return_value={"messageId": "msg-1"}) as run:
+    with mock.patch.object(job_scout, "subscriber_cv_file", return_value="/tmp/cv.pdf"), \
+         mock.patch.object(job_scout, "run_json_command", return_value={"messageId": "msg-1"}) as run:
       result = job_scout.send_application_email(subscriber, candidate, Path("/tmp/cover-letter.txt"))
 
     self.assertEqual(result["messageId"], "msg-1")
@@ -340,6 +392,30 @@ class JSearchDispatchTests(unittest.TestCase):
     self.assertIn("applicant@example.com", command)
     self.assertIn("--sender-uid", command)
     self.assertEqual(command[command.index("--sender-uid") + 1], "user-1")
+
+  def test_migrate_runtime_cvs_copies_and_updates_profile(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      source = root / "legacy" / "oldhash" / "cv.pdf"
+      source.parent.mkdir(parents=True)
+      source.write_bytes(b"pdf")
+      subscriber = self.subscriber()
+      subscriber["cvFileRef"] = "/home/joseph/.openclaw/workspace/job-scout/users/oldhash/cv.pdf"
+      args = argparse.Namespace(
+        legacy_root=root / "legacy",
+        storage_root=root / "runtime",
+        stored_ref_root=root / "runtime",
+        pilot_only=False,
+        dry_run=False,
+      )
+      with mock.patch.object(job_scout, "cmd_list_ready", return_value={"subscribers": [subscriber]}), \
+           mock.patch.object(job_scout, "request_json", return_value={"ok": True}) as request:
+        result = job_scout.cmd_migrate_runtime_cvs(args)
+
+      self.assertEqual(result["migratedCount"], 1)
+      self.assertEqual(result["missingCount"], 0)
+      payload = request.call_args.args[2]
+      self.assertTrue(Path(payload["cvFileRef"]).is_file())
 
   def test_non_zw_subscriber_gets_no_board_sources(self) -> None:
     # The Algeria subscriber (country dz) must never receive Zimbabwe board candidates;

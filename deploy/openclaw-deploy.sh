@@ -169,10 +169,69 @@ ensure_container_running() {
   fi
 }
 
+recreate_boundary_stack() {
+  local docker
+  docker="$(docker_bin)"
+  boundary_active || return 0
+  install -d -o joseph -g joseph -m 0700 /home/joseph/projects/genaebot/runtime/job-scout
+  log "Build and recreate the container stack so bind mounts use the current live-source inode"
+  (cd "$DEPLOY_DIR" && "$docker" compose up -d --build --force-recreate)
+  if ! wait_container_running "$docker" 90 >/dev/null; then
+    die "container $CONTAINER did not become ready after stack recreation"
+  fi
+}
+
+start_optional_job_scout_browser() {
+  local docker token browser_id health attempt
+  docker="$(docker_bin)"
+  boundary_active || return 0
+
+  if ! token="$(
+    cd "$DEPLOY_DIR" && \
+    "$docker" compose --profile job-scout config --format json | \
+    python3 -c 'import json,sys; print(json.load(sys.stdin)["services"]["job-scout-browser"]["environment"].get("JOB_SCOUT_BROWSER_TOKEN", ""))'
+  )"; then
+    log "WARNING: could not resolve optional Job Scout browser configuration; core gateway remains available"
+    return 0
+  fi
+  if [ "${#token}" -lt 32 ]; then
+    log "Job Scout browser not started: JOB_SCOUT_BROWSER_TOKEN is missing or shorter than 32 characters"
+    (cd "$DEPLOY_DIR" && "$docker" compose --profile job-scout stop job-scout-browser >/dev/null 2>&1) || true
+    return 0
+  fi
+  unset token
+
+  log "Build and start optional Job Scout browser"
+  if ! (cd "$DEPLOY_DIR" && "$docker" compose --profile job-scout up -d --build --force-recreate job-scout-browser); then
+    log "WARNING: Job Scout browser failed to build or start; core gateway remains available"
+    (cd "$DEPLOY_DIR" && "$docker" compose --profile job-scout stop job-scout-browser >/dev/null 2>&1) || true
+    return 0
+  fi
+
+  browser_id="$(cd "$DEPLOY_DIR" && "$docker" compose --profile job-scout ps -q job-scout-browser)"
+  for attempt in $(seq 1 18); do
+    health="$("$docker" inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$browser_id" 2>/dev/null || true)"
+    if [ "$health" = "healthy" ]; then
+      log "Job Scout browser is ready"
+      return 0
+    fi
+    if [ "$health" = "unhealthy" ]; then
+      break
+    fi
+    sleep 5
+  done
+  log "WARNING: Job Scout browser is not ready (health=${health:-missing}); pilot activation remains blocked"
+  return 0
+}
+
 syntax_checks() {
   log "Syntax checks"
   node --check "$OC_DIR/workspace/plugins/public-service-gate/index.js"
   node --check "$OC_DIR/workspace/plugins/whatsapp-relevance-gate/index.js"
+  node --test "$OC_DIR/workspace/plugins/public-service-gate/index.test.mjs"
+  node --check "$OC_DIR/workspace/job-scout/web_apply.mjs"
+  node --check "$OC_DIR/workspace/job-scout/web_apply_server.mjs"
+  node --test "$OC_DIR/workspace/job-scout/web_apply.test.mjs"
   local pycache
   pycache="$(mktemp -d)"
   if ! PYTHONPYCACHEPREFIX="$pycache" python3 -m py_compile \
@@ -184,6 +243,7 @@ syntax_checks() {
     "$OC_DIR/workspace/cron/algeria-exhibitions-listener/check_new_events.py" \
     "$OC_DIR/workspace/public-events/event_subscriptions.py" \
     "$OC_DIR/workspace/cron/event-scout-dispatcher/dispatch.py" \
+    "$OC_DIR/workspace/job-scout/job_scout.py" \
     "$OC_DIR/workspace/bin/genaie-calendar" \
     "$OC_DIR/deploy/patch-openclaw-config.py"; then
     rm -rf "$pycache"
@@ -193,18 +253,25 @@ syntax_checks() {
   bash -n "$OC_DIR/workspace/bin/openclaw-cap"
   bash -n "$OC_DIR/workspace/cron/github-issue-tracker/check_issue.sh"
   bash -n "$OC_DIR/workspace/cron/webetu-meals/notify-reservations.sh"
+  bash -n "$OC_DIR/deploy/install-job-scout-pilot.sh"
   python3 -m json.tool "$OC_DIR/config/openclaw.template.json" >/dev/null
+  python3 -m json.tool "$OC_DIR/workspace/job-scout/package.json" >/dev/null
+  python3 -m json.tool "$OC_DIR/workspace/job-scout/package-lock.json" >/dev/null
   python3 -m json.tool "$COMPOSE_OVERRIDE_SRC" >/dev/null 2>&1 || true
   pycache="$(mktemp -d)"
   if ! PYTHONPYCACHEPREFIX="$pycache" python3 -m unittest discover \
     -s "$OC_DIR/deploy" \
-    -p 'test_patch_openclaw_config.py' || \
+    -p 'test_*.py' || \
     ! PYTHONPYCACHEPREFIX="$pycache" python3 -m unittest discover \
       -s "$OC_DIR/workspace/public-events" \
       -p 'test_event_subscriptions.py' || \
     ! PYTHONPYCACHEPREFIX="$pycache" python3 -m unittest discover \
       -s "$OC_DIR/workspace/cron/event-scout-dispatcher" \
-      -p 'test_dispatch.py'; then
+      -p 'test_dispatch.py' || \
+    ! PYTHONPATH="$OC_DIR/workspace/lib:$OC_DIR/workspace/account-link" \
+      PYTHONPYCACHEPREFIX="$pycache" python3 -m unittest discover \
+      -s "$OC_DIR/workspace/job-scout" \
+      -p 'test_job_scout.py'; then
     rm -rf "$pycache"
     return 1
   fi
@@ -215,7 +282,8 @@ stage_source() {
   require_file "$COMPOSE_OVERRIDE_SRC"
   require_file "$ENTRYPOINT_SRC"
   log "Stage curated source into $STAGE_DIR"
-  rm -rf "$STAGE_DIR"
+  # Keep the live-source root inode stable. Docker bind mounts keep pointing at
+  # the old inode when this directory is deleted and recreated.
   mkdir -p "$STAGE_DIR/workspace" "$STAGE_DIR/agent-workspace" "$STAGE_DIR/config" "$STAGE_DIR/deploy"
 
   rsync -a --delete \
@@ -245,6 +313,9 @@ stage_source() {
     --include='/webetu-preferences/***' \
     --include='/job-scout/' \
     --include='/job-scout/*.py' \
+    --include='/job-scout/*.mjs' \
+    --include='/job-scout/package.json' \
+    --include='/job-scout/package-lock.json' \
     --include='/job-scout/scrapers/' \
     --include='/job-scout/scrapers/***' \
     --include='/cron/***' \
@@ -261,7 +332,8 @@ stage_source() {
   rsync -a --delete "$OC_DIR/deploy/agent-workspace/" "$STAGE_DIR/agent-workspace/"
   install -m 0644 "$OC_DIR/config/openclaw.template.json" "$STAGE_DIR/config/openclaw.template.json"
   install -m 0755 "$OC_DIR/deploy/patch-openclaw-config.py" "$STAGE_DIR/deploy/patch-openclaw-config.py"
-  if [ "$APPLY_CONTAINER_BOUNDARY" = "1" ]; then
+  install -m 0644 "$OC_DIR/deploy/job-scout-browser.Dockerfile" "$STAGE_DIR/deploy/job-scout-browser.Dockerfile"
+  if [ "$APPLY_CONTAINER_BOUNDARY" = "1" ] || boundary_active; then
     log "Install Docker Compose override with container read/write boundary"
     install -m 0644 "$COMPOSE_OVERRIDE_SRC" "$COMPOSE_OVERRIDE_DST"
   else
@@ -320,6 +392,8 @@ def source_for_stage(rel: str) -> str | None:
     if rel == "config/openclaw.template.json":
         return rel
     if rel == "deploy/patch-openclaw-config.py":
+        return rel
+    if rel == "deploy/job-scout-browser.Dockerfile":
         return rel
     return None
 
@@ -381,6 +455,8 @@ require_staged_workspace_files() {
   for path in \
     "$STAGE_DIR/workspace/bin/job-scout" \
     "$STAGE_DIR/workspace/job-scout/job_scout.py" \
+    "$STAGE_DIR/workspace/job-scout/web_apply_server.mjs" \
+    "$STAGE_DIR/deploy/job-scout-browser.Dockerfile" \
     "$STAGE_DIR/workspace/job-scout/scrapers/__init__.py"; do
     if [ ! -f "$path" ]; then
       printf 'missing required staged workspace file: %s\n' "$path" >&2
@@ -553,7 +629,17 @@ expected = ["AGENTS.md", "COMMANDS.md", "README.md", "data", "files"]
 missing = [name for name in expected if not (root / name).exists()]
 if missing:
     raise SystemExit(f"agent-workspace missing: {', '.join(missing)}")
+
+job_scout = Path("/home/joseph/.openclaw/workspace/bin/job-scout")
+if not job_scout.is_file():
+    raise SystemExit("read-only workspace mount is missing bin/job-scout")
+runtime = Path("/home/joseph/.openclaw/runtime/job-scout")
+runtime.mkdir(parents=True, exist_ok=True)
+probe = runtime / ".deploy-write-check"
+probe.write_text("ok\n", encoding="utf-8")
+probe.unlink()
 PY
+
 }
 
 main() {
@@ -564,11 +650,13 @@ main() {
   syntax_checks
   stage_source
   "$OC_DIR/deploy/check-openclaw-mirror.sh" --strict
+  recreate_boundary_stack
   ensure_container_running
   sync_source_to_container
   apply_config_template
   verify_live_workspace
   restart_and_check
+  start_optional_job_scout_browser
   log "Deploy complete. Review Git diff and commit/push manually when ready."
 }
 

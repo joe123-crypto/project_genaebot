@@ -1,5 +1,9 @@
 services:
   openclaw:
+    environment:
+      JOB_SCOUT_WEB_APPLY_URL: http://job-scout-browser:8787/apply
+      JOB_SCOUT_BROWSER_TOKEN: ${JOB_SCOUT_BROWSER_TOKEN:-}
+      JOB_SCOUT_PILOT_USER_IDS: ${JOB_SCOUT_PILOT_USER_IDS:-}
     volumes:
       # Developer-owned source/context. Staged into ~/openclaw-deploy/live-source
       # because snap Docker cannot reliably read hidden home directories.
@@ -26,3 +30,30 @@ services:
       - ./live-source/workspace/MEMORY.md:/home/joseph/.openclaw/agent-workspace/MEMORY.md:ro
       - ./live-source/workspace/README.md:/home/joseph/.openclaw/agent-workspace/README.md:ro
       - ./live-source/agent-workspace/COMMANDS.md:/home/joseph/.openclaw/agent-workspace/COMMANDS.md:ro
+
+  job-scout-browser:
+    profiles:
+      - job-scout
+    build:
+      context: ./live-source
+      dockerfile: deploy/job-scout-browser.Dockerfile
+    image: genaie-job-scout-browser:1.0.0
+    restart: unless-stopped
+    environment:
+      JOB_SCOUT_BROWSER_PORT: "8787"
+      JOB_SCOUT_BROWSER_TOKEN: ${JOB_SCOUT_BROWSER_TOKEN:-}
+    user: pwuser
+    read_only: true
+    cap_drop:
+      - ALL
+    shm_size: 1gb
+    tmpfs:
+      - /tmp:size=256m,uid=1001,gid=1001,mode=1770
+    volumes:
+      - /home/joseph/projects/genaebot/runtime/job-scout:/home/joseph/.openclaw/runtime/job-scout:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 60s
+      timeout: 20s
+      retries: 3
+      start_period: 30s

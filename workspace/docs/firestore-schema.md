@@ -451,7 +451,16 @@ Use deterministic `applicationId = sha256(userId + company + role)` to prevent d
   role: string,
   applicationEmail: string | null,
   source: string,
-  status: "applied" | "skipped" | "physical_submission" | "failed",
+  status: "applied" | "skipped" | "action_required" | "physical_submission" | "failed",
+  submissionMethod: "email" | "website" | "manual" | null,
+  applicationUrl: string | null,
+  blockerCode: string | null,
+  attemptCount: number,
+  lastAttemptAt: Timestamp | null,
+  evidence: {
+    finalUrl: string | null,
+    filledFields: string[]
+  },
   appliedAt: Timestamp | null,
   createdAt: Timestamp,
   updatedAt: Timestamp,
@@ -464,6 +473,9 @@ Rules:
 - Applicant email/name come from `users/{userId}.profile` at apply time.
 - Do not ask a signed-in user for a separate application email.
 - If sending email, use `gmailConnections/{userId}` or another explicitly connected sender.
+- Set `applied` only after Gmail returns a message ID or the browser worker detects a submission confirmation.
+- Use `action_required` for login, CAPTCHA, unknown required questions, declarations, payment requests, and unsupported forms. `physical_submission` is retained only for historical compatibility.
+- Retry only `failed` records, up to `attemptCount === 3`; all successful, skipped, historical, and action-required records are terminal until an operator explicitly replaces them.
 
 ## Cron
 
