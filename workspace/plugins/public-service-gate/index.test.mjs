@@ -8,6 +8,7 @@ import plugin, { createLimiter, inviteLinkText, isQueueFullError, runJsonCommand
 import { accountLinkRequiredText } from "./lib/account-link.js";
 import { busyReply } from "./lib/runtime.js";
 import { handleEventScoutRequest } from "./services/event-scout.js";
+import { handleJobScoutRequest } from "./services/job-scout.js";
 
 const MEMBER = "+233208864185";
 const UNKNOWN = "+19995550123";
@@ -48,6 +49,7 @@ esac
               enabled: true,
               publicUsers: [MEMBER],
               invitesEnabled: true,
+              jobScoutOnboardingEnabled: true,
               serviceStatePath,
               ...effectiveConfig,
             },
@@ -115,6 +117,12 @@ esac
   };
   return dispatch;
 }
+
+test("job scout onboarding stays closed unless explicitly enabled", async () => {
+  const reply = await handleJobScoutRequest({ pluginConfig: { jobScoutOnboardingEnabled: false } }, UNKNOWN);
+  assert.equal(reply.handled, true);
+  assert.match(reply.text, /existing pilot users/i);
+});
 
 function eventFor(text, sender = MEMBER) {
   return {

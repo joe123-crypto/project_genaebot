@@ -223,7 +223,7 @@ If the user gives many details, use repeated flags. The helper keeps the CV in t
 After saving, reply:
 
 ```text
-Your Job Scout profile is saved. Make sure Gmail shows Connected in the app.
+Your Job Scout profile is saved. Make sure Gmail shows Connected in the app. When automatic applications are enabled, I can send email applications and submit straightforward website forms. If a site needs a login, CAPTCHA, payment, declaration, or an answer only you can provide, I'll send you the link instead.
 ```
 
 ## Verify Ready Users
@@ -232,7 +232,7 @@ Your Job Scout profile is saved. Make sure Gmail shows Connected in the app.
 /home/joseph/.openclaw/workspace/bin/job-scout list-ready
 ```
 
-This lists only users who have an active Job Scout profile, linked WhatsApp chat, CV reference, and connected Gmail sender.
+This lists only users who have an active Job Scout profile, linked WhatsApp chat, CV reference, and connected Gmail sender. A pilot user is dispatch-ready only when the referenced CV exists under `/home/joseph/.openclaw/runtime/job-scout/users`.
 
 ## Failure Handling
 
