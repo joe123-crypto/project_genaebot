@@ -10,7 +10,7 @@ ALERT_TO="${JOB_SCOUT_FAILURE_ALERT_TO:-+213563719936}"
 COMMAND_ARGV='["/home/joseph/.openclaw/workspace/bin/job-scout","dispatch-jsearch","--pilot-only"]'
 
 job_scout=("$DOCKER" exec -u joseph "$CONTAINER" /home/joseph/.openclaw/workspace/bin/job-scout)
-openclaw=("$DOCKER" exec -u joseph "$CONTAINER" openclaw)
+openclaw=("$DOCKER" exec -u joseph "$CONTAINER" sh -lc 'exec env -u OPENCLAW_HOME OPENCLAW_GATEWAY_TOKEN="$GATEWAY_AUTH_TOKEN" openclaw "$@"' openclaw)
 
 if ! "$DOCKER" exec "$CONTAINER" sh -lc '[ "${#JOB_SCOUT_BROWSER_TOKEN}" -ge 32 ]'; then
   printf 'ERROR: JOB_SCOUT_BROWSER_TOKEN is missing from the gateway or shorter than 32 characters.\n' >&2
