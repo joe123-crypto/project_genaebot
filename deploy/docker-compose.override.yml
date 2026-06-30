@@ -42,13 +42,15 @@ services:
     environment:
       JOB_SCOUT_BROWSER_PORT: "8787"
       JOB_SCOUT_BROWSER_TOKEN: ${JOB_SCOUT_BROWSER_TOKEN:-}
-    user: pwuser
+    # Match the host owner of runtime/job-scout so the worker can read private
+    # CV and generated cover-letter files without making them world-readable.
+    user: ubuntu
     read_only: true
     cap_drop:
       - ALL
     shm_size: 1gb
     tmpfs:
-      - /tmp:size=256m,uid=1001,gid=1001,mode=1770
+      - /tmp:size=256m,uid=1000,gid=1000,mode=1770
     volumes:
       - /home/joseph/projects/genaebot/runtime/job-scout:/home/joseph/.openclaw/runtime/job-scout:ro
     healthcheck:

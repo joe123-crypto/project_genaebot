@@ -393,6 +393,24 @@ class JSearchDispatchTests(unittest.TestCase):
     self.assertIn("--sender-uid", command)
     self.assertEqual(command[command.index("--sender-uid") + 1], "user-1")
 
+  def test_send_whatsapp_summary_uses_gateway_state_and_token(self) -> None:
+    with mock.patch.dict(job_scout.os.environ, {
+      "OPENCLAW_HOME": "/home/joseph/.openclaw",
+      "GATEWAY_AUTH_TOKEN": "gateway-token",
+      "KEEP_ME": "yes",
+    }, clear=True), mock.patch.object(
+      job_scout,
+      "run_json_command",
+      return_value={"messageId": "wa-1"},
+    ) as run:
+      result = job_scout.send_whatsapp_summary("+263700000000", "Job Scout update")
+
+    self.assertEqual(result["messageId"], "wa-1")
+    command_env = run.call_args.kwargs["env"]
+    self.assertNotIn("OPENCLAW_HOME", command_env)
+    self.assertEqual(command_env["OPENCLAW_GATEWAY_TOKEN"], "gateway-token")
+    self.assertEqual(command_env["KEEP_ME"], "yes")
+
   def test_migrate_runtime_cvs_copies_and_updates_profile(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
       root = Path(tmp)

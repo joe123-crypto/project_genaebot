@@ -1010,7 +1010,7 @@ def parse_json_output(output: str) -> dict:
   return data if isinstance(data, dict) else {}
 
 
-def run_json_command(command: list[str], timeout: int = 90) -> dict:
+def run_json_command(command: list[str], timeout: int = 90, env: dict[str, str] | None = None) -> dict:
   try:
     completed = subprocess.run(
       command,
@@ -1018,6 +1018,7 @@ def run_json_command(command: list[str], timeout: int = 90) -> dict:
       capture_output=True,
       text=True,
       timeout=timeout,
+      env=env,
     )
   except (OSError, subprocess.TimeoutExpired) as err:
     raise RuntimeError(public_text(err, 240)) from err
@@ -1052,6 +1053,11 @@ def send_application_email(subscriber: dict, candidate: dict, cover_letter: Path
 
 
 def send_whatsapp_summary(phone: str, message: str) -> dict:
+  command_env = os.environ.copy()
+  command_env.pop("OPENCLAW_HOME", None)
+  gateway_token = command_env.get("GATEWAY_AUTH_TOKEN", "").strip()
+  if gateway_token:
+    command_env["OPENCLAW_GATEWAY_TOKEN"] = gateway_token
   return run_json_command([
     str(OPENCLAW_BIN),
     "message",
@@ -1063,7 +1069,7 @@ def send_whatsapp_summary(phone: str, message: str) -> dict:
     "--message",
     message,
     "--json",
-  ])
+  ], env=command_env)
 
 
 def result_message_id(result: dict) -> str | None:
