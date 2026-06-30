@@ -19,6 +19,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from country_codes import country_code, country_name
+
 
 WORKSPACE = Path("/home/joseph/.openclaw/workspace")
 RUNTIME_ROOT = Path(os.environ.get("JOB_SCOUT_RUNTIME_ROOT", "/home/joseph/.openclaw/runtime/job-scout"))
@@ -191,6 +193,145 @@ def clean_items(values: list[str] | None) -> list[str]:
     seen.add(key)
     output.append(text)
   return output
+
+
+def resolve_preferred_locations(values: list[str] | None) -> dict:
+  locations = clean_items(values)
+  if not locations:
+    raise SystemExit("preferred location is required")
+
+  codes: set[str] = set()
+  for location in locations:
+    locality, separator, country_value = location.rpartition(",")
+    locality = locality.strip()
+    country_value = country_value.strip()
+    if not separator or not locality or not country_value:
+      raise SystemExit(
+        f'Preferred location must include the country, for example "Bindura, Zimbabwe": {location}'
+      )
+    code = country_code(country_value)
+    if not code:
+      raise SystemExit(f"Preferred location country is not recognized: {country_value}")
+    codes.add(code)
+
+  if len(codes) != 1:
+    countries = ", ".join(sorted(country_name(code) for code in codes))
+    raise SystemExit(
+      f"Preferred locations must be in one country because Job Scout uses one country filter: {countries}"
+    )
+
+  code = next(iter(codes))
+  return {
+    "locations": locations,
+    "country": code,
+    "countryName": country_name(code),
+  }
+
+
+def normalize_stored_locations(
+  values: list[str] | None,
+  stored_country: str | None = None,
+) -> dict:
+  locations = clean_items(values)
+  if not locations:
+    return {"locations": [], "country": None}
+
+  stored_code = None
+  if str(stored_country or "").strip():
+    stored_code = country_code(stored_country)
+    if not stored_code:
+      raise SystemExit(f"Stored search country is not recognized: {stored_country}")
+
+  normalized: list[str] = []
+  codes: set[str] = set()
+  for location in locations:
+    if "," in location:
+      resolved = resolve_preferred_locations([location])
+      code = str(resolved["country"])
+      normalized.append(location)
+    else:
+      inferred_code = country_code(location)
+      if inferred_code:
+        code = inferred_code
+        normalized.append(f"Nationwide, {country_name(code)}")
+      else:
+        if not stored_code:
+          raise SystemExit(
+            f"Stored preferred location needs a valid country before it can be normalized: {location}"
+          )
+        code = stored_code
+        normalized.append(f"{location}, {country_name(code)}")
+    codes.add(code)
+
+  if len(codes) != 1:
+    countries = ", ".join(sorted(country_name(code) for code in codes))
+    raise SystemExit(
+      f"Preferred locations must be in one country because Job Scout uses one country filter: {countries}"
+    )
+
+  code = next(iter(codes))
+  if stored_code and stored_code != code:
+    raise SystemExit(
+      f"Stored search country {stored_code} conflicts with preferred location country {code}"
+    )
+  return {"locations": clean_items(normalized), "country": code}
+
+
+def resolved_profile_country(
+  locations: list[str],
+  explicit_country: str | None = None,
+  fallback_country: str | None = None,
+) -> str:
+  if locations:
+    resolved = resolve_preferred_locations(locations)
+    derived = str(resolved["country"])
+    if explicit_country:
+      supplied = country_code(explicit_country)
+      if not supplied:
+        raise SystemExit(f"Search country is not recognized: {explicit_country}")
+      if supplied != derived:
+        raise SystemExit(
+          f"Search country {supplied} conflicts with preferred location country {derived}"
+        )
+    return derived
+
+  supplied_value = explicit_country or fallback_country or DEFAULT_JSEARCH_COUNTRY
+  supplied = country_code(supplied_value)
+  if not supplied:
+    raise SystemExit(f"Search country is not recognized: {supplied_value}")
+  return supplied
+
+
+def resolve_profile_locations(
+  stored_locations: list[str] | None,
+  submitted_locations: list[str] | None = None,
+  explicit_country: str | None = None,
+  stored_country: str | None = None,
+) -> dict:
+  stored = normalize_stored_locations(stored_locations, stored_country)
+  submitted_values = clean_items(submitted_locations)
+  submitted = resolve_preferred_locations(submitted_values) if submitted_values else None
+
+  codes = {
+    str(resolved["country"])
+    for resolved in (stored, submitted)
+    if resolved and resolved.get("country")
+  }
+  if len(codes) != 1 and codes:
+    countries = ", ".join(sorted(country_name(code) for code in codes))
+    raise SystemExit(
+      f"Preferred locations must be in one country because Job Scout uses one country filter: {countries}"
+    )
+
+  locations = clean_items([
+    *stored["locations"],
+    *(submitted["locations"] if submitted else []),
+  ])
+  if codes:
+    country = resolved_profile_country(locations, explicit_country)
+  else:
+    country = resolved_profile_country([], explicit_country, stored_country)
+  return {"locations": locations, "country": country}
 
 
 def profile_values(profile: dict, key: str) -> list[str]:
@@ -735,11 +876,17 @@ def cmd_save_profile(args: argparse.Namespace) -> dict:
     if args.max_applications_per_run is not None
     else base.get("maxApplicationsPerRun", 2)
   )
+  resolved_locations = resolve_profile_locations(
+    profile_values(base, "locations"),
+    args.location,
+    args.country,
+    base.get("country"),
+  )
   preferences = {
     **base,
     "targetRoles": clean_items([*profile_values(base, "targetRoles"), *(args.target_role or [])]),
-    "locations": clean_items([*profile_values(base, "locations"), *(args.location or [])]),
-    "country": args.country or base.get("country") or DEFAULT_JSEARCH_COUNTRY,
+    "locations": resolved_locations["locations"],
+    "country": resolved_locations["country"],
     "language": args.language or base.get("language") or DEFAULT_JSEARCH_LANGUAGE,
     "qualifications": clean_items([*profile_values(base, "qualifications"), *(args.qualification or [])]),
     "experience": clean_items([*profile_values(base, "experience"), *(args.experience or [])]),
@@ -839,11 +986,17 @@ def cmd_record_application(args: argparse.Namespace) -> dict:
 
 def cmd_fetch_candidates(args: argparse.Namespace) -> dict:
   base = load_profile_json(args.profile_json)
+  resolved_locations = resolve_profile_locations(
+    profile_values(base, "locations"),
+    args.location,
+    args.country,
+    base.get("country"),
+  )
   preferences = {
     **base,
     "targetRoles": clean_items([*profile_values(base, "targetRoles"), *(args.target_role or [])]),
-    "locations": clean_items([*profile_values(base, "locations"), *(args.location or [])]),
-    "country": args.country or base.get("country") or DEFAULT_JSEARCH_COUNTRY,
+    "locations": resolved_locations["locations"],
+    "country": resolved_locations["country"],
     "language": args.language or base.get("language") or DEFAULT_JSEARCH_LANGUAGE,
     "exclusions": clean_items([*profile_values(base, "exclusions"), *(args.exclusion or [])]),
     "maxApplicationsPerRun": args.limit,
@@ -861,6 +1014,11 @@ def cmd_fetch_candidates(args: argparse.Namespace) -> dict:
     "candidateCount": len(candidates),
     "candidates": candidates,
   }
+
+
+def cmd_resolve_location(args: argparse.Namespace) -> dict:
+  resolved = resolve_preferred_locations(args.location)
+  return {"ok": True, **resolved}
 
 
 def write_candidate_artifact(root: Path, run_id: str, user_id: str, data: dict) -> str:
@@ -1685,6 +1843,13 @@ def build_parser() -> argparse.ArgumentParser:
   check_runtime.add_argument("--check-subscribers", action="store_true")
   check_runtime.add_argument("--pilot-only", action="store_true")
   check_runtime.set_defaults(func=cmd_check_runtime)
+
+  resolve_location = subparsers.add_parser(
+    "resolve-location",
+    help="validate preferred locations and derive their ISO country code",
+  )
+  resolve_location.add_argument("--location", action="append", required=True)
+  resolve_location.set_defaults(func=cmd_resolve_location)
 
   stage = subparsers.add_parser("stage-cv", help="copy an uploaded CV into durable Job Scout storage")
   stage.add_argument("--phone", required=True)

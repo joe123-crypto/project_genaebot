@@ -34,6 +34,7 @@ PYTHONPYCACHEPREFIX="$pycache" python3 -m py_compile \
   "$OC_DIR/workspace/public-events/event_subscriptions.py" \
   "$OC_DIR/workspace/cron/event-scout-dispatcher/dispatch.py" \
   "$OC_DIR/workspace/job-scout/job_scout.py" \
+  "$OC_DIR/workspace/job-scout/country_codes.py" \
   "$OC_DIR/workspace/job-scout/scrapers/__init__.py" \
   "$OC_DIR/workspace/job-scout/scrapers/base.py" \
   "$OC_DIR/workspace/job-scout/scrapers/iharare.py" \
