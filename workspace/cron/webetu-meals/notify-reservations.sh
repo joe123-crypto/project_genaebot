@@ -39,6 +39,10 @@ ADMIN_TARGET="${WEBETU_ADMIN_TARGET:-+213563719936}"
 DRY_RUN="${WEBETU_NOTIFY_DRY_RUN:-0}"
 HEARTBEAT_SECONDS="${WEBETU_NOTIFY_HEARTBEAT_SECONDS:-10}"
 WORKER_STEP_TIMEOUT_SECONDS="${WEBETU_WORKER_STEP_TIMEOUT_SECONDS:-90}"
+REGISTRATION_MAX_ATTEMPTS="${WEBETU_REGISTRATION_MAX_ATTEMPTS:-3}"
+RESERVATION_MAX_ATTEMPTS="${WEBETU_RESERVATION_MAX_ATTEMPTS:-2}"
+FIRST_RETRY_DELAY_SECONDS="${WEBETU_FIRST_RETRY_DELAY_SECONDS:-30}"
+SECOND_RETRY_DELAY_SECONDS="${WEBETU_SECOND_RETRY_DELAY_SECONDS:-60}"
 USER_FAILURE_MESSAGE="${WEBETU_USER_FAILURE_MESSAGE:-I couldn't complete today's Webetu meal reservation automatically. Please reserve manually today.}"
 BROAD_FAILURE_NOTICE_ALLOWED="${WEBETU_ALLOW_BROAD_FAILURE_NOTICE:-0}"
 
@@ -157,6 +161,83 @@ run_worker_capture() {
   elapsed=$((now - started_at))
   log "worker done step=$step rc=$rc elapsed_seconds=$elapsed"
   return "$rc"
+}
+
+retry_delay_seconds() {
+  local failed_attempt="$1"
+
+  if [ "$failed_attempt" -le 1 ]; then
+    printf '%s\n' "$FIRST_RETRY_DELAY_SECONDS"
+    return
+  fi
+  printf '%s\n' "$SECOND_RETRY_DELAY_SECONDS"
+}
+
+is_transient_worker_failure() {
+  local rc="$1"
+  local output_file="$2"
+
+  if [ "$rc" -eq 124 ]; then
+    return 0
+  fi
+
+  grep -Eiq \
+    'temporary failure in name resolution|name or service not known|network is unreachable|connection (timed out|timeout|reset|refused|aborted)|timed out|timeout|temporar(y|ily) unavailable|service unavailable|remote end closed|remote disconnected|broken pipe|http[^0-9]*(408|429|5[0-9][0-9])|status code[^0-9]*(408|429|5[0-9][0-9])' \
+    "$output_file"
+}
+
+run_registration_capture() {
+  local output_file="$1"
+  shift
+
+  local attempt=1 rc delay
+  while [ "$attempt" -le "$REGISTRATION_MAX_ATTEMPTS" ]; do
+    if run_worker_capture "list-registrations attempt=$attempt/$REGISTRATION_MAX_ATTEMPTS" "$output_file" "$@"; then
+      return 0
+    else
+      rc=$?
+    fi
+
+    if [ "$attempt" -ge "$REGISTRATION_MAX_ATTEMPTS" ]; then
+      log "worker retry exhausted step=list-registrations attempts=$attempt rc=$rc"
+      return "$rc"
+    fi
+
+    delay="$(retry_delay_seconds "$attempt")"
+    log "worker retry step=list-registrations failed_attempt=$attempt/$REGISTRATION_MAX_ATTEMPTS rc=$rc reason=lookup_failure delay_seconds=$delay"
+    sleep "$delay"
+    attempt=$((attempt + 1))
+  done
+}
+
+run_reservation_capture() {
+  local step="$1"
+  local output_file="$2"
+  shift 2
+
+  local attempt=1 rc delay
+  while [ "$attempt" -le "$RESERVATION_MAX_ATTEMPTS" ]; do
+    if run_worker_capture "$step attempt=$attempt/$RESERVATION_MAX_ATTEMPTS" "$output_file" "$@"; then
+      return 0
+    else
+      rc=$?
+    fi
+
+    if ! is_transient_worker_failure "$rc" "$output_file"; then
+      log "worker retry skipped step=$step attempt=$attempt/$RESERVATION_MAX_ATTEMPTS rc=$rc reason=permanent_failure"
+      return "$rc"
+    fi
+
+    if [ "$attempt" -ge "$RESERVATION_MAX_ATTEMPTS" ]; then
+      log "worker retry exhausted step=$step attempts=$attempt rc=$rc reason=transient_failure"
+      return "$rc"
+    fi
+
+    delay="$(retry_delay_seconds "$attempt")"
+    log "worker retry step=$step failed_attempt=$attempt/$RESERVATION_MAX_ATTEMPTS rc=$rc reason=transient_failure delay_seconds=$delay"
+    sleep "$delay"
+    attempt=$((attempt + 1))
+  done
 }
 
 run_openclaw() {
@@ -416,7 +497,7 @@ send_failure_notices() {
 
   local registrations_file
   registrations_file="$(mktemp)"
-  if ! run_worker_capture "failure-notice list-registrations" "$registrations_file" list-registrations; then
+  if ! run_registration_capture "$registrations_file" list-registrations; then
     rm -f "$registrations_file"
     fail_system "Failed to list users for Webetu failure notices."
     return 1
@@ -531,11 +612,11 @@ main() {
     return 1
   fi
 
-  log "started dates=${dates[*]} dry_run=$DRY_RUN worker_mode=$WORKER_MODE heartbeat_seconds=$HEARTBEAT_SECONDS worker_step_timeout_seconds=$WORKER_STEP_TIMEOUT_SECONDS"
+  log "started dates=${dates[*]} dry_run=$DRY_RUN worker_mode=$WORKER_MODE heartbeat_seconds=$HEARTBEAT_SECONDS worker_step_timeout_seconds=$WORKER_STEP_TIMEOUT_SECONDS registration_max_attempts=$REGISTRATION_MAX_ATTEMPTS reservation_max_attempts=$RESERVATION_MAX_ATTEMPTS"
 
   local registrations_file
   registrations_file="$(mktemp)"
-  if ! run_worker_capture "list-registrations" "$registrations_file" list-registrations; then
+  if ! run_registration_capture "$registrations_file" list-registrations; then
     rm -f "$registrations_file"
     fail_system "Failed to list onboarded Webetu users."
     return 1
@@ -596,7 +677,7 @@ main() {
       if [ "$DRY_RUN" = "1" ]; then
         reserve_args+=(--dry-run)
       fi
-      if run_worker_capture "reserve user=$user_id phone_hash=$phone_hash source=$source date=$date" "$result_file" "${reserve_args[@]}"; then
+      if run_reservation_capture "reserve user=$user_id phone_hash=$phone_hash source=$source date=$date" "$result_file" "${reserve_args[@]}"; then
         rc=0
       else
         rc=$?
