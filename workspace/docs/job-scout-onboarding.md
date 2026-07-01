@@ -35,7 +35,7 @@ User signs in to Agent Genaie with their email
 Setup link binds this WhatsApp chat to that app user
 User connects Gmail in the app
 Agent asks whether the user wants guided questions or CV autofill
-Agent collects target roles, target locations, and other details gradually, one or two questions per message
+Agent collects target roles, a preferred location that includes its country, and other details gradually, one or two questions per message
 Agent summarizes the profile and asks for corrections
 Agent sends scam warning and requires acknowledgement
 Agent saves profile through job-scout helper
@@ -108,7 +108,7 @@ Ask one or two questions per message, then wait for the user to answer before as
 Recommended order:
 
 1. What kind of jobs should I look for?
-2. Which city, area, or country should I target?
+2. Which city or area should I search? Include the country so I target the right place, for example: Bindura, Zimbabwe.
 3. What qualifications or certificates do you have?
 4. What work experience should I mention?
 5. What skills should I mention in applications?
@@ -121,8 +121,8 @@ If the user already answered some of these, do not ask again. Ask only for missi
 Friendly field mapping:
 
 - Jobs to look for -> `--target-role` (repeat for multiple roles)
-- Preferred city, area, or country -> `--location` (repeat for multiple locations)
-- Search country -> `--country` (default `dz` for Algeria)
+- Preferred city or area plus country -> `--location` in `City or area, Country` format (repeat only for locations in the same country)
+- Search country -> derived by `resolve-location`; Algeria (`dz`) remains the fallback only when no location is supplied outside onboarding
 - Search language -> `--language` (default `fr` for French)
 - Qualifications or certificates -> `--qualification`
 - Work experience -> `--experience`
@@ -140,6 +140,15 @@ When the user uploads the CV, immediately stage it into durable Job Scout storag
 ```
 
 Use the returned `cvFileRef` for later extraction and saving. Do not mention internal file paths to the user.
+
+Before confirming or saving the profile, validate every preferred location:
+
+```bash
+/home/joseph/.openclaw/workspace/bin/job-scout resolve-location \
+  --location "Bindura, Zimbabwe"
+```
+
+If validation fails, ask the user to restate the location with its country. Do not guess the country or silently use the Algeria fallback. Multiple locations must resolve to the same country because JSearch accepts one country filter.
 
 ## CV Autofill Flow
 
@@ -209,8 +218,7 @@ After the user has provided enough details, uploaded a CV, confirmed the summary
   --phone "<whatsapp phone>" \
   --cv "<cvFileRef returned by stage-cv>" \
   --target-role "General worker" \
-  --location "Algiers" \
-  --country dz \
+  --location "Algiers, Algeria" \
   --language fr \
   --qualification "O Level Mathematics and English" \
   --experience "General work" \

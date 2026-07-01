@@ -12,7 +12,7 @@ Usage:
   openclaw-cap account-link <create-invite|status> [args...]
   openclaw-cap public-news <register|disable|list-enabled|record-delivery> [args...]
   openclaw-cap public-events <register|disable|get|list-enabled|mark-synced|record-offers|clear-pending|record-delivery> [args...]
-  openclaw-cap job-scout <create-invite|stage-cv|save-profile|list-ready> [args...]
+  openclaw-cap job-scout <create-invite|resolve-location|stage-cv|save-profile|list-ready> [args...]
   openclaw-cap cron run <algeria-exhibitions|github-issue-tracker|webetu-meals> [--dry-run]
   openclaw-cap webetu <lookup-user|check-credentials|reserve> --phone <phone> [--dry-run]
   openclaw-cap webetu-preferences <list-restaurants|get|set-default|set-override> [args...]
@@ -92,7 +92,7 @@ cmd_public_events() {
 cmd_job_scout() {
   [ "$#" -ge 1 ] || die "job-scout requires a subcommand"
   case "$1" in
-    create-invite|stage-cv|save-profile|list-ready)
+    create-invite|resolve-location|stage-cv|save-profile|list-ready)
       ensure_runtime
       export OPENCLAW_PENDING_LINKS_PATH="$RUNTIME/account-link/pending-links.json"
       exec "$WORKSPACE/bin/job-scout" "$@"

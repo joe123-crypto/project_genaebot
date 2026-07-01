@@ -104,7 +104,7 @@ class CvStagingTests(unittest.TestCase):
         storage_root=storage,
         profile_json=None,
         target_role=["General worker"],
-        location=["Harare"],
+        location=["Harare, Zimbabwe"],
         country=None,
         language=None,
         qualification=None,
@@ -122,8 +122,147 @@ class CvStagingTests(unittest.TestCase):
       self.assertTrue(result["dryRun"])
       self.assertEqual(result["cvFileRef"], staged["cvFileRef"])
       self.assertEqual(result["preferences"]["targetRoles"], ["General worker"])
-      self.assertEqual(result["preferences"]["country"], "dz")
+      self.assertEqual(result["preferences"]["country"], "zw")
       self.assertEqual(result["preferences"]["language"], "fr")
+
+
+class PreferredLocationTests(unittest.TestCase):
+  def test_resolves_country_from_location_suffix(self) -> None:
+    self.assertEqual(
+      job_scout.resolve_preferred_locations(["Bindura, Zimbabwe"]),
+      {
+        "locations": ["Bindura, Zimbabwe"],
+        "country": "zw",
+        "countryName": "Zimbabwe",
+      },
+    )
+    self.assertEqual(
+      job_scout.resolve_preferred_locations(["Algiers, Algeria"])["country"],
+      "dz",
+    )
+
+  def test_country_aliases_and_codes_are_supported(self) -> None:
+    self.assertEqual(job_scout.resolve_preferred_locations(["London, UK"])["country"], "gb")
+    self.assertEqual(job_scout.resolve_preferred_locations(["New York, US"])["country"], "us")
+
+  def test_location_must_include_country(self) -> None:
+    with self.assertRaisesRegex(SystemExit, "must include the country"):
+      job_scout.resolve_preferred_locations(["Harare"])
+
+  def test_unknown_country_is_rejected(self) -> None:
+    with self.assertRaisesRegex(SystemExit, "country is not recognized"):
+      job_scout.resolve_preferred_locations(["Example City, Not A Country"])
+
+  def test_locations_must_share_one_country(self) -> None:
+    with self.assertRaisesRegex(SystemExit, "must be in one country"):
+      job_scout.resolve_preferred_locations(["Harare, Zimbabwe", "Algiers, Algeria"])
+
+  def test_explicit_country_must_match_location(self) -> None:
+    with self.assertRaisesRegex(SystemExit, "conflicts"):
+      job_scout.resolved_profile_country(["Bindura, Zimbabwe"], "dz")
+
+  def test_no_location_retains_algeria_default(self) -> None:
+    self.assertEqual(job_scout.resolved_profile_country([]), "dz")
+
+  def test_stored_bare_location_uses_valid_stored_country(self) -> None:
+    self.assertEqual(
+      job_scout.normalize_stored_locations(["Harare"], "zw"),
+      {"locations": ["Harare, Zimbabwe"], "country": "zw"},
+    )
+    self.assertEqual(
+      job_scout.normalize_stored_locations(["Algiers"], "dz"),
+      {"locations": ["Algiers, Algeria"], "country": "dz"},
+    )
+
+  def test_stored_country_only_location_becomes_nationwide(self) -> None:
+    self.assertEqual(
+      job_scout.normalize_stored_locations(["Zimbabwe"]),
+      {"locations": ["Nationwide, Zimbabwe"], "country": "zw"},
+    )
+
+  def test_stored_bare_location_without_country_is_rejected(self) -> None:
+    with self.assertRaisesRegex(SystemExit, "needs a valid country"):
+      job_scout.normalize_stored_locations(["Harare"])
+    with self.assertRaisesRegex(SystemExit, "not recognized"):
+      job_scout.normalize_stored_locations(["Harare"], "not-a-country")
+
+  def test_conflicting_stored_country_is_rejected(self) -> None:
+    with self.assertRaisesRegex(SystemExit, "conflicts"):
+      job_scout.normalize_stored_locations(["Harare, Zimbabwe"], "dz")
+
+  def test_old_and_new_locations_must_share_one_country(self) -> None:
+    self.assertEqual(
+      job_scout.resolve_profile_locations(["Harare"], ["Bindura, Zimbabwe"], stored_country="zw"),
+      {
+        "locations": ["Harare, Zimbabwe", "Bindura, Zimbabwe"],
+        "country": "zw",
+      },
+    )
+    with self.assertRaisesRegex(SystemExit, "must be in one country"):
+      job_scout.resolve_profile_locations(["Harare"], ["Algiers, Algeria"], stored_country="zw")
+
+  def test_new_bare_location_is_rejected_even_with_stored_country(self) -> None:
+    with self.assertRaisesRegex(SystemExit, "must include the country"):
+      job_scout.resolve_profile_locations([], ["Harare"], stored_country="zw")
+
+  def test_save_profile_migrates_stored_location(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      cv = root / "resume.pdf"
+      cv.write_bytes(b"pdf")
+      base = {
+        "targetRoles": ["Driver"],
+        "locations": ["Harare"],
+        "country": "zw",
+        "skills": ["Defensive driving"],
+      }
+      args = argparse.Namespace(
+        phone="+263785632943",
+        user_id="user-1",
+        cv=str(cv),
+        storage_root=root / "storage",
+        profile_json=json.dumps(base),
+        target_role=None,
+        location=None,
+        country=None,
+        language=None,
+        qualification=None,
+        experience=None,
+        skill=None,
+        exclusion=None,
+        prompt_note=None,
+        max_applications_per_run=None,
+        no_auto_apply=False,
+        dry_run=True,
+      )
+
+      result = job_scout.cmd_save_profile(args)
+
+    self.assertEqual(result["preferences"]["locations"], ["Harare, Zimbabwe"])
+    self.assertEqual(result["preferences"]["country"], "zw")
+    self.assertEqual(result["preferences"]["skills"], ["Defensive driving"])
+
+  def test_manual_fetch_normalizes_profile_only_in_memory(self) -> None:
+    base = {"targetRoles": ["Driver"], "locations": ["Harare"], "country": "zw"}
+    args = argparse.Namespace(
+      profile_json=json.dumps(base),
+      target_role=None,
+      location=None,
+      country=None,
+      language=None,
+      exclusion=None,
+      limit=5,
+    )
+    with mock.patch.object(job_scout, "fetch_jsearch_candidates", return_value=[]) as jsearch, \
+         mock.patch.object(job_scout, "fetch_scraped_candidates", return_value=[]) as scraped, \
+         mock.patch.object(job_scout, "jsearch_provider", return_value="test"):
+      result = job_scout.cmd_fetch_candidates(args)
+
+    normalized = {"targetRoles": ["Driver"], "locations": ["Harare, Zimbabwe"], "country": "zw", "language": "fr", "exclusions": [], "maxApplicationsPerRun": 5}
+    jsearch.assert_called_once_with(normalized, 5)
+    scraped.assert_called_once_with(normalized, 5)
+    self.assertEqual(result["queries"], ["Driver à Harare, Zimbabwe"])
+    self.assertEqual(base["locations"], ["Harare"])
 
 
 class JSearchTests(unittest.TestCase):

@@ -244,6 +244,7 @@ syntax_checks() {
     "$OC_DIR/workspace/public-events/event_subscriptions.py" \
     "$OC_DIR/workspace/cron/event-scout-dispatcher/dispatch.py" \
     "$OC_DIR/workspace/job-scout/job_scout.py" \
+    "$OC_DIR/workspace/job-scout/country_codes.py" \
     "$OC_DIR/workspace/bin/genaie-calendar" \
     "$OC_DIR/deploy/patch-openclaw-config.py"; then
     rm -rf "$pycache"
@@ -455,6 +456,7 @@ require_staged_workspace_files() {
   for path in \
     "$STAGE_DIR/workspace/bin/job-scout" \
     "$STAGE_DIR/workspace/job-scout/job_scout.py" \
+    "$STAGE_DIR/workspace/job-scout/country_codes.py" \
     "$STAGE_DIR/workspace/job-scout/web_apply_server.mjs" \
     "$STAGE_DIR/deploy/job-scout-browser.Dockerfile" \
     "$STAGE_DIR/workspace/job-scout/scrapers/__init__.py"; do
