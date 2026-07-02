@@ -1,5 +1,8 @@
 from pathlib import Path
 import json
+import os
+import subprocess
+import tempfile
 import unittest
 
 
@@ -59,6 +62,34 @@ class JobScoutDeploymentTests(unittest.TestCase):
     self.assertNotIn('rm -rf "$STAGE_DIR"', stage)
     self.assertIn('mkdir -p "$STAGE_DIR/workspace"', stage)
     self.assertLess(recreate, ensure_running)
+
+  def test_container_service_waits_for_docker_api(self) -> None:
+    unit = (ROOT / "deploy/systemd/openclaw-gateway-container.service").read_text(encoding="utf-8")
+    deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")
+
+    self.assertIn("ExecStartPre=/usr/local/libexec/openclaw-wait-for-docker", unit)
+    self.assertIn("install_container_service", deploy)
+    self.assertIn('run_root install -D -m 0644 "$SERVICE_UNIT_SRC" "$SERVICE_UNIT_DST"', deploy)
+
+  def test_docker_readiness_check_succeeds_and_is_bounded(self) -> None:
+    waiter = ROOT / "deploy/systemd/wait-for-docker.sh"
+    with tempfile.TemporaryDirectory() as tmp:
+      fake = Path(tmp) / "docker"
+      fake.write_text("#!/bin/sh\n[ \"$1\" = info ]\n", encoding="utf-8")
+      fake.chmod(0o755)
+      env = {
+        **os.environ,
+        "DOCKER_BIN": str(fake),
+        "DOCKER_READY_ATTEMPTS": "1",
+        "DOCKER_READY_INTERVAL_SECONDS": "0",
+      }
+      success = subprocess.run(["bash", str(waiter)], env=env, capture_output=True, text=True, check=False)
+      fake.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+      failure = subprocess.run(["bash", str(waiter)], env=env, capture_output=True, text=True, check=False)
+
+    self.assertEqual(success.returncode, 0, success.stderr)
+    self.assertEqual(failure.returncode, 1)
+    self.assertIn("did not become ready after 1 attempts", failure.stderr)
 
 
 if __name__ == "__main__":

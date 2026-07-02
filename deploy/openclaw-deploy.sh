@@ -9,6 +9,10 @@ COMPOSE_OVERRIDE_DST="$DEPLOY_DIR/docker-compose.override.yml"
 ENTRYPOINT_SRC="$OC_DIR/deploy/container/entrypoint.sh"
 ENTRYPOINT_DST="$DEPLOY_DIR/entrypoint.sh"
 SERVICE_NAME="${OPENCLAW_CONTAINER_SERVICE:-openclaw-gateway-container.service}"
+SERVICE_UNIT_SRC="$OC_DIR/deploy/systemd/openclaw-gateway-container.service"
+SERVICE_UNIT_DST="/etc/systemd/system/$SERVICE_NAME"
+DOCKER_WAIT_SRC="$OC_DIR/deploy/systemd/wait-for-docker.sh"
+DOCKER_WAIT_DST="/usr/local/libexec/openclaw-wait-for-docker"
 CONTAINER="${OPENCLAW_CONTAINER:-openclaw-gateway}"
 DOCKER_BIN="${DOCKER:-}"
 APPLY_CONTAINER_BOUNDARY=0
@@ -30,6 +34,17 @@ run_systemctl() {
     return 0
   fi
   die "systemctl $* failed; rerun with permissions to manage $SERVICE_NAME"
+}
+
+run_root() {
+  if [ "$(id -u)" -eq 0 ]; then
+    "$@"
+    return
+  fi
+  if command -v sudo >/dev/null 2>&1 && sudo -n "$@"; then
+    return
+  fi
+  die "root command failed: $*"
 }
 
 require_file() {
@@ -121,6 +136,17 @@ check_docker_access() {
   if ! "$docker" inspect "$CONTAINER" >/dev/null 2>&1; then
     die "cannot inspect container '$CONTAINER'. Rerun with Docker permissions, for example: sudo $OC_DIR/deploy/openclaw-deploy.sh"
   fi
+}
+
+install_container_service() {
+  require_file "$SERVICE_UNIT_SRC"
+  require_file "$DOCKER_WAIT_SRC"
+
+  log "Install source-controlled container service and Docker readiness check"
+  run_root install -D -m 0755 "$DOCKER_WAIT_SRC" "$DOCKER_WAIT_DST"
+  run_root install -D -m 0644 "$SERVICE_UNIT_SRC" "$SERVICE_UNIT_DST"
+  run_systemctl daemon-reload
+  run_systemctl enable "$SERVICE_NAME"
 }
 
 container_status() {
@@ -256,6 +282,7 @@ syntax_checks() {
   bash -n "$OC_DIR/workspace/cron/github-issue-tracker/check_issue.sh"
   bash -n "$OC_DIR/workspace/cron/webetu-meals/notify-reservations.sh"
   bash -n "$OC_DIR/deploy/install-job-scout.sh"
+  bash -n "$DOCKER_WAIT_SRC"
   python3 -m json.tool "$OC_DIR/config/openclaw.template.json" >/dev/null
   python3 -m json.tool "$OC_DIR/workspace/job-scout/package.json" >/dev/null
   python3 -m json.tool "$OC_DIR/workspace/job-scout/package-lock.json" >/dev/null
@@ -651,6 +678,7 @@ main() {
   check_staged_files
   check_docker_access
   syntax_checks
+  install_container_service
   stage_source
   "$OC_DIR/deploy/check-openclaw-mirror.sh" --strict
   recreate_boundary_stack

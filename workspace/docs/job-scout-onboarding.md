@@ -245,6 +245,20 @@ Your Job Scout profile is saved. Make sure Gmail shows Connected in the app. Whe
 
 This returns only the requesting user's sanitized setup state. A user is dispatch-ready only when the WhatsApp chat is linked, Gmail is connected, a profile and CV reference are saved, and the CV object is available in R2. The CV is fetched from R2 on demand at dispatch time. Files under `runtime/job-scout/users` are temporary download caches and must never be used to decide whether a CV exists.
 
+## Admin Manual Dispatch
+
+This section is for Joe's direct admin chat only. It must not be used for public-user self-service.
+
+When Joe asks for a manual run after checking one person's status, scope the run to that person's WhatsApp number:
+
+```bash
+/home/joseph/.openclaw/workspace/bin/job-scout dispatch-jsearch \
+  --phone "<whatsapp phone>" \
+  --run-id "manual-job-scout-<UTC timestamp>"
+```
+
+Start the command once, then poll that same process for up to 20 minutes. Several minutes without stdout is normal. Do not launch a second dispatch, do not start a dry run while the first run is active, and do not kill a run only because it is quiet. `--pilot-only` is obsolete and must not be used. If the tool session disappears, verify the named dispatch marker and application records before deciding whether a retry is safe.
+
 ## Failure Handling
 
 If setup or saving fails, do not show raw output. Reply:

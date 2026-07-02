@@ -154,6 +154,32 @@ class CvDownloadTests(unittest.TestCase):
          mock.patch.object(job_scout.urllib.request, "urlopen", side_effect=err):
       self.assertFalse(job_scout.cv_object_available("user-9"))
 
+  def test_download_retries_temporarily_missing_presigned_url(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      dest = Path(tmp) / "cv.pdf"
+      with mock.patch.object(
+        job_scout,
+        "request_json",
+        side_effect=[{}, {}, {"url": "https://r2.example/presigned"}],
+      ) as getreq, mock.patch.object(job_scout.time, "sleep") as sleep, \
+           mock.patch.object(job_scout.urllib.request, "urlopen") as urlopen:
+        urlopen.return_value.__enter__.return_value.read.return_value = b"%PDF-1.7 data"
+        result = job_scout.download_cv("user-9", dest)
+
+    self.assertEqual(result, dest)
+    self.assertEqual(getreq.call_count, 3)
+    self.assertEqual(sleep.call_count, 2)
+
+  def test_download_fails_after_bounded_missing_url_retries(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      with mock.patch.object(job_scout, "request_json", return_value={}) as getreq, \
+           mock.patch.object(job_scout.time, "sleep") as sleep:
+        with self.assertRaisesRegex(RuntimeError, "CV is unavailable"):
+          job_scout.download_cv("user-9", Path(tmp) / "cv.pdf")
+
+    self.assertEqual(getreq.call_count, job_scout.CV_URL_LOOKUP_ATTEMPTS)
+    self.assertEqual(sleep.call_count, job_scout.CV_URL_LOOKUP_ATTEMPTS - 1)
+
 
 class JobScoutStatusTests(unittest.TestCase):
   def test_status_uses_r2_and_returns_only_requested_user(self) -> None:
@@ -463,6 +489,7 @@ class JSearchDispatchTests(unittest.TestCase):
   def args(self, root: Path, dry_run: bool = False) -> argparse.Namespace:
     return argparse.Namespace(
       run_id="unit-dispatch",
+      phone=None,
       limit_ready=10,
       max_candidates_per_user=5,
       dispatch_root=root,
@@ -533,6 +560,52 @@ class JSearchDispatchTests(unittest.TestCase):
       record_args = result["_record_calls"][0].args[0]
       self.assertEqual(record_args.status, "applied")
       self.assertEqual(record_args.source, "jsearch")
+
+  def test_dispatch_phone_scope_selects_only_requested_subscriber(self) -> None:
+    requested = self.subscriber()
+    other = {
+      **self.subscriber(),
+      "userId": "user-2",
+      "whatsappPhone": "+213555020202",
+      "whatsappPhoneHash": "phonehash2",
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+      args = self.args(Path(tmp), dry_run=True)
+      args.phone = "+213 555 010 101"
+      with mock.patch.object(job_scout, "cmd_list_ready", return_value={"subscribers": [other, requested]}), \
+           mock.patch.object(job_scout, "cmd_list_applications", return_value={"applications": []}) as applications, \
+           mock.patch.object(job_scout, "fetch_jsearch_candidates", return_value=[]), \
+           mock.patch.object(job_scout, "fetch_scraped_candidates", return_value=[]), \
+           mock.patch.object(job_scout, "jsearch_provider", return_value="test"):
+        result = job_scout.cmd_dispatch_jsearch(args)
+
+    self.assertTrue(result["scoped"])
+    self.assertEqual(result["readyCount"], 1)
+    self.assertEqual(result["processedCount"], 1)
+    applications.assert_called_once()
+    self.assertEqual(applications.call_args.args[0].user_id, "user-1")
+
+  def test_dispatch_phone_scope_rejects_non_ready_subscriber(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      args = self.args(Path(tmp), dry_run=True)
+      args.phone = "+213555099999"
+      with mock.patch.object(job_scout, "cmd_list_ready", return_value={"subscribers": [self.subscriber()]}):
+        with self.assertRaisesRegex(SystemExit, "no ready Job Scout subscriber"):
+          job_scout.cmd_dispatch_jsearch(args)
+
+  def test_dispatch_lock_rejects_overlapping_run(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp) / "dispatch-runs"
+      with job_scout.exclusive_dispatch_lock(root, "first-run"):
+        with self.assertRaisesRegex(SystemExit, "another Job Scout dispatch"):
+          job_scout.cmd_dispatch_jsearch(self.args(root, dry_run=True))
+
+  def test_dispatch_lock_stays_inside_dispatch_root(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp) / "dispatch-runs"
+      with job_scout.exclusive_dispatch_lock(root, "unit-run"):
+        self.assertEqual(job_scout.dispatch_lock_path(root), root / "dispatch.lock")
+        self.assertTrue((root / "dispatch.lock").is_file())
 
   def test_dispatch_records_action_required_when_site_needs_login(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:

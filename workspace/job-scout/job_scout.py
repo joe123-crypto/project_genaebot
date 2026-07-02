@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 from datetime import datetime, timezone
+import fcntl
 import hashlib
 import json
 import mimetypes
@@ -15,6 +17,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -29,6 +32,8 @@ DEFAULT_DISPATCH_ROOT = RUNTIME_ROOT / "dispatch-runs"
 DISPATCH_STATUSES = {"applied", "action_required", "physical_submission", "no_matches", "failed"}
 TERMINAL_APPLICATION_STATUSES = {"applied", "skipped", "action_required", "physical_submission"}
 MAX_APPLICATION_ATTEMPTS = 3
+CV_URL_LOOKUP_ATTEMPTS = 3
+CV_URL_LOOKUP_RETRY_SECONDS = 2
 DEFAULT_WEB_APPLY_URL = "http://job-scout-browser:8787/apply"
 DEFAULT_JSEARCH_COUNTRY = "dz"
 DEFAULT_JSEARCH_LANGUAGE = "fr"
@@ -242,8 +247,14 @@ def download_cv(user_id: str, dest: Path) -> Path:
   if not user:
     raise SystemExit("user-id is required to download a CV.")
   query = urllib.parse.urlencode({"userId": user})
-  result = request_json("GET", endpoint(f"/internal/job-scout/cv?{query}"))
-  url = str(result.get("url") or "").strip()
+  url = ""
+  for attempt in range(CV_URL_LOOKUP_ATTEMPTS):
+    result = request_json("GET", endpoint(f"/internal/job-scout/cv?{query}"))
+    url = str(result.get("url") or "").strip()
+    if url:
+      break
+    if attempt + 1 < CV_URL_LOOKUP_ATTEMPTS:
+      time.sleep(CV_URL_LOOKUP_RETRY_SECONDS)
   if not url:
     raise RuntimeError("subscriber CV is unavailable; re-upload is required")
   request = urllib.request.Request(url, method="GET", headers={"Accept": "*/*"})
@@ -1537,13 +1548,58 @@ def build_user_summary(date_label: str, applied: list[dict], action_required: li
   return "\n".join(line for line in lines).strip()
 
 
+def dispatch_lock_path(dispatch_root: Path) -> Path:
+  return Path(dispatch_root).resolve() / "dispatch.lock"
+
+
+@contextmanager
+def exclusive_dispatch_lock(dispatch_root: Path, run_id: str):
+  lock_path = dispatch_lock_path(dispatch_root)
+  lock_path.parent.mkdir(parents=True, exist_ok=True)
+  with lock_path.open("a+", encoding="utf-8") as lock_file:
+    try:
+      fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as err:
+      raise SystemExit("another Job Scout dispatch is already running") from err
+    lock_file.seek(0)
+    lock_file.truncate()
+    lock_file.write(json.dumps({"runId": run_id, "pid": os.getpid(), "startedAt": utc_now()}) + "\n")
+    lock_file.flush()
+    try:
+      yield
+    finally:
+      fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def scoped_subscribers(subscribers: list[dict], phone: str | None) -> list[dict]:
+  if not phone:
+    return subscribers
+  target = normalize_phone(phone)
+  selected: list[dict] = []
+  for subscriber in subscribers:
+    try:
+      if normalize_phone(subscriber_phone(subscriber)) == target:
+        selected.append(subscriber)
+    except (RuntimeError, SystemExit):
+      continue
+  if not selected:
+    raise SystemExit("no ready Job Scout subscriber matches that phone")
+  return selected
+
+
 def cmd_dispatch_jsearch(args: argparse.Namespace) -> dict:
+  run_id = args.run_id or f"job-scout-jsearch-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
+  run_id = safe_run_id(run_id)
+  with exclusive_dispatch_lock(args.dispatch_root, run_id):
+    return dispatch_jsearch_locked(args, run_id)
+
+
+def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
   ready_result = cmd_list_ready(argparse.Namespace(limit=args.limit_ready))
   subscribers = ready_result.get("subscribers") if isinstance(ready_result, dict) else []
   if not isinstance(subscribers, list):
     subscribers = []
-  run_id = args.run_id or f"job-scout-jsearch-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
-  run_id = safe_run_id(run_id)
+  subscribers = scoped_subscribers(subscribers, getattr(args, "phone", None))
   ready_count = len(subscribers)
   if not args.dry_run:
     cmd_start_dispatch(argparse.Namespace(run_id=run_id, ready_count=ready_count, dispatch_root=args.dispatch_root))
@@ -1822,6 +1878,7 @@ def cmd_dispatch_jsearch(args: argparse.Namespace) -> dict:
   return {
     "ok": True,
     "dryRun": args.dry_run,
+    "scoped": bool(getattr(args, "phone", None)),
     "runId": run_id,
     "readyCount": ready_count,
     "processedCount": processed_count,
@@ -2048,6 +2105,7 @@ def build_parser() -> argparse.ArgumentParser:
 
   dispatch_jsearch = subparsers.add_parser("dispatch-jsearch", help="fetch JSearch candidates for ready subscribers")
   dispatch_jsearch.add_argument("--run-id")
+  dispatch_jsearch.add_argument("--phone", help="limit this operator-triggered run to one ready WhatsApp subscriber")
   dispatch_jsearch.add_argument("--limit-ready", type=int, default=100)
   dispatch_jsearch.add_argument("--max-candidates-per-user", type=int, default=5)
   dispatch_jsearch.add_argument("--dispatch-root", type=Path, default=DEFAULT_DISPATCH_ROOT)

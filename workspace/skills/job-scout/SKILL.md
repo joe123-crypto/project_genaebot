@@ -20,6 +20,14 @@ Commands:
 - Fetch JSearch candidates for a profile: `/home/joseph/.openclaw/workspace/bin/job-scout fetch-candidates --target-role "..." --location "..."`
 - Preview candidates for ready users: `/home/joseph/.openclaw/workspace/bin/job-scout dispatch-jsearch --dry-run`
 
+Admin manual runs:
+
+- A request made after checking one person is scoped to that person. Run `/home/joseph/.openclaw/workspace/bin/job-scout dispatch-jsearch --phone "<whatsapp phone>" --run-id "manual-job-scout-<UTC timestamp>"` exactly once.
+- A running process with no new output is not a failure. Job discovery and website checks normally take several minutes. Poll the same process for up to 20 minutes.
+- Never start a direct or dry run while another dispatch is running. The command lock will reject overlaps.
+- Never use `--pilot-only`; it is obsolete. Do not infer current arguments from historical run diagnostics.
+- If the process connection is lost, inspect the named dispatch marker and application records before deciding whether another run is safe.
+
 Rules:
 
 - Use only the requester's WhatsApp phone number.
