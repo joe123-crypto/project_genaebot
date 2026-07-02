@@ -9,6 +9,7 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 NOTIFIER = ROOT / "workspace/cron/webetu-meals/notify-reservations.sh"
+JOURNAL = ROOT / "workspace/cron/webetu-meals/delivery_journal.py"
 
 
 class WebetuNotifierRetryTests(unittest.TestCase):
@@ -92,12 +93,31 @@ class WebetuNotifierRetryTests(unittest.TestCase):
             r"""
             #!/usr/bin/env bash
             set -eu
+
+            if [ "${1:-}" = "channels" ] && [ "${2:-}" = "status" ]; then
+              if [ "$TEST_MODE" = "preflight_down" ]; then
+                printf '%s\n' '{"channelAccounts":{"whatsapp":[{"accountId":"default","linked":false,"running":false,"connected":false}]}}'
+              else
+                printf '%s\n' '{"channelAccounts":{"whatsapp":[{"accountId":"default","linked":true,"running":true,"connected":true}]}}'
+              fi
+              exit 0
+            fi
+
+            if [ "${1:-}" != "message" ] || [ "${2:-}" != "send" ]; then
+              printf 'Unexpected OpenClaw arguments: %s\n' "$*" >&2
+              exit 2
+            fi
+
             file="$TEST_STATE_DIR/deliveries.count"
             count=0
             if [ -f "$file" ]; then
               count="$(tr -d '\n' <"$file")"
             fi
             printf '%s\n' "$((count + 1))" >"$file"
+            if [ "$TEST_MODE" = "delivery_failure" ]; then
+              printf '%s\n' 'OutboundDeliveryError: No active WhatsApp Web listener for +213555000111' >&2
+              exit 1
+            fi
             printf '%s\n' '{"status":"ok"}'
             """,
         )
@@ -115,7 +135,7 @@ class WebetuNotifierRetryTests(unittest.TestCase):
         path = self.state / f"{name}.count"
         return int(path.read_text(encoding="utf-8").strip()) if path.exists() else 0
 
-    def _run(self, mode):
+    def _run_args(self, mode, args):
         env = os.environ.copy()
         env.update(
             {
@@ -128,6 +148,8 @@ class WebetuNotifierRetryTests(unittest.TestCase):
                 "WEBETU_NOTIFY_STATE_DIR": str(self.state),
                 "WEBETU_NOTIFY_LOCK_DIR": str(self.state / "notify.lock"),
                 "WEBETU_NOTIFY_SKIP_WINDOWS_FILE": str(self.state / "skip-windows.tsv"),
+                "WEBETU_FAILED_DELIVERY_DIR": str(self.state / "failed-deliveries"),
+                "WEBETU_DELIVERY_JOURNAL_TOOL": str(JOURNAL),
                 "WEBETU_NOTIFY_HEARTBEAT_SECONDS": "1",
                 "WEBETU_WORKER_STEP_TIMEOUT_SECONDS": "3",
                 "WEBETU_REGISTRATION_MAX_ATTEMPTS": "3",
@@ -141,7 +163,7 @@ class WebetuNotifierRetryTests(unittest.TestCase):
             }
         )
         return subprocess.run(
-            ["bash", str(NOTIFIER), "2026-07-01"],
+            ["bash", str(NOTIFIER), *args],
             cwd=ROOT,
             env=env,
             text=True,
@@ -150,6 +172,15 @@ class WebetuNotifierRetryTests(unittest.TestCase):
             timeout=30,
             check=False,
         )
+
+    def _run(self, mode):
+        return self._run_args(mode, ["2026-07-01"])
+
+    def _pending_deliveries(self):
+        return sorted((self.state / "failed-deliveries").glob("*.json"))
+
+    def _resolved_deliveries(self):
+        return sorted((self.state / "failed-deliveries" / "resolved").glob("*.json"))
 
     def test_registration_lookup_retries_then_completes(self):
         completed = self._run("registration_flaky")
@@ -185,6 +216,67 @@ class WebetuNotifierRetryTests(unittest.TestCase):
         self.assertEqual(self._count("reservations"), 1)
         self.assertEqual(self._count("deliveries"), 2)
         self.assertIn("reason=permanent_failure", completed.stdout)
+
+    def test_disconnected_preflight_aborts_before_worker_or_delivery(self):
+        completed = self._run("preflight_down")
+
+        self.assertEqual(completed.returncode, 1)
+        self.assertEqual(self._count("registrations"), 0)
+        self.assertEqual(self._count("reservations"), 0)
+        self.assertEqual(self._count("deliveries"), 0)
+        self.assertIn("action=abort_before_reservations", completed.stdout)
+
+    def test_successful_delivery_is_archived_not_pending(self):
+        completed = self._run("normal")
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(self._pending_deliveries(), [])
+        self.assertEqual(len(self._resolved_deliveries()), 1)
+        payload = json.loads(self._resolved_deliveries()[0].read_text(encoding="utf-8"))
+        self.assertEqual(payload["status"], "delivered")
+        self.assertNotIn("phone", {key.lower() for key in payload})
+
+    def test_failed_delivery_stays_pending_without_raw_phone(self):
+        completed = self._run("delivery_failure")
+
+        self.assertEqual(completed.returncode, 1)
+        self.assertEqual(len(self._pending_deliveries()), 1)
+        record_text = self._pending_deliveries()[0].read_text(encoding="utf-8")
+        self.assertNotIn("+213555000111", record_text)
+        payload = json.loads(record_text)
+        self.assertEqual(payload["status"], "failed")
+        self.assertEqual(payload["phoneHash"], "testhash0001")
+        self.assertIn("Webetu meals", payload["message"])
+        self.assertIn("[redacted-phone]", payload["lastError"])
+
+    def test_list_failed_outputs_safe_metadata_only(self):
+        failed = self._run("delivery_failure")
+        self.assertEqual(failed.returncode, 1)
+        delivery_id = json.loads(
+            self._pending_deliveries()[0].read_text(encoding="utf-8")
+        )["deliveryId"]
+
+        listed = self._run_args("normal", ["--list-failed"])
+
+        self.assertEqual(listed.returncode, 0, listed.stderr)
+        self.assertIn(delivery_id, listed.stdout)
+        self.assertIn("testhash0001", listed.stdout)
+        self.assertNotIn("+213555000111", listed.stdout)
+        self.assertNotIn("Reservation results", listed.stdout)
+
+    def test_targeted_retry_revalidates_and_archives_one_delivery(self):
+        failed = self._run("delivery_failure")
+        self.assertEqual(failed.returncode, 1)
+        delivery_id = json.loads(
+            self._pending_deliveries()[0].read_text(encoding="utf-8")
+        )["deliveryId"]
+
+        retried = self._run_args("normal", ["--retry-failed", delivery_id])
+
+        self.assertEqual(retried.returncode, 0, retried.stderr)
+        self.assertEqual(self._pending_deliveries(), [])
+        self.assertEqual(len(self._resolved_deliveries()), 1)
+        self.assertIn("delivery retry ok", retried.stdout)
 
 
 if __name__ == "__main__":

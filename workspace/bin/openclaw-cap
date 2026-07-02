@@ -13,7 +13,7 @@ Usage:
   openclaw-cap public-news <register|disable|list-enabled|record-delivery> [args...]
   openclaw-cap public-events <register|disable|get|list-enabled|mark-synced|record-offers|clear-pending|record-delivery> [args...]
   openclaw-cap job-scout <create-invite|resolve-location|stage-cv|save-profile|list-ready> [args...]
-  openclaw-cap cron run <algeria-exhibitions|github-issue-tracker|webetu-meals> [--dry-run]
+  openclaw-cap cron run <algeria-exhibitions|github-issue-tracker|webetu-meals> [--dry-run|--list-failed|--retry-failed <delivery-id>]
   openclaw-cap webetu <lookup-user|check-credentials|reserve> --phone <phone> [--dry-run]
   openclaw-cap webetu-preferences <list-restaurants|get|set-default|set-override> [args...]
 EOF
@@ -125,10 +125,16 @@ cmd_cron() {
         dry_run=1
         shift
       fi
-      [ "$#" -eq 0 ] || die "unsupported webetu-meals args: $*"
+      if [ "${1:-}" = "--list-failed" ]; then
+        [ "$#" -eq 1 ] || die "--list-failed does not accept additional arguments"
+      elif [ "${1:-}" = "--retry-failed" ]; then
+        [ "$#" -eq 2 ] || die "--retry-failed requires exactly one delivery id"
+      else
+        [ "$#" -eq 0 ] || die "unsupported webetu-meals args: $*"
+      fi
       export WEBETU_NOTIFY_DRY_RUN="$dry_run"
       export WEBETU_NOTIFY_LOG_FILE="$RUNTIME/cron-state/webetu-meals/notification.log"
-      exec "$WORKSPACE/cron/webetu-meals/notify-reservations.sh"
+      exec "$WORKSPACE/cron/webetu-meals/notify-reservations.sh" "$@"
       ;;
     *)
       die "unsupported cron job: $job"

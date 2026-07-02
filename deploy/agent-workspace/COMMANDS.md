@@ -31,6 +31,8 @@ definitions, deployment files, or OpenClaw config by hand.
 - `openclaw-cap cron run github-issue-tracker`
 - `openclaw-cap cron run webetu-meals --dry-run`
 - `openclaw-cap cron run webetu-meals`
+- `openclaw-cap cron run webetu-meals --list-failed`
+- `openclaw-cap cron run webetu-meals --retry-failed <delivery-id>` (manual, one delivery at a time)
 
 ## Webetu
 

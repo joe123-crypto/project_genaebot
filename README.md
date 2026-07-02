@@ -337,6 +337,12 @@ sudo /snap/bin/docker exec -u joseph openclaw-gateway \
 
 sudo /snap/bin/docker exec -u joseph openclaw-gateway \
   /home/joseph/.openclaw/workspace/bin/openclaw-cap cron run webetu-meals --dry-run
+
+  # Inspect private pending summaries without exposing phone numbers or message bodies.
+  /home/joseph/.openclaw/workspace/bin/openclaw-cap cron run webetu-meals --list-failed
+
+  # Explicitly retry one audited delivery; retries are never automatic.
+  /home/joseph/.openclaw/workspace/bin/openclaw-cap cron run webetu-meals --retry-failed <delivery-id>
 ```
 
 Rule of thumb:

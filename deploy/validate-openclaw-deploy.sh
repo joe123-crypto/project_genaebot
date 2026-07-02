@@ -31,6 +31,7 @@ PYTHONPYCACHEPREFIX="$pycache" python3 -m py_compile \
   "$OC_DIR/workspace/lib/whatsapp-public-user.py" \
   "$OC_DIR/workspace/public-news/news_subscriptions.py" \
   "$OC_DIR/workspace/cron/algeria-exhibitions-listener/check_new_events.py" \
+  "$OC_DIR/workspace/cron/webetu-meals/delivery_journal.py" \
   "$OC_DIR/workspace/public-events/event_subscriptions.py" \
   "$OC_DIR/workspace/cron/event-scout-dispatcher/dispatch.py" \
   "$OC_DIR/workspace/job-scout/job_scout.py" \

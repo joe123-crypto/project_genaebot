@@ -11,6 +11,8 @@ LOG_FILE="${WEBETU_NOTIFY_LOG_FILE:-/home/joseph/.openclaw/runtime/cron-state/we
 STATE_DIR="${WEBETU_NOTIFY_STATE_DIR:-$(dirname "$LOG_FILE")}"
 SKIP_WINDOWS_FILE="${WEBETU_NOTIFY_SKIP_WINDOWS_FILE:-$STATE_DIR/skip-windows.tsv}"
 LOCK_DIR="${WEBETU_NOTIFY_LOCK_DIR:-$STATE_DIR/notify.lock}"
+FAILED_DELIVERY_DIR="${WEBETU_FAILED_DELIVERY_DIR:-$STATE_DIR/failed-deliveries}"
+JOURNAL_TOOL="${WEBETU_DELIVERY_JOURNAL_TOOL:-$SCRIPT_DIR/delivery_journal.py}"
 WORKER="${WEBETU_WORKER_BIN:-/home/joseph/projects/webetu/webetu-worker/bin/webetu-worker}"
 WORKER_CONFIG="${WEBETU_WORKER_CONFIG:-/home/joseph/projects/webetu/webetu-worker/config/webetu-worker.example.json}"
 WORKER_MODE="${WEBETU_WORKER_MODE:-sudo}"
@@ -249,6 +251,89 @@ run_openclaw() {
   HOME="$OPENCLAW_HOME" OPENCLAW_HOME="$OPENCLAW_HOME" "$OPENCLAW_BIN" "$@"
 }
 
+require_whatsapp_connected() {
+  if [ "$DRY_RUN" = "1" ]; then
+    return 0
+  fi
+
+  local status_file
+  status_file="$(mktemp)"
+  if ! run_openclaw channels status --json >"$status_file" 2>&1; then
+    log "whatsapp preflight failed reason=status_command_failed"
+    rm -f "$status_file"
+    return 1
+  fi
+
+  if ! python3 - "$status_file" <<'PY'
+import json
+import pathlib
+import sys
+
+text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+try:
+    payload = json.loads(text)
+except json.JSONDecodeError:
+    decoder = json.JSONDecoder()
+    payload = None
+    for index, char in enumerate(text):
+        if char != "{":
+            continue
+        try:
+            candidate, _ = decoder.raw_decode(text[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(candidate, dict):
+            payload = candidate
+            break
+    if payload is None:
+        raise SystemExit(1)
+
+accounts = payload.get("channelAccounts", {}).get("whatsapp", [])
+default = next((item for item in accounts if item.get("accountId") == "default"), None)
+if not default:
+    raise SystemExit(1)
+if not all(default.get(field) is True for field in ("linked", "running", "connected")):
+    raise SystemExit(1)
+PY
+  then
+    log "whatsapp preflight failed reason=default_account_not_connected"
+    rm -f "$status_file"
+    return 1
+  fi
+
+  rm -f "$status_file"
+  log "whatsapp preflight ok account=default"
+}
+
+journal_command() {
+  python3 "$JOURNAL_TOOL" "$@"
+}
+
+journal_prepare() {
+  local user_id="$1"
+  local phone_hash="$2"
+  local source="$3"
+  local message_file="$4"
+  shift 4
+
+  local delivery_id date
+  delivery_id="$(date -u '+%Y%m%dT%H%M%S%NZ')-${phone_hash}-$$"
+  local -a args=(
+    prepare
+    --directory "$FAILED_DELIVERY_DIR"
+    --delivery-id "$delivery_id"
+    --user-id "$user_id"
+    --phone-hash "$phone_hash"
+    --source "$source"
+    --message-file "$message_file"
+  )
+  for date in "$@"; do
+    args+=(--date "$date")
+  done
+  journal_command "${args[@]}"
+  printf '%s\n' "$delivery_id"
+}
+
 registration_rows() {
   local registrations_file="$1"
 
@@ -446,7 +531,10 @@ send_message() {
   local phone="$1"
   local phone_hash="$2"
   local message_file="$3"
-  local output
+  local user_id="$4"
+  local source="$5"
+  shift 5
+  local output delivery_id output_file
 
   if [ "$DRY_RUN" = "1" ]; then
     log "delivery dry-run phone_hash=$phone_hash"
@@ -456,13 +544,36 @@ send_message() {
     return 0
   fi
 
-  if output="$(run_openclaw message send --channel whatsapp --target "$phone" --message "$(cat "$message_file")" --json 2>&1)"; then
+  if ! delivery_id="$(journal_prepare "$user_id" "$phone_hash" "$source" "$message_file" "$@")"; then
+    log "delivery blocked phone_hash=$phone_hash reason=journal_prepare_failed"
+    return 1
+  fi
+  if ! journal_command mark-attempt --directory "$FAILED_DELIVERY_DIR" --delivery-id "$delivery_id"; then
+    log "delivery blocked phone_hash=$phone_hash delivery_id=$delivery_id reason=journal_mark_attempt_failed"
+    return 1
+  fi
+
+  output_file="$(mktemp)"
+  if run_openclaw message send --channel whatsapp --target "$phone" --message "$(cat "$message_file")" --json >"$output_file" 2>&1; then
+    if ! journal_command mark-delivered --directory "$FAILED_DELIVERY_DIR" --delivery-id "$delivery_id"; then
+      log "delivery unresolved phone_hash=$phone_hash delivery_id=$delivery_id reason=journal_archive_failed"
+      rm -f "$output_file"
+      return 1
+    fi
     log "delivery ok phone_hash=$phone_hash"
+    rm -f "$output_file"
     return 0
   fi
 
+  output="$(cat "$output_file")"
   output="${output//$phone/[redacted-phone]}"
+  printf '%s\n' "$output" >"$output_file"
+  journal_command mark-failed \
+    --directory "$FAILED_DELIVERY_DIR" \
+    --delivery-id "$delivery_id" \
+    --error-file "$output_file" || log "delivery journal update failed phone_hash=$phone_hash delivery_id=$delivery_id"
   log "delivery failed phone_hash=$phone_hash output=$(printf '%s' "$output" | tr '\n' ' ' | cut -c1-240)"
+  rm -f "$output_file"
   return 1
 }
 
@@ -543,7 +654,7 @@ send_failure_notices() {
     message_file="$(mktemp)"
     printf '%s\n' "$USER_FAILURE_MESSAGE" >"$message_file"
     log "failure-notice delivery start user=$user_id phone_hash=$phone_hash source=$source"
-    if ! send_message "$phone" "$phone_hash" "$message_file"; then
+    if ! send_message "$phone" "$phone_hash" "$message_file" "$user_id" "$source"; then
       delivery_failures=$((delivery_failures + 1))
     fi
     log "failure-notice delivery done user=$user_id phone_hash=$phone_hash source=$source"
@@ -559,8 +670,123 @@ send_failure_notices() {
   fi
 }
 
+list_failed_deliveries() {
+  journal_command list --directory "$FAILED_DELIVERY_DIR"
+}
+
+retry_failed_delivery() {
+  local delivery_id="$1"
+  local message_file metadata user_id expected_phone_hash expected_source
+  local registrations_file rows
+  local current_user_id phone phone_hash registration_status allowed source
+  local matched_phone=""
+
+  if ! require_whatsapp_connected; then
+    log "delivery retry blocked delivery_id=$delivery_id reason=whatsapp_not_connected"
+    return 1
+  fi
+
+  message_file="$(mktemp)"
+  if ! metadata="$(journal_command extract \
+    --directory "$FAILED_DELIVERY_DIR" \
+    --delivery-id "$delivery_id" \
+    --message-file "$message_file")"; then
+    rm -f "$message_file"
+    return 1
+  fi
+  IFS=$'\t' read -r user_id expected_phone_hash expected_source <<<"$metadata"
+
+  registrations_file="$(mktemp)"
+  if ! run_registration_capture "$registrations_file" list-registrations; then
+    rm -f "$registrations_file" "$message_file"
+    log "delivery retry blocked delivery_id=$delivery_id phone_hash=$expected_phone_hash reason=registration_lookup_failed"
+    return 1
+  fi
+  if ! rows="$(registration_rows "$registrations_file" 2>>"$LOG_FILE")"; then
+    rm -f "$registrations_file" "$message_file"
+    log "delivery retry blocked delivery_id=$delivery_id phone_hash=$expected_phone_hash reason=registration_parse_failed"
+    return 1
+  fi
+  rm -f "$registrations_file"
+
+  while IFS=$'\t' read -r current_user_id phone phone_hash registration_status allowed source; do
+    [ "$current_user_id" = "$user_id" ] || continue
+    [ "$phone_hash" = "$expected_phone_hash" ] || continue
+    registration_ready "$registration_status" || continue
+    [ "$allowed" = "yes" ] || continue
+    matched_phone="$phone"
+    break
+  done <<<"$rows"
+
+  if [ -z "$matched_phone" ]; then
+    rm -f "$message_file"
+    log "delivery retry blocked delivery_id=$delivery_id phone_hash=$expected_phone_hash reason=registration_not_current_or_allowlisted"
+    return 1
+  fi
+
+  if ! journal_command mark-attempt --directory "$FAILED_DELIVERY_DIR" --delivery-id "$delivery_id"; then
+    rm -f "$message_file"
+    log "delivery retry blocked delivery_id=$delivery_id phone_hash=$expected_phone_hash reason=journal_mark_attempt_failed"
+    return 1
+  fi
+
+  local output_file output
+  output_file="$(mktemp)"
+  if run_openclaw message send \
+    --channel whatsapp \
+    --target "$matched_phone" \
+    --message "$(cat "$message_file")" \
+    --json >"$output_file" 2>&1; then
+    rm -f "$message_file" "$output_file"
+    if ! journal_command mark-delivered --directory "$FAILED_DELIVERY_DIR" --delivery-id "$delivery_id"; then
+      log "delivery retry unresolved delivery_id=$delivery_id phone_hash=$expected_phone_hash reason=journal_archive_failed"
+      return 1
+    fi
+    log "delivery retry ok delivery_id=$delivery_id phone_hash=$expected_phone_hash"
+    return 0
+  fi
+
+  output="$(cat "$output_file")"
+  output="${output//$matched_phone/[redacted-phone]}"
+  printf '%s\n' "$output" >"$output_file"
+  journal_command mark-failed \
+    --directory "$FAILED_DELIVERY_DIR" \
+    --delivery-id "$delivery_id" \
+    --error-file "$output_file" || log "delivery retry journal update failed delivery_id=$delivery_id phone_hash=$expected_phone_hash"
+  rm -f "$message_file" "$output_file"
+  log "delivery retry failed delivery_id=$delivery_id phone_hash=$expected_phone_hash output=$(printf '%s' "$output" | tr '\n' ' ' | cut -c1-240)"
+  return 1
+}
+
 main() {
   ensure_state_dir
+
+  if [ ! -f "$JOURNAL_TOOL" ]; then
+    log "system failure reason=delivery_journal_tool_not_found"
+    return 1
+  fi
+
+  if [ "${1:-}" = "--list-failed" ]; then
+    [ "$#" -eq 1 ] || {
+      printf '%s\n' '--list-failed does not accept additional arguments' >&2
+      return 2
+    }
+    list_failed_deliveries
+    return $?
+  fi
+
+  if [ "${1:-}" = "--retry-failed" ]; then
+    [ "$#" -eq 2 ] || {
+      printf '%s\n' '--retry-failed requires exactly one delivery id' >&2
+      return 2
+    }
+    if ! acquire_run_lock; then
+      return 1
+    fi
+    trap release_run_lock EXIT
+    retry_failed_delivery "$2"
+    return $?
+  fi
 
   if [ "${1:-}" = "--failure-notice-only" ] && [ "$BROAD_FAILURE_NOTICE_ALLOWED" != "1" ]; then
     log "failure-notice refused reason=broad_failure_notice_disabled"
@@ -570,6 +796,10 @@ main() {
 
   if [ "${1:-}" = "--failure-notice-only" ]; then
     shift
+    if ! require_whatsapp_connected; then
+      log "failure-notice blocked reason=whatsapp_not_connected"
+      return 1
+    fi
     send_failure_notices
     return $?
   fi
@@ -609,6 +839,11 @@ main() {
   if [ "$DRY_RUN" != "1" ] && [ ! -x "$OPENCLAW_BIN" ]; then
     log "system failure reason=openclaw_executable_not_found"
     printf 'openclaw executable not found\n' >&2
+    return 1
+  fi
+
+  if ! require_whatsapp_connected; then
+    log "system failure reason=whatsapp_not_connected action=abort_before_reservations"
     return 1
   fi
 
@@ -703,7 +938,7 @@ main() {
     fi
 
     log "delivery start user=$user_id phone_hash=$phone_hash source=$source"
-    if ! send_message "$phone" "$phone_hash" "$summary_file"; then
+    if ! send_message "$phone" "$phone_hash" "$summary_file" "$user_id" "$source" "${dates[@]}"; then
       delivery_failures=$((delivery_failures + 1))
     fi
     if [ "$user_reservation_failed" -ne 0 ]; then
