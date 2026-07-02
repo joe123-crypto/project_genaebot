@@ -48,60 +48,43 @@ class OpenClawBinResolutionTests(unittest.TestCase):
 
 
 class CvStagingTests(unittest.TestCase):
-  def test_stage_cv_copies_supported_file_to_user_directory(self) -> None:
+  def _pdf(self, root: Path) -> Path:
+    source = root / "resume.pdf"
+    source.write_bytes(b"%PDF-1.7 fake")
+    return source
+
+  def test_stage_cv_uploads_pdf_to_r2(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
-      root = Path(tmp)
-      source = root / "resume.docx"
-      storage = root / "storage"
-      source.write_bytes(b"docx content")
+      source = self._pdf(Path(tmp))
+      with mock.patch.object(job_scout, "linked_user_id", return_value="user-1"), \
+           mock.patch.object(job_scout, "request_multipart", return_value={"ok": True, "key": "user-1/cv/cv.pdf"}) as upload:
+        result = job_scout.stage_cv("+263 785 632 943", str(source))
 
-      result = job_scout.stage_cv("+263 785 632 943", str(source), storage)
-
-      expected = storage / result["phoneHash"] / "cv.docx"
       self.assertTrue(result["ok"])
-      self.assertEqual(result["cvFileRef"], str(expected))
-      self.assertEqual(result["originalPath"], str(source.resolve()))
-      self.assertEqual(expected.read_bytes(), b"docx content")
+      self.assertEqual(result["userId"], "user-1")
+      self.assertEqual(result["cvFileRef"], "user-1/cv/cv.pdf")
+      url, fields = upload.call_args.args[0], upload.call_args.args[1]
+      self.assertTrue(url.endswith("/internal/job-scout/cv"))
+      self.assertEqual(fields["userId"], "user-1")
 
-  def test_stage_cv_rejects_unsupported_extension(self) -> None:
+  def test_stage_cv_rejects_non_pdf(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
-      root = Path(tmp)
-      source = root / "resume.exe"
-      storage = root / "storage"
-      source.write_bytes(b"not a cv")
+      source = Path(tmp) / "resume.docx"
+      source.write_bytes(b"docx content")
+      with mock.patch.object(job_scout, "linked_user_id", return_value="user-1"), \
+           mock.patch.object(job_scout, "request_multipart") as upload:
+        with self.assertRaises(SystemExit):
+          job_scout.stage_cv("+263785632943", str(source))
+      upload.assert_not_called()
 
-      with self.assertRaises(SystemExit):
-        job_scout.stage_cv("+263785632943", str(source), storage)
-
-      self.assertFalse(storage.exists())
-
-  def test_stage_cv_overwrites_same_user_cv_reference(self) -> None:
+  def test_save_profile_dry_run_reports_r2_key(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
-      root = Path(tmp)
-      source = root / "resume.pdf"
-      storage = root / "storage"
-      source.write_bytes(b"first")
-      first = job_scout.stage_cv("+263785632943", str(source), storage)
-
-      source.write_bytes(b"second")
-      second = job_scout.stage_cv("+263785632943", str(source), storage)
-
-      self.assertEqual(first["cvFileRef"], second["cvFileRef"])
-      self.assertEqual(Path(second["cvFileRef"]).read_bytes(), b"second")
-
-  def test_save_profile_dry_run_accepts_already_staged_cv(self) -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-      root = Path(tmp)
-      source = root / "resume.pdf"
-      storage = root / "storage"
-      source.write_bytes(b"pdf content")
-      staged = job_scout.stage_cv("+263785632943", str(source), storage)
-
+      source = self._pdf(Path(tmp))
       args = argparse.Namespace(
         phone="+263785632943",
         user_id="user-1",
-        cv=staged["cvFileRef"],
-        storage_root=storage,
+        cv=str(source),
+        storage_root=Path(tmp) / "storage",
         profile_json=None,
         target_role=["General worker"],
         location=["Harare, Zimbabwe"],
@@ -120,10 +103,56 @@ class CvStagingTests(unittest.TestCase):
       result = job_scout.cmd_save_profile(args)
 
       self.assertTrue(result["dryRun"])
-      self.assertEqual(result["cvFileRef"], staged["cvFileRef"])
+      self.assertEqual(result["cvFileRef"], "user-1/cv/cv.pdf")
+      self.assertTrue(result["uploadEndpoint"].endswith("/internal/job-scout/cv"))
       self.assertEqual(result["preferences"]["targetRoles"], ["General worker"])
       self.assertEqual(result["preferences"]["country"], "zw")
-      self.assertEqual(result["preferences"]["language"], "fr")
+
+  def test_resolve_cv_ref_accepts_staged_key(self) -> None:
+    self.assertEqual(
+      job_scout.resolve_cv_ref("user-1", "user-1/cv/cv.pdf", do_upload=True),
+      "user-1/cv/cv.pdf",
+    )
+
+  def test_resolve_cv_ref_rejects_missing_local_path(self) -> None:
+    # A nonexistent local path must never be persisted as an R2 key.
+    with self.assertRaises(SystemExit):
+      job_scout.resolve_cv_ref("user-1", "/tmp/does-not-exist-cv.pdf", do_upload=True)
+
+  def test_resolve_cv_ref_rejects_foreign_key(self) -> None:
+    with self.assertRaises(SystemExit):
+      job_scout.resolve_cv_ref("user-1", "other-user/cv/cv.pdf", do_upload=False)
+
+
+class CvDownloadTests(unittest.TestCase):
+  def test_subscriber_cv_file_downloads_from_r2(self) -> None:
+    job_scout._cv_download_cache.clear()
+    subscriber = {"userId": "user-9", "whatsappPhoneHash": "hash9", "cvFileRef": "user-9/cv/cv.pdf"}
+    with tempfile.TemporaryDirectory() as tmp:
+      dest = Path(tmp) / "hash9" / "cv.pdf"
+      with mock.patch.object(job_scout, "request_json", return_value={"url": "https://r2.example/presigned"}) as getreq, \
+           mock.patch.object(job_scout, "cv_local_dest", return_value=dest), \
+           mock.patch.object(job_scout.urllib.request, "urlopen") as urlopen:
+        urlopen.return_value.__enter__.return_value.read.return_value = b"%PDF-1.7 data"
+        path = job_scout.subscriber_cv_file(subscriber)
+
+      self.assertEqual(path, str(dest))
+      self.assertEqual(Path(path).read_bytes(), b"%PDF-1.7 data")
+      called_url = getreq.call_args.args[1]
+      self.assertIn("/internal/job-scout/cv?", called_url)
+      self.assertIn("userId=user-9", called_url)
+
+  def test_cv_object_available_true_on_url(self) -> None:
+    with mock.patch.object(job_scout, "api_key", return_value="k"), \
+         mock.patch.object(job_scout.urllib.request, "urlopen") as urlopen:
+      urlopen.return_value.__enter__.return_value.read.return_value = b'{"url": "https://r2/x"}'
+      self.assertTrue(job_scout.cv_object_available("user-9"))
+
+  def test_cv_object_available_false_on_404(self) -> None:
+    err = job_scout.urllib.error.HTTPError("u", 404, "not found", {}, None)
+    with mock.patch.object(job_scout, "api_key", return_value="k"), \
+         mock.patch.object(job_scout.urllib.request, "urlopen", side_effect=err):
+      self.assertFalse(job_scout.cv_object_available("user-9"))
 
 
 class PreferredLocationTests(unittest.TestCase):
@@ -549,30 +578,6 @@ class JSearchDispatchTests(unittest.TestCase):
     self.assertNotIn("OPENCLAW_HOME", command_env)
     self.assertEqual(command_env["OPENCLAW_GATEWAY_TOKEN"], "gateway-token")
     self.assertEqual(command_env["KEEP_ME"], "yes")
-
-  def test_migrate_runtime_cvs_copies_and_updates_profile(self) -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-      root = Path(tmp)
-      source = root / "legacy" / "oldhash" / "cv.pdf"
-      source.parent.mkdir(parents=True)
-      source.write_bytes(b"pdf")
-      subscriber = self.subscriber()
-      subscriber["cvFileRef"] = "/home/joseph/.openclaw/workspace/job-scout/users/oldhash/cv.pdf"
-      args = argparse.Namespace(
-        legacy_root=root / "legacy",
-        storage_root=root / "runtime",
-        stored_ref_root=root / "runtime",
-        pilot_only=False,
-        dry_run=False,
-      )
-      with mock.patch.object(job_scout, "cmd_list_ready", return_value={"subscribers": [subscriber]}), \
-           mock.patch.object(job_scout, "request_json", return_value={"ok": True}) as request:
-        result = job_scout.cmd_migrate_runtime_cvs(args)
-
-      self.assertEqual(result["migratedCount"], 1)
-      self.assertEqual(result["missingCount"], 0)
-      payload = request.call_args.args[2]
-      self.assertTrue(Path(payload["cvFileRef"]).is_file())
 
   def test_non_zw_subscriber_gets_no_board_sources(self) -> None:
     # The Algeria subscriber (country dz) must never receive Zimbabwe board candidates;

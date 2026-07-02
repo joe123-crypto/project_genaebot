@@ -176,27 +176,15 @@ JOB_SCOUT_PILOT_USER_IDS=<comma-separated Firebase UIDs for the two pilot users>
    core gateway starts independently. The optional browser is built afterward;
    failure leaves Job Scout degraded but does not stop WhatsApp or other services.
 
-3. One existing CV can be recovered from the legacy Docker volume. Preview and
-   then migrate it without retrying historical applications:
+3. CVs now live in the Agent Genaie Cloudflare R2 bucket (object key
+   `<uid>/cv/cv.pdf`), and `cvFileRef` in Firestore holds that key. Existing
+   on-disk CVs were already migrated into R2 by the Agent Genaie
+   `scripts/migrate-cvs-to-r2.ts` one-off; the genaebot `migrate-runtime-cvs`
+   command has been removed. New CVs are uploaded to R2 by `stage-cv` /
+   `save-profile`, and the worker downloads a presigned URL at dispatch time.
 
-```bash
-OPENCLAW_ENV_PATH=/home/joseph/openclaw-deploy/.env \
-PYTHONPATH=workspace/lib:workspace/account-link \
-python3 workspace/job-scout/job_scout.py migrate-runtime-cvs \
-  --legacy-root /var/snap/docker/common/var-lib-docker/volumes/openclaw-state/_data/workspace/job-scout/users \
-  --storage-root /home/joseph/projects/genaebot/runtime/job-scout/users \
-  --stored-ref-root /home/joseph/.openclaw/runtime/job-scout/users \
-  --pilot-only --dry-run
-# Remove --dry-run only after reviewing the aggregate result.
-```
-
-   CV migration is intentionally not part of deployment: it reads a
-   host-specific legacy Docker volume and updates user profile records. A code
-   deploy must not silently mutate that data. The recoverable CV has already
-   been migrated on this host.
-
-4. The second pilot user has no recoverable CV and must upload it again through
-   the normal Job Scout profile flow.
+4. Any pilot user without a CV in R2 must upload it again through the normal Job
+   Scout profile flow.
 
 5. Install or update the pilot schedule:
 

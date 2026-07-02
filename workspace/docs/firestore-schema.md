@@ -113,7 +113,7 @@ Job Scout example:
     whatsappPhone: string,
     whatsappPhoneHash: string,
     senderEmail: "<users.profile.email unless user chooses another connected sender>",
-    cvFileRef: string | null,
+    cvFileRef: string | null,  // R2 object key "<uid>/cv/cv.pdf" (not a local path)
     setupStatus: "linked" | "profile_saved" | "ready"
   }
 }

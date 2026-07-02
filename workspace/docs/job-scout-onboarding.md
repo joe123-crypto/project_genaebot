@@ -131,7 +131,8 @@ Friendly field mapping:
 - Anything else to remember -> `--prompt-note`
 - Uploaded CV -> `--cv`
 
-When the user uploads the CV, immediately stage it into durable Job Scout storage:
+When the user uploads the CV, immediately stage it. This uploads the PDF to the
+Agent Genaie Cloudflare R2 bucket (the phone must already be linked):
 
 ```bash
 /home/joseph/.openclaw/workspace/bin/job-scout stage-cv \
@@ -139,7 +140,9 @@ When the user uploads the CV, immediately stage it into durable Job Scout storag
   --cv "<MediaPath>"
 ```
 
-Use the returned `cvFileRef` for later extraction and saving. Do not mention internal file paths to the user.
+`stage-cv` returns a `cvFileRef` that is the R2 object key (`<uid>/cv/cv.pdf`),
+not a local path. Use it for later extraction and saving. The CV must be a PDF.
+Do not mention internal storage keys to the user.
 
 Before confirming or saving the profile, validate every preferred location:
 
@@ -160,7 +163,7 @@ Upload your CV and say, "Use my CV for Job Scout."
 
 After the user uploads the CV and gives permission:
 
-- Immediately stage the CV into durable Job Scout storage:
+- Immediately stage the CV. This uploads the PDF to the Agent Genaie R2 bucket:
 
 ```bash
 /home/joseph/.openclaw/workspace/bin/job-scout stage-cv \
@@ -168,7 +171,7 @@ After the user uploads the CV and gives permission:
   --cv "<MediaPath>"
 ```
 
-- Use the returned `cvFileRef` for CV extraction and final profile saving.
+- Use the returned `cvFileRef` (R2 object key `<uid>/cv/cv.pdf`) for CV extraction and final profile saving.
 - Extract likely job types, qualifications, work experience, and skills from the CV.
 - Ask follow-up questions only for missing or unclear details.
 - Ask at most one or two questions per message.
@@ -226,7 +229,7 @@ After the user has provided enough details, uploaded a CV, confirmed the summary
   --exclusion "Senior management"
 ```
 
-If the user gives many details, use repeated flags. The helper keeps the CV in the per-user Job Scout folder and stores only the file reference in Agent Genaie/Firestore. Raw WhatsApp media is temporary and must not be treated as the durable CV location.
+`--cv` accepts either the `cvFileRef` returned by `stage-cv` (the R2 object key, already uploaded) or a local CV path (which `save-profile` uploads to R2). If the user gives many details, use repeated flags. The CV lives in the Agent Genaie Cloudflare R2 bucket under `<uid>/cv/cv.pdf`; Firestore stores that key as `cvFileRef`. Raw WhatsApp media is temporary and must not be treated as the durable CV location.
 
 After saving, reply:
 
@@ -240,7 +243,7 @@ Your Job Scout profile is saved. Make sure Gmail shows Connected in the app. Whe
 /home/joseph/.openclaw/workspace/bin/job-scout list-ready
 ```
 
-This lists only users who have an active Job Scout profile, linked WhatsApp chat, CV reference, and connected Gmail sender. A pilot user is dispatch-ready only when the referenced CV exists under `/home/joseph/.openclaw/runtime/job-scout/users`.
+This lists only users who have an active Job Scout profile, linked WhatsApp chat, CV reference, and connected Gmail sender. A pilot user is dispatch-ready only when a `cvFileRef` (R2 object key) is on file; the CV itself is fetched from the R2 bucket on demand at dispatch time.
 
 ## Failure Handling
 

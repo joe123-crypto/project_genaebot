@@ -176,6 +176,107 @@ def request_json(method: str, url: str, payload: dict | None = None) -> dict:
     raise SystemExit(1) from err
 
 
+def request_multipart(url: str, fields: dict[str, str], file_field: str, file_path: Path, filename: str, content_type: str) -> dict:
+  key = api_key()
+  if not key:
+    raise SystemExit("Missing AGENT_GENAI_INTERNAL_API_KEY.")
+  boundary = "----genaebot" + os.urandom(16).hex()
+  chunks: list[bytes] = []
+  for name, value in fields.items():
+    if value is None:
+      continue
+    chunks.append(f"--{boundary}\r\n".encode("utf-8"))
+    chunks.append(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("utf-8"))
+    chunks.append(f"{value}\r\n".encode("utf-8"))
+  chunks.append(f"--{boundary}\r\n".encode("utf-8"))
+  chunks.append(f'Content-Disposition: form-data; name="{file_field}"; filename="{filename}"\r\n'.encode("utf-8"))
+  chunks.append(f"Content-Type: {content_type}\r\n\r\n".encode("utf-8"))
+  chunks.append(Path(file_path).read_bytes())
+  chunks.append(f"\r\n--{boundary}--\r\n".encode("utf-8"))
+  body = b"".join(chunks)
+  request = urllib.request.Request(
+    url,
+    data=body,
+    method="POST",
+    headers={
+      "Authorization": f"Bearer {key}",
+      "Content-Type": f"multipart/form-data; boundary={boundary}",
+    },
+  )
+  try:
+    with urllib.request.urlopen(request, timeout=60) as response:
+      raw = response.read().decode("utf-8")
+      return json.loads(raw) if raw else {}
+  except urllib.error.HTTPError as err:
+    raw = err.read().decode("utf-8", errors="replace")
+    print(f"Agent Genaie Job Scout API failed with HTTP {err.code}: {raw}", file=sys.stderr)
+    raise SystemExit(1) from err
+  except urllib.error.URLError as err:
+    print(f"Could not reach Agent Genaie Job Scout API: {err}", file=sys.stderr)
+    raise SystemExit(1) from err
+
+
+def upload_cv(user_id: str, source: str | Path) -> dict:
+  """Upload a CV PDF to the agent-genaie R2 bucket and return {ok, key}."""
+  src = Path(source).expanduser().resolve()
+  if not src.exists() or not src.is_file():
+    raise SystemExit(f"CV file not found: {src}")
+  if safe_cv_suffix(src) != ".pdf":
+    raise SystemExit("CV must be a PDF file (the R2 store accepts application/pdf only).")
+  user = str(user_id or "").strip()
+  if not user:
+    raise SystemExit("user-id is required to upload a CV.")
+  return request_multipart(
+    endpoint("/internal/job-scout/cv"),
+    {"userId": user},
+    "file",
+    src,
+    "cv.pdf",
+    "application/pdf",
+  )
+
+
+def download_cv(user_id: str, dest: Path) -> Path:
+  """Fetch a presigned CV URL from agent-genaie and download it to dest."""
+  user = str(user_id or "").strip()
+  if not user:
+    raise SystemExit("user-id is required to download a CV.")
+  query = urllib.parse.urlencode({"userId": user})
+  result = request_json("GET", endpoint(f"/internal/job-scout/cv?{query}"))
+  url = str(result.get("url") or "").strip()
+  if not url:
+    raise RuntimeError("subscriber CV is unavailable; re-upload is required")
+  request = urllib.request.Request(url, method="GET", headers={"Accept": "*/*"})
+  try:
+    with urllib.request.urlopen(request, timeout=60) as response:
+      data = response.read()
+  except (urllib.error.URLError, TimeoutError, OSError) as err:
+    raise RuntimeError("could not download subscriber CV from storage") from err
+  dest.parent.mkdir(parents=True, exist_ok=True)
+  dest.write_bytes(data)
+  return dest
+
+
+def cv_object_available(user_id: str) -> bool:
+  """Non-fatal readiness probe: does the user's CV actually exist in R2?
+
+  The GET endpoint returns 404 when there is no cvFileRef or the object is
+  missing, so a 200 with a URL means the CV is truly downloadable.
+  """
+  user = str(user_id or "").strip()
+  key = api_key()
+  if not user or not key:
+    return False
+  url = endpoint(f"/internal/job-scout/cv?{urllib.parse.urlencode({'userId': user})}")
+  request = urllib.request.Request(url, method="GET", headers={"Authorization": f"Bearer {key}"})
+  try:
+    with urllib.request.urlopen(request, timeout=30) as response:
+      data = json.loads(response.read().decode("utf-8") or "{}")
+  except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
+    return False
+  return bool(str(data.get("url") or "").strip())
+
+
 def clean_items(values: list[str] | None) -> list[str]:
   output: list[str] = []
   seen: set[str] = set()
@@ -705,27 +806,16 @@ def safe_cv_suffix(path: Path) -> str:
   return suffix
 
 
-def store_cv(phone: str, source: str, storage_root: Path) -> str:
-  src = Path(source).expanduser().resolve()
-  if not src.exists() or not src.is_file():
-    raise SystemExit(f"CV file not found: {src}")
-  suffix = safe_cv_suffix(src)
-  user_dir = storage_root / phone_hash(phone)
-  user_dir.mkdir(parents=True, exist_ok=True)
-  dest = user_dir / f"cv{suffix}"
-  if src != dest:
-    shutil.copy2(src, dest)
-  return str(dest)
-
-
-def stage_cv(phone: str, source: str, storage_root: Path) -> dict:
+def stage_cv(phone: str, source: str) -> dict:
   normalized_phone = normalize_phone(phone)
   src = Path(source).expanduser().resolve()
-  cv_file_ref = store_cv(normalized_phone, str(src), storage_root)
+  user_id = linked_user_id(normalized_phone)
+  result = upload_cv(user_id, src)
   return {
     "ok": True,
     "phoneHash": phone_hash(normalized_phone),
-    "cvFileRef": cv_file_ref,
+    "userId": user_id,
+    "cvFileRef": result.get("key"),
     "originalPath": str(src),
     "storedAt": utc_now(),
   }
@@ -832,11 +922,18 @@ def cmd_check_runtime(args: argparse.Namespace) -> dict:
       ready = ready if isinstance(ready, list) else []
       ready = restrict_to_pilot(ready, bool(getattr(args, "pilot_only", False)))
       subscriber_count = len(ready)
-      accessible_cv_count = sum(1 for subscriber in ready if Path(str(subscriber.get("cvFileRef") or "")).is_file())
+      # cvFileRef is an R2 object key now; verify each CV actually exists in the
+      # bucket (the GET endpoint 404s on a missing or stale ref) rather than
+      # trusting a non-empty ref.
+      accessible_cv_count = sum(
+        1
+        for subscriber in ready
+        if cv_object_available(str(subscriber.get("userId") or subscriber.get("uid") or subscriber.get("id") or ""))
+      )
       if subscriber_count == 0:
         errors.append("no pilot subscribers are ready")
       elif accessible_cv_count != subscriber_count:
-        errors.append("one or more pilot CV files are unavailable; re-upload is required")
+        errors.append("one or more pilot subscribers have no CV in storage; re-upload is required")
     except (SystemExit, RuntimeError) as err:
       errors.append(public_text(err, 240))
 
@@ -862,8 +959,22 @@ def cmd_check_runtime(args: argparse.Namespace) -> dict:
   return result
 
 
+def resolve_cv_ref(user_id: str, cv_arg: str, do_upload: bool) -> str:
+  """`--cv` may be a local PDF (upload it to R2) or this user's already-staged R2 key."""
+  text = str(cv_arg or "").strip()
+  if not text:
+    raise SystemExit("--cv is required")
+  expected_key = f"{user_id}/cv/cv.pdf"
+  if text == expected_key:
+    return text  # already staged via stage-cv; value is this user's R2 object key
+  if Path(text).expanduser().is_file():
+    return str(upload_cv(user_id, text).get("key") or "") if do_upload else expected_key
+  # Not a real local file and not the expected staged key: never persist a bogus ref.
+  raise SystemExit(f"CV file not found (and not a staged CV reference): {text}")
+
+
 def cmd_stage_cv(args: argparse.Namespace) -> dict:
-  return stage_cv(args.phone, args.cv, args.storage_root)
+  return stage_cv(args.phone, args.cv)
 
 
 def cmd_save_profile(args: argparse.Namespace) -> dict:
@@ -896,59 +1007,21 @@ def cmd_save_profile(args: argparse.Namespace) -> dict:
     "autoApply": auto_apply,
     "maxApplicationsPerRun": max_applications,
   }
-  cv_file_ref = store_cv(phone, args.cv, args.storage_root)
-  payload = {"phone": phone, "userId": user_id, "preferences": preferences, "cvFileRef": cv_file_ref}
   if args.dry_run:
     return {
       "dryRun": True,
       "phoneHash": phone_hash(phone),
       "userId": user_id,
-      "cvFileRef": cv_file_ref,
+      "cvFileRef": resolve_cv_ref(user_id, args.cv, do_upload=False),
       "preferences": preferences,
+      "uploadEndpoint": endpoint("/internal/job-scout/cv"),
       "endpoint": endpoint("/internal/job-scout/profile"),
     }
+  cv_file_ref = resolve_cv_ref(user_id, args.cv, do_upload=True)
+  payload = {"phone": phone, "userId": user_id, "preferences": preferences, "cvFileRef": cv_file_ref}
   result = request_json("POST", endpoint("/internal/job-scout/profile"), payload)
   remove_pending_links(phone=phone, service="job-scout")
   return result
-
-
-def cmd_migrate_runtime_cvs(args: argparse.Namespace) -> dict:
-  ready = cmd_list_ready(argparse.Namespace(limit=100)).get("subscribers", [])
-  ready = ready if isinstance(ready, list) else []
-  ready = restrict_to_pilot(ready, args.pilot_only)
-  migrated = 0
-  missing = 0
-  users: list[dict] = []
-  marker = "/workspace/job-scout/users/"
-  for subscriber in ready:
-    old_ref = str(subscriber.get("cvFileRef") or "")
-    relative = old_ref.split(marker, 1)[1] if marker in old_ref else ""
-    source = args.legacy_root / relative if relative else Path(old_ref)
-    if not source.is_file():
-      missing += 1
-      users.append({"userKey": user_key(subscriber_user_id(subscriber)), "status": "missing"})
-      continue
-    suffix = safe_cv_suffix(source)
-    relative_ref = Path(phone_hash(subscriber_phone(subscriber))) / f"cv{suffix}"
-    new_ref = str(args.stored_ref_root / relative_ref)
-    if not args.dry_run:
-      store_cv(subscriber_phone(subscriber), str(source), args.storage_root)
-      request_json("POST", endpoint("/internal/job-scout/profile"), {
-        "phone": subscriber_phone(subscriber),
-        "userId": subscriber_user_id(subscriber),
-        "preferences": subscriber_preferences(subscriber),
-        "cvFileRef": new_ref,
-      })
-    migrated += 1
-    users.append({"userKey": user_key(subscriber_user_id(subscriber)), "status": "migrated"})
-  return {
-    "ok": missing == 0,
-    "dryRun": args.dry_run,
-    "subscriberCount": len(ready),
-    "migratedCount": migrated,
-    "missingCount": missing,
-    "users": users,
-  }
 
 
 def cmd_list_ready(args: argparse.Namespace) -> dict:
@@ -1093,13 +1166,26 @@ def subscriber_sender_email(subscriber: dict) -> str:
   return email
 
 
+# cvFileRef is now an R2 object key, not a local path. Downloaded CVs are cached
+# per user for the duration of a dispatch run so multiple candidates reuse one
+# download.
+_cv_download_cache: dict[str, str] = {}
+
+
+def cv_local_dest(subscriber: dict) -> Path:
+  return DEFAULT_STORAGE_ROOT / subscriber_phone_hash(subscriber) / "cv.pdf"
+
+
 def subscriber_cv_file(subscriber: dict) -> str:
-  cv = str(subscriber.get("cvFileRef") or "").strip()
-  if not cv:
+  user_id = subscriber_user_id(subscriber)
+  cached = _cv_download_cache.get(user_id)
+  if cached and Path(cached).is_file():
+    return cached
+  if not str(subscriber.get("cvFileRef") or "").strip():
     raise RuntimeError("subscriber is missing cvFileRef")
-  if not Path(cv).is_file():
-    raise RuntimeError("subscriber CV is unavailable; re-upload is required")
-  return cv
+  path = str(download_cv(user_id, cv_local_dest(subscriber)))
+  _cv_download_cache[user_id] = path
+  return path
 
 
 def subscriber_phone_hash(subscriber: dict) -> str:
@@ -1876,14 +1962,6 @@ def build_parser() -> argparse.ArgumentParser:
   profile.add_argument("--storage-root", type=Path, default=DEFAULT_STORAGE_ROOT)
   profile.add_argument("--dry-run", action="store_true")
   profile.set_defaults(func=cmd_save_profile)
-
-  migrate_cvs = subparsers.add_parser("migrate-runtime-cvs", help="move legacy pilot CVs into writable runtime storage")
-  migrate_cvs.add_argument("--legacy-root", type=Path, required=True)
-  migrate_cvs.add_argument("--storage-root", type=Path, default=DEFAULT_STORAGE_ROOT)
-  migrate_cvs.add_argument("--stored-ref-root", type=Path, default=DEFAULT_STORAGE_ROOT)
-  migrate_cvs.add_argument("--pilot-only", action="store_true")
-  migrate_cvs.add_argument("--dry-run", action="store_true")
-  migrate_cvs.set_defaults(func=cmd_migrate_runtime_cvs)
 
   ready = subparsers.add_parser("list-ready", help="list ready Job Scout subscribers")
   ready.add_argument("--limit", type=int, default=10)
