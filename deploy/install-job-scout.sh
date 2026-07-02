@@ -3,21 +3,18 @@ set -euo pipefail
 
 CONTAINER="${OPENCLAW_CONTAINER:-openclaw-gateway}"
 DOCKER="${DOCKER:-docker}"
-NAME="job-scout-pilot"
+NAME="job-scout"
+LEGACY_NAME="job-scout-pilot"
 CRON_EXPR="0 9 * * *"
 TZ="Africa/Harare"
 ALERT_TO="${JOB_SCOUT_FAILURE_ALERT_TO:-+213563719936}"
-COMMAND_ARGV='["/home/joseph/.openclaw/workspace/bin/job-scout","dispatch-jsearch","--pilot-only"]'
+COMMAND_ARGV='["/home/joseph/.openclaw/workspace/bin/job-scout","dispatch-jsearch","--limit-ready","100"]'
 
 job_scout=("$DOCKER" exec -u joseph "$CONTAINER" /home/joseph/.openclaw/workspace/bin/job-scout)
 openclaw=("$DOCKER" exec -u joseph "$CONTAINER" sh -lc 'exec env -u OPENCLAW_HOME OPENCLAW_GATEWAY_TOKEN="$GATEWAY_AUTH_TOKEN" openclaw "$@"' openclaw)
 
 if ! "$DOCKER" exec "$CONTAINER" sh -lc '[ "${#JOB_SCOUT_BROWSER_TOKEN}" -ge 32 ]'; then
   printf 'ERROR: JOB_SCOUT_BROWSER_TOKEN is missing from the gateway or shorter than 32 characters.\n' >&2
-  exit 1
-fi
-if ! "$DOCKER" exec "$CONTAINER" sh -lc '[ -n "$JOB_SCOUT_PILOT_USER_IDS" ]'; then
-  printf 'ERROR: JOB_SCOUT_PILOT_USER_IDS is missing from the gateway.\n' >&2
   exit 1
 fi
 
@@ -34,11 +31,17 @@ if [ "$gateway_token_hash" != "$browser_token_hash" ]; then
 fi
 unset gateway_token_hash browser_token_hash
 
-"${job_scout[@]}" check-runtime --check-browser --check-subscribers --pilot-only
+"${job_scout[@]}" check-runtime --check-browser --check-subscribers
 
-existing_id="$("${openclaw[@]}" cron list --json | jq -r --arg name "$NAME" '.jobs[] | select(.name == $name) | .id' | head -1)"
+jobs_json="$("${openclaw[@]}" cron list --all --json)"
+existing_id="$(printf '%s' "$jobs_json" | jq -r --arg name "$NAME" '.jobs[] | select(.name == $name) | .id' | head -1)"
+if [ -z "$existing_id" ]; then
+  existing_id="$(printf '%s' "$jobs_json" | jq -r --arg name "$LEGACY_NAME" '.jobs[] | select(.name == $name) | .id' | head -1)"
+fi
+
 if [ -n "$existing_id" ]; then
   "${openclaw[@]}" cron edit "$existing_id" \
+    --name "$NAME" \
     --cron "$CRON_EXPR" \
     --tz "$TZ" \
     --exact \
@@ -62,7 +65,16 @@ else
     --json >/dev/null
 fi
 
-existing_id="$("${openclaw[@]}" cron list --json | jq -r --arg name "$NAME" '.jobs[] | select(.name == $name) | .id' | head -1)"
+jobs_json="$("${openclaw[@]}" cron list --all --json)"
+existing_id="$(printf '%s' "$jobs_json" | jq -r --arg name "$NAME" '.jobs[] | select(.name == $name) | .id' | head -1)"
+
+# Remove any duplicate legacy schedule after the canonical job is installed.
+while IFS= read -r legacy_id; do
+  [ -n "$legacy_id" ] || continue
+  [ "$legacy_id" = "$existing_id" ] && continue
+  "${openclaw[@]}" cron remove "$legacy_id" --json >/dev/null
+done < <(printf '%s' "$jobs_json" | jq -r --arg name "$LEGACY_NAME" '.jobs[] | select(.name == $name) | .id')
+
 "${openclaw[@]}" cron edit "$existing_id" \
   --failure-alert \
   --failure-alert-after 1 \
@@ -70,7 +82,14 @@ existing_id="$("${openclaw[@]}" cron list --json | jq -r --arg name "$NAME" '.jo
   --failure-alert-to "$ALERT_TO" \
   --failure-alert-cooldown 1h >/dev/null
 
-"${openclaw[@]}" cron list --json | jq -e --arg name "$NAME" \
-  '.jobs[] | select(.name == $name and .enabled == true and .schedule.expr == "0 9 * * *" and .schedule.tz == "Africa/Harare" and .failureAlert.after == 1)' >/dev/null
+"${openclaw[@]}" cron list --all --json | jq -e --arg name "$NAME" \
+  '.jobs[] | select(
+    .name == $name and
+    .enabled == true and
+    .schedule.expr == "0 9 * * *" and
+    .schedule.tz == "Africa/Harare" and
+    .payload.argv == ["/home/joseph/.openclaw/workspace/bin/job-scout", "dispatch-jsearch", "--limit-ready", "100"] and
+    .failureAlert.after == 1
+  )' >/dev/null
 
-printf 'Job Scout pilot scheduled daily at 09:00 Africa/Harare.\n'
+printf 'Job Scout scheduled daily at 09:00 Africa/Harare for up to 100 ready subscribers.\n'

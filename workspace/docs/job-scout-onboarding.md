@@ -240,10 +240,10 @@ Your Job Scout profile is saved. Make sure Gmail shows Connected in the app. Whe
 ## Verify Ready Users
 
 ```bash
-/home/joseph/.openclaw/workspace/bin/job-scout list-ready
+/home/joseph/.openclaw/workspace/bin/job-scout status --phone "<whatsapp phone>"
 ```
 
-This lists only users who have an active Job Scout profile, linked WhatsApp chat, CV reference, and connected Gmail sender. A pilot user is dispatch-ready only when a `cvFileRef` (R2 object key) is on file; the CV itself is fetched from the R2 bucket on demand at dispatch time.
+This returns only the requesting user's sanitized setup state. A user is dispatch-ready only when the WhatsApp chat is linked, Gmail is connected, a profile and CV reference are saved, and the CV object is available in R2. The CV is fetched from R2 on demand at dispatch time. Files under `runtime/job-scout/users` are temporary download caches and must never be used to decide whether a CV exists.
 
 ## Failure Handling
 

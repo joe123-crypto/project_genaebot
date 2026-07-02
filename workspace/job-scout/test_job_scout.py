@@ -155,6 +155,56 @@ class CvDownloadTests(unittest.TestCase):
       self.assertFalse(job_scout.cv_object_available("user-9"))
 
 
+class JobScoutStatusTests(unittest.TestCase):
+  def test_status_uses_r2_and_returns_only_requested_user(self) -> None:
+    subscribers = [
+      {
+        "userId": "other-user",
+        "whatsappPhone": "+263700000000",
+        "senderEmail": "other@example.com",
+        "cvFileRef": "other-user/cv/cv.pdf",
+      },
+      {
+        "userId": "requested-user",
+        "whatsappPhone": "+213555010101",
+        "senderEmail": "requester@example.com",
+        "cvFileRef": "requested-user/cv/cv.pdf",
+        "profile": {"displayName": "Requester"},
+        "preferences": {
+          "targetRoles": ["Driver"],
+          "locations": ["Nationwide, Zimbabwe"],
+          "autoApply": True,
+          "maxApplicationsPerRun": 2,
+        },
+      },
+    ]
+    with mock.patch.object(job_scout, "cmd_list_ready", return_value={"subscribers": subscribers}), \
+         mock.patch.object(job_scout, "cv_object_available", return_value=True) as cv_probe:
+      result = job_scout.cmd_status(argparse.Namespace(phone="+213 555 010 101"))
+
+    self.assertTrue(result["ready"])
+    self.assertTrue(result["cvAvailable"])
+    self.assertEqual(result["senderEmail"], "requester@example.com")
+    self.assertEqual(result["preferences"]["targetRoles"], ["Driver"])
+    self.assertNotIn("userId", result)
+    self.assertNotIn("other@example.com", json.dumps(result))
+    cv_probe.assert_called_once_with("requested-user")
+
+  def test_status_reports_unconfigured_without_other_user_data(self) -> None:
+    with mock.patch.object(job_scout, "cmd_list_ready", return_value={"subscribers": []}), \
+         mock.patch.object(job_scout, "cv_object_available") as cv_probe:
+      result = job_scout.cmd_status(argparse.Namespace(phone="+213555010101"))
+
+    self.assertEqual(result, {
+      "configured": False,
+      "linked": False,
+      "gmailConnected": False,
+      "cvAvailable": False,
+      "ready": False,
+    })
+    cv_probe.assert_not_called()
+
+
 class PreferredLocationTests(unittest.TestCase):
   def test_resolves_country_from_location_suffix(self) -> None:
     self.assertEqual(
@@ -391,12 +441,6 @@ class JSearchTests(unittest.TestCase):
 
     self.assertEqual(job_scout.filter_candidates(candidates, {}, applications, 5), [candidates[0]])
 
-  def test_pilot_filter_applies_allowlist(self) -> None:
-    subscribers = [{"userId": "one"}, {"userId": "two"}]
-    with mock.patch.dict(job_scout.os.environ, {"JOB_SCOUT_PILOT_USER_IDS": "two"}):
-      self.assertEqual(job_scout.restrict_to_pilot(subscribers, True), [subscribers[1]])
-
-
 class JSearchDispatchTests(unittest.TestCase):
   def subscriber(self, auto_apply: bool = True) -> dict:
     return {
@@ -423,7 +467,6 @@ class JSearchDispatchTests(unittest.TestCase):
       max_candidates_per_user=5,
       dispatch_root=root,
       dry_run=dry_run,
-      pilot_only=False,
     )
 
   def candidate(self, email: str | None = "hr@example.dz", link: str = "https://jobs.example/apply") -> dict:

@@ -10,7 +10,7 @@ import {
 
 const DEFAULT_JOB_SCOUT_SCRIPT = "~/.openclaw/workspace/bin/job-scout";
 const DEFAULT_JOB_SCOUT_SETUP_FAILED = `I couldn't start Job Scout. Try again later.`;
-const JOB_SCOUT_PILOT_CLOSED = "Job Scout is currently limited to the existing pilot users. New setup will reopen after the pilot is verified.";
+const JOB_SCOUT_UNAVAILABLE = "Job Scout setup is temporarily unavailable. Try again later.";
 
 const JOB_SCOUT_REQUEST_PATTERNS = [
   /\bjob\s*(?:scout|scouting|application|applications?)\b/i,
@@ -81,7 +81,7 @@ ${setupUrl}
 
 export async function handleJobScoutRequest(api, sender) {
   if (getPluginConfig(api).jobScoutOnboardingEnabled !== true) {
-    return { handled: true, text: JOB_SCOUT_PILOT_CLOSED };
+    return { handled: true, text: JOB_SCOUT_UNAVAILABLE };
   }
   try {
     const accountLinkScript = getAccountLinkScript(api);

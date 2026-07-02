@@ -1,6 +1,6 @@
 ---
 name: job-scout
-description: Onboard public WhatsApp users for the Agent Genaie Job Scout pilot and manage Job Scout records.
+description: Onboard public WhatsApp users for Agent Genaie Job Scout and manage Job Scout records.
 ---
 
 # job-scout
@@ -14,11 +14,11 @@ Commands:
 - After linked, create Job Scout setup link: `/home/joseph/.openclaw/workspace/bin/job-scout create-invite --phone "<whatsapp phone>"`
 - Validate the preferred location before saving: `/home/joseph/.openclaw/workspace/bin/job-scout resolve-location --location "Bindura, Zimbabwe"`
 - Save profile and CV: `/home/joseph/.openclaw/workspace/bin/job-scout save-profile --phone "<whatsapp phone>" --cv "/path/to/cv.pdf" --target-role "..." --location "City or area, Country" --language fr`
-- List ready subscribers: `/home/joseph/.openclaw/workspace/bin/job-scout list-ready`
+- Check one requester's setup: `/home/joseph/.openclaw/workspace/bin/job-scout status --phone "<whatsapp phone>"`
 - List applications: `/home/joseph/.openclaw/workspace/bin/job-scout list-applications --user-id "<firebase uid>"`
 - Record application: `/home/joseph/.openclaw/workspace/bin/job-scout record-application --user-id "<firebase uid>" --company "..." --role "..." --status applied`
 - Fetch JSearch candidates for a profile: `/home/joseph/.openclaw/workspace/bin/job-scout fetch-candidates --target-role "..." --location "..."`
-- Preview candidates for ready users: `/home/joseph/.openclaw/workspace/bin/job-scout dispatch-jsearch --dry-run --pilot-only`
+- Preview candidates for ready users: `/home/joseph/.openclaw/workspace/bin/job-scout dispatch-jsearch --dry-run`
 
 Rules:
 
@@ -30,5 +30,6 @@ Rules:
 - Real application email sends go through `genaie-mail --from <connected sender>`.
 - Website applications go only through the isolated browser worker. Report `applied` only after its `submitted` result; login, CAPTCHA, declarations, payments, and unknown required questions are `action_required`.
 - Never claim that an `action_required`, historical `physical_submission`, or failed record was submitted.
-- Pilot dispatch must use `--pilot-only`; `JOB_SCOUT_PILOT_USER_IDS` is the allowlist.
+- Use `status --phone` when answering whether a requester is set up. Cloud R2 is authoritative for CV availability; never infer it from files under `runtime/job-scout/users`.
+- `list-ready` and full dispatch commands are operator-only because their output can include multiple users. Never use them to answer a public user's status question.
 - Job discovery must use the deterministic JSearch dispatcher only. Each saved preferred location supplies that user's JSearch country code. Algeria (`dz`) remains the fallback when no location is supplied outside onboarding; default language is French (`fr`).

@@ -108,10 +108,11 @@ Short replies such as "1", "2", "Done", "yes", "no", and restaurant names are no
 
 ## Job Scout Onboarding
 
-- New Job Scout onboarding is closed during the two-user browser-application pilot. Do not create setup links for new users until `jobScoutOnboardingEnabled` is deliberately enabled after pilot review.
-- Existing pilot users may update their profile or replace a missing CV through the flow below.
+- Job Scout onboarding is open to supported public WhatsApp users.
 - Treat `/home/joseph/.openclaw/workspace/docs/job-scout-onboarding.md` as the exact source of truth for Job Scout setup.
 - If a user asks to start Job Scout, first ensure this WhatsApp chat is linked to an Agent Genaie login for that requester's phone only.
+- If a user asks whether Job Scout is set up, use `/home/joseph/.openclaw/workspace/bin/job-scout status --phone "<whatsapp phone>"` for that requester only.
+- Treat Cloudflare R2 as the CV source of truth. Local files under `runtime/job-scout/users` are disposable dispatch caches and do not prove that a CV exists or is missing.
 - Ask at most one or two onboarding questions per WhatsApp message.
 - Offer two setup paths: guided questions or CV autofill.
 - When a Job Scout user uploads a CV during setup, stage it immediately using `/home/joseph/.openclaw/workspace/bin/job-scout stage-cv`; raw WhatsApp media is temporary and must not be the durable CV location.

@@ -77,7 +77,7 @@ Most admin cron jobs deliver to the admin WhatsApp: **+213563719936** (Joe's day
 1. **Webetu Progress meal reservation** — reservations, status checks, troubleshooting, onboarding
 2. **Personalized news delivery** — to user's inbox, based on their topics and schedule
 3. **Local event scouting** — events around user's location
-4. **Job/scholarship/internship scouting** — active pilot; requires Agent Genaie login, linked WhatsApp chat, connected Gmail, profile/CV, and scam-warning acknowledgement.
+4. **Job/scholarship/internship scouting** — active with open onboarding; requires Agent Genaie login, linked WhatsApp chat, connected Gmail, profile/CV, and scam-warning acknowledgement. Scheduled dispatch covers all ready users. CV availability must be checked in Cloudflare R2 with `job-scout status --phone`; local runtime CV files are only disposable caches.
 
 ### Public Service Gate Plugin
 - **Location:** `plugins/public-service-gate/index.js`

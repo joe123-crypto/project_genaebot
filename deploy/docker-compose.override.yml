@@ -3,7 +3,6 @@ services:
     environment:
       JOB_SCOUT_WEB_APPLY_URL: http://job-scout-browser:8787/apply
       JOB_SCOUT_BROWSER_TOKEN: ${JOB_SCOUT_BROWSER_TOKEN:-}
-      JOB_SCOUT_PILOT_USER_IDS: ${JOB_SCOUT_PILOT_USER_IDS:-}
     volumes:
       # Developer-owned source/context. Staged into ~/openclaw-deploy/live-source
       # because snap Docker cannot reliably read hidden home directories.

@@ -118,10 +118,11 @@ esac
   return dispatch;
 }
 
-test("job scout onboarding stays closed unless explicitly enabled", async () => {
+test("job scout onboarding has a generic disabled response", async () => {
   const reply = await handleJobScoutRequest({ pluginConfig: { jobScoutOnboardingEnabled: false } }, UNKNOWN);
   assert.equal(reply.handled, true);
-  assert.match(reply.text, /existing pilot users/i);
+  assert.match(reply.text, /temporarily unavailable/i);
+  assert.doesNotMatch(reply.text, /pilot/i);
 });
 
 function eventFor(text, sender = MEMBER) {

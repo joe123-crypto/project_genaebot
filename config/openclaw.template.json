@@ -77,7 +77,7 @@
           "webetuOnboardingStartText": "Sign in here and save your Webetu details in the Credentials Vault:\n{setupUrl}\n\nDon't send those details here. Check Spam if the sign-in email doesn't arrive.",
           "botWhatsappNumber": "+263785632943",
           "invitesEnabled": true,
-          "jobScoutOnboardingEnabled": false
+          "jobScoutOnboardingEnabled": true
         }
       },
       "whatsapp-relevance-gate": {

@@ -159,17 +159,16 @@ cd /home/joseph/.openclaw
 sudo ./deploy/openclaw-deploy.sh
 ```
 
-Job Scout pilot activation is deliberately separate from a normal gateway
+Job Scout scheduler activation is deliberately separate from a normal gateway
 deploy. Use this order:
 
 1. Add these private values to `/home/joseph/openclaw-deploy/.env`:
 
 ```text
 JOB_SCOUT_BROWSER_TOKEN=<at least 32 random bytes>
-JOB_SCOUT_PILOT_USER_IDS=<comma-separated Firebase UIDs for the two pilot users>
 ```
 
-   Do not put either value in Git. The same Compose interpolation supplies the
+   Do not put this value in Git. The same Compose interpolation supplies the
    browser token to the gateway and worker, preventing mismatched delivery paths.
 
 2. Deploy the Agent Genaie API schema change, then deploy this repository. The
@@ -183,19 +182,20 @@ JOB_SCOUT_PILOT_USER_IDS=<comma-separated Firebase UIDs for the two pilot users>
    command has been removed. New CVs are uploaded to R2 by `stage-cv` /
    `save-profile`, and the worker downloads a presigned URL at dispatch time.
 
-4. Any pilot user without a CV in R2 must upload it again through the normal Job
-   Scout profile flow.
+4. Any ready user without a CV in R2 must upload it again through the normal Job
+   Scout profile flow. Local files under `runtime/job-scout/users` are disposable
+   caches and are not evidence that an R2 CV exists or is missing.
 
-5. Install or update the pilot schedule:
+5. Install or update the schedule:
 
 ```bash
-sudo ./deploy/install-job-scout-pilot.sh
+sudo ./deploy/install-job-scout.sh
 ```
 
 The installer refuses to enable the cron unless the worker is healthy, the
-gateway and worker tokens match, the allowlist resolves to ready subscribers,
-and every pilot CV is accessible. It prints the failing readiness check, runs
-daily at `09:00 Africa/Harare`, and leaves wider onboarding unchanged.
+gateway and worker tokens match, at least one subscriber is ready, and every
+ready CV is accessible. It prints the failing readiness check and runs daily at
+`09:00 Africa/Harare` for up to 100 ready subscribers.
 
 The deploy script used by both paths:
 

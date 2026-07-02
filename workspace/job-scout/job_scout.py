@@ -920,7 +920,6 @@ def cmd_check_runtime(args: argparse.Namespace) -> dict:
     try:
       ready = cmd_list_ready(argparse.Namespace(limit=100)).get("subscribers", [])
       ready = ready if isinstance(ready, list) else []
-      ready = restrict_to_pilot(ready, bool(getattr(args, "pilot_only", False)))
       subscriber_count = len(ready)
       # cvFileRef is an R2 object key now; verify each CV actually exists in the
       # bucket (the GET endpoint 404s on a missing or stale ref) rather than
@@ -931,9 +930,9 @@ def cmd_check_runtime(args: argparse.Namespace) -> dict:
         if cv_object_available(str(subscriber.get("userId") or subscriber.get("uid") or subscriber.get("id") or ""))
       )
       if subscriber_count == 0:
-        errors.append("no pilot subscribers are ready")
+        errors.append("no Job Scout subscribers are ready")
       elif accessible_cv_count != subscriber_count:
-        errors.append("one or more pilot subscribers have no CV in storage; re-upload is required")
+        errors.append("one or more Job Scout subscribers have no CV in storage; re-upload is required")
     except (SystemExit, RuntimeError) as err:
       errors.append(public_text(err, 240))
 
@@ -1027,6 +1026,60 @@ def cmd_save_profile(args: argparse.Namespace) -> dict:
 def cmd_list_ready(args: argparse.Namespace) -> dict:
   query = urllib.parse.urlencode({"limit": args.limit})
   return request_json("GET", endpoint(f"/internal/job-scout/subscribers?{query}"))
+
+
+def cmd_status(args: argparse.Namespace) -> dict:
+  """Return requester-scoped readiness using R2 as the CV source of truth."""
+  phone = normalize_phone(args.phone)
+  response = cmd_list_ready(argparse.Namespace(limit=100))
+  subscribers = response.get("subscribers") if isinstance(response, dict) else []
+  subscribers = subscribers if isinstance(subscribers, list) else []
+  subscriber = None
+  for candidate in subscribers:
+    candidate_phone = str(candidate.get("whatsappPhone") or "").strip()
+    if not candidate_phone:
+      continue
+    try:
+      if normalize_phone(candidate_phone) == phone:
+        subscriber = candidate
+        break
+    except SystemExit:
+      continue
+
+  if subscriber is None:
+    return {
+      "configured": False,
+      "linked": False,
+      "gmailConnected": False,
+      "cvAvailable": False,
+      "ready": False,
+    }
+
+  user_id = subscriber_user_id(subscriber)
+  sender_email = str(subscriber.get("senderEmail") or "").strip()
+  preferences = subscriber_preferences(subscriber)
+  profile = subscriber.get("profile") if isinstance(subscriber.get("profile"), dict) else {}
+  cv_available = cv_object_available(user_id)
+  linked = bool(str(subscriber.get("whatsappPhone") or "").strip())
+  gmail_connected = bool(sender_email)
+  ready = bool(linked and gmail_connected and str(subscriber.get("cvFileRef") or "").strip() and cv_available)
+  return {
+    "configured": True,
+    "linked": linked,
+    "gmailConnected": gmail_connected,
+    "senderEmail": sender_email or None,
+    "cvAvailable": cv_available,
+    "ready": ready,
+    "profile": {
+      "displayName": str(profile.get("displayName") or "").strip() or None,
+    },
+    "preferences": {
+      "targetRoles": clean_items(profile_values(preferences, "targetRoles")),
+      "locations": clean_items(profile_values(preferences, "locations")),
+      "autoApply": preferences.get("autoApply", True) is not False,
+      "maxApplicationsPerRun": max_applications(preferences),
+    },
+  }
 
 
 def cmd_list_applications(args: argparse.Namespace) -> dict:
@@ -1484,26 +1537,11 @@ def build_user_summary(date_label: str, applied: list[dict], action_required: li
   return "\n".join(line for line in lines).strip()
 
 
-def pilot_user_ids() -> set[str]:
-  raw = env_default("JOB_SCOUT_PILOT_USER_IDS", "")
-  return {item.strip() for item in raw.split(",") if item.strip()}
-
-
-def restrict_to_pilot(subscribers: list[dict], enabled: bool) -> list[dict]:
-  if not enabled:
-    return subscribers
-  allowed = pilot_user_ids()
-  if not allowed:
-    raise SystemExit("JOB_SCOUT_PILOT_USER_IDS is required with --pilot-only")
-  return [subscriber for subscriber in subscribers if subscriber_user_id(subscriber) in allowed]
-
-
 def cmd_dispatch_jsearch(args: argparse.Namespace) -> dict:
   ready_result = cmd_list_ready(argparse.Namespace(limit=args.limit_ready))
   subscribers = ready_result.get("subscribers") if isinstance(ready_result, dict) else []
   if not isinstance(subscribers, list):
     subscribers = []
-  subscribers = restrict_to_pilot(subscribers, bool(getattr(args, "pilot_only", False)))
   run_id = args.run_id or f"job-scout-jsearch-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
   run_id = safe_run_id(run_id)
   ready_count = len(subscribers)
@@ -1927,7 +1965,6 @@ def build_parser() -> argparse.ArgumentParser:
   check_runtime = subparsers.add_parser("check-runtime", help="check Job Scout runtime prerequisites")
   check_runtime.add_argument("--check-browser", action="store_true")
   check_runtime.add_argument("--check-subscribers", action="store_true")
-  check_runtime.add_argument("--pilot-only", action="store_true")
   check_runtime.set_defaults(func=cmd_check_runtime)
 
   resolve_location = subparsers.add_parser(
@@ -1963,8 +2000,12 @@ def build_parser() -> argparse.ArgumentParser:
   profile.add_argument("--dry-run", action="store_true")
   profile.set_defaults(func=cmd_save_profile)
 
+  status = subparsers.add_parser("status", help="check one WhatsApp user's Job Scout readiness")
+  status.add_argument("--phone", required=True)
+  status.set_defaults(func=cmd_status)
+
   ready = subparsers.add_parser("list-ready", help="list ready Job Scout subscribers")
-  ready.add_argument("--limit", type=int, default=10)
+  ready.add_argument("--limit", type=int, default=100)
   ready.set_defaults(func=cmd_list_ready)
 
   apps = subparsers.add_parser("list-applications", help="list a user's recorded applications")
@@ -2007,10 +2048,9 @@ def build_parser() -> argparse.ArgumentParser:
 
   dispatch_jsearch = subparsers.add_parser("dispatch-jsearch", help="fetch JSearch candidates for ready subscribers")
   dispatch_jsearch.add_argument("--run-id")
-  dispatch_jsearch.add_argument("--limit-ready", type=int, default=10)
+  dispatch_jsearch.add_argument("--limit-ready", type=int, default=100)
   dispatch_jsearch.add_argument("--max-candidates-per-user", type=int, default=5)
   dispatch_jsearch.add_argument("--dispatch-root", type=Path, default=DEFAULT_DISPATCH_ROOT)
-  dispatch_jsearch.add_argument("--pilot-only", action="store_true")
   dispatch_jsearch.add_argument("--dry-run", action="store_true")
   dispatch_jsearch.set_defaults(func=cmd_dispatch_jsearch)
 

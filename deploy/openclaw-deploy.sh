@@ -220,7 +220,7 @@ start_optional_job_scout_browser() {
     fi
     sleep 5
   done
-  log "WARNING: Job Scout browser is not ready (health=${health:-missing}); pilot activation remains blocked"
+  log "WARNING: Job Scout browser is not ready (health=${health:-missing}); scheduler installation remains blocked"
   return 0
 }
 
@@ -255,7 +255,7 @@ syntax_checks() {
   bash -n "$OC_DIR/workspace/bin/openclaw-cap"
   bash -n "$OC_DIR/workspace/cron/github-issue-tracker/check_issue.sh"
   bash -n "$OC_DIR/workspace/cron/webetu-meals/notify-reservations.sh"
-  bash -n "$OC_DIR/deploy/install-job-scout-pilot.sh"
+  bash -n "$OC_DIR/deploy/install-job-scout.sh"
   python3 -m json.tool "$OC_DIR/config/openclaw.template.json" >/dev/null
   python3 -m json.tool "$OC_DIR/workspace/job-scout/package.json" >/dev/null
   python3 -m json.tool "$OC_DIR/workspace/job-scout/package-lock.json" >/dev/null

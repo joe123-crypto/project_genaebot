@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import unittest
 
 
@@ -6,6 +7,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class JobScoutDeploymentTests(unittest.TestCase):
+  def test_job_scout_onboarding_is_enabled(self) -> None:
+    config = json.loads((ROOT / "config/openclaw.template.json").read_text(encoding="utf-8"))
+
+    plugin = config["plugins"]["entries"]["public-service-gate"]["config"]
+    self.assertIs(plugin["jobScoutOnboardingEnabled"], True)
+
   def test_browser_is_optional_and_does_not_gate_openclaw(self) -> None:
     compose = (ROOT / "deploy/docker-compose.override.yml").read_text(encoding="utf-8")
 
@@ -16,8 +23,17 @@ class JobScoutDeploymentTests(unittest.TestCase):
     self.assertIn("user: ubuntu", compose)
     self.assertIn("/tmp:size=256m,uid=1000,gid=1000,mode=1770", compose)
     self.assertIn("JOB_SCOUT_BROWSER_TOKEN: ${JOB_SCOUT_BROWSER_TOKEN:-}", compose)
-    self.assertIn("JOB_SCOUT_PILOT_USER_IDS: ${JOB_SCOUT_PILOT_USER_IDS:-}", compose)
+    self.assertNotIn("JOB_SCOUT_PILOT_USER_IDS", compose)
     self.assertEqual(compose.count("JOB_SCOUT_BROWSER_TOKEN: ${JOB_SCOUT_BROWSER_TOKEN:-}"), 2)
+
+  def test_scheduler_has_no_pilot_allowlist(self) -> None:
+    installer = (ROOT / "deploy/install-job-scout.sh").read_text(encoding="utf-8")
+
+    self.assertIn('NAME="job-scout"', installer)
+    self.assertIn('LEGACY_NAME="job-scout-pilot"', installer)
+    self.assertNotIn("--pilot-only", installer)
+    self.assertNotIn("JOB_SCOUT_PILOT_USER_IDS", installer)
+    self.assertIn('"--limit-ready","100"', installer)
 
   def test_healthcheck_exercises_chromium_readiness(self) -> None:
     compose = (ROOT / "deploy/docker-compose.override.yml").read_text(encoding="utf-8")
