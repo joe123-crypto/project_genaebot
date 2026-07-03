@@ -73,6 +73,14 @@ class JobScoutDeploymentTests(unittest.TestCase):
     self.assertIn("install_container_service", deploy)
     self.assertIn('run_root install -D -m 0644 "$SERVICE_UNIT_SRC" "$SERVICE_UNIT_DST"', deploy)
 
+  def test_live_workspace_verification_survives_container_restart(self) -> None:
+    deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")
+    verify = deploy[deploy.index("verify_live_workspace()") : deploy.index("main()")]
+
+    self.assertIn('for _attempt in $(seq 1 5)', verify)
+    self.assertIn('exec -i "$CONTAINER" python3', verify)
+    self.assertIn("ensure_container_running", verify)
+
   def test_docker_readiness_check_succeeds_and_is_bounded(self) -> None:
     waiter = ROOT / "deploy/systemd/wait-for-docker.sh"
     with tempfile.TemporaryDirectory() as tmp:

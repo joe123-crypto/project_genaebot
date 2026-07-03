@@ -539,10 +539,13 @@ diagnose_health_failure() {
 }
 
 verify_live_workspace() {
-  local docker
+  local docker rc _attempt
   docker="$(docker_bin)"
   log "Verify live workspace setting"
-  "$docker" exec "$CONTAINER" python3 - <<'PY'
+  rc=1
+  for _attempt in $(seq 1 5); do
+    set +e
+    "$docker" exec -i "$CONTAINER" python3 - <<'PY'
 import json
 from pathlib import Path
 
@@ -567,7 +570,17 @@ probe = runtime / ".deploy-write-check"
 probe.write_text("ok\n", encoding="utf-8")
 probe.unlink()
 PY
+    rc=$?
+    set -e
+    if [ "$rc" -eq 0 ]; then
+      return 0
+    fi
+    log "Live workspace verification attempt $_attempt failed (rc=$rc); waiting for the container to stabilize"
+    sleep 2
+    ensure_container_running
+  done
 
+  return "$rc"
 }
 
 main() {

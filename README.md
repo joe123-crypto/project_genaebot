@@ -234,6 +234,7 @@ The deploy script used by both paths:
   read-only bind mounts instead)
 - applies `config/openclaw.template.json` to the container's live config
 - verifies `agents.defaults.workspace=/home/joseph/.openclaw/agent-workspace`
+  with bounded retries while the recreated container stabilizes
 - restarts `openclaw-gateway-container.service`
 - runs the deployment health check
 - best-effort builds and readiness-checks the optional Job Scout browser after
