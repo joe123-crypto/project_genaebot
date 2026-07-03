@@ -13,13 +13,11 @@ const DEFAULT_INVITE_PENDING = `Invite one person to unlock your access. Type "i
 const DEFAULT_INVITE_UNLOCKED = `Your invite was activated, so your Genaie access is unlocked.`;
 const DEFAULT_INVITE_AWAITING_ACTIVATION = `I'll unlock your access when they activate their invite.`;
 
-// An existing user (member or admin) asking for a link to invite someone else.
+// An existing user (member or admin) explicitly asking for a link to invite
+// someone else. Matched as a whole message so incidental mentions of "invite"
+// inside a longer sentence never trigger the invite flow.
 const INVITE_REQUEST_PATTERNS = [
-  /\binvite\s+(?:link|code)\b/i,
-  /\b(?:invite|refer)\s+(?:a\s+|my\s+|some\s+)?(?:friend|friends|someone|somebody|people|others?|buddy|buddies)\b/i,
-  /\b(?:get|need|want|send|give|create|make|generate)\b[^.!?]*\binvite\b/i,
-  /\b(?:how\s+(?:do|can)\s+i|can\s+i)\s+invite\b/i,
-  /^invite(?:\s+me)?[\s!.?]*$/i,
+  /^invite\s+(?:link|code)(?:\s+please)?[\s!.?]*$/i,
 ];
 // A pending user confirming they have shared their invite link, e.g. "Shared",
 // "Sent it", "Done". Matched as a whole message so it doesn't fire on longer
