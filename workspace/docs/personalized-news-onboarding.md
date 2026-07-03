@@ -129,3 +129,11 @@ For stop failures, reply:
 ```text
 I couldn't stop personalized news. Try again later.
 ```
+
+## Implementation Notes
+
+`workspace/public-news/news_subscriptions.py` shares its phone normalization,
+registry read/write/locking, and allowlist loading with the other public
+workflows via `workspace/lib/` (`phone_utils`, `registry_store`, `allowlist`).
+This is an internal refactor only: the CLI subcommands, arguments, and sanitized
+output above are unchanged.

@@ -105,7 +105,9 @@ Tracked categories:
 - `workspace/cron/**/*.py` and `workspace/cron/**/*.sh`
 - `workspace/docs/**`
 - custom source folders such as `account-link/`, `public-news/`,
-  `webetu-preferences/`, and `job-scout/`
+  `webetu-preferences/`, and `job-scout/` (including its `scrapers/` and
+  `jobscout/` helper packages, both tracked and staged by
+  `deploy/stage-workspace.rsync`)
 - selected custom skills plus `workspace/skills.lock.json`
 
 Ignored categories:
