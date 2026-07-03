@@ -154,4 +154,4 @@ jobs:
         run: sudo /usr/local/sbin/openclaw-prod-deploy "$GITHUB_WORKSPACE"
 
       - name: Record deployed revision
-        run: printf '### Production deployment\n\nDeployed `%s` to OpenClaw production.\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+        run: printf "### Production deployment\n\nDeployed \`%s\` to OpenClaw production.\n" "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"

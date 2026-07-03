@@ -46,7 +46,8 @@ production Job Scout browser image is built when one of its inputs changes.
 
 The deploy job has read-only repository permissions and runs only for a `main`
 push after every hosted job succeeds. Actions are pinned to commit revisions;
-containerized validation tools are pinned to versions.
+containerized validation tools are pinned to versions. A successful deployment
+records the exact production commit in the workflow summary.
 
 ## Deploy Flow
 
