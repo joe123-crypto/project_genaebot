@@ -1,0 +1,103 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "name": "GitHub Actions and runner operations",
+      "paths": [
+        ".github/workflows/**",
+        ".github/actionlint.yaml",
+        "deploy/github-actions/**"
+      ],
+      "requiredDocs": [
+        "deploy/github-actions/README.md"
+      ]
+    },
+    {
+      "name": "production deployment and container boundary",
+      "paths": [
+        "deploy/openclaw-deploy.sh",
+        "deploy/validate-openclaw-deploy.sh",
+        "deploy/stage-openclaw-source.sh",
+        "deploy/stage-workspace.rsync",
+        "deploy/docker-compose.override.yml",
+        "deploy/job-scout-browser.Dockerfile",
+        "deploy/container/**",
+        "deploy/systemd/**"
+      ],
+      "requiredDocs": [
+        "README.md"
+      ]
+    },
+    {
+      "name": "public plugin configuration contract",
+      "paths": [
+        "workspace/plugins/*/openclaw.plugin.json"
+      ],
+      "requiredDocs": [
+        "workspace/docs/public-services.md",
+        "workspace/docs/public-whatsapp-system-prompt.txt"
+      ]
+    },
+    {
+      "name": "Webetu public workflow",
+      "paths": [
+        "workspace/plugins/public-service-gate/services/webetu.js",
+        "workspace/bin/webetu-preferences"
+      ],
+      "requiredDocs": [
+        "workspace/docs/webetu-onboarding.md"
+      ]
+    },
+    {
+      "name": "personalized news public workflow",
+      "paths": [
+        "workspace/plugins/public-service-gate/services/news.js",
+        "workspace/public-news/**"
+      ],
+      "requiredDocs": [
+        "workspace/docs/personalized-news-onboarding.md"
+      ]
+    },
+    {
+      "name": "event scout public workflow",
+      "paths": [
+        "workspace/plugins/public-service-gate/services/event-scout.js",
+        "workspace/public-events/**"
+      ],
+      "requiredDocs": [
+        "workspace/docs/event-scout-onboarding.md"
+      ]
+    },
+    {
+      "name": "calendar save interface",
+      "paths": [
+        "workspace/bin/genaie-calendar",
+        "workspace/skills/genaie-calendar/**"
+      ],
+      "requiredDocs": [
+        "workspace/docs/calendar-save-onboarding.md"
+      ]
+    },
+    {
+      "name": "Gmail interface",
+      "paths": [
+        "workspace/bin/genaie-mail",
+        "workspace/skills/genaie-mail/**"
+      ],
+      "requiredDocs": [
+        "workspace/docs/gmail-onboarding.md"
+      ]
+    },
+    {
+      "name": "Job Scout public interface",
+      "paths": [
+        "workspace/bin/job-scout",
+        "workspace/plugins/public-service-gate/services/job-scout.js",
+        "workspace/skills/job-scout/**"
+      ],
+      "requiredDocs": [
+        "workspace/docs/job-scout-onboarding.md"
+      ]
+    }
+  ]
+}

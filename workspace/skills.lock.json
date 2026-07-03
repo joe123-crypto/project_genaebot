@@ -2,6 +2,10 @@
   "version": 1,
   "customSkills": [
     {
+      "name": "genaie-calendar",
+      "path": "workspace/skills/genaie-calendar"
+    },
+    {
       "name": "genaie-mail",
       "path": "workspace/skills/genaie-mail"
     },

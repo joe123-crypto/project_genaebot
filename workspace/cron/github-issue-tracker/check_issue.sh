@@ -7,8 +7,7 @@ DEFAULT_STATE_DIR="/home/joseph/.openclaw/runtime/cron-state/github-issue-tracke
 STATE_FILE="${OPENCLAW_GITHUB_ISSUE_TRACKER_STATE:-$DEFAULT_STATE_DIR/state.json}"
 STATE_DIR="$(dirname "$STATE_FILE")"
 
-RESPONSE=$(curl -sf "$ISSUE_URL" 2>/dev/null)
-if [ $? -ne 0 ]; then
+if ! RESPONSE=$(curl -sf "$ISSUE_URL" 2>/dev/null); then
     echo "❌ Failed to fetch issue #88472 from GitHub API"
     exit 1
 fi

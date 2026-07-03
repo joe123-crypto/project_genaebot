@@ -208,7 +208,7 @@ recreate_boundary_stack() {
 }
 
 start_optional_job_scout_browser() {
-  local docker token browser_id health attempt
+  local docker token browser_id health
   docker="$(docker_bin)"
   boundary_active || return 0
 
@@ -235,7 +235,7 @@ start_optional_job_scout_browser() {
   fi
 
   browser_id="$(cd "$DEPLOY_DIR" && "$docker" compose --profile job-scout ps -q job-scout-browser)"
-  for attempt in $(seq 1 18); do
+  for _attempt in $(seq 1 18); do
     health="$("$docker" inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$browser_id" 2>/dev/null || true)"
     if [ "$health" = "healthy" ]; then
       log "Job Scout browser is ready"
@@ -251,127 +251,15 @@ start_optional_job_scout_browser() {
 }
 
 syntax_checks() {
-  log "Syntax checks"
-  node --check "$OC_DIR/workspace/plugins/public-service-gate/index.js"
-  node --check "$OC_DIR/workspace/plugins/whatsapp-relevance-gate/index.js"
-  node --test "$OC_DIR/workspace/plugins/public-service-gate/index.test.mjs"
-  node --check "$OC_DIR/workspace/job-scout/web_apply.mjs"
-  node --check "$OC_DIR/workspace/job-scout/web_apply_server.mjs"
-  node --test "$OC_DIR/workspace/job-scout/web_apply.test.mjs"
-  local pycache
-  pycache="$(mktemp -d)"
-  if ! PYTHONPYCACHEPREFIX="$pycache" python3 -m py_compile \
-    "$OC_DIR/workspace/account-link/account_link.py" \
-    "$OC_DIR/workspace/account-link/pending_cache.py" \
-    "$OC_DIR/workspace/lib/phone_utils.py" \
-    "$OC_DIR/workspace/lib/registry_store.py" \
-    "$OC_DIR/workspace/lib/allowlist.py" \
-    "$OC_DIR/workspace/lib/whatsapp-invite.py" \
-    "$OC_DIR/workspace/lib/whatsapp-public-user.py" \
-    "$OC_DIR/workspace/public-news/news_subscriptions.py" \
-    "$OC_DIR/workspace/cron/algeria-exhibitions-listener/check_new_events.py" \
-    "$OC_DIR/workspace/cron/webetu-meals/delivery_journal.py" \
-    "$OC_DIR/workspace/public-events/event_subscriptions.py" \
-    "$OC_DIR/workspace/cron/event-scout-dispatcher/dispatch.py" \
-    "$OC_DIR/workspace/cron/event-scout-dispatcher/taxonomy.py" \
-    "$OC_DIR/workspace/job-scout/job_scout.py" \
-    "$OC_DIR/workspace/job-scout/country_codes.py" \
-    "$OC_DIR/workspace/job-scout/jobscout/constants.py" \
-    "$OC_DIR/workspace/job-scout/jobscout/textutil.py" \
-    "$OC_DIR/workspace/job-scout/jobscout/profile.py" \
-    "$OC_DIR/workspace/job-scout/jobscout/jsearch.py" \
-    "$OC_DIR/workspace/bin/genaie-calendar" \
-    "$OC_DIR/deploy/patch-openclaw-config.py"; then
-    rm -rf "$pycache"
-    return 1
-  fi
-  rm -rf "$pycache"
-  bash -n "$OC_DIR/workspace/bin/openclaw-cap"
-  bash -n "$OC_DIR/workspace/cron/github-issue-tracker/check_issue.sh"
-  bash -n "$OC_DIR/workspace/cron/webetu-meals/notify-reservations.sh"
-  bash -n "$OC_DIR/deploy/install-job-scout.sh"
-  bash -n "$DOCKER_WAIT_SRC"
-  python3 -m json.tool "$OC_DIR/config/openclaw.template.json" >/dev/null
-  python3 -m json.tool "$OC_DIR/workspace/job-scout/package.json" >/dev/null
-  python3 -m json.tool "$OC_DIR/workspace/job-scout/package-lock.json" >/dev/null
-  python3 -m json.tool "$COMPOSE_OVERRIDE_SRC" >/dev/null 2>&1 || true
-  pycache="$(mktemp -d)"
-  if ! PYTHONPYCACHEPREFIX="$pycache" python3 -m unittest discover \
-    -s "$OC_DIR/deploy" \
-    -p 'test_*.py' || \
-    ! PYTHONPYCACHEPREFIX="$pycache" python3 -m unittest discover \
-      -s "$OC_DIR/workspace/public-events" \
-      -p 'test_event_subscriptions.py' || \
-    ! PYTHONPYCACHEPREFIX="$pycache" python3 -m unittest discover \
-      -s "$OC_DIR/workspace/cron/event-scout-dispatcher" \
-      -p 'test_dispatch.py' || \
-    ! PYTHONPATH="$OC_DIR/workspace/lib:$OC_DIR/workspace/account-link" \
-      PYTHONPYCACHEPREFIX="$pycache" python3 -m unittest discover \
-      -s "$OC_DIR/workspace/job-scout" \
-      -p 'test_job_scout.py'; then
-    rm -rf "$pycache"
-    return 1
-  fi
-  rm -rf "$pycache"
+  log "Portable source validation"
+  "$OC_DIR/deploy/ci-check.sh"
 }
 
 stage_source() {
   require_file "$COMPOSE_OVERRIDE_SRC"
   require_file "$ENTRYPOINT_SRC"
   log "Stage curated source into $STAGE_DIR"
-  # Keep the live-source root inode stable. Docker bind mounts keep pointing at
-  # the old inode when this directory is deleted and recreated.
-  mkdir -p "$STAGE_DIR/workspace" "$STAGE_DIR/agent-workspace" "$STAGE_DIR/config" "$STAGE_DIR/deploy"
-
-  rsync -a --delete \
-    --exclude='**/__pycache__/' \
-    --exclude='**/.venv/' \
-    --exclude='**/node_modules/' \
-    --exclude='**/*.pyc' \
-    --exclude='**/*.log' \
-    --exclude='**/state.json' \
-    --exclude='**/pending-links.json' \
-    --exclude='**/subscriptions.json' \
-    --include='/AGENTS.md' \
-    --include='/HEARTBEAT.md' \
-    --include='/IDENTITY.md' \
-    --include='/MEMORY.md' \
-    --include='/README.md' \
-    --include='/SOUL.md' \
-    --include='/TOOLS.md' \
-    --include='/USER.md' \
-    --include='/bin/***' \
-    --include='/lib/***' \
-    --include='/plugins/***' \
-    --include='/docs/***' \
-    --include='/account-link/***' \
-    --include='/public-news/***' \
-    --include='/public-events/***' \
-    --include='/webetu-preferences/***' \
-    --include='/job-scout/' \
-    --include='/job-scout/*.py' \
-    --include='/job-scout/*.mjs' \
-    --include='/job-scout/package.json' \
-    --include='/job-scout/package-lock.json' \
-    --include='/job-scout/scrapers/' \
-    --include='/job-scout/scrapers/***' \
-    --include='/job-scout/jobscout/' \
-    --include='/job-scout/jobscout/***' \
-    --include='/cron/***' \
-    --include='/skills.lock.json' \
-    --include='/skills/genaie-mail/***' \
-    --include='/skills/gog/***' \
-    --include='/skills/job-scout/SKILL.md' \
-    --include='/skills/pdf-edit/SKILL.md' \
-    --include='/skills/pdf-edit/pdf_edit.py' \
-    --exclude='/**' \
-    "$OC_DIR/workspace/" "$STAGE_DIR/workspace/"
-  mkdir -p "$STAGE_DIR/workspace/tmp"
-
-  rsync -a --delete "$OC_DIR/deploy/agent-workspace/" "$STAGE_DIR/agent-workspace/"
-  install -m 0644 "$OC_DIR/config/openclaw.template.json" "$STAGE_DIR/config/openclaw.template.json"
-  install -m 0755 "$OC_DIR/deploy/patch-openclaw-config.py" "$STAGE_DIR/deploy/patch-openclaw-config.py"
-  install -m 0644 "$OC_DIR/deploy/job-scout-browser.Dockerfile" "$STAGE_DIR/deploy/job-scout-browser.Dockerfile"
+  bash "$OC_DIR/deploy/stage-openclaw-source.sh" "$OC_DIR" "$STAGE_DIR"
   if [ "$APPLY_CONTAINER_BOUNDARY" = "1" ] || boundary_active; then
     log "Install Docker Compose override with container read/write boundary"
     install -m 0644 "$COMPOSE_OVERRIDE_SRC" "$COMPOSE_OVERRIDE_DST"
@@ -652,10 +540,13 @@ diagnose_health_failure() {
 }
 
 verify_live_workspace() {
-  local docker
+  local docker rc _attempt
   docker="$(docker_bin)"
   log "Verify live workspace setting"
-  "$docker" exec "$CONTAINER" python3 - <<'PY'
+  rc=1
+  for _attempt in $(seq 1 5); do
+    set +e
+    "$docker" exec -i "$CONTAINER" python3 - <<'PY'
 import json
 from pathlib import Path
 
@@ -680,7 +571,17 @@ probe = runtime / ".deploy-write-check"
 probe.write_text("ok\n", encoding="utf-8")
 probe.unlink()
 PY
+    rc=$?
+    set -e
+    if [ "$rc" -eq 0 ]; then
+      return 0
+    fi
+    log "Live workspace verification attempt $_attempt failed (rc=$rc); waiting for the container to stabilize"
+    sleep 2
+    ensure_container_running
+  done
 
+  return "$rc"
 }
 
 main() {

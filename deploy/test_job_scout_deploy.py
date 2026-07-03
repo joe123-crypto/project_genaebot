@@ -55,12 +55,14 @@ class JobScoutDeploymentTests(unittest.TestCase):
 
   def test_live_source_bind_mount_is_refreshed_safely(self) -> None:
     deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")
+    staging = (ROOT / "deploy/stage-openclaw-source.sh").read_text(encoding="utf-8")
     stage = deploy[deploy.index("stage_source()") : deploy.index("write_generated_marker()")]
     recreate = deploy.index("  recreate_boundary_stack\n", deploy.index("main()"))
     ensure_running = deploy.index("  ensure_container_running\n", deploy.index("main()"))
 
-    self.assertNotIn('rm -rf "$STAGE_DIR"', stage)
-    self.assertIn('mkdir -p "$STAGE_DIR/workspace"', stage)
+    self.assertIn('stage-openclaw-source.sh" "$OC_DIR" "$STAGE_DIR"', stage)
+    self.assertNotIn('rm -rf "$stage_root"', staging)
+    self.assertIn('"$stage_root/workspace"', staging)
     self.assertLess(recreate, ensure_running)
 
   def test_container_service_waits_for_docker_api(self) -> None:
@@ -70,6 +72,14 @@ class JobScoutDeploymentTests(unittest.TestCase):
     self.assertIn("ExecStartPre=/usr/local/libexec/openclaw-wait-for-docker", unit)
     self.assertIn("install_container_service", deploy)
     self.assertIn('run_root install -D -m 0644 "$SERVICE_UNIT_SRC" "$SERVICE_UNIT_DST"', deploy)
+
+  def test_live_workspace_verification_survives_container_restart(self) -> None:
+    deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")
+    verify = deploy[deploy.index("verify_live_workspace()") : deploy.index("main()")]
+
+    self.assertIn('for _attempt in $(seq 1 5)', verify)
+    self.assertIn('exec -i "$CONTAINER" python3', verify)
+    self.assertIn("ensure_container_running", verify)
 
   def test_docker_readiness_check_succeeds_and_is_bounded(self) -> None:
     waiter = ROOT / "deploy/systemd/wait-for-docker.sh"
