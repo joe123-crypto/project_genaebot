@@ -460,7 +460,7 @@ def preference_code(profile: dict, key: str, default: str) -> str:
   return text if re.fullmatch(r"[a-z]{2}", text) else default
 
 
-def max_applications(profile: dict, default: int = 2) -> int:
+def max_applications(profile: dict, default: int = 5) -> int:
   try:
     value = int(profile.get("maxApplicationsPerRun", default))
   except (TypeError, ValueError):
