@@ -62,6 +62,8 @@
 !workspace/job-scout/package-lock.json
 !workspace/job-scout/scrapers/
 !workspace/job-scout/scrapers/*.py
+!workspace/job-scout/jobscout/
+!workspace/job-scout/jobscout/*.py
 
 # Custom skills that are not purely reinstallable from package metadata.
 !workspace/skills/

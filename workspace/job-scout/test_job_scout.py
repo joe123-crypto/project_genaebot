@@ -402,7 +402,9 @@ class JSearchTests(unittest.TestCase):
     self.assertEqual(candidate["sourceUrl"], "https://example.com/apply")
 
   def test_fetch_jsearch_candidates_uses_profile_country_and_language(self) -> None:
-    with mock.patch.object(job_scout, "jsearch_request") as request:
+    # jsearch_request is called by fetch_jsearch_candidates within jobscout.jsearch,
+    # so patch it at its defining module rather than the job_scout re-export.
+    with mock.patch("jobscout.jsearch.jsearch_request") as request:
       request.return_value = {
         "data": [
           {
@@ -425,7 +427,7 @@ class JSearchTests(unittest.TestCase):
 
   def test_fetch_jsearch_candidates_soft_fails_on_outage(self) -> None:
     # A transient JSearch outage must not raise: the caller falls back to scrapers.
-    with mock.patch.object(job_scout, "jsearch_request", side_effect=job_scout.JSearchUnavailable("HTTP 504")):
+    with mock.patch("jobscout.jsearch.jsearch_request", side_effect=job_scout.JSearchUnavailable("HTTP 504")):
       candidates = job_scout.fetch_jsearch_candidates({"targetRoles": ["Driver"], "locations": ["Harare"]}, 5)
     self.assertEqual(candidates, [])
     self.assertFalse(issubclass(job_scout.JSearchUnavailable, SystemExit))
@@ -433,8 +435,8 @@ class JSearchTests(unittest.TestCase):
   def test_jsearch_request_maps_read_timeout_to_unavailable(self) -> None:
     # A socket read timeout (TimeoutError, not HTTPError/URLError) must still be
     # classified transient so dispatch falls back to the scraped boards.
-    with mock.patch.object(job_scout, "jsearch_provider", return_value="rapidapi"), \
-         mock.patch.object(job_scout, "env_default", side_effect=lambda key, default="": "key" if "KEY" in key else default), \
+    with mock.patch("jobscout.jsearch.jsearch_provider", return_value="rapidapi"), \
+         mock.patch("jobscout.jsearch.env_default", side_effect=lambda key, default="": "key" if "KEY" in key else default), \
          mock.patch("urllib.request.urlopen", side_effect=TimeoutError("The read operation timed out")):
       with self.assertRaises(job_scout.JSearchUnavailable):
         job_scout.jsearch_request("driver", "dz", "fr", 5)

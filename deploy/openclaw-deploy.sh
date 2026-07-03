@@ -263,6 +263,9 @@ syntax_checks() {
   if ! PYTHONPYCACHEPREFIX="$pycache" python3 -m py_compile \
     "$OC_DIR/workspace/account-link/account_link.py" \
     "$OC_DIR/workspace/account-link/pending_cache.py" \
+    "$OC_DIR/workspace/lib/phone_utils.py" \
+    "$OC_DIR/workspace/lib/registry_store.py" \
+    "$OC_DIR/workspace/lib/allowlist.py" \
     "$OC_DIR/workspace/lib/whatsapp-invite.py" \
     "$OC_DIR/workspace/lib/whatsapp-public-user.py" \
     "$OC_DIR/workspace/public-news/news_subscriptions.py" \
@@ -270,8 +273,13 @@ syntax_checks() {
     "$OC_DIR/workspace/cron/webetu-meals/delivery_journal.py" \
     "$OC_DIR/workspace/public-events/event_subscriptions.py" \
     "$OC_DIR/workspace/cron/event-scout-dispatcher/dispatch.py" \
+    "$OC_DIR/workspace/cron/event-scout-dispatcher/taxonomy.py" \
     "$OC_DIR/workspace/job-scout/job_scout.py" \
     "$OC_DIR/workspace/job-scout/country_codes.py" \
+    "$OC_DIR/workspace/job-scout/jobscout/constants.py" \
+    "$OC_DIR/workspace/job-scout/jobscout/textutil.py" \
+    "$OC_DIR/workspace/job-scout/jobscout/profile.py" \
+    "$OC_DIR/workspace/job-scout/jobscout/jsearch.py" \
     "$OC_DIR/workspace/bin/genaie-calendar" \
     "$OC_DIR/deploy/patch-openclaw-config.py"; then
     rm -rf "$pycache"
@@ -347,6 +355,8 @@ stage_source() {
     --include='/job-scout/package-lock.json' \
     --include='/job-scout/scrapers/' \
     --include='/job-scout/scrapers/***' \
+    --include='/job-scout/jobscout/' \
+    --include='/job-scout/jobscout/***' \
     --include='/cron/***' \
     --include='/skills.lock.json' \
     --include='/skills/genaie-mail/***' \
@@ -487,7 +497,8 @@ require_staged_workspace_files() {
     "$STAGE_DIR/workspace/job-scout/country_codes.py" \
     "$STAGE_DIR/workspace/job-scout/web_apply_server.mjs" \
     "$STAGE_DIR/deploy/job-scout-browser.Dockerfile" \
-    "$STAGE_DIR/workspace/job-scout/scrapers/__init__.py"; do
+    "$STAGE_DIR/workspace/job-scout/scrapers/__init__.py" \
+    "$STAGE_DIR/workspace/job-scout/jobscout/jsearch.py"; do
     if [ ! -f "$path" ]; then
       printf 'missing required staged workspace file: %s\n' "$path" >&2
       missing=1

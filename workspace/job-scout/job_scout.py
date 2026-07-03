@@ -24,32 +24,28 @@ import urllib.request
 
 from country_codes import country_code, country_name
 
+from jobscout.constants import (
+  CV_URL_LOOKUP_ATTEMPTS,
+  CV_URL_LOOKUP_RETRY_SECONDS,
+  DEFAULT_DISPATCH_ROOT,
+  DEFAULT_JSEARCH_COUNTRY,
+  DEFAULT_JSEARCH_DATE_POSTED,
+  DEFAULT_JSEARCH_LANGUAGE,
+  DEFAULT_OPENWEBNINJA_BASE_URL,
+  DEFAULT_RAPIDAPI_BASE_URL,
+  DEFAULT_RAPIDAPI_HOST,
+  DEFAULT_STORAGE_ROOT,
+  DEFAULT_WEB_APPLY_URL,
+  DISPATCH_STATUSES,
+  GENAIE_MAIL_BIN,
+  MAX_APPLICATION_ATTEMPTS,
+  OPENCLAW_BIN_FALLBACKS,
+  PUBLIC_DISPATCH_FAILURE_MESSAGE,
+  RUNTIME_ROOT,
+  TERMINAL_APPLICATION_STATUSES,
+  WORKSPACE,
+)
 
-WORKSPACE = Path("/home/joseph/.openclaw/workspace")
-RUNTIME_ROOT = Path(os.environ.get("JOB_SCOUT_RUNTIME_ROOT", "/home/joseph/.openclaw/runtime/job-scout"))
-DEFAULT_STORAGE_ROOT = RUNTIME_ROOT / "users"
-DEFAULT_DISPATCH_ROOT = RUNTIME_ROOT / "dispatch-runs"
-DISPATCH_STATUSES = {"applied", "action_required", "physical_submission", "no_matches", "failed"}
-TERMINAL_APPLICATION_STATUSES = {"applied", "skipped", "action_required", "physical_submission"}
-MAX_APPLICATION_ATTEMPTS = 3
-CV_URL_LOOKUP_ATTEMPTS = 3
-CV_URL_LOOKUP_RETRY_SECONDS = 2
-DEFAULT_WEB_APPLY_URL = "http://job-scout-browser:8787/apply"
-DEFAULT_JSEARCH_COUNTRY = "dz"
-DEFAULT_JSEARCH_LANGUAGE = "fr"
-DEFAULT_JSEARCH_DATE_POSTED = "3days"
-DEFAULT_OPENWEBNINJA_BASE_URL = "https://api.openwebninja.com/jsearch"
-DEFAULT_RAPIDAPI_BASE_URL = "https://jsearch.p.rapidapi.com"
-DEFAULT_RAPIDAPI_HOST = "jsearch.p.rapidapi.com"
-GENAIE_MAIL_BIN = Path("/home/joseph/.openclaw/workspace/bin/genaie-mail")
-OPENCLAW_BIN_FALLBACKS = (
-  Path("/usr/local/bin/openclaw"),
-  Path("/home/joseph/.npm-global/bin/openclaw"),
-)
-PUBLIC_DISPATCH_FAILURE_MESSAGE = (
-  "Job Scout could not finish today's job check because the service failed. "
-  "I recorded it and will try again on the next run."
-)
 os.environ.setdefault(
   "OPENCLAW_PENDING_LINKS_PATH",
   "/home/joseph/.openclaw/runtime/account-link/pending-links.json",
@@ -77,6 +73,41 @@ from pending_cache import (
   utc_now_iso,
 )
 
+# Extracted Job Scout internals. Re-imported here so the CLI/orchestration layer
+# calls them by bare name and existing mock.patch("job_scout.<name>") targets keep
+# working. Helpers that call each other inside a submodule are patched at their
+# defining module (e.g. jobscout.jsearch.jsearch_request).
+from jobscout.textutil import public_text
+from jobscout.profile import (
+  clean_items,
+  load_profile_json,
+  max_applications,
+  normalize_stored_locations,
+  preference_code,
+  profile_values,
+  resolve_preferred_locations,
+  resolve_profile_locations,
+  resolved_profile_country,
+  search_queries,
+  subscriber_preferences,
+  subscriber_user_id,
+)
+from jobscout.jsearch import (
+  JSearchUnavailable,
+  application_key,
+  apply_links,
+  candidate_key,
+  extract_emails,
+  fetch_jsearch_candidates,
+  fetch_scraped_candidates,
+  filter_candidates,
+  jsearch_items,
+  jsearch_provider,
+  jsearch_request,
+  normalized_candidate,
+  zw_targeted,
+)
+
 
 def resolve_openclaw_bin(fallbacks: tuple[Path, ...] = OPENCLAW_BIN_FALLBACKS) -> Path:
   configured = os.environ.get("OPENCLAW_BIN", "").strip()
@@ -95,12 +126,6 @@ def resolve_openclaw_bin(fallbacks: tuple[Path, ...] = OPENCLAW_BIN_FALLBACKS) -
 
 
 OPENCLAW_BIN = resolve_openclaw_bin()
-
-
-class JSearchUnavailable(RuntimeError):
-  """Transient JSearch failure (HTTP/network). Non-fatal: the run continues with the
-  scraped boards so a JSearch outage can't take the rest of dispatch down with it.
-  Missing-credential errors stay as SystemExit (real misconfiguration, must be loud)."""
 
 
 def normalize_phone(value: str) -> str:
@@ -288,194 +313,6 @@ def cv_object_available(user_id: str) -> bool:
   return bool(str(data.get("url") or "").strip())
 
 
-def clean_items(values: list[str] | None) -> list[str]:
-  output: list[str] = []
-  seen: set[str] = set()
-  if isinstance(values, str):
-    iterable = [values]
-  else:
-    iterable = values or []
-  for value in iterable:
-    text = re.sub(r"\s+", " ", str(value or "")).strip()
-    if not text:
-      continue
-    key = text.casefold()
-    if key in seen:
-      continue
-    seen.add(key)
-    output.append(text)
-  return output
-
-
-def resolve_preferred_locations(values: list[str] | None) -> dict:
-  locations = clean_items(values)
-  if not locations:
-    raise SystemExit("preferred location is required")
-
-  codes: set[str] = set()
-  for location in locations:
-    locality, separator, country_value = location.rpartition(",")
-    locality = locality.strip()
-    country_value = country_value.strip()
-    if not separator or not locality or not country_value:
-      raise SystemExit(
-        f'Preferred location must include the country, for example "Bindura, Zimbabwe": {location}'
-      )
-    code = country_code(country_value)
-    if not code:
-      raise SystemExit(f"Preferred location country is not recognized: {country_value}")
-    codes.add(code)
-
-  if len(codes) != 1:
-    countries = ", ".join(sorted(country_name(code) for code in codes))
-    raise SystemExit(
-      f"Preferred locations must be in one country because Job Scout uses one country filter: {countries}"
-    )
-
-  code = next(iter(codes))
-  return {
-    "locations": locations,
-    "country": code,
-    "countryName": country_name(code),
-  }
-
-
-def normalize_stored_locations(
-  values: list[str] | None,
-  stored_country: str | None = None,
-) -> dict:
-  locations = clean_items(values)
-  if not locations:
-    return {"locations": [], "country": None}
-
-  stored_code = None
-  if str(stored_country or "").strip():
-    stored_code = country_code(stored_country)
-    if not stored_code:
-      raise SystemExit(f"Stored search country is not recognized: {stored_country}")
-
-  normalized: list[str] = []
-  codes: set[str] = set()
-  for location in locations:
-    if "," in location:
-      resolved = resolve_preferred_locations([location])
-      code = str(resolved["country"])
-      normalized.append(location)
-    else:
-      inferred_code = country_code(location)
-      if inferred_code:
-        code = inferred_code
-        normalized.append(f"Nationwide, {country_name(code)}")
-      else:
-        if not stored_code:
-          raise SystemExit(
-            f"Stored preferred location needs a valid country before it can be normalized: {location}"
-          )
-        code = stored_code
-        normalized.append(f"{location}, {country_name(code)}")
-    codes.add(code)
-
-  if len(codes) != 1:
-    countries = ", ".join(sorted(country_name(code) for code in codes))
-    raise SystemExit(
-      f"Preferred locations must be in one country because Job Scout uses one country filter: {countries}"
-    )
-
-  code = next(iter(codes))
-  if stored_code and stored_code != code:
-    raise SystemExit(
-      f"Stored search country {stored_code} conflicts with preferred location country {code}"
-    )
-  return {"locations": clean_items(normalized), "country": code}
-
-
-def resolved_profile_country(
-  locations: list[str],
-  explicit_country: str | None = None,
-  fallback_country: str | None = None,
-) -> str:
-  if locations:
-    resolved = resolve_preferred_locations(locations)
-    derived = str(resolved["country"])
-    if explicit_country:
-      supplied = country_code(explicit_country)
-      if not supplied:
-        raise SystemExit(f"Search country is not recognized: {explicit_country}")
-      if supplied != derived:
-        raise SystemExit(
-          f"Search country {supplied} conflicts with preferred location country {derived}"
-        )
-    return derived
-
-  supplied_value = explicit_country or fallback_country or DEFAULT_JSEARCH_COUNTRY
-  supplied = country_code(supplied_value)
-  if not supplied:
-    raise SystemExit(f"Search country is not recognized: {supplied_value}")
-  return supplied
-
-
-def resolve_profile_locations(
-  stored_locations: list[str] | None,
-  submitted_locations: list[str] | None = None,
-  explicit_country: str | None = None,
-  stored_country: str | None = None,
-) -> dict:
-  stored = normalize_stored_locations(stored_locations, stored_country)
-  submitted_values = clean_items(submitted_locations)
-  submitted = resolve_preferred_locations(submitted_values) if submitted_values else None
-
-  codes = {
-    str(resolved["country"])
-    for resolved in (stored, submitted)
-    if resolved and resolved.get("country")
-  }
-  if len(codes) != 1 and codes:
-    countries = ", ".join(sorted(country_name(code) for code in codes))
-    raise SystemExit(
-      f"Preferred locations must be in one country because Job Scout uses one country filter: {countries}"
-    )
-
-  locations = clean_items([
-    *stored["locations"],
-    *(submitted["locations"] if submitted else []),
-  ])
-  if codes:
-    country = resolved_profile_country(locations, explicit_country)
-  else:
-    country = resolved_profile_country([], explicit_country, stored_country)
-  return {"locations": locations, "country": country}
-
-
-def profile_values(profile: dict, key: str) -> list[str]:
-  value = profile.get(key, [])
-  if isinstance(value, list):
-    return value
-  if value is None:
-    return []
-  return [str(value)]
-
-
-def preference_code(profile: dict, key: str, default: str) -> str:
-  text = re.sub(r"[^A-Za-z]", "", str(profile.get(key) or default)).lower()
-  return text if re.fullmatch(r"[a-z]{2}", text) else default
-
-
-def max_applications(profile: dict, default: int = 5) -> int:
-  try:
-    value = int(profile.get("maxApplicationsPerRun", default))
-  except (TypeError, ValueError):
-    value = default
-  return max(0, min(value, 5))
-
-
-def load_profile_json(value: str | None) -> dict:
-  if not value:
-    return {}
-  if value.startswith("@"):
-    return json.loads(Path(value[1:]).read_text(encoding="utf-8"))
-  return json.loads(value)
-
-
 def linked_user_id(phone: str) -> str:
   query = urllib.parse.urlencode({"phone": normalize_phone(phone)})
   result = request_json("GET", endpoint(f"/internal/account-link/status?{query}"))
@@ -483,297 +320,6 @@ def linked_user_id(phone: str) -> str:
   if not result.get("linked") or not user_id:
     raise SystemExit("phone is not linked to an Agent Genaie user")
   return user_id
-
-
-def subscriber_preferences(subscriber: dict) -> dict:
-  preferences = subscriber.get("preferences")
-  return preferences if isinstance(preferences, dict) else {}
-
-
-def subscriber_user_id(subscriber: dict) -> str:
-  for key in ("userId", "uid", "id"):
-    value = str(subscriber.get(key) or "").strip()
-    if value:
-      return value
-  raise SystemExit("subscriber is missing userId")
-
-
-def search_queries(preferences: dict) -> list[str]:
-  roles = clean_items(profile_values(preferences, "targetRoles") or profile_values(preferences, "roles"))
-  locations = clean_items(profile_values(preferences, "locations"))
-  if not roles:
-    return []
-  if not locations:
-    locations = ["Algeria"]
-  queries: list[str] = []
-  seen: set[str] = set()
-  for role in roles:
-    for location in locations:
-      query = f"{role} à {location}".strip()
-      key = query.casefold()
-      if key in seen:
-        continue
-      seen.add(key)
-      queries.append(query)
-  return queries
-
-
-def jsearch_provider() -> str:
-  requested = env_default("JSEARCH_PROVIDER", "auto").strip().lower() or "auto"
-  if requested not in {"auto", "openwebninja", "rapidapi"}:
-    raise SystemExit("JSEARCH_PROVIDER must be auto, openwebninja, or rapidapi")
-  if requested != "auto":
-    return requested
-  if env_default("JSEARCH_API_KEY"):
-    return "openwebninja"
-  if env_default("JSEARCH_RAPIDAPI_KEY") or env_default("RAPIDAPI_KEY"):
-    return "rapidapi"
-  raise SystemExit("Missing JSearch credentials: set JSEARCH_API_KEY or JSEARCH_RAPIDAPI_KEY.")
-
-
-def jsearch_request(query: str, country: str, language: str, limit: int, cursor: str | None = None) -> dict:
-  provider = jsearch_provider()
-  if provider == "rapidapi":
-    key = env_default("JSEARCH_RAPIDAPI_KEY") or env_default("RAPIDAPI_KEY")
-    if not key:
-      raise SystemExit("Missing JSEARCH_RAPIDAPI_KEY.")
-    base_url = env_default("JSEARCH_RAPIDAPI_BASE_URL", DEFAULT_RAPIDAPI_BASE_URL).rstrip("/")
-    host = env_default("JSEARCH_RAPIDAPI_HOST", DEFAULT_RAPIDAPI_HOST)
-    params = {
-      "query": query,
-      "country": country,
-      "date_posted": env_default("JSEARCH_DATE_POSTED", DEFAULT_JSEARCH_DATE_POSTED),
-      "num_pages": "1",
-      "page": cursor or "1",
-    }
-    headers = {
-      "X-RapidAPI-Key": key,
-      "X-RapidAPI-Host": host,
-    }
-    url = f"{base_url}/search?{urllib.parse.urlencode(params)}"
-  else:
-    key = env_default("JSEARCH_API_KEY")
-    if not key:
-      raise SystemExit("Missing JSEARCH_API_KEY.")
-    base_url = env_default("JSEARCH_BASE_URL", DEFAULT_OPENWEBNINJA_BASE_URL).rstrip("/")
-    params = {
-      "query": query,
-      "country": country,
-      "language": language,
-      "date_posted": env_default("JSEARCH_DATE_POSTED", DEFAULT_JSEARCH_DATE_POSTED),
-      "num": str(max(1, min(limit, 25))),
-    }
-    if cursor:
-      params["cursor"] = cursor
-    headers = {"x-api-key": key}
-    url = f"{base_url}/search-v2?{urllib.parse.urlencode(params)}"
-
-  request = urllib.request.Request(url, headers={**headers, "Accept": "application/json"})
-  try:
-    with urllib.request.urlopen(request, timeout=45) as response:
-      body = response.read().decode("utf-8")
-      return json.loads(body) if body else {}
-  except urllib.error.HTTPError as err:
-    body = err.read().decode("utf-8", errors="replace")
-    print(f"JSearch request failed with HTTP {err.code}: {body[:1000]}", file=sys.stderr)
-    raise JSearchUnavailable(f"HTTP {err.code}") from err
-  except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as err:
-    # Connection refused/reset, DNS, and read timeouts (socket TimeoutError) are all
-    # transient; treat them like the HTTP errors above so dispatch falls back to boards.
-    print(f"Could not reach JSearch API: {err}", file=sys.stderr)
-    raise JSearchUnavailable("network error") from err
-
-
-def jsearch_items(response: dict) -> list[dict]:
-  for key in ("data", "jobs", "results"):
-    value = response.get(key)
-    if isinstance(value, list):
-      return [item for item in value if isinstance(item, dict)]
-  return []
-
-
-EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
-
-
-def extract_emails(*values: object) -> list[str]:
-  emails: list[str] = []
-  seen: set[str] = set()
-  for value in values:
-    for email in EMAIL_RE.findall(str(value or "")):
-      key = email.casefold()
-      if key in seen:
-        continue
-      seen.add(key)
-      emails.append(email)
-  return emails
-
-
-def apply_links(item: dict) -> list[str]:
-  links: list[str] = []
-  for key in ("job_apply_link", "job_google_link", "employer_website"):
-    value = str(item.get(key) or "").strip()
-    if value:
-      links.append(value)
-  options = item.get("apply_options")
-  if isinstance(options, list):
-    for option in options:
-      if not isinstance(option, dict):
-        continue
-      value = str(option.get("apply_link") or option.get("link") or "").strip()
-      if value:
-        links.append(value)
-  output: list[str] = []
-  seen: set[str] = set()
-  for link in links:
-    if link in seen:
-      continue
-    seen.add(link)
-    output.append(link)
-  return output
-
-
-def normalized_candidate(item: dict, query: str) -> dict:
-  company = re.sub(r"\s+", " ", str(item.get("employer_name") or item.get("company") or "Unknown employer")).strip()
-  role = re.sub(r"\s+", " ", str(item.get("job_title") or item.get("title") or "Unknown role")).strip()
-  links = apply_links(item)
-  description = re.sub(r"\s+", " ", str(item.get("job_description") or item.get("description") or "")).strip()
-  emails = extract_emails(description, item.get("job_apply_link"), item.get("apply_options"))
-  location = ", ".join(clean_items([
-    item.get("job_city"),
-    item.get("job_state"),
-    item.get("job_country"),
-  ]))
-  source_url = links[0] if links else None
-  raw_id = str(item.get("job_id") or item.get("id") or "").strip()
-  fallback_id = hashlib.sha256(f"{company}\n{role}\n{source_url or ''}".encode("utf-8")).hexdigest()[:24]
-  return {
-    "candidateId": raw_id or fallback_id,
-    "source": "jsearch",
-    "sourceUrl": source_url,
-    "applyLinks": links,
-    "applicationEmails": emails,
-    "applicationEmail": emails[0] if emails else None,
-    "company": company,
-    "role": role,
-    "location": location,
-    "query": query,
-    "closing": item.get("job_offer_expiration_datetime_utc") or item.get("job_offer_expiration_datetime"),
-    "description": description[:2000],
-  }
-
-
-def candidate_key(candidate: dict) -> str:
-  return hashlib.sha256(
-    "\n".join([
-      str(candidate.get("company") or "").casefold(),
-      str(candidate.get("role") or "").casefold(),
-      str(candidate.get("sourceUrl") or "").casefold(),
-      str(candidate.get("candidateId") or "").casefold(),
-    ]).encode("utf-8")
-  ).hexdigest()
-
-
-def application_key(value: dict) -> tuple[str, str]:
-  return (
-    str(value.get("company") or "").strip().casefold(),
-    str(value.get("role") or "").strip().casefold(),
-  )
-
-
-def filter_candidates(candidates: list[dict], preferences: dict, applications: list[dict], limit: int) -> list[dict]:
-  exclusions = [item.casefold() for item in clean_items(profile_values(preferences, "exclusions"))]
-  existing: set[tuple[str, str]] = set()
-  for application in applications:
-    status = str(application.get("status") or "").strip().lower()
-    try:
-      attempts = int(application.get("attemptCount") or 0)
-    except (TypeError, ValueError):
-      attempts = 0
-    # Historical records without a status and manual-submission records are
-    # deliberately terminal: users may already have applied after receiving the URL.
-    if not status or status in TERMINAL_APPLICATION_STATUSES:
-      existing.add(application_key(application))
-    elif status == "failed" and attempts >= MAX_APPLICATION_ATTEMPTS:
-      existing.add(application_key(application))
-  seen: set[str] = set()
-  output: list[dict] = []
-  for candidate in candidates:
-    text = " ".join([
-      str(candidate.get("company") or ""),
-      str(candidate.get("role") or ""),
-      str(candidate.get("description") or ""),
-    ]).casefold()
-    if any(exclusion in text for exclusion in exclusions):
-      continue
-    appkey = application_key(candidate)
-    # Skip jobs already applied to (prior runs) and collapse same company/role
-    # across sources within this run, so a JSearch + board duplicate is applied once.
-    if appkey in existing:
-      continue
-    key = candidate_key(candidate)
-    if key in seen:
-      continue
-    seen.add(key)
-    existing.add(appkey)
-    output.append(candidate)
-    if len(output) >= limit:
-      break
-  return output
-
-
-def fetch_jsearch_candidates(preferences: dict, limit: int) -> list[dict]:
-  country = preference_code(preferences, "country", DEFAULT_JSEARCH_COUNTRY)
-  language = preference_code(preferences, "language", DEFAULT_JSEARCH_LANGUAGE)
-  candidates: list[dict] = []
-  for query in search_queries(preferences):
-    try:
-      response = jsearch_request(query, country, language, limit)
-    except JSearchUnavailable as err:
-      # Transient JSearch outage: keep any candidates already gathered and let the
-      # caller fall back to the scraped boards instead of aborting the whole run.
-      print(f"JSearch unavailable, continuing without it: {public_text(err)}", file=sys.stderr)
-      break
-    for item in jsearch_items(response):
-      candidates.append(normalized_candidate(item, query))
-    if len(candidates) >= limit:
-      break
-  return candidates
-
-
-# Zimbabwe job boards (VacancyMail, iHarare, VacancyBox) are scraped to extend JSearch
-# for ZW-targeting subscribers only. JSearch still runs for everyone.
-ZIMBABWE_HINTS = {
-  "zimbabwe", "harare", "bulawayo", "mutare", "gweru", "kwekwe", "masvingo",
-  "chitungwiza", "kadoma", "chinhoyi", "marondera", "victoria falls", "zvishavane",
-  "bindura", "beitbridge", "hwange", "redcliff", "norton", "ruwa", "chegutu",
-  "kariba", "rusape", "chiredzi", "gwanda", "midlands",
-}
-
-
-def zw_targeted(preferences: dict) -> bool:
-  country_raw = str(preferences.get("country") or "").strip().casefold()
-  if country_raw == "zw" or "zimbabwe" in country_raw:
-    return True
-  if preference_code(preferences, "country", DEFAULT_JSEARCH_COUNTRY) == "zw":
-    return True
-  for location in clean_items(profile_values(preferences, "locations")):
-    text = location.casefold()
-    if any(hint in text for hint in ZIMBABWE_HINTS):
-      return True
-  return False
-
-
-def fetch_scraped_candidates(preferences: dict, limit: int) -> list[dict]:
-  """Board-scraped candidates for ZW-targeting users. Never raises; merged alongside
-  JSearch results. Returns [] when not ZW-targeted or the scrapers are unavailable."""
-  if limit <= 0 or not zw_targeted(preferences):
-    return []
-  try:
-    import scrapers  # lazily imported so a scraper import error can't break JSearch
-    return scrapers.fetch_scraped_candidates(preferences, limit)
-  except Exception as err:
-    print(f"Scraper sources failed: {public_text(err)}", file=sys.stderr)
-    return []
 
 
 def dispatch_path(run_id: str, root: Path = DEFAULT_DISPATCH_ROOT) -> Path:
@@ -1188,15 +734,6 @@ def candidate_attempt(applications: list[dict], candidate: dict) -> tuple[int, b
       previous = 0
     return min(previous + 1, MAX_APPLICATION_ATTEMPTS), True
   return 1, False
-
-
-def public_text(value: object, max_len: int = 180) -> str:
-  text = re.sub(r"[\r\n\t]+", " ", str(value or ""))
-  text = re.sub(r"\s+", " ", text).strip()
-  text = re.sub(r"/home/joseph/\S+", "[local path]", text)
-  text = re.sub(r"Bearer\s+[A-Za-z0-9._~+/=-]+", "Bearer [redacted]", text, flags=re.I)
-  text = re.sub(r"([A-Za-z0-9._%+-]{2})[A-Za-z0-9._%+-]*(@[A-Za-z0-9.-]+\.[A-Za-z]{2,})", r"\1***\2", text)
-  return text[:max_len]
 
 
 def display_name(subscriber: dict) -> str:
