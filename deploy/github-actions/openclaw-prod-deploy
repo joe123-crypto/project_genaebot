@@ -45,7 +45,7 @@ git_cmd() {
 
 remote_url="$(git_cmd config --get remote.origin.url || true)"
 case "$remote_url" in
-  https://github.com/${repo_slug}|https://github.com/${repo_slug}.git|git@github.com:${repo_slug}.git)
+  https://github.com/"$repo_slug"|https://github.com/"$repo_slug".git|git@github.com:"$repo_slug".git)
     ;;
   *)
     die "refusing to deploy unexpected origin: ${remote_url:-missing}"

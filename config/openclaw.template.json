@@ -73,7 +73,7 @@
         "enabled": true,
         "config": {
           "enabled": true,
-          "greetingTemplatePath": "/home/joseph/.openclaw/workspace/public-greeting.txt",
+          "greetingTemplatePath": "/home/joseph/.openclaw/workspace/docs/public-greeting.txt",
           "webetuOnboardingStartText": "Sign in here and save your Webetu details in the Credentials Vault:\n{setupUrl}\n\nDon't send those details here. Check Spam if the sign-in email doesn't arrive.",
           "botWhatsappNumber": "+263785632943",
           "invitesEnabled": true,

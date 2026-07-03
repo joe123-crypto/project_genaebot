@@ -1,37 +1,157 @@
-name: Deploy OpenClaw production
+name: Validate and deploy OpenClaw production
 
 on:
+  pull_request:
   push:
     branches:
       - main
   workflow_dispatch:
 
-concurrency:
-  group: openclaw-production
-  cancel-in-progress: false
-
 permissions:
   contents: read
 
 jobs:
+  validate:
+    name: Portable validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      browser_changed: ${{ steps.changes.outputs.browser_changed }}
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: workspace/job-scout/package-lock.json
+
+      - name: Validate workflow definitions
+        run: >-
+          docker run --rm
+          -v "$PWD:/repo"
+          -w /repo
+          rhysd/actionlint:1.7.12
+
+      - name: Lint shell scripts
+        run: |
+          mapfile -t files < <(
+            git ls-files -s | awk '$1 == "100755" || $4 ~ /\.sh$/ {print $4}' | while read -r path; do
+              if [[ "$path" == *.sh ]] || head -n 1 "$path" | grep -Eq '^#!/usr/bin/env bash$'; then
+                printf '%s\n' "$path"
+              fi
+            done
+          )
+          docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.11.0 --exclude=SC2016 "${files[@]}"
+
+      - name: Run repository validation and tests
+        run: ./deploy/ci-check.sh --base-sha "$BASE_SHA" --head-sha "$GITHUB_SHA"
+
+      - name: Render Docker Compose configuration
+        run: docker compose -f deploy/docker-compose.override.yml config --no-interpolate >/dev/null
+
+      - name: Verify locked Node dependencies
+        working-directory: workspace/job-scout
+        run: |
+          npm ci --ignore-scripts
+          npm audit --omit=dev --audit-level=high
+
+      - name: Detect browser image changes
+        id: changes
+        shell: bash
+        run: |
+          if [ -z "$BASE_SHA" ] || [[ "$BASE_SHA" =~ ^0+$ ]] || ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            changed=true
+          elif git diff --quiet "$BASE_SHA...$GITHUB_SHA" -- \
+            deploy/job-scout-browser.Dockerfile \
+            deploy/stage-openclaw-source.sh \
+            deploy/stage-workspace.rsync \
+            workspace/job-scout/package.json \
+            workspace/job-scout/package-lock.json \
+            workspace/job-scout/web_apply.mjs \
+            workspace/job-scout/web_apply_server.mjs; then
+            changed=false
+          else
+            changed=true
+          fi
+          printf 'browser_changed=%s\n' "$changed" >> "$GITHUB_OUTPUT"
+
+  secrets:
+    name: Secret and private-state scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan tracked source
+        run: >-
+          docker run --rm
+          -v "$PWD:/repo"
+          zricethezav/gitleaks:v8.30.1
+          dir /repo --no-banner --redact
+
+  browser-image:
+    name: Job Scout browser image
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Build production browser image
+        if: needs.validate.outputs.browser_changed == 'true'
+        run: |
+          stage="$RUNNER_TEMP/live-source"
+          ./deploy/stage-openclaw-source.sh "$GITHUB_WORKSPACE" "$stage"
+          docker build --file "$stage/deploy/job-scout-browser.Dockerfile" "$stage"
+
+      - name: Report unchanged browser image
+        if: needs.validate.outputs.browser_changed != 'true'
+        run: echo "Browser image inputs did not change; build skipped."
+
   deploy:
-    name: Deploy to live container
+    name: Deploy exact main commit
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs:
+      - validate
+      - secrets
+      - browser-image
     runs-on:
       - self-hosted
       - linux
       - openclaw-prod
     timeout-minutes: 15
+    concurrency:
+      group: openclaw-production
+      cancel-in-progress: false
+    environment: production
     env:
       OPENCLAW_DIR: ${{ github.workspace }}
 
     steps:
-      - name: Check out pushed commit
-        uses: actions/checkout@v4
+      - name: Check out validated commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
 
-      - name: Validate deployable source
-        run: ./deploy/validate-openclaw-deploy.sh
-
       - name: Deploy live container
         run: sudo /usr/local/sbin/openclaw-prod-deploy "$GITHUB_WORKSPACE"
+
+      - name: Record deployed revision
+        run: printf '### Production deployment\n\nDeployed `%s` to OpenClaw production.\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"

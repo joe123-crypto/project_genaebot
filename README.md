@@ -7,9 +7,10 @@ It does not own or patch the installed OpenClaw npm package under
 replace only package-managed files, while this repository tracks custom plugins,
 commands, skills metadata, deployment helpers, and sanitized config templates.
 
-Git commits and pushes are manual, but production deploys are automated from
-GitHub: when `main` updates, the self-hosted GitHub Actions runner on this host
-validates the pushed commit and deploys it to the live container.
+Git commits and pushes are manual. Pull requests and `main` pushes run portable
+structure, documentation-contract, syntax, unit, dependency, secret, Compose,
+and browser-image checks on GitHub-hosted runners. A successful `main` push then
+uses the self-hosted runner on this host to deploy the exact validated commit.
 
 ## Working Checkout and Container Boundary
 
@@ -61,6 +62,10 @@ confinement, which is why the editable checkout lives under `projects/`.
 ├── deploy/
 │   ├── openclaw-deploy.sh        # Deterministic deploy script
 │   ├── validate-openclaw-deploy.sh
+│   ├── ci-check.sh                # Portable repository validation and tests
+│   ├── ci/                        # Structure/docs policy and mappings
+│   ├── stage-openclaw-source.sh   # Shared CI/production staging helper
+│   ├── stage-workspace.rsync      # Single deployable-workspace allowlist
 │   ├── check-openclaw-mirror.sh  # Generated mirror freshness/runtime check
 │   ├── patch-openclaw-config.py
 │   ├── github-actions/           # Source-controlled host automation helpers
@@ -133,8 +138,10 @@ git commit -m "Describe the change"
 git push origin main
 ```
 
-GitHub Actions then runs on this host through the `openclaw-prod` self-hosted
-runner. The workflow checks out the exact pushed commit, validates it, and runs:
+GitHub Actions first validates the commit on hosted runners. The production job
+starts only after portable validation, secret scanning, dependency checks, and
+the conditional Job Scout browser build succeed. It then checks out the same
+commit on the `openclaw-prod` self-hosted runner and runs:
 
 ```bash
 sudo /usr/local/sbin/openclaw-prod-deploy "$GITHUB_WORKSPACE"
@@ -149,8 +156,20 @@ Validate without deploying:
 
 ```bash
 cd /home/joseph/.openclaw
+./deploy/ci-check.sh
 ./deploy/validate-openclaw-deploy.sh
 ```
+
+`ci-check.sh` is host-independent. The deployment validator adds host-only
+checks for retired GitClaw automation, ignored private paths, and generated
+mirror state. CI also applies `deploy/ci/docs-contract.json`: changes to a
+declared public, onboarding, or operations interface must update the mapped
+documentation in the same pull request or push.
+
+The repository is currently private on a GitHub plan that does not provide
+branch protection. A failing commit can therefore reach `main`, but the workflow
+will not deploy it. Production rollback is performed by reverting the bad commit
+on `main`; the revert passes through the same validation and deployment path.
 
 Manual fallback deploy for emergency/local use:
 
@@ -203,7 +222,8 @@ The deploy script used by both paths:
 - shows Git status and diff stats
 - rejects staged runtime/secret files
 - runs syntax and JSON checks
-- stages curated source into `/home/joseph/openclaw-deploy/live-source`
+- stages curated source into `/home/joseph/openclaw-deploy/live-source` using
+  the same helper and allowlist exercised by hosted CI
 - preserves the `live-source` root inode so Docker's read-only bind mount cannot
   become detached from the newly staged files
 - stamps `live-source` with `.OPENCLAW_GENERATED` and a source manifest

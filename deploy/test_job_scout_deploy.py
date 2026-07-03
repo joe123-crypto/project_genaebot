@@ -55,12 +55,14 @@ class JobScoutDeploymentTests(unittest.TestCase):
 
   def test_live_source_bind_mount_is_refreshed_safely(self) -> None:
     deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")
+    staging = (ROOT / "deploy/stage-openclaw-source.sh").read_text(encoding="utf-8")
     stage = deploy[deploy.index("stage_source()") : deploy.index("write_generated_marker()")]
     recreate = deploy.index("  recreate_boundary_stack\n", deploy.index("main()"))
     ensure_running = deploy.index("  ensure_container_running\n", deploy.index("main()"))
 
-    self.assertNotIn('rm -rf "$STAGE_DIR"', stage)
-    self.assertIn('mkdir -p "$STAGE_DIR/workspace"', stage)
+    self.assertIn('stage-openclaw-source.sh" "$OC_DIR" "$STAGE_DIR"', stage)
+    self.assertNotIn('rm -rf "$stage_root"', staging)
+    self.assertIn('"$stage_root/workspace"', staging)
     self.assertLess(recreate, ensure_running)
 
   def test_container_service_waits_for_docker_api(self) -> None:

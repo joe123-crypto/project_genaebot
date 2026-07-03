@@ -9,7 +9,7 @@ from pathlib import Path
 import unittest
 
 
-MODULE_PATH = Path("/home/joseph/.openclaw/workspace/bin/genaie-mail")
+MODULE_PATH = Path(__file__).with_name("genaie-mail")
 loader = importlib.machinery.SourceFileLoader("genaie_mail", str(MODULE_PATH))
 spec = importlib.util.spec_from_loader("genaie_mail", loader)
 assert spec and spec.loader

@@ -31,8 +31,22 @@ cd /home/joseph/.openclaw
 sudo RUNNER_TOKEN='...' ./deploy/github-actions/register-openclaw-runner.sh
 ```
 
-The runner must show online in GitHub with the `openclaw-prod` label before
-push-to-deploy can run.
+The runner must show online in GitHub with the `openclaw-prod` label before the
+production job can run. Pull-request and portable validation jobs never use this
+runner.
+
+## CI Gates
+
+Pull requests, `main` pushes, and manual workflow runs validate on GitHub-hosted
+Ubuntu runners. Required checks cover repository/staging structure,
+documentation contracts, syntax, all discovered Python and Node tests,
+ShellCheck, actionlint, locked npm dependencies, high-severity production npm
+advisories, secret/private-state scanning, and Docker Compose rendering. The
+production Job Scout browser image is built when one of its inputs changes.
+
+The deploy job has read-only repository permissions and runs only for a `main`
+push after every hosted job succeeds. Actions are pinned to commit revisions;
+containerized validation tools are pinned to versions.
 
 ## Deploy Flow
 
@@ -43,7 +57,8 @@ cd /home/joseph/.openclaw
 git push origin main
 ```
 
-The workflow validates the exact pushed commit, then runs:
+The hosted jobs validate the exact pushed commit. After they pass, the
+self-hosted job runs:
 
 ```bash
 sudo /usr/local/sbin/openclaw-prod-deploy "$GITHUB_WORKSPACE"
@@ -51,3 +66,8 @@ sudo /usr/local/sbin/openclaw-prod-deploy "$GITHUB_WORKSPACE"
 
 The wrapper refuses dirty checkouts, unexpected remotes, stale commits, and
 overlapping deploys.
+
+Because branch protection is unavailable for this private repository on the
+current GitHub plan, CI cannot prevent a failing commit from entering `main`.
+The job dependency prevents that commit from reaching production. Revert the
+commit on `main` to roll production back through the normal validated path.

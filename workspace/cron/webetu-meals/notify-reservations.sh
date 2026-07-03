@@ -45,7 +45,10 @@ REGISTRATION_MAX_ATTEMPTS="${WEBETU_REGISTRATION_MAX_ATTEMPTS:-3}"
 RESERVATION_MAX_ATTEMPTS="${WEBETU_RESERVATION_MAX_ATTEMPTS:-2}"
 FIRST_RETRY_DELAY_SECONDS="${WEBETU_FIRST_RETRY_DELAY_SECONDS:-30}"
 SECOND_RETRY_DELAY_SECONDS="${WEBETU_SECOND_RETRY_DELAY_SECONDS:-60}"
-USER_FAILURE_MESSAGE="${WEBETU_USER_FAILURE_MESSAGE:-I couldn't complete today's Webetu meal reservation automatically. Please reserve manually today.}"
+USER_FAILURE_MESSAGE="${WEBETU_USER_FAILURE_MESSAGE:-}"
+if [ -z "$USER_FAILURE_MESSAGE" ]; then
+  USER_FAILURE_MESSAGE="I couldn't complete today's Webetu meal reservation automatically. Please reserve manually today."
+fi
 BROAD_FAILURE_NOTICE_ALLOWED="${WEBETU_ALLOW_BROAD_FAILURE_NOTICE:-0}"
 
 ensure_state_dir() {
@@ -248,7 +251,7 @@ run_openclaw() {
     return $?
   fi
 
-  HOME="$OPENCLAW_HOME" OPENCLAW_HOME="$OPENCLAW_HOME" "$OPENCLAW_BIN" "$@"
+  env HOME="$OPENCLAW_HOME" OPENCLAW_HOME="$OPENCLAW_HOME" "$OPENCLAW_BIN" "$@"
 }
 
 require_whatsapp_connected() {
@@ -676,7 +679,7 @@ list_failed_deliveries() {
 
 retry_failed_delivery() {
   local delivery_id="$1"
-  local message_file metadata user_id expected_phone_hash expected_source
+  local message_file metadata user_id expected_phone_hash _expected_source
   local registrations_file rows
   local current_user_id phone phone_hash registration_status allowed source
   local matched_phone=""
@@ -694,7 +697,7 @@ retry_failed_delivery() {
     rm -f "$message_file"
     return 1
   fi
-  IFS=$'\t' read -r user_id expected_phone_hash expected_source <<<"$metadata"
+  IFS=$'\t' read -r user_id expected_phone_hash _expected_source <<<"$metadata"
 
   registrations_file="$(mktemp)"
   if ! run_registration_capture "$registrations_file" list-registrations; then
