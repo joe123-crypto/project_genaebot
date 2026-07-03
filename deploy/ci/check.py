@@ -15,10 +15,6 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNTIME_WORKSPACE_PREFIX = "/home/joseph/.openclaw/workspace/"
-COMPATIBILITY_ONLY = {
-    "workspace/whatsapp-invite.py",
-    "workspace/whatsapp-public-user.py",
-}
 FORBIDDEN_TRACKED_PARTS = {
     ".env",
     "credentials",
@@ -156,7 +152,7 @@ def check_staged_source(files: dict[str, str], checks: Checks) -> None:
 
         staged_workspace = {rel for rel in staged if rel.startswith("workspace/")}
         tracked_workspace = {rel for rel in files if rel.startswith("workspace/")}
-        missing = sorted(tracked_workspace - staged_workspace - COMPATIBILITY_ONLY)
+        missing = sorted(tracked_workspace - staged_workspace)
         checks.require(not missing, f"tracked workspace files are not deployable or explicitly exempt: {missing}")
 
         forbidden_names = {"state.json", "pending-links.json", "subscriptions.json"}
@@ -221,13 +217,6 @@ def check_runtime_references(checks: Checks) -> None:
         "./live-source/workspace/USER.md:/home/joseph/.openclaw/agent-workspace/USER.md:ro" in compose,
         "container boundary does not mount USER.md read-only into agent-workspace",
     )
-
-
-def check_compatibility_copies(checks: Checks) -> None:
-    for name in ("whatsapp-invite.py", "whatsapp-public-user.py"):
-        top = ROOT / "workspace" / name
-        library = ROOT / "workspace/lib" / name
-        checks.require(top.read_bytes() == library.read_bytes(), f"compatibility copy drifted from workspace/lib: {name}")
 
 
 LINK_PATTERN = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
@@ -315,7 +304,6 @@ def main() -> int:
     check_skills(files, checks)
     check_staged_source(files, checks)
     check_runtime_references(checks)
-    check_compatibility_copies(checks)
     check_document_links(files, checks)
     check_service_catalog(checks)
     check_documentation_contract(args.base_sha, args.head_sha, checks)

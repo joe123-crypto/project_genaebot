@@ -126,6 +126,9 @@ Full procedure, credential model, and worker paths live in the **Webetu Meal Res
 - Updated all references in: bin wrappers, AGENTS.md, MEMORY.md, `lib/whatsapp-public-user.py`, `plugins/public-service-gate/index.js`
 - Root now only has: core files (AGENTS/SOUL/IDENTITY/MEMORY/USER/TOOLS), CV files, and the new `docs/` + `lib/` dirs
 
+## Workspace Cleanup (2026-07-03)
+- Removed the transitional root compatibility copies `whatsapp-invite.py`, `whatsapp-public-user.py`; the `lib/` versions are canonical (bin wrappers, `services/invite.js`, deploy staging all use `lib/`). Also removed the now-dead `check_compatibility_copies` guard in `deploy/ci/check.py` that only kept those copies in sync.
+
 ## Webetu Meal Reservation — architecture + onboarding (2026-06-05)
 **Paths:** worker project `/home/joseph/projects/webetu/webetu-worker`; installed worker `/opt/webetu-worker`; safe wrapper `/usr/local/bin/webetu-worker-safe`; cron folder `cron/webetu-meals/`, entrypoint `notify-reservations.sh`. Legacy registry `/var/lib/webetu-worker/users.sqlite` and legacy `reserve_api.py`/emulator scripts are archived — do NOT use for onboarding or the cron path.
 
