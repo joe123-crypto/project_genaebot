@@ -423,6 +423,17 @@ class JSearchTests(unittest.TestCase):
     self.assertEqual(len(candidates), 1)
     self.assertEqual(candidates[0]["company"], "Entreprise")
 
+  def test_channel_permalink_is_not_treated_as_application_url(self) -> None:
+    candidate = {
+      "source": "zimlinks-whatsapp",
+      "sourceUrl": "https://whatsapp.com/channel/invite/123",
+      "sourcePostUrl": "https://whatsapp.com/channel/invite/123",
+      "applyLinks": [],
+    }
+    self.assertIsNone(job_scout.candidate_application_url(candidate))
+    self.assertIn("Review the original advert", job_scout.action_instruction(candidate, "channel_post_manual"))
+    self.assertIn(candidate["sourcePostUrl"], job_scout.action_instruction(candidate, "channel_post_manual"))
+
   def test_fetch_jsearch_candidates_soft_fails_on_outage(self) -> None:
     # A transient JSearch outage must not raise: the caller falls back to scrapers.
     with mock.patch.object(job_scout, "jsearch_request", side_effect=job_scout.JSearchUnavailable("HTTP 504")):

@@ -776,6 +776,50 @@ def fetch_scraped_candidates(preferences: dict, limit: int) -> list[dict]:
     return []
 
 
+def fetch_zimlinks_candidates(preferences: dict, limit: int) -> list[dict]:
+  """Read fresh channel candidates first for Zimbabwe-targeted subscribers."""
+  if limit <= 0 or not zw_targeted(preferences):
+    return []
+  try:
+    from scrapers import base as scraper_base, target_roles, zimlinks
+    match = scraper_base.build_role_matcher(target_roles(preferences))
+    return zimlinks.fetch(limit=limit, match=match)
+  except Exception as err:
+    print(f"ZimLinks source failed: {public_text(err)}", file=sys.stderr)
+    return []
+
+
+def register_channel_candidate_eligibility(run_id: str, user_id: str, candidates: list[dict]) -> None:
+  """Record selected channel candidates without making source bookkeeping fatal."""
+  try:
+    from scrapers import zimlinks
+    zimlinks.register_eligibility(run_id, user_key(user_id), candidates)
+  except Exception as err:
+    print(f"ZimLinks eligibility tracking failed: {public_text(err)}", file=sys.stderr)
+
+
+def record_channel_candidate_outcome(
+  run_id: str,
+  user_id: str,
+  candidate: dict,
+  outcome: str,
+  attempt_count: int = 0,
+) -> None:
+  try:
+    from scrapers import zimlinks
+    zimlinks.record_outcome(run_id, user_key(user_id), candidate, outcome, attempt_count)
+  except Exception as err:
+    print(f"ZimLinks outcome tracking failed: {public_text(err)}", file=sys.stderr)
+
+
+def finalize_channel_candidate_dispatch(run_id: str) -> None:
+  try:
+    from scrapers import zimlinks
+    zimlinks.finalize_dispatch(run_id)
+  except Exception as err:
+    print(f"ZimLinks cleanup failed: {public_text(err)}", file=sys.stderr)
+
+
 def dispatch_path(run_id: str, root: Path = DEFAULT_DISPATCH_ROOT) -> Path:
   return root / f"{safe_run_id(run_id)}.json"
 
@@ -1138,7 +1182,11 @@ def cmd_fetch_candidates(args: argparse.Namespace) -> dict:
     "exclusions": clean_items([*profile_values(base, "exclusions"), *(args.exclusion or [])]),
     "maxApplicationsPerRun": args.limit,
   }
-  raw_candidates = fetch_jsearch_candidates(preferences, args.limit) + fetch_scraped_candidates(preferences, args.limit)
+  raw_candidates = (
+    fetch_zimlinks_candidates(preferences, args.limit)
+    + fetch_jsearch_candidates(preferences, args.limit)
+    + fetch_scraped_candidates(preferences, args.limit)
+  )
   candidates = filter_candidates(raw_candidates, preferences, [], args.limit)
   queries = search_queries(preferences)
   return {
@@ -1401,6 +1449,9 @@ def candidate_application_url(candidate: dict) -> str | None:
       link = str(value or "").strip()
       if link.startswith(("https://", "http://")):
         return link
+  # The channel permalink is provenance, not an application form.
+  if str(candidate.get("source") or "") == "zimlinks-whatsapp":
+    return None
   source = str(candidate.get("sourceUrl") or "").strip()
   return source if source.startswith(("https://", "http://")) else None
 
@@ -1497,7 +1548,7 @@ def record_candidate_application(
 
 
 def action_instruction(candidate: dict, blocker_code: str | None = None) -> str:
-  link = candidate_application_url(candidate)
+  link = candidate_application_url(candidate) or str(candidate.get("sourcePostUrl") or candidate.get("sourceUrl") or "").strip()
   reasons = {
     "login_required": "The site requires you to sign in.",
     "captcha_required": "The site requires a CAPTCHA.",
@@ -1505,6 +1556,7 @@ def action_instruction(candidate: dict, blocker_code: str | None = None) -> str:
     "legal_declaration": "The form requires a declaration only you should confirm.",
     "payment_required": "The site asks for payment; I will never submit or pay it.",
     "unsupported_site": "This site's application form is not safely automatable yet.",
+    "channel_post_manual": "The channel post has no application form or email. Review the original advert and apply manually.",
   }
   prefix = reasons.get(str(blocker_code or ""), "This application needs your input.")
   if link:
@@ -1630,8 +1682,14 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
       try:
         applications_result = cmd_list_applications(argparse.Namespace(user_id=user_id))
         applications = applications_from_response(applications_result)
-        raw_candidates = fetch_jsearch_candidates(preferences, per_user_limit) + fetch_scraped_candidates(preferences, per_user_limit)
+        raw_candidates = (
+          fetch_zimlinks_candidates(preferences, per_user_limit)
+          + fetch_jsearch_candidates(preferences, per_user_limit)
+          + fetch_scraped_candidates(preferences, per_user_limit)
+        )
         candidates = filter_candidates(raw_candidates, preferences, applications, per_user_limit)
+        if not args.dry_run:
+          register_channel_candidate_eligibility(run_id, user_id, candidates)
       except SystemExit:
         raise
       except Exception as err:
@@ -1682,6 +1740,7 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
               attempt_count=attempt_count,
               replace=replace_existing,
             )
+            record_channel_candidate_outcome(run_id, user_id, candidate, "applied", attempt_count)
             user_applied.append({"candidate": candidate, "reason": reason, "method": "email"})
           except Exception as err:
             failed_note = public_text(err)
@@ -1698,6 +1757,7 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
               )
             except Exception:
               pass
+            record_channel_candidate_outcome(run_id, user_id, candidate, "failed", attempt_count)
             break
         elif application_url and auto_apply:
           if args.dry_run:
@@ -1725,6 +1785,7 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
                 replace=replace_existing,
                 evidence=web_result.get("evidence") if isinstance(web_result.get("evidence"), dict) else None,
               )
+              record_channel_candidate_outcome(run_id, user_id, candidate, "applied", attempt_count)
               user_applied.append({"candidate": candidate, "reason": reason, "method": "website"})
             elif outcome == "action_required":
               blocker_code = str(web_result.get("blockerCode") or "unsupported_site")
@@ -1740,6 +1801,7 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
                 attempt_count=attempt_count,
                 replace=replace_existing,
               )
+              record_channel_candidate_outcome(run_id, user_id, candidate, "action_required", attempt_count)
               user_action_required.append({"candidate": candidate, "blockerCode": blocker_code})
             else:
               raise RuntimeError(public_text(web_result.get("error") or "website submission failed", 240))
@@ -1760,6 +1822,7 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
               )
             except Exception:
               pass
+            record_channel_candidate_outcome(run_id, user_id, candidate, "failed", attempt_count)
             break
         elif application_url:
           blocker_code = "auto_apply_disabled"
@@ -1775,6 +1838,22 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
               blocker_code=blocker_code,
               attempt_count=0,
             )
+            record_channel_candidate_outcome(run_id, user_id, candidate, "action_required", 0)
+          user_action_required.append({"candidate": candidate, "blockerCode": blocker_code})
+        elif str(candidate.get("source") or "") == "zimlinks-whatsapp":
+          blocker_code = "channel_post_manual"
+          if not args.dry_run:
+            record_candidate_application(
+              user_id,
+              candidate,
+              "action_required",
+              notes=action_instruction(candidate, blocker_code),
+              match=reason,
+              submission_method="manual",
+              blocker_code=blocker_code,
+              attempt_count=0,
+            )
+            record_channel_candidate_outcome(run_id, user_id, candidate, "action_required", 0)
           user_action_required.append({"candidate": candidate, "blockerCode": blocker_code})
 
     if user_applied:
@@ -1874,6 +1953,7 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
       dispatch_root=args.dispatch_root,
     ))
     cmd_verify_dispatch(argparse.Namespace(run_id=run_id, dispatch_root=args.dispatch_root))
+    finalize_channel_candidate_dispatch(run_id)
 
   return {
     "ok": True,

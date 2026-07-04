@@ -216,6 +216,28 @@ gateway and worker tokens match, at least one subscriber is ready, and every
 ready CV is accessible. It prints the failing readiness check and runs daily at
 `09:00 Africa/Harare` for up to 100 ready subscribers.
 
+### ZimLinks WhatsApp Channel source
+
+Job Scout can also consume job adverts from the ZimLinks WhatsApp Channel. A
+separate `job-scout-channel-listener` container uses its own linked-device auth;
+never point it at OpenClaw's WhatsApp auth directory. It captures posts in real
+time, backfills the latest 10 after pairing/reconnect, and keeps transient state
+under `runtime/job-scout-channel/`. The daily Job Scout dispatch reads normalized
+Zimbabwe candidates from that queue. Raw post text/media is removed after all
+selected users reach terminal outcomes; application records remain in the
+existing Agent Genaie database.
+
+After a normal deploy, pair the isolated listener once:
+
+```bash
+./deploy/pair-job-scout-channel.sh
+```
+
+Scan the displayed QR code with the WhatsApp account that should follow
+ZimLinks. The script verifies the channel identity, starts the listener, and
+installs a 15-minute health check. Media-only posts are discarded because this
+version deliberately does not perform OCR.
+
 The deploy script used by both paths:
 
 - verifies GitClaw autocommit is disabled

@@ -59,3 +59,31 @@ services:
       timeout: 20s
       retries: 3
       start_period: 30s
+
+  job-scout-channel-listener:
+    profiles:
+      - job-scout-channel
+    build:
+      context: ./live-source
+      dockerfile: deploy/job-scout-channel-listener.Dockerfile
+    image: genaie-job-scout-channel-listener:1.0.0
+    restart: unless-stopped
+    environment:
+      JOB_SCOUT_CHANNEL_INVITE_CODE: "0029VaYITFn2v1IsGm9zxP1k"
+      JOB_SCOUT_CHANNEL_NAME: "ZimLinks"
+      JOB_SCOUT_CHANNEL_BACKFILL_COUNT: "10"
+      JOB_SCOUT_CHANNEL_MAX_MEDIA_BYTES: "26214400"
+    user: node
+    read_only: true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=64m,uid=1000,gid=1000,mode=1770
+    volumes:
+      - /home/joseph/projects/genaebot/runtime/job-scout-channel:/data
+    healthcheck:
+      test: ["CMD", "node", "healthcheck.mjs"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s

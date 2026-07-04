@@ -200,6 +200,10 @@ recreate_boundary_stack() {
   docker="$(docker_bin)"
   boundary_active || return 0
   install -d -o joseph -g joseph -m 0700 /home/joseph/projects/genaebot/runtime/job-scout
+  install -d -o joseph -g joseph -m 0700 \
+    /home/joseph/projects/genaebot/runtime/job-scout-channel \
+    /home/joseph/projects/genaebot/runtime/job-scout-channel/auth \
+    /home/joseph/projects/genaebot/runtime/job-scout-channel/media
   log "Build and recreate the container stack so bind mounts use the current live-source inode"
   (cd "$DEPLOY_DIR" && "$docker" compose up -d --build --force-recreate)
   if ! wait_container_running "$docker" 90 >/dev/null; then
@@ -247,6 +251,38 @@ start_optional_job_scout_browser() {
     sleep 5
   done
   log "WARNING: Job Scout browser is not ready (health=${health:-missing}); scheduler installation remains blocked"
+  return 0
+}
+
+start_optional_job_scout_channel_listener() {
+  local docker listener_id health auth_file
+  docker="$(docker_bin)"
+  boundary_active || return 0
+  auth_file="/home/joseph/projects/genaebot/runtime/job-scout-channel/auth/creds.json"
+  if [ ! -s "$auth_file" ]; then
+    log "ZimLinks listener not started: run deploy/pair-job-scout-channel.sh to scan its separate QR code"
+    (cd "$DEPLOY_DIR" && "$docker" compose --profile job-scout-channel stop job-scout-channel-listener >/dev/null 2>&1) || true
+    return 0
+  fi
+  log "Build and start ZimLinks channel listener"
+  if ! (cd "$DEPLOY_DIR" && "$docker" compose --profile job-scout-channel up -d --build --force-recreate job-scout-channel-listener); then
+    log "WARNING: ZimLinks listener failed to build or start; core gateway remains available"
+    return 0
+  fi
+  listener_id="$(cd "$DEPLOY_DIR" && "$docker" compose --profile job-scout-channel ps -q job-scout-channel-listener)"
+  for _attempt in $(seq 1 24); do
+    health="$("$docker" inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$listener_id" 2>/dev/null || true)"
+    if [ "$health" = "healthy" ]; then
+      log "ZimLinks channel listener is ready"
+      bash "$OC_DIR/deploy/install-job-scout-channel-health.sh"
+      return 0
+    fi
+    if [ "$health" = "unhealthy" ]; then
+      break
+    fi
+    sleep 5
+  done
+  log "WARNING: ZimLinks listener is not ready (health=${health:-missing})"
   return 0
 }
 
@@ -322,6 +358,8 @@ def source_for_stage(rel: str) -> str | None:
         return rel
     if rel == "deploy/job-scout-browser.Dockerfile":
         return rel
+    if rel == "deploy/job-scout-channel-listener.Dockerfile":
+        return rel
     return None
 
 files = []
@@ -385,6 +423,9 @@ require_staged_workspace_files() {
     "$STAGE_DIR/workspace/job-scout/country_codes.py" \
     "$STAGE_DIR/workspace/job-scout/web_apply_server.mjs" \
     "$STAGE_DIR/deploy/job-scout-browser.Dockerfile" \
+    "$STAGE_DIR/deploy/job-scout-channel-listener.Dockerfile" \
+    "$STAGE_DIR/workspace/job-scout/channel-listener/listener.mjs" \
+    "$STAGE_DIR/workspace/job-scout/channel-listener/package-lock.json" \
     "$STAGE_DIR/workspace/job-scout/scrapers/__init__.py"; do
     if [ ! -f "$path" ]; then
       printf 'missing required staged workspace file: %s\n' "$path" >&2
@@ -599,6 +640,7 @@ main() {
   verify_live_workspace
   restart_and_check
   start_optional_job_scout_browser
+  start_optional_job_scout_channel_listener
   log "Deploy complete. Review Git diff and commit/push manually when ready."
 }
 

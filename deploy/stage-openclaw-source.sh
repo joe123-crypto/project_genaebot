@@ -16,6 +16,7 @@ for required in \
   "$source_root/config/openclaw.template.json" \
   "$source_root/deploy/patch-openclaw-config.py" \
   "$source_root/deploy/job-scout-browser.Dockerfile" \
+  "$source_root/deploy/job-scout-channel-listener.Dockerfile" \
   "$filter_file"; do
   if [ ! -e "$required" ]; then
     printf 'ERROR: missing staging input: %s\n' "$required" >&2
@@ -46,3 +47,6 @@ install -m 0755 \
 install -m 0644 \
   "$source_root/deploy/job-scout-browser.Dockerfile" \
   "$stage_root/deploy/job-scout-browser.Dockerfile"
+install -m 0644 \
+  "$source_root/deploy/job-scout-channel-listener.Dockerfile" \
+  "$stage_root/deploy/job-scout-channel-listener.Dockerfile"

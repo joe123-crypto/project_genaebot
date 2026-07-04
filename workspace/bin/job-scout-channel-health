@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+exec python3 /home/joseph/.openclaw/workspace/job-scout/channel_health.py "$@"

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import sys
 
-from . import base, iharare, vacancybox, vacancymail
+from . import base, iharare, vacancybox, vacancymail, zimlinks
 
 # Ordered registry: name -> module exposing fetch(limit, timeout, match).
 SCRAPERS = {

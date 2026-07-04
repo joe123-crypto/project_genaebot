@@ -27,6 +27,8 @@
 + /job-scout/*.mjs
 + /job-scout/package.json
 + /job-scout/package-lock.json
++ /job-scout/channel-listener/
++ /job-scout/channel-listener/***
 + /job-scout/scrapers/
 + /job-scout/scrapers/***
 + /cron/***

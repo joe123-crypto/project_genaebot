@@ -29,6 +29,27 @@ class JobScoutDeploymentTests(unittest.TestCase):
     self.assertNotIn("JOB_SCOUT_PILOT_USER_IDS", compose)
     self.assertEqual(compose.count("JOB_SCOUT_BROWSER_TOKEN: ${JOB_SCOUT_BROWSER_TOKEN:-}"), 2)
 
+  def test_channel_listener_is_isolated_and_requires_pairing(self) -> None:
+    compose = (ROOT / "deploy/docker-compose.override.yml").read_text(encoding="utf-8")
+    deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")
+    pair = (ROOT / "deploy/pair-job-scout-channel.sh").read_text(encoding="utf-8")
+
+    self.assertIn("- job-scout-channel", compose)
+    self.assertIn("JOB_SCOUT_CHANNEL_BACKFILL_COUNT: \"10\"", compose)
+    self.assertIn("runtime/job-scout-channel:/data", compose)
+    self.assertNotIn(".openclaw/credentials", compose)
+    self.assertIn("cap_drop:\n      - ALL", compose)
+    self.assertIn("auth/creds.json", deploy)
+    self.assertIn("JOB_SCOUT_CHANNEL_PAIRING=1", pair)
+    self.assertIn("install-job-scout-channel-health.sh", pair)
+
+  def test_channel_listener_image_pins_baileys_and_runs_read_only(self) -> None:
+    package = json.loads((ROOT / "workspace/job-scout/channel-listener/package.json").read_text(encoding="utf-8"))
+    dockerfile = (ROOT / "deploy/job-scout-channel-listener.Dockerfile").read_text(encoding="utf-8")
+    self.assertEqual(package["dependencies"]["baileys"], "7.0.0-rc13")
+    self.assertIn("FROM node:24-bookworm-slim", dockerfile)
+    self.assertIn('CMD ["node", "listener.mjs"]', dockerfile)
+
   def test_scheduler_has_no_pilot_allowlist(self) -> None:
     installer = (ROOT / "deploy/install-job-scout.sh").read_text(encoding="utf-8")
 
