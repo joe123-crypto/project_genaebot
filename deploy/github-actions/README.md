@@ -42,7 +42,10 @@ Ubuntu runners. Required checks cover repository/staging structure,
 documentation contracts, syntax, all discovered Python and Node tests,
 ShellCheck, actionlint, locked npm dependencies, high-severity production npm
 advisories, secret/private-state scanning, and Docker Compose rendering. The
-production Job Scout browser image is built when one of its inputs changes.
+Job Scout and ZimLinks listener dependency sets are installed from their
+respective lockfiles before Node tests run, then both production dependency
+sets are audited. The production Job Scout browser image is built when one of
+its inputs changes.
 
 The deploy job has read-only repository permissions and runs only for a `main`
 push after every hosted job succeeds. Actions are pinned to commit revisions;
