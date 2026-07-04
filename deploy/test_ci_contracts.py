@@ -8,6 +8,7 @@ import unittest
 
 
 MODULE_PATH = Path(__file__).parent / "ci" / "check.py"
+WORKFLOW_PATH = Path(__file__).parents[1] / ".github" / "workflows" / "deploy-main.yml"
 SPEC = importlib.util.spec_from_file_location("ci_check", MODULE_PATH)
 assert SPEC and SPEC.loader
 ci_check = importlib.util.module_from_spec(SPEC)
@@ -50,6 +51,25 @@ class DocumentationContractTests(unittest.TestCase):
         }
         failures = ci_check.documentation_failures({"workspace/job-scout/job_scout.py"}, contract)
         self.assertEqual(failures, [])
+
+
+class WorkflowContractTests(unittest.TestCase):
+    def test_node_dependencies_are_installed_before_repository_tests(self) -> None:
+        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+        validation = workflow.index('run: ./deploy/ci-check.sh')
+        installs = (
+            "npm ci --ignore-scripts --prefix workspace/job-scout",
+            "npm ci --ignore-scripts --prefix workspace/job-scout/channel-listener",
+        )
+        for install in installs:
+            with self.subTest(install=install):
+                self.assertIn(install, workflow)
+                self.assertLess(workflow.index(install), validation)
+
+    def test_node_cache_tracks_both_package_locks(self) -> None:
+        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+        self.assertIn("workspace/job-scout/package-lock.json", workflow)
+        self.assertIn("workspace/job-scout/channel-listener/package-lock.json", workflow)
 
 
 if __name__ == "__main__":

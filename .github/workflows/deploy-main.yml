@@ -36,7 +36,14 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: workspace/job-scout/package-lock.json
+          cache-dependency-path: |
+            workspace/job-scout/package-lock.json
+            workspace/job-scout/channel-listener/package-lock.json
+
+      - name: Install locked Node dependencies
+        run: |
+          npm ci --ignore-scripts --prefix workspace/job-scout
+          npm ci --ignore-scripts --prefix workspace/job-scout/channel-listener
 
       - name: Validate workflow definitions
         run: >-
@@ -62,11 +69,10 @@ jobs:
       - name: Render Docker Compose configuration
         run: docker compose -f deploy/docker-compose.override.yml config --no-interpolate >/dev/null
 
-      - name: Verify locked Node dependencies
-        working-directory: workspace/job-scout
+      - name: Audit locked Node dependencies
         run: |
-          npm ci --ignore-scripts
-          npm audit --omit=dev --audit-level=high
+          npm --prefix workspace/job-scout audit --omit=dev --audit-level=high
+          npm --prefix workspace/job-scout/channel-listener audit --omit=dev --audit-level=high
 
       - name: Detect browser image changes
         id: changes
