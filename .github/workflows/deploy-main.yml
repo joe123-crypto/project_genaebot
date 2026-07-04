@@ -156,6 +156,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install locked Node dependencies
+        run: |
+          npm ci --ignore-scripts --prefix workspace/job-scout
+          npm ci --ignore-scripts --prefix workspace/job-scout/channel-listener
+
       - name: Deploy live container
         run: sudo /usr/local/sbin/openclaw-prod-deploy "$GITHUB_WORKSPACE"
 

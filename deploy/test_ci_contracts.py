@@ -66,6 +66,19 @@ class WorkflowContractTests(unittest.TestCase):
                 self.assertIn(install, workflow)
                 self.assertLess(workflow.index(install), validation)
 
+    def test_node_dependencies_are_installed_before_production_deploy(self) -> None:
+        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+        deploy_job = workflow[workflow.index("\n  deploy:"):]
+        deployment = deploy_job.index('run: sudo /usr/local/sbin/openclaw-prod-deploy')
+        installs = (
+            "npm ci --ignore-scripts --prefix workspace/job-scout",
+            "npm ci --ignore-scripts --prefix workspace/job-scout/channel-listener",
+        )
+        for install in installs:
+            with self.subTest(install=install):
+                self.assertIn(install, deploy_job)
+                self.assertLess(deploy_job.index(install), deployment)
+
     def test_node_cache_tracks_both_package_locks(self) -> None:
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
         self.assertIn("workspace/job-scout/package-lock.json", workflow)
