@@ -173,14 +173,21 @@ def fetch(
 ) -> list[dict]:
   candidates: list[dict] = []
   seen: set[str] = set()
+  fetched_page = False
   for term in base.source_search_terms(roles or []):
     page = 1
     while len(candidates) < max(0, limit):
       payload = base.http_get_json(search_url(term, page), timeout=timeout)
       if payload is None:
+        # WordPress answers a page beyond the last with HTTP 400 -> None. Once at
+        # least one page has come back cleanly, treat a failure as end-of-results
+        # rather than a board outage (which would drop everything collected so far).
+        if fetched_page:
+          break
         raise RuntimeError(f"ApplyNow search page {page} request failed")
       if not isinstance(payload, list):
         raise RuntimeError(f"ApplyNow search page {page} returned an invalid response")
+      fetched_page = True
       posts = [post for post in payload if isinstance(post, dict)]
       if not posts:
         break

@@ -1217,6 +1217,18 @@ class BoardParserTests(unittest.TestCase):
     self.assertEqual(request.call_count, 2)
     self.assertIn("page=2", request.call_args_list[1].args[0])
 
+  def test_applynow_search_stops_when_page_past_end_returns_none(self) -> None:
+    # A full last page (exactly POSTS_PER_PAGE) makes fetch request one page past
+    # the end, which WordPress answers with HTTP 400 -> None. Having already read a
+    # page, fetch should end the term rather than raise and drop what it collected.
+    from scrapers import applynow as an
+
+    with mock.patch.object(an, "POSTS_PER_PAGE", 1), \
+         mock.patch("scrapers.base.http_get_json", side_effect=[[self.AN_POST], None]) as request:
+      out = an.fetch(limit=5, match=lambda role, text: True, roles=["Accountant"])
+    self.assertEqual(len(out), 1)
+    self.assertEqual(request.call_count, 2)
+
   def test_applynow_listing_failure_is_reported(self) -> None:
     from scrapers import applynow as an
 
