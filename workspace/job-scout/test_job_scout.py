@@ -922,6 +922,27 @@ class BoardParserTests(unittest.TestCase):
     "hiringOrganization": {"@type": "Organization", "name": "Acme Retail"},
     "jobLocation": {"@type": "Place", "address": "Mutare"},
   }) + '</script>'
+  AN_LIST = (
+    '<div class="p-wrap p-list p-list-2" data-pid="101">'
+    '<a class="p-flink" href="https://applynow.co.zw/2026/07/04/city-of-kadoma/">'
+    '<img width="300" class="featured-img wp-post-image" alt="City of Kadoma"></a>'
+    '<h2 class="entry-title"> <a class="p-url" href="https://applynow.co.zw/2026/07/04/city-of-kadoma/" rel="bookmark"> City of Kadoma is hiring: Accountant | Apply by 22 July 2026 </a></h2>'
+    '<time class="updated" datetime="2026-07-04T08:09:50+02:00">a day ago</time></div>'
+    '<div class="p-wrap p-list p-list-2" data-pid="102">'
+    '<a class="p-flink" href="https://applynow.co.zw/2026/07/03/blue-carbon/">'
+    '<img width="300" class="featured-img wp-post-image" alt="Blue Carbon"></a>'
+    '<h2 class="entry-title"> <a class="p-url" href="https://applynow.co.zw/2026/07/03/blue-carbon/" rel="bookmark"> Free Blue Carbon Finance Course 2026 </a></h2>'
+    '<time class="updated" datetime="2026-07-03T17:51:18+02:00">2 days ago</time></div>'
+  )
+  AN_DETAIL = (
+    '<div class="entry-content rbct clearfix"><h2>Accountant</h2>'
+    '<p>Prepare municipal accounts. Closing Date: 22 July 2026.</p>'
+    '<p>Send your CV to hr@kadoma.co.zw or apply at '
+    '<a href="https://apply.kadoma.co.zw/n">the portal</a>.</p>'
+    '<a href="https://facebook.com/applynow">Follow us</a></div>'
+    '<div class="single-related"><h2 class="entry-title"><a href="/other/">Other Job</a></h2>'
+    '<p>noise@other.co.zw</p></div>'
+  )
 
   def test_vacancymail_parses_card_and_detail(self) -> None:
     from scrapers import vacancymail as vm
@@ -991,6 +1012,43 @@ class BoardParserTests(unittest.TestCase):
     with mock.patch("scrapers.base.http_post_form_json", return_value=None):
       with self.assertRaisesRegex(RuntimeError, "listing request failed"):
         vb.fetch(limit=5)
+
+  def test_applynow_parses_card_and_detail(self) -> None:
+    from scrapers import applynow as an
+
+    cards = an.parse_cards(self.AN_LIST)
+    self.assertEqual(len(cards), 2)
+    self.assertEqual(cards[0]["role"], "City of Kadoma is hiring: Accountant | Apply by 22 July 2026")
+    self.assertEqual(cards[0]["company"], "City of Kadoma")
+    self.assertEqual(cards[0]["closing"], "22 July 2026")
+    self.assertEqual(cards[0]["url"], "https://applynow.co.zw/2026/07/04/city-of-kadoma/")
+    desc, emails, links = an.parse_detail(self.AN_DETAIL)
+    self.assertIn("Prepare municipal accounts", desc)
+    self.assertEqual(emails, ["hr@kadoma.co.zw"])  # related-post e-mail excluded
+    self.assertEqual(links, ["https://apply.kadoma.co.zw/n"])  # social link excluded
+
+  def test_applynow_fetch_filters_by_role(self) -> None:
+    from scrapers import applynow as an
+
+    def fake_get(url, timeout=25):
+      if url.startswith("https://applynow.co.zw/") and url.count("/") == 5:
+        return self.AN_LIST  # month archive: /YYYY/MM/
+      return self.AN_DETAIL
+
+    with mock.patch("scrapers.base.http_get", side_effect=fake_get):
+      out = an.fetch(limit=5, match=lambda role, text: "accountant" in f"{role} {text}".lower())
+    self.assertEqual(len(out), 1)
+    self.assertEqual(out[0]["source"], "applynow")
+    self.assertEqual(out[0]["company"], "City of Kadoma")
+    self.assertEqual(out[0]["applicationEmail"], "hr@kadoma.co.zw")
+    self.assertEqual(out[0]["closing"], "22 July 2026")
+
+  def test_applynow_listing_failure_is_reported(self) -> None:
+    from scrapers import applynow as an
+
+    with mock.patch("scrapers.base.http_get", return_value=None):
+      with self.assertRaisesRegex(RuntimeError, "listing request failed"):
+        an.fetch(limit=5)
 
 
 class ScraperIntegrationTests(unittest.TestCase):
