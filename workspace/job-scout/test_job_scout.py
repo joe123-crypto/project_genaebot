@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 import tempfile
@@ -369,7 +370,7 @@ class JSearchTests(unittest.TestCase):
     )
     self.assertEqual(
       job_scout.search_queries({"targetRoles": ["Waitress"], "locations": ["Harare, Zimbabwe"], "language": "en"}),
-      ["Waitress in Harare, Zimbabwe"],
+      ["restaurant jobs in Harare, Zimbabwe"],
     )
     self.assertEqual(
       job_scout.search_queries({"targetRoles": ["Cleaner"], "language": "en"}),
@@ -417,6 +418,54 @@ class JSearchTests(unittest.TestCase):
     request.assert_called_once_with("Technicien à Oran", "dz", "fr", 2)
     self.assertEqual(len(candidates), 1)
     self.assertEqual(candidates[0]["company"], "Entreprise")
+
+  def test_waitstaff_search_uses_one_broad_query_and_filters_unrelated_roles(self) -> None:
+    response = {"data": [
+      {"job_id": "1", "employer_name": "Hotel", "job_title": "Group Executive Chef", "job_description": "Lead kitchens."},
+      {"job_id": "2", "employer_name": "Cafe", "job_title": "Waiter", "job_description": "Serve diners."},
+      {"job_id": "3", "employer_name": "Tech", "job_title": "Server Administrator", "job_description": "Maintain Linux servers."},
+    ]}
+    with mock.patch.object(job_scout, "jsearch_request", return_value=response) as request:
+      candidates, result = job_scout.fetch_jsearch_candidates_with_result(
+        {"targetRoles": ["Waitress"], "locations": ["Harare, Zimbabwe"], "country": "zw", "language": "en"},
+        5,
+      )
+
+    request.assert_called_once_with("restaurant jobs in Harare, Zimbabwe", "zw", "en", 5)
+    self.assertEqual([candidate["role"] for candidate in candidates], ["Waiter"])
+    self.assertEqual(result["rawCount"], 3)
+    self.assertEqual(result["matchedCount"], 1)
+
+  def test_jsearch_explicitly_expired_results_are_removed(self) -> None:
+    response = {"data": [
+      {"job_id": "1", "employer_name": "Cafe", "job_title": "Waiter", "job_is_expired": True},
+      {"job_id": "2", "employer_name": "Hotel", "job_title": "Waitress", "job_is_expired": False},
+    ]}
+    with mock.patch.object(job_scout, "jsearch_request", return_value=response):
+      candidates, result = job_scout.fetch_jsearch_candidates_with_result(
+        {"targetRoles": ["Waitress"], "locations": ["Harare, Zimbabwe"], "country": "zw", "language": "en"},
+        5,
+      )
+    self.assertEqual([candidate["role"] for candidate in candidates], ["Waitress"])
+    self.assertEqual(result["expiredCount"], 1)
+
+  def test_closing_state_and_filter_keep_today_and_unknown_but_drop_expired(self) -> None:
+    now = datetime(2026, 7, 5, 12, tzinfo=timezone.utc)
+    self.assertEqual(job_scout.closing_state("04 JUL 2026", now), "expired")
+    self.assertEqual(job_scout.closing_state("05 JUL 2026", now), "open")
+    self.assertEqual(job_scout.closing_state("2026-07-06T00:00:00Z", now), "open")
+    self.assertEqual(job_scout.closing_state(None, now), "unknown")
+    self.assertEqual(job_scout.closing_state("when filled", now), "malformed")
+
+    candidates = [
+      {"company": "A", "role": "Waiter", "source": "jsearch", "closing": "01 Jul 2026", "candidateId": "1"},
+      {"company": "B", "role": "Waiter", "source": "jsearch", "closing": None, "candidateId": "2"},
+    ]
+    with mock.patch.object(job_scout, "closing_state", side_effect=["expired", "unknown"]):
+      selected, stats = job_scout.filter_candidates_with_stats(candidates, {}, [], 5)
+    self.assertEqual(selected, [candidates[1]])
+    self.assertEqual(stats["jsearch"]["expiredCount"], 1)
+    self.assertEqual(stats["jsearch"]["unknownDeadlineCount"], 1)
 
   def test_channel_permalink_is_not_treated_as_application_url(self) -> None:
     candidate = {
@@ -472,6 +521,9 @@ class JSearchTests(unittest.TestCase):
     ]
 
     self.assertEqual(job_scout.filter_candidates(candidates, {}, applications, 5), [candidates[0]])
+
+  def test_jsearch_default_window_is_one_month(self) -> None:
+    self.assertEqual(job_scout.DEFAULT_JSEARCH_DATE_POSTED, "month")
 
 class JSearchDispatchTests(unittest.TestCase):
   def subscriber(self, auto_apply: bool = True) -> dict:
@@ -532,7 +584,11 @@ class JSearchDispatchTests(unittest.TestCase):
     with (
       mock.patch.object(job_scout, "cmd_list_ready", return_value={"subscribers": [subscriber]}),
       mock.patch.object(job_scout, "cmd_list_applications", return_value={"applications": []}),
-      mock.patch.object(job_scout, "fetch_jsearch_candidates", return_value=candidates),
+      mock.patch.object(
+        job_scout,
+        "fetch_jsearch_candidates_with_result",
+        return_value=(candidates, {"status": "ok", "rawCount": len(candidates), "durationMs": 1}),
+      ),
       mock.patch.object(job_scout, "jsearch_provider", return_value="rapidapi"),
       mock.patch.object(job_scout, "write_cover_letter", return_value=root / "cover-letter.txt"),
       mock.patch.object(job_scout, "web_apply_payload", return_value={"applicationUrl": "https://jobs.example/apply"}),
@@ -582,8 +638,8 @@ class JSearchDispatchTests(unittest.TestCase):
       args.phone = "+213 555 010 101"
       with mock.patch.object(job_scout, "cmd_list_ready", return_value={"subscribers": [other, requested]}), \
            mock.patch.object(job_scout, "cmd_list_applications", return_value={"applications": []}) as applications, \
-           mock.patch.object(job_scout, "fetch_jsearch_candidates", return_value=[]), \
-           mock.patch.object(job_scout, "fetch_scraped_candidates", return_value=[]), \
+           mock.patch.object(job_scout, "fetch_jsearch_candidates_with_result", return_value=([], {"status": "ok", "rawCount": 0, "durationMs": 1})), \
+           mock.patch.object(job_scout, "fetch_scraped_candidates_with_results", return_value=([], {name: {"status": "skipped", "rawCount": 0, "durationMs": 0} for name in ("vacancymail", "iharare", "vacancybox")})), \
            mock.patch.object(job_scout, "jsearch_provider", return_value="test"):
         result = job_scout.cmd_dispatch_jsearch(args)
 
@@ -667,7 +723,11 @@ class JSearchDispatchTests(unittest.TestCase):
 
       self.assertEqual(result["noMatchesCount"], 1)
       self.assertEqual(result["users"][0]["status"], "no_matches")
+      self.assertEqual(result["users"][0]["sourceResults"]["jsearch"]["status"], "ok")
       self.assertEqual(result["_record_calls"], [])
+      artifact = json.loads(Path(result["users"][0]["artifactPath"]).read_text(encoding="utf-8"))
+      self.assertEqual(artifact["schemaVersion"], 2)
+      self.assertIn("sourceResults", artifact)
 
   def test_dispatch_failed_send_records_failed_sanitized_note(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
@@ -724,14 +784,14 @@ class JSearchDispatchTests(unittest.TestCase):
     # fetch_scraped_candidates is gated by zw_targeted. This guards the geo gate.
     board_markers = ["vacancymail", "iharare", "vacancybox"]
     with tempfile.TemporaryDirectory() as tmp:
-      with mock.patch("scrapers.fetch_scraped_candidates") as inner:
+      with mock.patch("scrapers.fetch_scraped_candidates_with_results") as inner:
         result = self.dispatch_with(Path(tmp), [self.candidate()])
       # The dz subscriber is gated out, so the scraper package is never invoked.
       inner.assert_not_called()
 
-    text = json.dumps(result, default=str).casefold()
     for marker in board_markers:
-      self.assertNotIn(marker, text)
+      self.assertEqual(result["users"][0]["sourceResults"][marker]["status"], "skipped")
+      self.assertEqual(result["users"][0]["sourceResults"][marker]["rawCount"], 0)
 
 
 class ZwGatingTests(unittest.TestCase):
@@ -795,6 +855,17 @@ class ScraperBaseTests(unittest.TestCase):
 
     self.assertTrue(base.build_role_matcher([])("Anything", "text"))
 
+  def test_waitstaff_family_accepts_hospitality_roles_and_rejects_false_positives(self) -> None:
+    from scrapers import base
+
+    match = base.build_candidate_matcher(["Waitress"])
+    self.assertTrue(match("Waiter", "Serve diners"))
+    self.assertTrue(match("Server", "Restaurant and hospitality role"))
+    self.assertTrue(match("Food and Beverage Attendant", "Hotel"))
+    self.assertFalse(match("Group Executive Chef", "Lead restaurant kitchens"))
+    self.assertFalse(match("Server Administrator", "Maintain Linux servers"))
+    self.assertTrue(base.build_candidate_matcher(["Any"])("Accountant", "Finance role"))
+
 
 class BoardParserTests(unittest.TestCase):
   VM_LIST = (
@@ -831,17 +902,26 @@ class BoardParserTests(unittest.TestCase):
     '<a href="https://apply.cityhospital.co.zw/n">Apply Now</a></div>'
     '<div class="single-candidate-bottom-right">related jobs</div>'
   )
-  VB_ITEM = {
-    "title": {"rendered": "Cashier"},
-    "link": "https://vacancybox.co.zw/job/cashier-9/",
-    "date": "2026-06-16T10:00:00",
-    "content": {"rendered": "<p>Sponsored DUE: 25 JUN 2026 Cashier at Acme. Email hr@acme.co.zw</p>"},
-  }
-  VB_DETAIL = (
-    '<div class="company"><img class="company_logo" alt="Acme"/>'
-    '<div class="company_header"><p class="name"><strong>Acme Retail</strong></p></div></div>'
-    '<li class="location"><a class="google_map_link" href="#">Mutare</a></li>'
+  VB_LIST = (
+    '<li class="post-9 job_listing type-job_listing"><a href="https://vacancybox.co.zw/job/cashier-9/">'
+    '<div class="position"><h3>Cashier</h3><div class="company"><strong>Acme Retail</strong></div></div>'
+    '<div class="location">Mutare</div><ul class="meta"><li class="date">Today</li></ul></a></li>'
+    '<li class="post-10 job_listing type-job_listing"><a href="https://vacancybox.co.zw/job/welder-1/">'
+    '<div class="position"><h3>Welder</h3><div class="company"><strong>Other</strong></div></div>'
+    '<div class="location">Harare</div></a></li>'
   )
+  VB_DETAIL = '<script type="application/ld+json">' + json.dumps({
+    "@context": "https://schema.org", "@type": "JobPosting", "title": "Cashier",
+    "hiringOrganization": {"@type": "Organization", "name": "VacancyBox"},
+    "jobLocation": {"@type": "Place", "address": {"addressCountry": "ZW"}},
+  }) + '</script><script type="application/ld+json">' + json.dumps({
+    "@context": "https://schema.org",
+    "@type": "JobPosting",
+    "title": "Cashier",
+    "description": "<p>DUE: 25 JUN 2026 Cashier at Acme. Email hr@acme.co.zw</p>",
+    "hiringOrganization": {"@type": "Organization", "name": "Acme Retail"},
+    "jobLocation": {"@type": "Place", "address": "Mutare"},
+  }) + '</script>'
 
   def test_vacancymail_parses_card_and_detail(self) -> None:
     from scrapers import vacancymail as vm
@@ -882,27 +962,35 @@ class BoardParserTests(unittest.TestCase):
     self.assertEqual(emails, ["hr@cityhospital.co.zw"])
     self.assertEqual(links, ["https://apply.cityhospital.co.zw/n"])
 
-  def test_vacancybox_item_and_detail(self) -> None:
+  def test_vacancybox_card_and_detail(self) -> None:
     from scrapers import vacancybox as vb
 
-    candidate = vb.candidate_from_item(self.VB_ITEM, timeout=5, fetch_detail=False)
+    cards = vb.parse_cards(self.VB_LIST)
+    self.assertEqual([card["role"] for card in cards], ["Cashier", "Welder"])
+    with mock.patch("scrapers.base.http_get", return_value=self.VB_DETAIL):
+      candidate = vb.candidate_from_card(cards[0], timeout=5, fetch_detail=True)
     self.assertEqual(candidate["role"], "Cashier")
     self.assertEqual(candidate["applicationEmail"], "hr@acme.co.zw")
     self.assertEqual(candidate["closing"], "25 JUN 2026")
-    company, location = vb.parse_detail(self.VB_DETAIL)
-    self.assertEqual(company, "Acme Retail")
-    self.assertEqual(location, "Mutare")
+    detail = vb.parse_detail(self.VB_DETAIL)
+    self.assertEqual(detail["company"], "Acme Retail")
+    self.assertEqual(detail["location"], "Mutare")
 
   def test_vacancybox_fetch_filters_by_role(self) -> None:
     from scrapers import vacancybox as vb
 
-    items = [self.VB_ITEM, {"title": {"rendered": "Welder"}, "link": "https://vacancybox.co.zw/job/welder-1/",
-                            "content": {"rendered": "<p>Welder wanted</p>"}}]
-    with mock.patch("scrapers.base.http_get_json", return_value=items), \
+    with mock.patch("scrapers.base.http_post_form_json", return_value={"html": self.VB_LIST}), \
          mock.patch("scrapers.base.http_get", return_value=self.VB_DETAIL):
       out = vb.fetch(limit=5, match=lambda role, text: "cashier" in f"{role} {text}".lower())
     self.assertEqual([c["role"] for c in out], ["Cashier"])
     self.assertEqual(out[0]["company"], "Acme Retail")
+
+  def test_vacancybox_listing_failure_is_reported(self) -> None:
+    from scrapers import vacancybox as vb
+
+    with mock.patch("scrapers.base.http_post_form_json", return_value=None):
+      with self.assertRaisesRegex(RuntimeError, "listing request failed"):
+        vb.fetch(limit=5)
 
 
 class ScraperIntegrationTests(unittest.TestCase):

@@ -19,6 +19,7 @@ import json
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 USER_AGENT = "Mozilla/5.0 (compatible; JobScout/1.0; +https://vacancymail.co.zw)"
@@ -27,6 +28,21 @@ DEFAULT_TIMEOUT = 25
 # detail-page fetches per scraper run so a single dispatch can't hammer a site.
 RATE_LIMIT_SECONDS = 0.7
 MAX_DETAIL_FETCHES = 25
+
+WAITSTAFF_TRIGGERS = {"waitress", "waiter", "wait staff", "waitstaff"}
+WAITSTAFF_SEARCH_ROLE = "restaurant jobs"
+WAITSTAFF_TITLE_PHRASES = (
+  "waitress",
+  "waiter",
+  "wait staff",
+  "waitstaff",
+  "restaurant server",
+  "restaurant staff",
+  "food and beverage attendant",
+  "food service attendant",
+)
+WAITSTAFF_CONTEXT = ("restaurant", "hotel", "hospitality", "food", "beverage", "dining", "lodge")
+ANY_ROLE_TRIGGERS = {"any", "any job", "anything"}
 
 EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -64,6 +80,25 @@ def http_get_json(url: str, timeout: int = DEFAULT_TIMEOUT) -> object | None:
         continue
       return None
   return None
+
+
+def http_post_form_json(url: str, payload: dict[str, object], timeout: int = DEFAULT_TIMEOUT) -> object | None:
+  """POST a form and parse JSON with one retry. Returns None after a bounded failure."""
+  data = urllib.parse.urlencode(payload).encode("utf-8")
+  for attempt in range(2):
+    request = _request(url, "application/json")
+    request.data = data
+    request.method = "POST"
+    request.add_header("Content-Type", "application/x-www-form-urlencoded")
+    try:
+      with urllib.request.urlopen(request, timeout=timeout) as response:
+        body = response.read().decode("utf-8", "ignore")
+      return json.loads(body) if body else None
+    except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError):
+      if attempt == 0:
+        time.sleep(2)
+        continue
+      return None
 
 
 def collapse_ws(value: object) -> str:
@@ -166,6 +201,51 @@ def build_role_matcher(roles: list[str]):
   def match(role: str, text: str) -> bool:
     haystack = f"{role} {text}".casefold()
     return any(all(term in haystack for term in terms) for terms in term_sets)
+
+  return match
+
+
+def uses_waitstaff_family(roles: list[str]) -> bool:
+  normalized = {collapse_ws(role).casefold() for role in (roles or [])}
+  return bool(normalized & WAITSTAFF_TRIGGERS)
+
+
+def jsearch_roles(roles: list[str]) -> list[str]:
+  """Collapse a waitstaff family to one broad query so aliases do not multiply API calls."""
+  output: list[str] = []
+  waitstaff_added = False
+  for role in roles or []:
+    normalized = collapse_ws(role)
+    if normalized.casefold() in WAITSTAFF_TRIGGERS:
+      if not waitstaff_added:
+        output.append(WAITSTAFF_SEARCH_ROLE)
+        waitstaff_added = True
+    elif normalized:
+      output.append(normalized)
+  return output
+
+
+def build_candidate_matcher(roles: list[str]):
+  """Match configured roles, including a guarded hospitality waitstaff family."""
+  normalized_roles = {collapse_ws(role).casefold() for role in (roles or [])}
+  if normalized_roles & ANY_ROLE_TRIGGERS:
+    return lambda role, text: True
+  ordinary = [role for role in (roles or []) if collapse_ws(role).casefold() not in WAITSTAFF_TRIGGERS]
+  ordinary_match = build_role_matcher(ordinary) if ordinary else None
+  waitstaff = uses_waitstaff_family(roles)
+
+  def match(role: str, text: str) -> bool:
+    if ordinary_match is not None and ordinary_match(role, text):
+      return True
+    if not waitstaff:
+      return ordinary_match is None
+    title = collapse_ws(role).casefold()
+    context = f"{title} {collapse_ws(text).casefold()}"
+    if any(phrase in title for phrase in WAITSTAFF_TITLE_PHRASES):
+      return True
+    if re.search(r"\b(?:server|staff)\b", title) and any(term in context for term in WAITSTAFF_CONTEXT):
+      return True
+    return False
 
   return match
 

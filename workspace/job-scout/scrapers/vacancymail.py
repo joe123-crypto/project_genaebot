@@ -84,6 +84,8 @@ def parse_detail(html: str) -> tuple[str, list[str]]:
 
 def fetch(limit: int = 15, timeout: int = base.DEFAULT_TIMEOUT, match=None) -> list[dict]:
   html = base.http_get(LIST_URL, timeout=timeout)
+  if html is None:
+    raise RuntimeError("VacancyMail listing request failed")
   if not html:
     return []
   candidates: list[dict] = []

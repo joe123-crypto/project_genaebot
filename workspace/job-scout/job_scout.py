@@ -37,7 +37,7 @@ CV_URL_LOOKUP_RETRY_SECONDS = 2
 DEFAULT_WEB_APPLY_URL = "http://job-scout-browser:8787/apply"
 DEFAULT_JSEARCH_COUNTRY = "dz"
 DEFAULT_JSEARCH_LANGUAGE = "fr"
-DEFAULT_JSEARCH_DATE_POSTED = "3days"
+DEFAULT_JSEARCH_DATE_POSTED = "month"
 DEFAULT_OPENWEBNINJA_BASE_URL = "https://api.openwebninja.com/jsearch"
 DEFAULT_RAPIDAPI_BASE_URL = "https://jsearch.p.rapidapi.com"
 DEFAULT_RAPIDAPI_HOST = "jsearch.p.rapidapi.com"
@@ -500,6 +500,11 @@ def subscriber_user_id(subscriber: dict) -> str:
 
 def search_queries(preferences: dict) -> list[str]:
   roles = clean_items(profile_values(preferences, "targetRoles") or profile_values(preferences, "roles"))
+  try:
+    from scrapers import base as scraper_base
+    roles = scraper_base.jsearch_roles(roles)
+  except Exception:
+    pass
   locations = clean_items(profile_values(preferences, "locations"))
   language = preference_code(preferences, "language", DEFAULT_JSEARCH_LANGUAGE)
   location_connector = "à" if language == "fr" else "in"
@@ -647,6 +652,12 @@ def normalized_candidate(item: dict, query: str) -> dict:
   ]))
   source_url = links[0] if links else None
   raw_id = str(item.get("job_id") or item.get("id") or "").strip()
+  closing = item.get("job_offer_expiration_datetime_utc") or item.get("job_offer_expiration_datetime")
+  if not closing and item.get("job_offer_expiration_timestamp") is not None:
+    try:
+      closing = datetime.fromtimestamp(float(item["job_offer_expiration_timestamp"]), tz=timezone.utc).isoformat()
+    except (TypeError, ValueError, OSError):
+      closing = None
   fallback_id = hashlib.sha256(f"{company}\n{role}\n{source_url or ''}".encode("utf-8")).hexdigest()[:24]
   return {
     "candidateId": raw_id or fallback_id,
@@ -659,7 +670,7 @@ def normalized_candidate(item: dict, query: str) -> dict:
     "role": role,
     "location": location,
     "query": query,
-    "closing": item.get("job_offer_expiration_datetime_utc") or item.get("job_offer_expiration_datetime"),
+    "closing": closing,
     "description": description[:2000],
   }
 
@@ -682,7 +693,34 @@ def application_key(value: dict) -> tuple[str, str]:
   )
 
 
-def filter_candidates(candidates: list[dict], preferences: dict, applications: list[dict], limit: int) -> list[dict]:
+def closing_state(value: object, now: datetime | None = None) -> str:
+  text = str(value or "").strip()
+  if not text:
+    return "unknown"
+  current = now or datetime.now(timezone.utc)
+  cleaned = re.sub(r"^(?:expires?|due|closing(?: date)?|deadline)\s*:?\s*", "", text, flags=re.I).strip()
+  for fmt in ("%Y-%m-%d", "%d %B %Y", "%d %b %Y", "%d %B, %Y", "%d %b, %Y"):
+    try:
+      closing_date = datetime.strptime(cleaned, fmt).date()
+      return "expired" if closing_date < current.date() else "open"
+    except ValueError:
+      continue
+  try:
+    parsed = datetime.fromisoformat(cleaned.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+      parsed = parsed.replace(tzinfo=timezone.utc)
+    return "expired" if parsed < current else "open"
+  except ValueError:
+    pass
+  return "malformed"
+
+
+def filter_candidates_with_stats(
+  candidates: list[dict],
+  preferences: dict,
+  applications: list[dict],
+  limit: int,
+) -> tuple[list[dict], dict[str, dict[str, int]]]:
   exclusions = [item.casefold() for item in clean_items(profile_values(preferences, "exclusions"))]
   existing: set[tuple[str, str]] = set()
   for application in applications:
@@ -699,46 +737,123 @@ def filter_candidates(candidates: list[dict], preferences: dict, applications: l
       existing.add(application_key(application))
   seen: set[str] = set()
   output: list[dict] = []
+  stats: dict[str, dict[str, int]] = {}
   for candidate in candidates:
+    source = str(candidate.get("source") or "unknown")
+    source_stats = stats.setdefault(source, {
+      "eligibleCount": 0,
+      "expiredCount": 0,
+      "duplicateCount": 0,
+      "excludedCount": 0,
+      "unknownDeadlineCount": 0,
+      "malformedDeadlineCount": 0,
+    })
+    deadline = closing_state(candidate.get("closing"))
+    if deadline == "expired":
+      source_stats["expiredCount"] += 1
+      continue
+    if deadline == "unknown":
+      source_stats["unknownDeadlineCount"] += 1
+    elif deadline == "malformed":
+      source_stats["malformedDeadlineCount"] += 1
     text = " ".join([
       str(candidate.get("company") or ""),
       str(candidate.get("role") or ""),
       str(candidate.get("description") or ""),
     ]).casefold()
     if any(exclusion in text for exclusion in exclusions):
+      source_stats["excludedCount"] += 1
       continue
     appkey = application_key(candidate)
     # Skip jobs already applied to (prior runs) and collapse same company/role
     # across sources within this run, so a JSearch + board duplicate is applied once.
     if appkey in existing:
+      source_stats["duplicateCount"] += 1
       continue
     key = candidate_key(candidate)
     if key in seen:
+      source_stats["duplicateCount"] += 1
+      continue
+    if len(output) >= limit:
       continue
     seen.add(key)
     existing.add(appkey)
     output.append(candidate)
-    if len(output) >= limit:
-      break
+    source_stats["eligibleCount"] += 1
+  return output, stats
+
+
+def filter_candidates(candidates: list[dict], preferences: dict, applications: list[dict], limit: int) -> list[dict]:
+  output, _ = filter_candidates_with_stats(candidates, preferences, applications, limit)
   return output
 
 
-def fetch_jsearch_candidates(preferences: dict, limit: int) -> list[dict]:
+def apply_source_filter_stats(source_results: dict[str, dict], filter_stats: dict[str, dict[str, int]]) -> None:
+  for source, stats in filter_stats.items():
+    result = source_results.setdefault(source, {"status": "ok", "rawCount": 0, "durationMs": 0})
+    for key, value in stats.items():
+      if key == "expiredCount":
+        result[key] = int(result.get(key) or 0) + value
+      else:
+        result[key] = value
+  for result in source_results.values():
+    for key in (
+      "eligibleCount",
+      "expiredCount",
+      "duplicateCount",
+      "excludedCount",
+      "unknownDeadlineCount",
+      "malformedDeadlineCount",
+    ):
+      result.setdefault(key, 0)
+
+
+def fetch_jsearch_candidates_with_result(preferences: dict, limit: int) -> tuple[list[dict], dict]:
+  started = time.monotonic()
   country = preference_code(preferences, "country", DEFAULT_JSEARCH_COUNTRY)
   language = preference_code(preferences, "language", DEFAULT_JSEARCH_LANGUAGE)
   candidates: list[dict] = []
+  raw_count = 0
+  expired_count = 0
+  roles = clean_items(profile_values(preferences, "targetRoles") or profile_values(preferences, "roles"))
+  try:
+    from scrapers import base as scraper_base
+    match = scraper_base.build_candidate_matcher(roles) if scraper_base.uses_waitstaff_family(roles) else lambda role, text: True
+  except Exception:
+    match = lambda role, text: True
   for query in search_queries(preferences):
     try:
       response = jsearch_request(query, country, language, limit)
     except JSearchUnavailable as err:
-      # Transient JSearch outage: keep any candidates already gathered and let the
-      # caller fall back to the scraped boards instead of aborting the whole run.
       print(f"JSearch unavailable, continuing without it: {public_text(err)}", file=sys.stderr)
-      break
-    for item in jsearch_items(response):
-      candidates.append(normalized_candidate(item, query))
+      return candidates, {
+        "status": "unavailable",
+        "rawCount": raw_count,
+        "error": public_text(err),
+        "durationMs": round((time.monotonic() - started) * 1000),
+      }
+    items = jsearch_items(response)
+    raw_count += len(items)
+    for item in items:
+      if item.get("job_is_expired") is True or str(item.get("job_is_expired") or "").casefold() == "true":
+        expired_count += 1
+        continue
+      candidate = normalized_candidate(item, query)
+      if match(str(candidate.get("role") or ""), str(candidate.get("description") or "")):
+        candidates.append(candidate)
     if len(candidates) >= limit:
       break
+  return candidates, {
+    "status": "ok",
+    "rawCount": raw_count,
+    "matchedCount": len(candidates),
+    "expiredCount": expired_count,
+    "durationMs": round((time.monotonic() - started) * 1000),
+  }
+
+
+def fetch_jsearch_candidates(preferences: dict, limit: int) -> list[dict]:
+  candidates, _ = fetch_jsearch_candidates_with_result(preferences, limit)
   return candidates
 
 
@@ -778,17 +893,72 @@ def fetch_scraped_candidates(preferences: dict, limit: int) -> list[dict]:
     return []
 
 
+def fetch_scraped_candidates_with_results(preferences: dict, limit: int) -> tuple[list[dict], dict[str, dict]]:
+  if limit <= 0 or not zw_targeted(preferences):
+    return [], {
+      name: {"status": "skipped", "rawCount": 0, "durationMs": 0}
+      for name in ("vacancymail", "iharare", "vacancybox")
+    }
+  try:
+    import scrapers
+    return scrapers.fetch_scraped_candidates_with_results(preferences, limit)
+  except Exception as err:
+    message = public_text(err, 180)
+    return [], {
+      name: {"status": "unavailable", "rawCount": 0, "error": message, "durationMs": 0}
+      for name in ("vacancymail", "iharare", "vacancybox")
+    }
+
+
 def fetch_zimlinks_candidates(preferences: dict, limit: int) -> list[dict]:
   """Read fresh channel candidates first for Zimbabwe-targeted subscribers."""
   if limit <= 0 or not zw_targeted(preferences):
     return []
   try:
     from scrapers import base as scraper_base, target_roles, zimlinks
-    match = scraper_base.build_role_matcher(target_roles(preferences))
+    match = scraper_base.build_candidate_matcher(target_roles(preferences))
     return zimlinks.fetch(limit=limit, match=match)
   except Exception as err:
     print(f"ZimLinks source failed: {public_text(err)}", file=sys.stderr)
     return []
+
+
+def fetch_zimlinks_candidates_with_result(preferences: dict, limit: int) -> tuple[list[dict], dict]:
+  if limit <= 0 or not zw_targeted(preferences):
+    return [], {"status": "skipped", "rawCount": 0, "durationMs": 0}
+  started = time.monotonic()
+  try:
+    from scrapers import base as scraper_base, target_roles, zimlinks
+    match = scraper_base.build_candidate_matcher(target_roles(preferences))
+    candidates = zimlinks.fetch(limit=limit, match=match)
+    return candidates, {
+      "status": "ok",
+      "rawCount": len(candidates),
+      "durationMs": round((time.monotonic() - started) * 1000),
+    }
+  except Exception as err:
+    print(f"ZimLinks source failed: {public_text(err)}", file=sys.stderr)
+    return [], {
+      "status": "unavailable",
+      "rawCount": 0,
+      "error": public_text(err, 180),
+      "durationMs": round((time.monotonic() - started) * 1000),
+    }
+
+
+def fetch_candidate_sources(preferences: dict, limit: int) -> tuple[list[dict], dict[str, dict]]:
+  zimlinks, zimlinks_result = fetch_zimlinks_candidates_with_result(preferences, limit)
+  jsearch, jsearch_result = fetch_jsearch_candidates_with_result(preferences, limit)
+  boards, board_results = fetch_scraped_candidates_with_results(preferences, limit)
+  results = {
+    "zimlinks-whatsapp": zimlinks_result,
+    "jsearch": jsearch_result,
+    **board_results,
+  }
+  for result in results.values():
+    if result.get("error"):
+      result["error"] = public_text(result["error"], 180)
+  return zimlinks + jsearch + boards, results
 
 
 def register_channel_candidate_eligibility(run_id: str, user_id: str, candidates: list[dict]) -> None:
@@ -1659,6 +1829,10 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
     user_action_required: list[dict] = []
     applications: list[dict] = []
     failed_note = None
+    source_results = {
+      source: {"status": "skipped", "rawCount": 0, "durationMs": 0}
+      for source in ("zimlinks-whatsapp", "jsearch", "vacancymail", "iharare", "vacancybox")
+    }
     if per_user_limit <= 0 or not queries:
       status = "no_matches"
       candidates: list[dict] = []
@@ -1666,12 +1840,14 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
       try:
         applications_result = cmd_list_applications(argparse.Namespace(user_id=user_id))
         applications = applications_from_response(applications_result)
-        raw_candidates = (
-          fetch_zimlinks_candidates(preferences, per_user_limit)
-          + fetch_jsearch_candidates(preferences, per_user_limit)
-          + fetch_scraped_candidates(preferences, per_user_limit)
+        raw_candidates, source_results = fetch_candidate_sources(preferences, per_user_limit)
+        candidates, filter_stats = filter_candidates_with_stats(
+          raw_candidates,
+          preferences,
+          applications,
+          per_user_limit,
         )
-        candidates = filter_candidates(raw_candidates, preferences, applications, per_user_limit)
+        apply_source_filter_stats(source_results, filter_stats)
         if not args.dry_run:
           register_channel_candidate_eligibility(run_id, user_id, candidates)
       except SystemExit:
@@ -1684,6 +1860,7 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
         users.append({
           "userKey": user_key(user_id),
           "status": status,
+          "sourceResults": source_results,
           "error": failed_note,
         })
         if not args.dry_run:
@@ -1874,6 +2051,7 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
           "candidateCount": len(candidates),
           "appliedCount": len(user_applied),
           "actionRequiredCount": len(user_action_required),
+          "sourceResults": source_results,
           "error": failed_note,
         })
         if not args.dry_run:
@@ -1888,7 +2066,7 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
         continue
 
     artifact = {
-      "schemaVersion": 1,
+      "schemaVersion": 2,
       "runId": run_id,
       "userKey": user_key(user_id),
       "createdAt": utc_now(),
@@ -1901,6 +2079,7 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
       "appliedCount": len(user_applied),
       "actionRequiredCount": len(user_action_required),
       "status": status,
+      "sourceResults": source_results,
       "candidates": candidates,
     }
     artifact_path = None if args.dry_run else write_candidate_artifact(args.dispatch_root, run_id, user_id, artifact)
@@ -1911,6 +2090,7 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
       "appliedCount": len(user_applied),
       "actionRequiredCount": len(user_action_required),
       "artifactPath": artifact_path,
+      "sourceResults": source_results,
       "error": failed_note,
     })
     if not args.dry_run:

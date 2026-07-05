@@ -247,6 +247,8 @@ Your Job Scout profile is saved. Make sure Gmail shows Connected in the app. Whe
 
 This returns only the requesting user's sanitized setup state. A user is dispatch-ready only when the WhatsApp chat is linked, Gmail is connected, target roles and a validated location are saved, the profile summary and safety warning are acknowledged, and the CV object is available in R2. The CV is fetched from R2 on demand at dispatch time. Files under `runtime/job-scout/users` are temporary download caches and must never be used to decide whether a CV exists.
 
+The daily dispatcher searches JSearch over a rolling 30-day posting window. It rejects jobs with explicit expired flags or parseable deadlines before today, keeps deadline-free jobs only while they remain in an active source feed, and suppresses jobs already recorded as applied, skipped, action needed, or physically submitted. Candidate artifacts include operator-only per-source diagnostics; do not expose those diagnostics in public chat.
+
 ## Admin Manual Dispatch
 
 This section is for Joe's direct admin chat only. It must not be used for public-user self-service.

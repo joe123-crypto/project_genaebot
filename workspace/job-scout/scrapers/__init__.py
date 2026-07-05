@@ -12,6 +12,7 @@ Std-lib only. A single board failing must never abort the run.
 from __future__ import annotations
 
 import sys
+import time
 
 from . import base, iharare, vacancybox, vacancymail, zimlinks
 
@@ -37,17 +38,40 @@ def target_roles(preferences: dict) -> list[str]:
 
 def matches_roles(candidate: dict, preferences: dict) -> bool:
   """True when the candidate's role/description matches any target role (or none set)."""
-  match = base.build_role_matcher(target_roles(preferences))
+  match = base.build_candidate_matcher(target_roles(preferences))
   return match(str(candidate.get("role") or ""), str(candidate.get("description") or ""))
 
 
-def fetch_scraped_candidates(preferences: dict, limit: int, timeout: int = base.DEFAULT_TIMEOUT) -> list[dict]:
-  match = base.build_role_matcher(target_roles(preferences))
+def fetch_scraped_candidates_with_results(
+  preferences: dict,
+  limit: int,
+  timeout: int = base.DEFAULT_TIMEOUT,
+) -> tuple[list[dict], dict[str, dict]]:
+  match = base.build_candidate_matcher(target_roles(preferences))
   pool = max(int(limit or 0), LISTING_POOL)
   candidates: list[dict] = []
+  results: dict[str, dict] = {}
   for name, module in SCRAPERS.items():
+    started = time.monotonic()
     try:
-      candidates.extend(module.fetch(limit=pool, timeout=timeout, match=match))
+      fetched = module.fetch(limit=pool, timeout=timeout, match=match)
+      candidates.extend(fetched)
+      results[name] = {
+        "status": "ok",
+        "rawCount": len(fetched),
+        "durationMs": round((time.monotonic() - started) * 1000),
+      }
     except Exception as err:  # one board's failure must not sink the others
       print(f"[scrapers] {name} failed: {err!r}", file=sys.stderr)
+      results[name] = {
+        "status": "unavailable",
+        "rawCount": 0,
+        "error": str(err)[:180],
+        "durationMs": round((time.monotonic() - started) * 1000),
+      }
+  return candidates, results
+
+
+def fetch_scraped_candidates(preferences: dict, limit: int, timeout: int = base.DEFAULT_TIMEOUT) -> list[dict]:
+  candidates, _ = fetch_scraped_candidates_with_results(preferences, limit, timeout)
   return candidates
