@@ -41,6 +41,9 @@ DEFAULT_JSEARCH_DATE_POSTED = "month"
 DEFAULT_OPENWEBNINJA_BASE_URL = "https://api.openwebninja.com/jsearch"
 DEFAULT_RAPIDAPI_BASE_URL = "https://jsearch.p.rapidapi.com"
 DEFAULT_RAPIDAPI_HOST = "jsearch.p.rapidapi.com"
+JSEARCH_REQUEST_TIMEOUT = 20
+JSEARCH_REQUEST_ATTEMPTS = 2
+JSEARCH_RETRY_SECONDS = 2
 GENAIE_MAIL_BIN = Path("/home/joseph/.openclaw/workspace/bin/genaie-mail")
 OPENCLAW_BIN_FALLBACKS = (
   Path("/usr/local/bin/openclaw"),
@@ -498,6 +501,15 @@ def subscriber_user_id(subscriber: dict) -> str:
   raise SystemExit("subscriber is missing userId")
 
 
+def jsearch_location(location: str) -> str:
+  """Use the country alone for nationwide profiles without changing stored preferences."""
+  text = str(location or "").strip()
+  locality, separator, country = text.rpartition(",")
+  if separator and locality.strip().casefold() == "nationwide" and country.strip():
+    return country.strip()
+  return text
+
+
 def search_queries(preferences: dict) -> list[str]:
   roles = clean_items(profile_values(preferences, "targetRoles") or profile_values(preferences, "roles"))
   try:
@@ -505,7 +517,7 @@ def search_queries(preferences: dict) -> list[str]:
     roles = scraper_base.jsearch_roles(roles)
   except Exception:
     pass
-  locations = clean_items(profile_values(preferences, "locations"))
+  locations = clean_items([jsearch_location(location) for location in profile_values(preferences, "locations")])
   language = preference_code(preferences, "language", DEFAULT_JSEARCH_LANGUAGE)
   location_connector = "à" if language == "fr" else "in"
   if not roles:
@@ -575,20 +587,27 @@ def jsearch_request(query: str, country: str, language: str, limit: int, cursor:
     headers = {"x-api-key": key}
     url = f"{base_url}/search-v2?{urllib.parse.urlencode(params)}"
 
-  request = urllib.request.Request(url, headers={**headers, "Accept": "application/json"})
-  try:
-    with urllib.request.urlopen(request, timeout=45) as response:
-      body = response.read().decode("utf-8")
-      return json.loads(body) if body else {}
-  except urllib.error.HTTPError as err:
-    body = err.read().decode("utf-8", errors="replace")
-    print(f"JSearch request failed with HTTP {err.code}: {body[:1000]}", file=sys.stderr)
-    raise JSearchUnavailable(f"HTTP {err.code}") from err
-  except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as err:
-    # Connection refused/reset, DNS, and read timeouts (socket TimeoutError) are all
-    # transient; treat them like the HTTP errors above so dispatch falls back to boards.
-    print(f"Could not reach JSearch API: {err}", file=sys.stderr)
-    raise JSearchUnavailable("network error") from err
+  for attempt in range(JSEARCH_REQUEST_ATTEMPTS):
+    request = urllib.request.Request(url, headers={**headers, "Accept": "application/json"})
+    try:
+      with urllib.request.urlopen(request, timeout=JSEARCH_REQUEST_TIMEOUT) as response:
+        body = response.read().decode("utf-8")
+        return json.loads(body) if body else {}
+    except urllib.error.HTTPError as err:
+      body = err.read().decode("utf-8", errors="replace")
+      print(f"JSearch request failed with HTTP {err.code}: {body[:1000]}", file=sys.stderr)
+      if 500 <= err.code < 600 and attempt + 1 < JSEARCH_REQUEST_ATTEMPTS:
+        time.sleep(JSEARCH_RETRY_SECONDS)
+        continue
+      raise JSearchUnavailable(f"HTTP {err.code}") from err
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as err:
+      # DNS, connection, read-timeout, and malformed-response failures are transient.
+      print(f"Could not reach JSearch API: {err}", file=sys.stderr)
+      if attempt + 1 < JSEARCH_REQUEST_ATTEMPTS:
+        time.sleep(JSEARCH_RETRY_SECONDS)
+        continue
+      raise JSearchUnavailable("network error") from err
+  raise JSearchUnavailable("network error")
 
 
 def jsearch_items(response: dict) -> list[dict]:
@@ -897,7 +916,7 @@ def fetch_scraped_candidates_with_results(preferences: dict, limit: int) -> tupl
   if limit <= 0 or not zw_targeted(preferences):
     return [], {
       name: {"status": "skipped", "rawCount": 0, "durationMs": 0}
-      for name in ("vacancymail", "iharare", "vacancybox")
+      for name in ("vacancymail", "iharare", "vacancybox", "applynow")
     }
   try:
     import scrapers
@@ -906,7 +925,7 @@ def fetch_scraped_candidates_with_results(preferences: dict, limit: int) -> tupl
     message = public_text(err, 180)
     return [], {
       name: {"status": "unavailable", "rawCount": 0, "error": message, "durationMs": 0}
-      for name in ("vacancymail", "iharare", "vacancybox")
+      for name in ("vacancymail", "iharare", "vacancybox", "applynow")
     }
 
 
@@ -1831,7 +1850,7 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
     failed_note = None
     source_results = {
       source: {"status": "skipped", "rawCount": 0, "durationMs": 0}
-      for source in ("zimlinks-whatsapp", "jsearch", "vacancymail", "iharare", "vacancybox")
+      for source in ("zimlinks-whatsapp", "jsearch", "vacancymail", "iharare", "vacancybox", "applynow")
     }
     if per_user_limit <= 0 or not queries:
       status = "no_matches"

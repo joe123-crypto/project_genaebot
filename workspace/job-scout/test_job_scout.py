@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+import io
 import json
 from pathlib import Path
 import tempfile
 import unittest
 from unittest import mock
+import urllib.error
 
 import job_scout
 
@@ -370,7 +372,11 @@ class JSearchTests(unittest.TestCase):
     )
     self.assertEqual(
       job_scout.search_queries({"targetRoles": ["Waitress"], "locations": ["Harare, Zimbabwe"], "language": "en"}),
-      ["restaurant jobs in Harare, Zimbabwe"],
+      ["Waitress in Harare, Zimbabwe"],
+    )
+    self.assertEqual(
+      job_scout.search_queries({"targetRoles": ["Waitress"], "locations": ["Nationwide, Zimbabwe"], "language": "en"}),
+      ["Waitress in Zimbabwe"],
     )
     self.assertEqual(
       job_scout.search_queries({"targetRoles": ["Cleaner"], "language": "en"}),
@@ -419,7 +425,7 @@ class JSearchTests(unittest.TestCase):
     self.assertEqual(len(candidates), 1)
     self.assertEqual(candidates[0]["company"], "Entreprise")
 
-  def test_waitstaff_search_uses_one_broad_query_and_filters_unrelated_roles(self) -> None:
+  def test_waitstaff_search_uses_one_targeted_query_and_filters_unrelated_roles(self) -> None:
     response = {"data": [
       {"job_id": "1", "employer_name": "Hotel", "job_title": "Group Executive Chef", "job_description": "Lead kitchens."},
       {"job_id": "2", "employer_name": "Cafe", "job_title": "Waiter", "job_description": "Serve diners."},
@@ -431,7 +437,7 @@ class JSearchTests(unittest.TestCase):
         5,
       )
 
-    request.assert_called_once_with("restaurant jobs in Harare, Zimbabwe", "zw", "en", 5)
+    request.assert_called_once_with("Waitress in Harare, Zimbabwe", "zw", "en", 5)
     self.assertEqual([candidate["role"] for candidate in candidates], ["Waiter"])
     self.assertEqual(result["rawCount"], 3)
     self.assertEqual(result["matchedCount"], 1)
@@ -490,9 +496,34 @@ class JSearchTests(unittest.TestCase):
     # classified transient so dispatch falls back to the scraped boards.
     with mock.patch.object(job_scout, "jsearch_provider", return_value="rapidapi"), \
          mock.patch.object(job_scout, "env_default", side_effect=lambda key, default="": "key" if "KEY" in key else default), \
-         mock.patch("urllib.request.urlopen", side_effect=TimeoutError("The read operation timed out")):
+         mock.patch("urllib.request.urlopen", side_effect=TimeoutError("The read operation timed out")) as request, \
+         mock.patch.object(job_scout.time, "sleep"):
       with self.assertRaises(job_scout.JSearchUnavailable):
         job_scout.jsearch_request("driver", "dz", "fr", 5)
+    self.assertEqual(request.call_count, 2)
+
+  def test_jsearch_request_retries_one_transient_failure(self) -> None:
+    response = mock.MagicMock()
+    response.__enter__.return_value.read.return_value = b'{"data": []}'
+    with mock.patch.object(job_scout, "jsearch_provider", return_value="rapidapi"), \
+         mock.patch.object(job_scout, "env_default", side_effect=lambda key, default="": "key" if "KEY" in key else default), \
+         mock.patch("urllib.request.urlopen", side_effect=[urllib.error.URLError("dns"), response]) as request, \
+         mock.patch.object(job_scout.time, "sleep") as sleep:
+      result = job_scout.jsearch_request("driver", "dz", "fr", 5)
+    self.assertEqual(result, {"data": []})
+    self.assertEqual(request.call_count, 2)
+    sleep.assert_called_once_with(job_scout.JSEARCH_RETRY_SECONDS)
+
+  def test_jsearch_request_does_not_retry_http_400(self) -> None:
+    error = urllib.error.HTTPError("https://example.test", 400, "bad", {}, io.BytesIO(b"bad request"))
+    with mock.patch.object(job_scout, "jsearch_provider", return_value="rapidapi"), \
+         mock.patch.object(job_scout, "env_default", side_effect=lambda key, default="": "key" if "KEY" in key else default), \
+         mock.patch("urllib.request.urlopen", side_effect=error) as request, \
+         mock.patch.object(job_scout.time, "sleep") as sleep:
+      with self.assertRaisesRegex(job_scout.JSearchUnavailable, "HTTP 400"):
+        job_scout.jsearch_request("driver", "dz", "fr", 5)
+    request.assert_called_once()
+    sleep.assert_not_called()
 
   def test_filter_candidates_skips_existing_duplicates_and_exclusions(self) -> None:
     candidates = [
@@ -639,7 +670,7 @@ class JSearchDispatchTests(unittest.TestCase):
       with mock.patch.object(job_scout, "cmd_list_ready", return_value={"subscribers": [other, requested]}), \
            mock.patch.object(job_scout, "cmd_list_applications", return_value={"applications": []}) as applications, \
            mock.patch.object(job_scout, "fetch_jsearch_candidates_with_result", return_value=([], {"status": "ok", "rawCount": 0, "durationMs": 1})), \
-           mock.patch.object(job_scout, "fetch_scraped_candidates_with_results", return_value=([], {name: {"status": "skipped", "rawCount": 0, "durationMs": 0} for name in ("vacancymail", "iharare", "vacancybox")})), \
+           mock.patch.object(job_scout, "fetch_scraped_candidates_with_results", return_value=([], {name: {"status": "skipped", "rawCount": 0, "durationMs": 0} for name in ("vacancymail", "iharare", "vacancybox", "applynow")})), \
            mock.patch.object(job_scout, "jsearch_provider", return_value="test"):
         result = job_scout.cmd_dispatch_jsearch(args)
 
@@ -782,7 +813,7 @@ class JSearchDispatchTests(unittest.TestCase):
   def test_non_zw_subscriber_gets_no_board_sources(self) -> None:
     # The Algeria subscriber (country dz) must never receive Zimbabwe board candidates;
     # fetch_scraped_candidates is gated by zw_targeted. This guards the geo gate.
-    board_markers = ["vacancymail", "iharare", "vacancybox"]
+    board_markers = ["vacancymail", "iharare", "vacancybox", "applynow"]
     with tempfile.TemporaryDirectory() as tmp:
       with mock.patch("scrapers.fetch_scraped_candidates_with_results") as inner:
         result = self.dispatch_with(Path(tmp), [self.candidate()])
@@ -866,6 +897,26 @@ class ScraperBaseTests(unittest.TestCase):
     self.assertFalse(match("Server Administrator", "Maintain Linux servers"))
     self.assertTrue(base.build_candidate_matcher(["Any"])("Accountant", "Finance role"))
 
+  def test_source_search_terms_expand_waitstaff_without_repeating_other_roles(self) -> None:
+    from scrapers import base
+
+    self.assertEqual(
+      base.source_search_terms(["Waitress", "Waiter", "Delivery Driver", "delivery driver"]),
+      ["waitress", "waiter", "Delivery Driver"],
+    )
+    self.assertEqual(base.source_search_terms(["Any"]), [""])
+
+  def test_pagination_max_reads_query_and_path_links(self) -> None:
+    from scrapers import base
+
+    html = '<a href="?page=4">4</a><a href="/2026/07/page/9/">9</a>'
+    self.assertEqual(base.pagination_max(html), 9)
+
+  def test_month_lookback_starts_at_oldest_included_month(self) -> None:
+    from scrapers import base
+
+    self.assertEqual(base.month_lookback_start(3, date(2026, 1, 15)), date(2025, 11, 1))
+
 
 class BoardParserTests(unittest.TestCase):
   VM_LIST = (
@@ -943,6 +994,13 @@ class BoardParserTests(unittest.TestCase):
     '<div class="single-related"><h2 class="entry-title"><a href="/other/">Other Job</a></h2>'
     '<p>noise@other.co.zw</p></div>'
   )
+  AN_POST = {
+    "id": 101,
+    "date": "2026-07-04T08:09:50",
+    "link": "https://applynow.co.zw/2026/07/04/city-of-kadoma/",
+    "title": {"rendered": "City of Kadoma is hiring: Accountant | Apply by 22 July 2026"},
+    "content": {"rendered": AN_DETAIL},
+  }
 
   def test_vacancymail_parses_card_and_detail(self) -> None:
     from scrapers import vacancymail as vm
@@ -961,14 +1019,48 @@ class BoardParserTests(unittest.TestCase):
   def test_vacancymail_fetch_with_match(self) -> None:
     from scrapers import vacancymail as vm
 
-    def fake_get(url, timeout=25):
-      return self.VM_LIST if url == vm.LIST_URL else self.VM_DETAIL
+    calls: list[str] = []
+    def fake_get(url, timeout=15, attempts=2):
+      calls.append(url)
+      return self.VM_LIST if url.startswith(f"{vm.LIST_URL}?") else self.VM_DETAIL
 
     with mock.patch("scrapers.base.http_get", side_effect=fake_get):
-      out = vm.fetch(limit=5, match=lambda role, text: "driver" in f"{role} {text}".lower())
+      out = vm.fetch(
+        limit=5,
+        match=lambda role, text: "driver" in f"{role} {text}".lower(),
+        roles=["Driver"],
+      )
     self.assertEqual(len(out), 1)
     self.assertEqual(out[0]["source"], "vacancymail")
     self.assertEqual(out[0]["applicationEmail"], "jobs@acme.co.zw")
+    self.assertIn("search=Driver", calls[0])
+
+  def test_vacancymail_fetch_follows_search_pagination(self) -> None:
+    from scrapers import vacancymail as vm
+
+    listing_calls: list[str] = []
+    page_one = self.VM_LIST + '<a href="?page=2">2</a>'
+    def fake_get(url, timeout=15, attempts=2):
+      if url.startswith(f"{vm.LIST_URL}?"):
+        listing_calls.append(url)
+        return "" if "page=2" in url else page_one
+      return self.VM_DETAIL
+
+    with mock.patch("scrapers.base.http_get", side_effect=fake_get):
+      vm.fetch(limit=5, match=lambda role, text: True, roles=["Driver"])
+    self.assertEqual(len(listing_calls), 2)
+    self.assertIn("page=2", listing_calls[1])
+
+  def test_vacancymail_keeps_listing_when_detail_times_out(self) -> None:
+    from scrapers import vacancymail as vm
+
+    def fake_get(url, timeout=15, attempts=2):
+      return self.VM_LIST if url.startswith(f"{vm.LIST_URL}?") else None
+
+    with mock.patch("scrapers.base.http_get", side_effect=fake_get):
+      out = vm.fetch(limit=5, match=lambda role, text: True, roles=["Driver"])
+    self.assertEqual(len(out), 1)
+    self.assertIn("Driver needed", out[0]["description"])
 
   def test_iharare_parses_card_and_detail(self) -> None:
     from scrapers import iharare as ih
@@ -982,6 +1074,39 @@ class BoardParserTests(unittest.TestCase):
     self.assertIn("Care for patients", desc)
     self.assertEqual(emails, ["hr@cityhospital.co.zw"])
     self.assertEqual(links, ["https://apply.cityhospital.co.zw/n"])
+
+  def test_iharare_fetch_uses_server_search(self) -> None:
+    from scrapers import iharare as ih
+
+    calls: list[str] = []
+    def fake_get(url, timeout=15, attempts=2):
+      calls.append(url)
+      return self.IH_LIST if url.startswith(f"{ih.LIST_URL}?") else self.IH_DETAIL
+
+    with mock.patch("scrapers.base.http_get", side_effect=fake_get):
+      out = ih.fetch(
+        limit=5,
+        match=lambda role, text: "nurse" in f"{role} {text}".lower(),
+        roles=["Nurse"],
+      )
+    self.assertEqual([candidate["role"] for candidate in out], ["Registered Nurse"])
+    self.assertIn("search=Nurse", calls[0])
+
+  def test_iharare_fetch_follows_search_pagination(self) -> None:
+    from scrapers import iharare as ih
+
+    listing_calls: list[str] = []
+    page_one = self.IH_LIST + '<a href="?page=2">2</a>'
+    def fake_get(url, timeout=15, attempts=2):
+      if url.startswith(f"{ih.LIST_URL}?"):
+        listing_calls.append(url)
+        return "" if "page=2" in url else page_one
+      return self.IH_DETAIL
+
+    with mock.patch("scrapers.base.http_get", side_effect=fake_get):
+      ih.fetch(limit=5, match=lambda role, text: True, roles=["Nurse"])
+    self.assertEqual(len(listing_calls), 2)
+    self.assertIn("page=2", listing_calls[1])
 
   def test_vacancybox_card_and_detail(self) -> None:
     from scrapers import vacancybox as vb
@@ -1000,18 +1125,51 @@ class BoardParserTests(unittest.TestCase):
   def test_vacancybox_fetch_filters_by_role(self) -> None:
     from scrapers import vacancybox as vb
 
-    with mock.patch("scrapers.base.http_post_form_json", return_value={"html": self.VB_LIST}), \
+    with mock.patch("scrapers.base.http_post_form_json", return_value={"html": self.VB_LIST, "max_num_pages": 1}) as listing, \
          mock.patch("scrapers.base.http_get", return_value=self.VB_DETAIL):
-      out = vb.fetch(limit=5, match=lambda role, text: "cashier" in f"{role} {text}".lower())
+      out = vb.fetch(
+        limit=5,
+        match=lambda role, text: "cashier" in f"{role} {text}".lower(),
+        roles=["Cashier"],
+      )
     self.assertEqual([c["role"] for c in out], ["Cashier"])
     self.assertEqual(out[0]["company"], "Acme Retail")
+    self.assertEqual(listing.call_args.args[1]["search_keywords"], "Cashier")
 
   def test_vacancybox_listing_failure_is_reported(self) -> None:
     from scrapers import vacancybox as vb
 
     with mock.patch("scrapers.base.http_post_form_json", return_value=None):
-      with self.assertRaisesRegex(RuntimeError, "listing request failed"):
+      with self.assertRaisesRegex(RuntimeError, "listing page 1 request failed"):
         vb.fetch(limit=5)
+
+  def test_vacancybox_fetch_follows_reported_pagination(self) -> None:
+    from scrapers import vacancybox as vb
+
+    responses = [
+      {"html": self.VB_LIST, "max_num_pages": 2},
+      {"html": "", "max_num_pages": 2},
+    ]
+    with mock.patch("scrapers.base.http_post_form_json", side_effect=responses) as listing, \
+         mock.patch("scrapers.base.http_get", return_value=self.VB_DETAIL):
+      vb.fetch(limit=5, match=lambda role, text: True, roles=["Cashier"])
+    self.assertEqual(listing.call_count, 2)
+    self.assertEqual(listing.call_args_list[1].args[1]["page"], 2)
+
+  def test_vacancybox_stops_before_detail_fetch_for_old_results(self) -> None:
+    from scrapers import vacancybox as vb
+
+    old_list = self.VB_LIST.replace(
+      '<li class="date">Today</li>',
+      '<li class="date"><time datetime="2026-04-22">Posted on April 22, 2026</time></li>',
+      1,
+    )
+    with mock.patch("scrapers.base.http_post_form_json", return_value={"html": old_list, "max_num_pages": 5}), \
+         mock.patch("scrapers.base.month_lookback_start", return_value=date(2026, 5, 1)), \
+         mock.patch("scrapers.base.http_get") as detail:
+      out = vb.fetch(limit=5, match=lambda role, text: True, roles=["Cashier"])
+    self.assertEqual(out, [])
+    detail.assert_not_called()
 
   def test_applynow_parses_card_and_detail(self) -> None:
     from scrapers import applynow as an
@@ -1030,24 +1188,52 @@ class BoardParserTests(unittest.TestCase):
   def test_applynow_fetch_filters_by_role(self) -> None:
     from scrapers import applynow as an
 
-    def fake_get(url, timeout=25):
-      if url.startswith("https://applynow.co.zw/") and url.count("/") == 5:
-        return self.AN_LIST  # month archive: /YYYY/MM/
-      return self.AN_DETAIL
+    calls: list[str] = []
+    def fake_get_json(url, timeout=15, attempts=2):
+      calls.append(url)
+      return [self.AN_POST]
 
-    with mock.patch("scrapers.base.http_get", side_effect=fake_get):
-      out = an.fetch(limit=5, match=lambda role, text: "accountant" in f"{role} {text}".lower())
+    with mock.patch("scrapers.base.http_get_json", side_effect=fake_get_json):
+      out = an.fetch(
+        limit=5,
+        match=lambda role, text: "accountant" in f"{role} {text}".lower(),
+        roles=["Accountant"],
+      )
     self.assertEqual(len(out), 1)
     self.assertEqual(out[0]["source"], "applynow")
     self.assertEqual(out[0]["company"], "City of Kadoma")
     self.assertEqual(out[0]["applicationEmail"], "hr@kadoma.co.zw")
     self.assertEqual(out[0]["closing"], "22 July 2026")
+    self.assertIn("search=Accountant", calls[0])
+    self.assertIn("after=", calls[0])
+
+  def test_applynow_search_paginates_until_an_empty_page(self) -> None:
+    from scrapers import applynow as an
+
+    with mock.patch.object(an, "POSTS_PER_PAGE", 1), \
+         mock.patch("scrapers.base.http_get_json", side_effect=[[self.AN_POST], []]) as request:
+      out = an.fetch(limit=5, match=lambda role, text: True, roles=["Accountant"])
+    self.assertEqual(len(out), 1)
+    self.assertEqual(request.call_count, 2)
+    self.assertIn("page=2", request.call_args_list[1].args[0])
+
+  def test_applynow_search_stops_when_page_past_end_returns_none(self) -> None:
+    # A full last page (exactly POSTS_PER_PAGE) makes fetch request one page past
+    # the end, which WordPress answers with HTTP 400 -> None. Having already read a
+    # page, fetch should end the term rather than raise and drop what it collected.
+    from scrapers import applynow as an
+
+    with mock.patch.object(an, "POSTS_PER_PAGE", 1), \
+         mock.patch("scrapers.base.http_get_json", side_effect=[[self.AN_POST], None]) as request:
+      out = an.fetch(limit=5, match=lambda role, text: True, roles=["Accountant"])
+    self.assertEqual(len(out), 1)
+    self.assertEqual(request.call_count, 2)
 
   def test_applynow_listing_failure_is_reported(self) -> None:
     from scrapers import applynow as an
 
-    with mock.patch("scrapers.base.http_get", return_value=None):
-      with self.assertRaisesRegex(RuntimeError, "listing request failed"):
+    with mock.patch("scrapers.base.http_get_json", return_value=None):
+      with self.assertRaisesRegex(RuntimeError, "search page 1 request failed"):
         an.fetch(limit=5)
 
 
@@ -1059,6 +1245,23 @@ class ScraperIntegrationTests(unittest.TestCase):
       {"role": "Cleaner", "description": "office cleaning"}, {"targetRoles": ["Cleaner"]}))
     self.assertFalse(scrapers.matches_roles(
       {"role": "Welder", "description": "metal work"}, {"targetRoles": ["Cleaner"]}))
+
+  def test_parallel_registry_passes_roles_and_isolates_source_failure(self) -> None:
+    import scrapers
+
+    healthy = mock.Mock()
+    healthy.fetch.return_value = [{"source": "healthy", "role": "Waiter"}]
+    broken = mock.Mock()
+    broken.fetch.side_effect = RuntimeError("temporary outage")
+    with mock.patch.dict(scrapers.SCRAPERS, {"healthy": healthy, "broken": broken}, clear=True):
+      candidates, results = scrapers.fetch_scraped_candidates_with_results(
+        {"targetRoles": ["Waitress"]},
+        5,
+      )
+    self.assertEqual(candidates, [{"source": "healthy", "role": "Waiter"}])
+    self.assertEqual(results["healthy"]["status"], "ok")
+    self.assertEqual(results["broken"]["status"], "unavailable")
+    self.assertEqual(healthy.fetch.call_args.kwargs["roles"], ["Waitress"])
 
   def test_merge_dedups_jsearch_and_board_duplicate(self) -> None:
     from scrapers import base

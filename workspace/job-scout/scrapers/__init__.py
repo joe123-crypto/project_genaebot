@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Job board scrapers that extend (not replace) the JSearch source.
 
-Each board module exposes `fetch(limit, timeout, match=None)` returning candidate
+Each board module exposes `fetch(limit, timeout, match=None, roles=None)` returning candidate
 dicts in the exact shape of job_scout.normalized_candidate. fetch_scraped_candidates
 runs all boards, role-filters at the listing stage (cheap, before detail fetches),
 and returns a merged list ready for job_scout.filter_candidates.
@@ -11,12 +11,13 @@ Std-lib only. A single board failing must never abort the run.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import sys
 import time
 
 from . import applynow, base, iharare, vacancybox, vacancymail, zimlinks
 
-# Ordered registry: name -> module exposing fetch(limit, timeout, match).
+# Ordered registry: name -> module exposing fetch(limit, timeout, match, roles).
 SCRAPERS = {
   "vacancymail": vacancymail,
   "iharare": iharare,
@@ -48,28 +49,37 @@ def fetch_scraped_candidates_with_results(
   limit: int,
   timeout: int = base.DEFAULT_TIMEOUT,
 ) -> tuple[list[dict], dict[str, dict]]:
-  match = base.build_candidate_matcher(target_roles(preferences))
+  roles = target_roles(preferences)
+  match = base.build_candidate_matcher(roles)
   pool = max(int(limit or 0), LISTING_POOL)
   candidates: list[dict] = []
   results: dict[str, dict] = {}
-  for name, module in SCRAPERS.items():
+
+  def fetch_one(module) -> tuple[list[dict], dict, Exception | None]:
     started = time.monotonic()
     try:
-      fetched = module.fetch(limit=pool, timeout=timeout, match=match)
-      candidates.extend(fetched)
-      results[name] = {
+      fetched = module.fetch(limit=pool, timeout=timeout, match=match, roles=roles)
+      return fetched, {
         "status": "ok",
         "rawCount": len(fetched),
         "durationMs": round((time.monotonic() - started) * 1000),
-      }
+      }, None
     except Exception as err:  # one board's failure must not sink the others
-      print(f"[scrapers] {name} failed: {err!r}", file=sys.stderr)
-      results[name] = {
+      return [], {
         "status": "unavailable",
         "rawCount": 0,
         "error": str(err)[:180],
         "durationMs": round((time.monotonic() - started) * 1000),
-      }
+      }, err
+
+  with ThreadPoolExecutor(max_workers=len(SCRAPERS), thread_name_prefix="job-scout-board") as executor:
+    futures = {name: executor.submit(fetch_one, module) for name, module in SCRAPERS.items()}
+    for name in SCRAPERS:
+      fetched, result, error = futures[name].result()
+      candidates.extend(fetched)
+      results[name] = result
+      if error is not None:
+        print(f"[scrapers] {name} failed: {error!r}", file=sys.stderr)
   return candidates, results
 
 

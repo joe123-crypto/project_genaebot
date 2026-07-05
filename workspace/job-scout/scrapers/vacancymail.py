@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+import urllib.parse
 
 if __package__ in (None, ""):
   sys.path.insert(0, __import__("os").path.dirname(__import__("os").path.dirname(__file__)))
@@ -82,39 +83,69 @@ def parse_detail(html: str) -> tuple[str, list[str]]:
   return description, emails
 
 
-def fetch(limit: int = 15, timeout: int = base.DEFAULT_TIMEOUT, match=None) -> list[dict]:
-  html = base.http_get(LIST_URL, timeout=timeout)
-  if html is None:
-    raise RuntimeError("VacancyMail listing request failed")
-  if not html:
-    return []
+def listing_url(term: str, page: int) -> str:
+  params: dict[str, object] = {}
+  if term:
+    params["search"] = term
+  if page > 1:
+    params["page"] = page
+  return f"{LIST_URL}?{urllib.parse.urlencode(params)}" if params else LIST_URL
+
+
+def fetch(
+  limit: int = 15,
+  timeout: int = base.DEFAULT_TIMEOUT,
+  match=None,
+  roles: list[str] | None = None,
+) -> list[dict]:
   candidates: list[dict] = []
   fetched = 0
-  for card in parse_cards(html):
-    if len(candidates) >= max(0, limit):
-      break
-    if match is not None and not match(card["role"], f"{card['role']} {card['blurb']}"):
-      continue
-    description = card["blurb"]
-    emails: list[str] = []
-    if fetched < base.MAX_DETAIL_FETCHES:
-      detail = base.http_get(card["url"], timeout=timeout)
-      if detail:
-        detail_desc, emails = parse_detail(detail)
-        if detail_desc:
-          description = detail_desc
-      fetched += 1
-      time.sleep(base.RATE_LIMIT_SECONDS)
-    candidates.append(base.build_candidate(
-      SOURCE,
-      role=card["role"],
-      company=card["company"],
-      url=card["url"],
-      description=description,
-      location=card["location"],
-      closing=card["closing"],
-      emails=emails,
-    ))
+  seen: set[str] = set()
+  for term in base.source_search_terms(roles or []):
+    page = 1
+    while len(candidates) < max(0, limit):
+      html = base.http_get(listing_url(term, page), timeout=timeout)
+      if html is None:
+        raise RuntimeError(f"VacancyMail listing page {page} request failed")
+      cards = parse_cards(html)
+      if not cards:
+        break
+      last_page = base.pagination_max(html, page)
+      for card in cards:
+        if len(candidates) >= max(0, limit):
+          break
+        if card["url"] in seen:
+          continue
+        seen.add(card["url"])
+        if match is not None and not match(card["role"], f"{card['role']} {card['blurb']}"):
+          continue
+        description = card["blurb"]
+        emails: list[str] = []
+        if fetched < base.MAX_DETAIL_FETCHES:
+          detail = base.http_get(
+            card["url"],
+            timeout=min(timeout, base.DETAIL_TIMEOUT),
+            attempts=1,
+          )
+          if detail:
+            detail_desc, emails = parse_detail(detail)
+            if detail_desc:
+              description = detail_desc
+          fetched += 1
+          time.sleep(base.RATE_LIMIT_SECONDS)
+        candidates.append(base.build_candidate(
+          SOURCE,
+          role=card["role"],
+          company=card["company"],
+          url=card["url"],
+          description=description,
+          location=card["location"],
+          closing=card["closing"],
+          emails=emails,
+        ))
+      if page >= last_page:
+        break
+      page += 1
   return candidates
 
 
@@ -123,8 +154,8 @@ def main(argv: list[str] | None = None) -> int:
   parser.add_argument("--limit", type=int, default=10)
   parser.add_argument("--query", help="optional case-insensitive role/keyword filter")
   args = parser.parse_args(argv)
-  match = base.keyword_match(args.query) if args.query else None
-  return base.print_candidates(fetch(limit=args.limit, match=match))
+  match = base.build_candidate_matcher([args.query]) if args.query else None
+  return base.print_candidates(fetch(limit=args.limit, match=match, roles=[args.query] if args.query else None))
 
 
 if __name__ == "__main__":

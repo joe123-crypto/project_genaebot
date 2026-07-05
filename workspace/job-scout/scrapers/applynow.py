@@ -2,8 +2,9 @@
 """Scraper for ApplyNOW Zimbabwe (https://applynow.co.zw/).
 
 ApplyNOW is a WordPress/Foxiz site that has no static jobs feed (/jobs/ redirects
-to a single post), but it exposes month archives at /YYYY/MM/ that list every
-opportunity published that month. Each listing card looks like:
+to a single post). Role-aware discovery uses its public WordPress posts API so
+results are not limited to the first page of each monthly archive. Archive-card
+parsing remains available for fixtures and diagnostics. Each listing card looks like:
 
     <div class="p-wrap p-list p-list-2" data-pid="23185">
       ... <img ... alt="Textile Exchange" class="featured-img wp-post-image" ...> ...
@@ -22,7 +23,7 @@ import argparse
 import datetime
 import re
 import sys
-import time
+import urllib.parse
 
 if __package__ in (None, ""):
   sys.path.insert(0, __import__("os").path.dirname(__import__("os").path.dirname(__file__)))
@@ -32,8 +33,10 @@ else:
 
 SOURCE = "applynow"
 BASE_URL = "https://applynow.co.zw"
+POSTS_URL = f"{BASE_URL}/wp-json/wp/v2/posts"
 # How many months of archives to walk back (current month + previous ones).
 MONTH_LOOKBACK = 3
+POSTS_PER_PAGE = 100
 
 # Each listing card starts at a p-wrap block; split on it and parse each segment.
 CARD_SPLIT_RE = re.compile(r'<div class="p-wrap ')
@@ -46,6 +49,7 @@ ALT_BEFORE_RE = re.compile(r'<img[^>]*class="featured-img[^"]*"[^>]*alt="(?P<alt
 ALT_AFTER_RE = re.compile(r'<img[^>]*alt="(?P<alt>[^"]*)"[^>]*class="featured-img', re.S)
 APPLY_BY_RE = re.compile(r'Apply by\s+([0-9]{1,2}\s+\w+\s+\d{4})', re.I)
 CLOSING_RE = re.compile(r'Closing Date:?\s*([0-9]{1,2}\s+\w+\s+\d{4})', re.I)
+COMPANY_RE = re.compile(r'^(?P<company>.+?)\s+is\s+(?:hiring|seeking|recruiting)\b', re.I)
 # Detail page body lives in .entry-content; stop before the related/footer noise.
 CONTENT_RE = re.compile(
   r'class="entry-content[^"]*"(.*?)'
@@ -114,53 +118,96 @@ def month_url(year: int, month: int) -> str:
   return f"{BASE_URL}/{year:04d}/{month:02d}/"
 
 
-def fetch(limit: int = 15, timeout: int = base.DEFAULT_TIMEOUT, match=None) -> list[dict]:
+def lookback_start(count: int = MONTH_LOOKBACK, today: datetime.date | None = None) -> str:
+  return f"{base.month_lookback_start(count, today).isoformat()}T00:00:00"
+
+
+def rendered(value: object) -> str:
+  if isinstance(value, dict):
+    return str(value.get("rendered") or "")
+  return str(value or "")
+
+
+def company_from_title(title: str) -> str:
+  match = COMPANY_RE.search(str(title or ""))
+  return base.collapse_ws(match.group("company")) if match else ""
+
+
+def search_url(term: str, page: int) -> str:
+  params = {
+    "search": term,
+    "after": lookback_start(),
+    "per_page": POSTS_PER_PAGE,
+    "page": page,
+    "orderby": "date",
+    "order": "desc",
+    "_fields": "id,date,link,title,content",
+  }
+  return f"{POSTS_URL}?{urllib.parse.urlencode(params)}"
+
+
+def candidate_from_post(post: dict) -> dict:
+  role = base.strip_tags(rendered(post.get("title")))
+  content = rendered(post.get("content"))
+  description, emails, apply_links = parse_detail(content)
+  deadline_text = f"{role} {description}"
+  deadline = APPLY_BY_RE.search(deadline_text) or CLOSING_RE.search(deadline_text)
+  return base.build_candidate(
+    SOURCE,
+    role=role,
+    company=company_from_title(role),
+    url=str(post.get("link") or ""),
+    description=description,
+    location="",
+    closing=base.strip_tags(deadline.group(1)) if deadline else None,
+    emails=emails,
+    apply_links=apply_links,
+  )
+
+
+def fetch(
+  limit: int = 15,
+  timeout: int = base.DEFAULT_TIMEOUT,
+  match=None,
+  roles: list[str] | None = None,
+) -> list[dict]:
   candidates: list[dict] = []
-  fetched = 0
   seen: set[str] = set()
-  for index, (year, month) in enumerate(_months_back(MONTH_LOOKBACK)):
-    if len(candidates) >= max(0, limit):
-      break
-    html = base.http_get(month_url(year, month), timeout=timeout)
-    if html is None:
-      if index == 0:
-        raise RuntimeError("ApplyNow listing request failed")
-      continue
-    if not html:
-      continue
-    for card in parse_cards(html):
-      if len(candidates) >= max(0, limit):
+  fetched_page = False
+  for term in base.source_search_terms(roles or []):
+    page = 1
+    while len(candidates) < max(0, limit):
+      payload = base.http_get_json(search_url(term, page), timeout=timeout)
+      if payload is None:
+        # WordPress answers a page beyond the last with HTTP 400 -> None. Once at
+        # least one page has come back cleanly, treat a failure as end-of-results
+        # rather than a board outage (which would drop everything collected so far).
+        if fetched_page:
+          break
+        raise RuntimeError(f"ApplyNow search page {page} request failed")
+      if not isinstance(payload, list):
+        raise RuntimeError(f"ApplyNow search page {page} returned an invalid response")
+      fetched_page = True
+      posts = [post for post in payload if isinstance(post, dict)]
+      if not posts:
         break
-      if card["url"] in seen:
-        continue
-      seen.add(card["url"])
-      if match is not None and not match(card["role"], f"{card['role']} {card['company']}"):
-        continue
-      description = ""
-      emails: list[str] = []
-      apply_links: list[str] = []
-      closing = card["closing"]
-      if fetched < base.MAX_DETAIL_FETCHES:
-        detail = base.http_get(card["url"], timeout=timeout)
-        if detail:
-          description, emails, apply_links = parse_detail(detail)
-          if not closing:
-            body_closing = CLOSING_RE.search(detail)
-            if body_closing:
-              closing = base.strip_tags(body_closing.group(1))
-        fetched += 1
-        time.sleep(base.RATE_LIMIT_SECONDS)
-      candidates.append(base.build_candidate(
-        SOURCE,
-        role=card["role"],
-        company=card["company"],
-        url=card["url"],
-        description=description,
-        location="",
-        closing=closing,
-        emails=emails,
-        apply_links=apply_links,
-      ))
+      for post in posts:
+        if len(candidates) >= max(0, limit):
+          break
+        url = str(post.get("link") or "")
+        if not url or url in seen:
+          continue
+        seen.add(url)
+        candidate = candidate_from_post(post)
+        if match is not None and not match(
+          str(candidate.get("role") or ""),
+          f"{candidate.get('role', '')} {candidate.get('description', '')}",
+        ):
+          continue
+        candidates.append(candidate)
+      if len(posts) < POSTS_PER_PAGE:
+        break
+      page += 1
   return candidates
 
 
@@ -169,8 +216,8 @@ def main(argv: list[str] | None = None) -> int:
   parser.add_argument("--limit", type=int, default=10)
   parser.add_argument("--query", help="optional case-insensitive role/keyword filter")
   args = parser.parse_args(argv)
-  match = base.keyword_match(args.query) if args.query else None
-  return base.print_candidates(fetch(limit=args.limit, match=match))
+  match = base.build_candidate_matcher([args.query]) if args.query else None
+  return base.print_candidates(fetch(limit=args.limit, match=match, roles=[args.query] if args.query else None))
 
 
 if __name__ == "__main__":
