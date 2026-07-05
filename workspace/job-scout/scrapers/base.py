@@ -13,6 +13,7 @@ through filter_candidates / dispatch unchanged.
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import html as html_lib
 import json
@@ -23,14 +24,16 @@ import urllib.parse
 import urllib.request
 
 USER_AGENT = "Mozilla/5.0 (compatible; JobScout/1.0; +https://vacancymail.co.zw)"
-DEFAULT_TIMEOUT = 25
+DEFAULT_TIMEOUT = 15
+DETAIL_TIMEOUT = 10
+DEFAULT_ATTEMPTS = 2
+RETRY_SECONDS = 2
 # Be polite: small pause between requests to the same board and a hard ceiling on
 # detail-page fetches per scraper run so a single dispatch can't hammer a site.
 RATE_LIMIT_SECONDS = 0.7
 MAX_DETAIL_FETCHES = 25
 
 WAITSTAFF_TRIGGERS = {"waitress", "waiter", "wait staff", "waitstaff"}
-WAITSTAFF_SEARCH_ROLE = "restaurant jobs"
 WAITSTAFF_TITLE_PHRASES = (
   "waitress",
   "waiter",
@@ -53,39 +56,55 @@ def _request(url: str, accept: str) -> urllib.request.Request:
   return urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": accept})
 
 
-def http_get(url: str, timeout: int = DEFAULT_TIMEOUT) -> str | None:
-  """GET text with one retry. Returns the body or None on failure (never raises)."""
-  for attempt in range(2):
+def http_get(
+  url: str,
+  timeout: int = DEFAULT_TIMEOUT,
+  attempts: int = DEFAULT_ATTEMPTS,
+) -> str | None:
+  """GET text with bounded retries. Returns the body or None on failure."""
+  attempts = max(1, int(attempts))
+  for attempt in range(attempts):
     try:
       with urllib.request.urlopen(_request(url, "text/html,*/*"), timeout=timeout) as response:
         return response.read().decode("utf-8", "ignore")
     except (urllib.error.URLError, OSError, ValueError):
-      if attempt == 0:
-        time.sleep(2)
+      if attempt + 1 < attempts:
+        time.sleep(RETRY_SECONDS)
         continue
       return None
   return None
 
 
-def http_get_json(url: str, timeout: int = DEFAULT_TIMEOUT) -> object | None:
-  """GET and parse JSON with one retry. Returns the decoded object or None."""
-  for attempt in range(2):
+def http_get_json(
+  url: str,
+  timeout: int = DEFAULT_TIMEOUT,
+  attempts: int = DEFAULT_ATTEMPTS,
+) -> object | None:
+  """GET and parse JSON with bounded retries. Returns None after failure."""
+  attempts = max(1, int(attempts))
+  for attempt in range(attempts):
     try:
       with urllib.request.urlopen(_request(url, "application/json"), timeout=timeout) as response:
         body = response.read().decode("utf-8", "ignore")
       return json.loads(body) if body else None
     except (urllib.error.URLError, OSError, ValueError):
-      if attempt == 0:
-        time.sleep(2)
+      if attempt + 1 < attempts:
+        time.sleep(RETRY_SECONDS)
         continue
       return None
   return None
 
 
-def http_post_form_json(url: str, payload: dict[str, object], timeout: int = DEFAULT_TIMEOUT) -> object | None:
-  """POST a form and parse JSON with one retry. Returns None after a bounded failure."""
+def http_post_form_json(
+  url: str,
+  payload: dict[str, object],
+  timeout: int = DEFAULT_TIMEOUT,
+  attempts: int = DEFAULT_ATTEMPTS,
+) -> object | None:
+  """POST a form and parse JSON with bounded retries."""
   data = urllib.parse.urlencode(payload).encode("utf-8")
-  for attempt in range(2):
+  attempts = max(1, int(attempts))
+  for attempt in range(attempts):
     request = _request(url, "application/json")
     request.data = data
     request.method = "POST"
@@ -95,8 +114,8 @@ def http_post_form_json(url: str, payload: dict[str, object], timeout: int = DEF
         body = response.read().decode("utf-8", "ignore")
       return json.loads(body) if body else None
     except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError):
-      if attempt == 0:
-        time.sleep(2)
+      if attempt + 1 < attempts:
+        time.sleep(RETRY_SECONDS)
         continue
       return None
 
@@ -211,18 +230,58 @@ def uses_waitstaff_family(roles: list[str]) -> bool:
 
 
 def jsearch_roles(roles: list[str]) -> list[str]:
-  """Collapse a waitstaff family to one broad query so aliases do not multiply API calls."""
+  """Collapse a waitstaff family to its first targeted role without extra API calls."""
   output: list[str] = []
   waitstaff_added = False
   for role in roles or []:
     normalized = collapse_ws(role)
     if normalized.casefold() in WAITSTAFF_TRIGGERS:
       if not waitstaff_added:
-        output.append(WAITSTAFF_SEARCH_ROLE)
+        output.append(normalized)
         waitstaff_added = True
     elif normalized:
       output.append(normalized)
   return output
+
+
+def source_search_terms(roles: list[str]) -> list[str]:
+  """Return bounded server-side board queries while preserving local role filtering."""
+  normalized = [collapse_ws(role) for role in (roles or []) if collapse_ws(role)]
+  if not normalized or any(role.casefold() in ANY_ROLE_TRIGGERS for role in normalized):
+    return [""]
+
+  output: list[str] = []
+  seen: set[str] = set()
+  waitstaff_added = False
+  for role in normalized:
+    if role.casefold() in WAITSTAFF_TRIGGERS:
+      if not waitstaff_added:
+        output.extend(["waitress", "waiter"])
+        seen.update({"waitress", "waiter"})
+        waitstaff_added = True
+      continue
+    key = role.casefold()
+    if key not in seen:
+      output.append(role)
+      seen.add(key)
+  return output or [""]
+
+
+def pagination_max(html: str, default: int = 1) -> int:
+  """Read common ?page=N and /page/N/ pagination links from listing HTML."""
+  pages = [int(value) for value in re.findall(r"(?:[?&]page=|/page/)([0-9]+)", str(html or ""), re.I)]
+  return max([max(1, int(default)), *pages])
+
+
+def month_lookback_start(count: int = 3, today: datetime.date | None = None) -> datetime.date:
+  """Return the first day of the oldest included month."""
+  current = today or datetime.date.today()
+  year, month = current.year, current.month
+  for _ in range(max(1, count) - 1):
+    month -= 1
+    if month == 0:
+      month, year = 12, year - 1
+  return datetime.date(year, month, 1)
 
 
 def build_candidate_matcher(roles: list[str]):

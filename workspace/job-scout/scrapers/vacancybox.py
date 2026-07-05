@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime
 import html as html_lib
 import json
 import re
@@ -27,6 +28,7 @@ LINK_RE = re.compile(r'<a[^>]*href="([^"]+)"', re.I)
 TITLE_RE = re.compile(r'<div[^>]*class="position"[^>]*>.*?<h3>(.*?)</h3>', re.S | re.I)
 COMPANY_RE = re.compile(r'<div[^>]*class="company"[^>]*>.*?<strong>(.*?)</strong>', re.S | re.I)
 LOCATION_RE = re.compile(r'<div[^>]*class="location"[^>]*>(.*?)</div>', re.S | re.I)
+POSTED_RE = re.compile(r'<time[^>]*datetime="([^"]+)"', re.I)
 JSON_LD_RE = re.compile(r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>', re.S | re.I)
 DUE_RE = re.compile(r'(?:DUE|CLOSING DATE|DEADLINE)\s*:\s*([0-9]{1,2}\s+\w+\s+\d{4})', re.I)
 
@@ -41,11 +43,13 @@ def parse_cards(html: str) -> list[dict]:
       continue
     company = COMPANY_RE.search(body)
     location = LOCATION_RE.search(body)
+    posted = POSTED_RE.search(body)
     cards.append({
       "url": base.absolute_url("https://vacancybox.co.zw", link.group(1)),
       "role": base.strip_tags(title.group(1)),
       "company": base.strip_tags(company.group(1)) if company else "",
       "location": base.strip_tags(location.group(1)) if location else "",
+      "posted": base.strip_tags(posted.group(1)) if posted else None,
     })
   return cards
 
@@ -95,7 +99,11 @@ def parse_detail(html: str) -> dict:
 def candidate_from_card(card: dict, *, timeout: int, fetch_detail: bool) -> dict:
   detail_data: dict = {}
   if fetch_detail and card.get("url"):
-    detail = base.http_get(str(card["url"]), timeout=timeout)
+    detail = base.http_get(
+      str(card["url"]),
+      timeout=min(timeout, base.DETAIL_TIMEOUT),
+      attempts=1,
+    )
     if detail:
       detail_data = parse_detail(detail)
     time.sleep(base.RATE_LIMIT_SECONDS)
@@ -111,33 +119,66 @@ def candidate_from_card(card: dict, *, timeout: int, fetch_detail: bool) -> dict
   )
 
 
-def fetch(limit: int = 15, timeout: int = base.DEFAULT_TIMEOUT, match=None) -> list[dict]:
-  per_page = max(1, min(max(limit * 3, limit), 50))
-  response = base.http_post_form_json(LIST_URL, {
-    "search_keywords": "",
-    "search_location": "",
-    "filter_job_type": "",
-    "per_page": per_page,
-    "orderby": "date",
-    "order": "DESC",
-    "page": 1,
-    "show_pagination": "true",
-  }, timeout=timeout)
-  if not isinstance(response, dict) or not isinstance(response.get("html"), str):
-    raise RuntimeError("VacancyBox listing request failed")
+def fetch(
+  limit: int = 15,
+  timeout: int = base.DEFAULT_TIMEOUT,
+  match=None,
+  roles: list[str] | None = None,
+) -> list[dict]:
+  per_page = 50
   candidates: list[dict] = []
   fetched = 0
-  for card in parse_cards(response["html"]):
-    if len(candidates) >= max(0, limit):
-      break
-    if match is not None and not match(str(card.get("role") or ""), str(card.get("role") or "")):
-      continue
-    candidates.append(candidate_from_card(
-      card,
-      timeout=timeout,
-      fetch_detail=fetched < base.MAX_DETAIL_FETCHES,
-    ))
-    fetched += 1
+  seen: set[str] = set()
+  posted_cutoff = base.month_lookback_start(3)
+  for term in base.source_search_terms(roles or []):
+    page = 1
+    while len(candidates) < max(0, limit):
+      response = base.http_post_form_json(LIST_URL, {
+        "search_keywords": term,
+        "search_location": "",
+        "filter_job_type": "",
+        "per_page": per_page,
+        "orderby": "date",
+        "order": "DESC",
+        "page": page,
+        "show_pagination": "true",
+      }, timeout=timeout)
+      if not isinstance(response, dict) or not isinstance(response.get("html"), str):
+        raise RuntimeError(f"VacancyBox listing page {page} request failed")
+      cards = parse_cards(response["html"])
+      if not cards:
+        break
+      try:
+        last_page = max(page, int(response.get("max_num_pages") or page))
+      except (TypeError, ValueError):
+        last_page = page
+      reached_lookback = False
+      for card in cards:
+        if len(candidates) >= max(0, limit):
+          break
+        posted = str(card.get("posted") or "").strip()
+        if posted:
+          try:
+            if datetime.date.fromisoformat(posted[:10]) < posted_cutoff:
+              reached_lookback = True
+              break
+          except ValueError:
+            pass
+        url = str(card.get("url") or "")
+        if url in seen:
+          continue
+        seen.add(url)
+        if match is not None and not match(str(card.get("role") or ""), str(card.get("role") or "")):
+          continue
+        candidates.append(candidate_from_card(
+          card,
+          timeout=timeout,
+          fetch_detail=fetched < base.MAX_DETAIL_FETCHES,
+        ))
+        fetched += 1
+      if reached_lookback or page >= last_page:
+        break
+      page += 1
   return candidates
 
 
@@ -146,8 +187,8 @@ def main(argv: list[str] | None = None) -> int:
   parser.add_argument("--limit", type=int, default=10)
   parser.add_argument("--query", help="optional case-insensitive role/keyword filter")
   args = parser.parse_args(argv)
-  match = base.keyword_match(args.query) if args.query else None
-  return base.print_candidates(fetch(limit=args.limit, match=match))
+  match = base.build_candidate_matcher([args.query]) if args.query else None
+  return base.print_candidates(fetch(limit=args.limit, match=match, roles=[args.query] if args.query else None))
 
 
 if __name__ == "__main__":
