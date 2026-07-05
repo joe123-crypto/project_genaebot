@@ -1034,6 +1034,12 @@ def cmd_stage_cv(args: argparse.Namespace) -> dict:
 def cmd_save_profile(args: argparse.Namespace) -> dict:
   phone = normalize_phone(args.phone)
   user_id = str(args.user_id or "").strip() or linked_user_id(phone)
+  profile_confirmed = bool(getattr(args, "profile_confirmed", False))
+  safety_acknowledged = bool(getattr(args, "safety_acknowledged", False))
+  if not profile_confirmed:
+    raise SystemExit("--profile-confirmed is required after the user confirms the profile summary")
+  if not safety_acknowledged:
+    raise SystemExit("--safety-acknowledged is required after the user acknowledges the scam warning")
   base = load_profile_json(args.profile_json)
   auto_apply = False if args.no_auto_apply else base.get("autoApply", True) is not False
   max_applications = (
@@ -1068,11 +1074,20 @@ def cmd_save_profile(args: argparse.Namespace) -> dict:
       "userId": user_id,
       "cvFileRef": resolve_cv_ref(user_id, args.cv, do_upload=False),
       "preferences": preferences,
+      "profileConfirmed": profile_confirmed,
+      "safetyAcknowledged": safety_acknowledged,
       "uploadEndpoint": endpoint("/internal/job-scout/cv"),
       "endpoint": endpoint("/internal/job-scout/profile"),
     }
   cv_file_ref = resolve_cv_ref(user_id, args.cv, do_upload=True)
-  payload = {"phone": phone, "userId": user_id, "preferences": preferences, "cvFileRef": cv_file_ref}
+  payload = {
+    "phone": phone,
+    "userId": user_id,
+    "preferences": preferences,
+    "cvFileRef": cv_file_ref,
+    "profileConfirmed": profile_confirmed,
+    "safetyAcknowledged": safety_acknowledged,
+  }
   result = request_json("POST", endpoint("/internal/job-scout/profile"), payload)
   remove_pending_links(phone=phone, service="job-scout")
   return result
@@ -1084,57 +1099,10 @@ def cmd_list_ready(args: argparse.Namespace) -> dict:
 
 
 def cmd_status(args: argparse.Namespace) -> dict:
-  """Return requester-scoped readiness using R2 as the CV source of truth."""
+  """Return requester-scoped readiness from the authoritative backend evaluator."""
   phone = normalize_phone(args.phone)
-  response = cmd_list_ready(argparse.Namespace(limit=100))
-  subscribers = response.get("subscribers") if isinstance(response, dict) else []
-  subscribers = subscribers if isinstance(subscribers, list) else []
-  subscriber = None
-  for candidate in subscribers:
-    candidate_phone = str(candidate.get("whatsappPhone") or "").strip()
-    if not candidate_phone:
-      continue
-    try:
-      if normalize_phone(candidate_phone) == phone:
-        subscriber = candidate
-        break
-    except SystemExit:
-      continue
-
-  if subscriber is None:
-    return {
-      "configured": False,
-      "linked": False,
-      "gmailConnected": False,
-      "cvAvailable": False,
-      "ready": False,
-    }
-
-  user_id = subscriber_user_id(subscriber)
-  sender_email = str(subscriber.get("senderEmail") or "").strip()
-  preferences = subscriber_preferences(subscriber)
-  profile = subscriber.get("profile") if isinstance(subscriber.get("profile"), dict) else {}
-  cv_available = cv_object_available(user_id)
-  linked = bool(str(subscriber.get("whatsappPhone") or "").strip())
-  gmail_connected = bool(sender_email)
-  ready = bool(linked and gmail_connected and str(subscriber.get("cvFileRef") or "").strip() and cv_available)
-  return {
-    "configured": True,
-    "linked": linked,
-    "gmailConnected": gmail_connected,
-    "senderEmail": sender_email or None,
-    "cvAvailable": cv_available,
-    "ready": ready,
-    "profile": {
-      "displayName": str(profile.get("displayName") or "").strip() or None,
-    },
-    "preferences": {
-      "targetRoles": clean_items(profile_values(preferences, "targetRoles")),
-      "locations": clean_items(profile_values(preferences, "locations")),
-      "autoApply": preferences.get("autoApply", True) is not False,
-      "maxApplicationsPerRun": max_applications(preferences),
-    },
-  }
+  query = urllib.parse.urlencode({"phone": phone})
+  return request_json("GET", endpoint(f"/internal/job-scout/status?{query}"))
 
 
 def cmd_list_applications(args: argparse.Namespace) -> dict:
@@ -1639,6 +1607,19 @@ def scoped_subscribers(subscribers: list[dict], phone: str | None) -> list[dict]
   return selected
 
 
+def subscriber_is_dispatch_ready(subscriber: dict) -> bool:
+  preferences = subscriber_preferences(subscriber)
+  return bool(
+    subscriber.get("ready") is True
+    and subscriber.get("gmailConnected") is True
+    and str(subscriber.get("senderEmail") or "").strip()
+    and str(subscriber.get("cvFileRef") or "").strip()
+    and str(subscriber.get("whatsappPhone") or "").strip()
+    and clean_items(profile_values(preferences, "targetRoles"))
+    and clean_items(profile_values(preferences, "locations"))
+  )
+
+
 def cmd_dispatch_jsearch(args: argparse.Namespace) -> dict:
   run_id = args.run_id or f"job-scout-jsearch-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
   run_id = safe_run_id(run_id)
@@ -1651,6 +1632,7 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
   subscribers = ready_result.get("subscribers") if isinstance(ready_result, dict) else []
   if not isinstance(subscribers, list):
     subscribers = []
+  subscribers = [subscriber for subscriber in subscribers if subscriber_is_dispatch_ready(subscriber)]
   subscribers = scoped_subscribers(subscribers, getattr(args, "phone", None))
   ready_count = len(subscribers)
   if not args.dry_run:
@@ -2133,6 +2115,8 @@ def build_parser() -> argparse.ArgumentParser:
   profile.add_argument("--prompt-note", action="append")
   profile.add_argument("--max-applications-per-run", type=int)
   profile.add_argument("--no-auto-apply", action="store_true")
+  profile.add_argument("--profile-confirmed", action="store_true", help="user confirmed the final profile summary")
+  profile.add_argument("--safety-acknowledged", action="store_true", help="user acknowledged the scam-safety warning")
   profile.add_argument("--storage-root", type=Path, default=DEFAULT_STORAGE_ROOT)
   profile.add_argument("--dry-run", action="store_true")
   profile.set_defaults(func=cmd_save_profile)
