@@ -14,13 +14,14 @@ from __future__ import annotations
 import sys
 import time
 
-from . import base, iharare, vacancybox, vacancymail, zimlinks
+from . import applynow, base, iharare, vacancybox, vacancymail, zimlinks
 
 # Ordered registry: name -> module exposing fetch(limit, timeout, match).
 SCRAPERS = {
   "vacancymail": vacancymail,
   "iharare": iharare,
   "vacancybox": vacancybox,
+  "applynow": applynow,
 }
 
 # How many listings to pull per board before role filtering / the final cap.
