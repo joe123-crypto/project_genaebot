@@ -52,6 +52,9 @@
   },
   "plugins": {
     "entries": {
+      "admin-http-rpc": {
+        "enabled": true
+      },
       "vercel-ai-gateway": {
         "enabled": true
       },
