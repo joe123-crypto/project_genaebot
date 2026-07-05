@@ -226,7 +226,9 @@ After the user has provided enough details, uploaded a CV, confirmed the summary
   --qualification "O Level Mathematics and English" \
   --experience "General work" \
   --skill "Computer literacy" \
-  --exclusion "Senior management"
+  --exclusion "Senior management" \
+  --profile-confirmed \
+  --safety-acknowledged
 ```
 
 `--cv` accepts either the `cvFileRef` returned by `stage-cv` (the R2 object key, already uploaded) or a local CV path (which `save-profile` uploads to R2). If the user gives many details, use repeated flags. The CV lives in the Agent Genaie Cloudflare R2 bucket under `<uid>/cv/cv.pdf`; Firestore stores that key as `cvFileRef`. Raw WhatsApp media is temporary and must not be treated as the durable CV location.
@@ -243,7 +245,7 @@ Your Job Scout profile is saved. Make sure Gmail shows Connected in the app. Whe
 /home/joseph/.openclaw/workspace/bin/job-scout status --phone "<whatsapp phone>"
 ```
 
-This returns only the requesting user's sanitized setup state. A user is dispatch-ready only when the WhatsApp chat is linked, Gmail is connected, a profile and CV reference are saved, and the CV object is available in R2. The CV is fetched from R2 on demand at dispatch time. Files under `runtime/job-scout/users` are temporary download caches and must never be used to decide whether a CV exists.
+This returns only the requesting user's sanitized setup state. A user is dispatch-ready only when the WhatsApp chat is linked, Gmail is connected, target roles and a validated location are saved, the profile summary and safety warning are acknowledged, and the CV object is available in R2. The CV is fetched from R2 on demand at dispatch time. Files under `runtime/job-scout/users` are temporary download caches and must never be used to decide whether a CV exists.
 
 ## Admin Manual Dispatch
 

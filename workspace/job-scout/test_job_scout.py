@@ -97,6 +97,8 @@ class CvStagingTests(unittest.TestCase):
         prompt_note=None,
         max_applications_per_run=None,
         no_auto_apply=False,
+        profile_confirmed=True,
+        safety_acknowledged=True,
         dry_run=True,
       )
 
@@ -105,8 +107,10 @@ class CvStagingTests(unittest.TestCase):
       self.assertTrue(result["dryRun"])
       self.assertEqual(result["cvFileRef"], "user-1/cv/cv.pdf")
       self.assertTrue(result["uploadEndpoint"].endswith("/internal/job-scout/cv"))
-      self.assertEqual(result["preferences"]["targetRoles"], ["General worker"])
-      self.assertEqual(result["preferences"]["country"], "zw")
+    self.assertEqual(result["preferences"]["targetRoles"], ["General worker"])
+    self.assertEqual(result["preferences"]["country"], "zw")
+    self.assertTrue(result["profileConfirmed"])
+    self.assertTrue(result["safetyAcknowledged"])
 
   def test_resolve_cv_ref_accepts_staged_key(self) -> None:
     self.assertEqual(
@@ -182,53 +186,34 @@ class CvDownloadTests(unittest.TestCase):
 
 
 class JobScoutStatusTests(unittest.TestCase):
-  def test_status_uses_r2_and_returns_only_requested_user(self) -> None:
-    subscribers = [
-      {
-        "userId": "other-user",
-        "whatsappPhone": "+263700000000",
-        "senderEmail": "other@example.com",
-        "cvFileRef": "other-user/cv/cv.pdf",
-      },
-      {
-        "userId": "requested-user",
-        "whatsappPhone": "+213555010101",
-        "senderEmail": "requester@example.com",
-        "cvFileRef": "requested-user/cv/cv.pdf",
-        "profile": {"displayName": "Requester"},
-        "preferences": {
-          "targetRoles": ["Driver"],
-          "locations": ["Nationwide, Zimbabwe"],
-          "autoApply": True,
-          "maxApplicationsPerRun": 2,
-        },
-      },
-    ]
-    with mock.patch.object(job_scout, "cmd_list_ready", return_value={"subscribers": subscribers}), \
-         mock.patch.object(job_scout, "cv_object_available", return_value=True) as cv_probe:
+  def test_status_uses_requester_scoped_backend_endpoint(self) -> None:
+    expected = {
+      "configured": True,
+      "linked": True,
+      "gmailConnected": True,
+      "senderEmail": "requester@example.com",
+      "cvAvailable": True,
+      "ready": True,
+      "preferences": {"targetRoles": ["Driver"], "locations": ["Nationwide, Zimbabwe"]},
+    }
+    with mock.patch.object(job_scout, "request_json", return_value=expected) as request:
       result = job_scout.cmd_status(argparse.Namespace(phone="+213 555 010 101"))
 
-    self.assertTrue(result["ready"])
-    self.assertTrue(result["cvAvailable"])
-    self.assertEqual(result["senderEmail"], "requester@example.com")
-    self.assertEqual(result["preferences"]["targetRoles"], ["Driver"])
-    self.assertNotIn("userId", result)
-    self.assertNotIn("other@example.com", json.dumps(result))
-    cv_probe.assert_called_once_with("requested-user")
+    self.assertEqual(result, expected)
+    method, url = request.call_args.args
+    self.assertEqual(method, "GET")
+    self.assertIn("/internal/job-scout/status?", url)
+    self.assertIn("phone=%2B213555010101", url)
 
-  def test_status_reports_unconfigured_without_other_user_data(self) -> None:
-    with mock.patch.object(job_scout, "cmd_list_ready", return_value={"subscribers": []}), \
-         mock.patch.object(job_scout, "cv_object_available") as cv_probe:
-      result = job_scout.cmd_status(argparse.Namespace(phone="+213555010101"))
-
-    self.assertEqual(result, {
-      "configured": False,
-      "linked": False,
-      "gmailConnected": False,
-      "cvAvailable": False,
-      "ready": False,
-    })
-    cv_probe.assert_not_called()
+  def test_status_does_not_query_the_multi_user_subscriber_feed(self) -> None:
+    with mock.patch.object(job_scout, "request_json", return_value={"configured": False}) as request, \
+         mock.patch.object(job_scout, "cmd_list_ready") as list_ready:
+      self.assertEqual(
+        job_scout.cmd_status(argparse.Namespace(phone="+213555010101")),
+        {"configured": False},
+      )
+    request.assert_called_once()
+    list_ready.assert_not_called()
 
 
 class PreferredLocationTests(unittest.TestCase):
@@ -338,6 +323,8 @@ class PreferredLocationTests(unittest.TestCase):
         prompt_note=None,
         max_applications_per_run=None,
         no_auto_apply=False,
+        profile_confirmed=True,
+        safety_acknowledged=True,
         dry_run=True,
       )
 
@@ -485,6 +472,8 @@ class JSearchDispatchTests(unittest.TestCase):
       "whatsappPhone": "+213555010101",
       "whatsappPhoneHash": "phonehash1",
       "senderEmail": "applicant@example.com",
+      "gmailConnected": True,
+      "ready": True,
       "cvFileRef": "/tmp/cv.pdf",
       "profile": {"displayName": "Test Applicant"},
       "preferences": {
@@ -603,6 +592,22 @@ class JSearchDispatchTests(unittest.TestCase):
       with mock.patch.object(job_scout, "cmd_list_ready", return_value={"subscribers": [self.subscriber()]}):
         with self.assertRaisesRegex(SystemExit, "no ready Job Scout subscriber"):
           job_scout.cmd_dispatch_jsearch(args)
+
+  def test_dispatch_filters_incomplete_subscribers_from_backend(self) -> None:
+    incomplete = {
+      **self.subscriber(),
+      "ready": False,
+      "preferences": {"targetRoles": [], "locations": []},
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+      args = self.args(Path(tmp), dry_run=True)
+      with mock.patch.object(job_scout, "cmd_list_ready", return_value={"subscribers": [incomplete]}), \
+           mock.patch.object(job_scout, "send_whatsapp_summary") as whatsapp:
+        result = job_scout.cmd_dispatch_jsearch(args)
+
+    self.assertEqual(result["readyCount"], 0)
+    self.assertEqual(result["processedCount"], 0)
+    whatsapp.assert_not_called()
 
   def test_dispatch_lock_rejects_overlapping_run(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
