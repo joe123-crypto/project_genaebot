@@ -202,9 +202,9 @@ function formatReservationStatusReply(result) {
   }
   const alreadyBooked = Number(result?.meals_reserved) || 0;
   if (alreadyBooked <= 0) {
-    return `Your next meal reservation is set for ${when} at ${restaurant}. All 3 meal types will be booked automatically.`;
+    return `Your meals for ${when} at ${restaurant} aren't reserved yet. Please make the reservation manually.`;
   }
-  return `Your next meal reservation is set for ${when} at ${restaurant}. The remaining meals will be booked automatically.`;
+  return `Some meals for ${when} at ${restaurant} are already reserved. Please make any remaining reservations manually.`;
 }
 
 // Same redirect the onboarding-start branch uses, for users who ask for status

@@ -44,9 +44,9 @@ Agent runs sanitized credential and dry-run checks
 Agent asks for and confirms the user's default restaurant by public name
   → If restaurant is not visible: inform user, offer Club 3 Bab Ezzouar or wait path
   → If user chooses to wait: advise manual reservations, tell user to return when ready
-Agent warns user about the 3-day wait window, offers to reserve now
+Agent offers to reserve the next 3 days now
 If user agrees (or does not object): agent reserves meals for the next 3 days and reports results
-Automatic runs fire on the 1st, 3rd, 6th, 9th, 12th, 15th, 18th, 21st, 24th, 27th, and 30th of each month at 12:00 PM Algiers, covering all days of the year with no gaps
+Automatic reservations are stopped. Users must make future reservations manually.
 ```
 
 ## Start Setup
@@ -189,7 +189,7 @@ sudo -n -u webetu-worker /usr/local/bin/webetu-worker-safe \
 If `registration_status` is not `"active"`, the user is not set up yet. Redirect to onboarding.
 
 ```bash
-# 2. Check their next scheduled reservation (no booking is made)
+# 2. Check their next reservation date (no booking is made)
 sudo -n -u webetu-worker /usr/local/bin/webetu-worker-safe \
   reserve --phone "<whatsapp phone>" --dry-run
 ```
@@ -197,7 +197,7 @@ sudo -n -u webetu-worker /usr/local/bin/webetu-worker-safe \
 Translate the result into plain language. Example reply:
 
 ```text
-Your next meal reservation is set for <date> at <restaurant name>. All 3 meal types will be booked automatically.
+Your meals for <date> at <restaurant name> aren't reserved yet. Please make the reservation manually.
 ```
 
 Or if meals_reserved is 0 and the message explains why (e.g. already booked, no active dates):
@@ -269,28 +269,6 @@ sudo -n -u webetu-worker /usr/local/bin/webetu-worker-safe \
 
 This authenticates privately, discovers/caches metadata, checks existing reservations, and reports what would be reserved without creating a reservation.
 
-## Automatic Schedule (Next Run Lookup)
-
-Whenever you tell a user when the next automatic run is, do NOT make the user calculate it and do NOT estimate "in 3 days". Look it up from this fixed table and state the actual date.
-
-The job runs at 12:00 PM Algiers on these days of every month:
-
-```text
-1st, 3rd, 6th, 9th, 12th, 15th, 18th, 21st, 24th, 27th, 30th
-```
-
-To find the next run date: take today's date, then find the first day in the list above that is tomorrow or later. That is the date to tell the user (it always falls within the next 3 days, so it bridges the meals you just reserved with no gap).
-
-Examples:
-
-```text
-Today June 11  → next run June 12
-Today June 12 (after the noon run) → next run June 15
-Today June 13  → next run June 15
-Today June 30 (after the noon run) → next run July 1st
-Today Jan 31   → next run Feb 1st
-```
-
 ## Immediate Reservation After Setup
 
 When the dry-run check passes and a default restaurant has been saved, warn the user before reserving:
@@ -302,7 +280,7 @@ Setup is complete. Should I reserve the next 3 days at <restaurant name> now?
 If the user says anything like "don't reserve", "wait", "do it later", "I'll do it manually", or any instruction to pause, respect it immediately without reserving:
 
 ```text
-I won't reserve now. Make reservations yourself until the next run on <next run date>.
+I won't reserve now. Please make your reservations manually.
 ```
 
 If the user agrees or does not object, run reservations for the next 3 days using the requester's WhatsApp phone:
@@ -323,14 +301,13 @@ Report results in plain language (date + outcome). Do not expose raw JSON, user 
 If all 3 succeed:
 
 ```text
-Done. Your meals are reserved for the next 3 days at <restaurant name>. The next automatic run is on <look up the next fire date from the Automatic Schedule table above>.
+Done. Your meals are reserved for the next 3 days at <restaurant name>.
 ```
 
 If some fail:
 
 ```text
 I reserved meals for <date1> and <date2>, but <date3> failed. Reserve <date3> yourself.
-The next automatic run is on <look up the next fire date from the Automatic Schedule table above>.
 ```
 
 If no default restaurant was saved because the user chose to wait for their restaurant, skip this section entirely. The user was already advised to make manual reservations.
