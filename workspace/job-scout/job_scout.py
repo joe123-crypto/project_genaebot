@@ -501,6 +501,8 @@ def subscriber_user_id(subscriber: dict) -> str:
 def search_queries(preferences: dict) -> list[str]:
   roles = clean_items(profile_values(preferences, "targetRoles") or profile_values(preferences, "roles"))
   locations = clean_items(profile_values(preferences, "locations"))
+  language = preference_code(preferences, "language", DEFAULT_JSEARCH_LANGUAGE)
+  location_connector = "à" if language == "fr" else "in"
   if not roles:
     return []
   if not locations:
@@ -509,7 +511,7 @@ def search_queries(preferences: dict) -> list[str]:
   seen: set[str] = set()
   for role in roles:
     for location in locations:
-      query = f"{role} à {location}".strip()
+      query = f"{role} {location_connector} {location}".strip()
       key = query.casefold()
       if key in seen:
         continue

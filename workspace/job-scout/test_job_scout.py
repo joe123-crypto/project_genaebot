@@ -360,12 +360,20 @@ class PreferredLocationTests(unittest.TestCase):
 class JSearchTests(unittest.TestCase):
   def test_search_queries_use_roles_locations_and_default_location(self) -> None:
     self.assertEqual(
-      job_scout.search_queries({"targetRoles": ["Security guard", "Driver"], "locations": ["Algiers"]}),
+      job_scout.search_queries({
+        "targetRoles": ["Security guard", "Driver"],
+        "locations": ["Algiers"],
+        "language": "fr",
+      }),
       ["Security guard à Algiers", "Driver à Algiers"],
     )
     self.assertEqual(
-      job_scout.search_queries({"targetRoles": ["Cleaner"]}),
-      ["Cleaner à Algeria"],
+      job_scout.search_queries({"targetRoles": ["Waitress"], "locations": ["Harare, Zimbabwe"], "language": "en"}),
+      ["Waitress in Harare, Zimbabwe"],
+    )
+    self.assertEqual(
+      job_scout.search_queries({"targetRoles": ["Cleaner"], "language": "en"}),
+      ["Cleaner in Algeria"],
     )
 
   def test_normalized_candidate_extracts_explicit_email_only(self) -> None:
