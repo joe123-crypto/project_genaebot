@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Transient WhatsApp Channel source for ZimLinks job adverts.
+"""Transient WhatsApp Channel sources for Job Scout job adverts.
 
 The isolated Node listener captures raw posts into SQLite. This module performs
 bounded classification/normalization and exposes candidates in Job Scout's
@@ -88,6 +88,11 @@ CREATE TABLE IF NOT EXISTS post_outcomes (
   user_key TEXT NOT NULL, outcome TEXT NOT NULL,
   attempt_count INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL,
   PRIMARY KEY (run_id, channel_jid, post_id, user_key)
+);
+CREATE TABLE IF NOT EXISTS listener_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL
 );
 """
 
@@ -238,7 +243,28 @@ def classify_with_model(text: str, *, timeout: int) -> tuple[dict, str]:
   return result, model
 
 
-def candidate_from(row: sqlite3.Row, fields: dict) -> dict:
+def channel_metadata(conn: sqlite3.Connection) -> dict[str, dict]:
+  metadata: dict[str, dict] = {}
+  try:
+    rows = conn.execute(
+      "SELECT key,value FROM listener_meta WHERE key='channel' OR key LIKE 'channel:%' ORDER BY key",
+    ).fetchall()
+  except sqlite3.Error:
+    return metadata
+  for row in rows:
+    try:
+      value = json.loads(row["value"])
+    except (TypeError, json.JSONDecodeError):
+      continue
+    if not isinstance(value, dict):
+      continue
+    jid = str(value.get("jid") or "").strip()
+    if jid:
+      metadata[jid] = value
+  return metadata
+
+
+def candidate_from(row: sqlite3.Row, fields: dict, channel: dict | None = None) -> dict:
   text = str(row["raw_text"] or "")
   apply_links, contact_links = original_urls(text)
   role = clean_line(fields.get("role"), 120) or "Unknown role"
@@ -246,9 +272,10 @@ def candidate_from(row: sqlite3.Row, fields: dict) -> dict:
   description = clean_line(fields.get("description"), 2000) or base.collapse_ws(text)[:2000]
   identity = hashlib.sha256(f"{row['channel_jid']}\n{row['post_id']}".encode("utf-8")).hexdigest()[:24]
   emails = base.extract_emails(text)
+  channel = channel if isinstance(channel, dict) else {}
   return {
     "candidateId": identity,
-    "source": SOURCE,
+    "source": str(channel.get("source") or SOURCE),
     "sourceUrl": row["post_url"],
     "sourcePostUrl": row["post_url"],
     "applyLinks": apply_links,
@@ -262,6 +289,7 @@ def candidate_from(row: sqlite3.Row, fields: dict) -> dict:
     "closing": clean_line(fields.get("closing"), 100) or None,
     "description": description,
     "sourceChannelJid": row["channel_jid"],
+    "sourceChannelName": clean_line(channel.get("name"), 140) or None,
     "sourcePostId": row["post_id"],
   }
 
@@ -328,6 +356,7 @@ def process_pending(conn: sqlite3.Connection, timeout: int) -> None:
     """,
     (MAX_PARSE_ATTEMPTS,),
   ).fetchall()
+  channels = channel_metadata(conn)
   model_calls = 0
   for row in rows:
     text = str(row["raw_text"] or "").strip()
@@ -370,7 +399,7 @@ def process_pending(conn: sqlite3.Connection, timeout: int) -> None:
     else:
       fields["description"] = text
     with conn:
-      save_candidate(conn, row, candidate_from(row, fields), model)
+      save_candidate(conn, row, candidate_from(row, fields, channels.get(str(row["channel_jid"]))), model)
 
 
 def cleanup(conn: sqlite3.Connection) -> None:
@@ -420,7 +449,7 @@ def register_eligibility(run_id: str, user_key: str, candidates: list[dict]) -> 
   try:
     now = utc_now()
     for candidate in candidates:
-      if candidate.get("source") != SOURCE:
+      if not candidate.get("sourceChannelJid") or not candidate.get("sourcePostId"):
         continue
       conn.execute(
         "INSERT OR IGNORE INTO post_eligibility(run_id,channel_jid,post_id,user_key,created_at) VALUES (?,?,?,?,?)",
@@ -432,7 +461,7 @@ def register_eligibility(run_id: str, user_key: str, candidates: list[dict]) -> 
 
 
 def record_outcome(run_id: str, user_key: str, candidate: dict, outcome: str, attempt_count: int = 0) -> None:
-  if candidate.get("source") != SOURCE:
+  if not candidate.get("sourceChannelJid") or not candidate.get("sourcePostId"):
     return
   conn = connect()
   if conn is None:

@@ -18,8 +18,11 @@ import qrcode from "qrcode-terminal";
 
 import { attachMedia, markTerminal, openStore, postId, setMeta, storeCounts, upsertPost } from "./store.mjs";
 
-const DEFAULT_INVITE_CODE = "0029VaYITFn2v1IsGm9zxP1k";
-const DEFAULT_CHANNEL_NAME = "ZimLinks";
+const DEFAULT_CHANNELS = [{
+  inviteCode: "0029VaYITFn2v1IsGm9zxP1k",
+  expectedName: "ZimLinks",
+  source: "zimlinks-whatsapp",
+}];
 const DEFAULT_DATA_DIR = "/data";
 const DEFAULT_MAX_MEDIA_BYTES = 25 * 1024 * 1024;
 const DEFAULT_BACKFILL_COUNT = 10;
@@ -32,16 +35,50 @@ function envInt(name, fallback) {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
+function channelConfig(env) {
+  let values;
+  if (env.JOB_SCOUT_CHANNELS_JSON) {
+    try {
+      values = JSON.parse(env.JOB_SCOUT_CHANNELS_JSON);
+    } catch (error) {
+      throw new Error(`JOB_SCOUT_CHANNELS_JSON is invalid JSON: ${String(error)}`);
+    }
+  } else {
+    values = [{
+      inviteCode: env.JOB_SCOUT_CHANNEL_INVITE_CODE || DEFAULT_CHANNELS[0].inviteCode,
+      expectedName: env.JOB_SCOUT_CHANNEL_NAME || DEFAULT_CHANNELS[0].expectedName,
+      source: DEFAULT_CHANNELS[0].source,
+    }];
+  }
+  if (!Array.isArray(values) || values.length === 0) {
+    throw new Error("JOB_SCOUT_CHANNELS_JSON must be a non-empty array");
+  }
+  const inviteCodes = new Set();
+  const sources = new Set();
+  return values.map((value, index) => {
+    const inviteCode = String(value?.inviteCode || "").trim();
+    const expectedName = String(value?.expectedName || "").trim();
+    const source = String(value?.source || "").trim();
+    if (!/^[A-Za-z0-9_-]+$/.test(inviteCode)) throw new Error(`channel ${index + 1} has an invalid inviteCode`);
+    if (!expectedName) throw new Error(`channel ${index + 1} is missing expectedName`);
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(source)) throw new Error(`channel ${index + 1} has an invalid source`);
+    if (inviteCodes.has(inviteCode)) throw new Error(`duplicate channel inviteCode: ${inviteCode}`);
+    if (sources.has(source)) throw new Error(`duplicate channel source: ${source}`);
+    inviteCodes.add(inviteCode);
+    sources.add(source);
+    return { inviteCode, expectedName, source };
+  });
+}
+
 export function listenerConfig(env = process.env) {
   const dataDir = env.JOB_SCOUT_CHANNEL_DATA_DIR || DEFAULT_DATA_DIR;
   return {
     authDir: env.JOB_SCOUT_CHANNEL_AUTH_DIR || path.join(dataDir, "auth"),
     backfillCount: envInt("JOB_SCOUT_CHANNEL_BACKFILL_COUNT", DEFAULT_BACKFILL_COUNT),
-    channelName: env.JOB_SCOUT_CHANNEL_NAME || DEFAULT_CHANNEL_NAME,
+    channels: channelConfig(env),
     dataDir,
     dbPath: env.JOB_SCOUT_CHANNEL_DB || path.join(dataDir, "posts.sqlite3"),
     healthPath: env.JOB_SCOUT_CHANNEL_HEALTH || path.join(dataDir, "health.json"),
-    inviteCode: env.JOB_SCOUT_CHANNEL_INVITE_CODE || DEFAULT_INVITE_CODE,
     maxMediaBytes: envInt("JOB_SCOUT_CHANNEL_MAX_MEDIA_BYTES", DEFAULT_MAX_MEDIA_BYTES),
     mediaDir: env.JOB_SCOUT_CHANNEL_MEDIA_DIR || path.join(dataDir, "media"),
     pairing: env.JOB_SCOUT_CHANNEL_PAIRING === "1",
@@ -150,6 +187,13 @@ export function decodeBackfillResponse(result, channelJid) {
   return found;
 }
 
+export async function fetchBackfillMessages(sock, channelJid, count) {
+  // Omitting `since` asks WhatsApp for the latest posts. Passing zero sends an
+  // epoch cursor and can cause the newsletter query to time out without data.
+  const result = await sock.newsletterFetchMessages(channelJid, count, undefined, 0);
+  return decodeBackfillResponse(result, channelJid).slice(-count);
+}
+
 function extensionFor(media) {
   const mime = String(media?.mime || "").toLowerCase();
   const subtype = mime.split("/", 2)[1]?.split(";", 1)[0]?.replace(/[^a-z0-9.+-]/g, "");
@@ -242,6 +286,14 @@ export async function runListener(config = listenerConfig()) {
   const logger = pino({ level: process.env.LOG_LEVEL || "info" });
   const health = {
     authenticated: false,
+    channels: config.channels.map((channel) => ({
+      channelJid: null,
+      channelName: null,
+      expectedName: channel.expectedName,
+      lastError: null,
+      lastSubscriptionAt: null,
+      source: channel.source,
+    })),
     channelJid: null,
     channelName: null,
     connected: false,
@@ -254,7 +306,7 @@ export async function runListener(config = listenerConfig()) {
   let stopped = false;
   let storeClosed = false;
   let socket;
-  let renewalTimer;
+  const renewalTimers = new Map();
   let reconnectAttempt = 0;
 
   const heartbeat = () => {
@@ -265,41 +317,50 @@ export async function runListener(config = listenerConfig()) {
   const heartbeatTimer = setInterval(heartbeat, HEARTBEAT_INTERVAL_MS);
   heartbeat();
 
-  async function subscribe(sock, jid) {
+  async function subscribe(sock, channelHealth, jid) {
     const result = await sock.subscribeNewsletterUpdates(jid);
-    health.lastSubscriptionAt = new Date().toISOString();
+    channelHealth.lastSubscriptionAt = new Date().toISOString();
+    channelHealth.lastError = null;
+    if (channelHealth === health.channels[0]) health.lastSubscriptionAt = channelHealth.lastSubscriptionAt;
     const durationSeconds = Number(result?.duration || 0);
     const renewalMs = Math.max(MIN_RENEWAL_MS, Math.floor((durationSeconds || 900) * 800));
-    clearTimeout(renewalTimer);
-    renewalTimer = setTimeout(() => {
-      subscribe(sock, jid).catch((error) => {
-        health.lastError = `subscription renewal: ${String(error)}`;
+    clearTimeout(renewalTimers.get(jid));
+    renewalTimers.set(jid, setTimeout(() => {
+      subscribe(sock, channelHealth, jid).catch((error) => {
+        channelHealth.lastError = `subscription renewal: ${String(error)}`;
+        health.lastError = `${channelHealth.source}: ${channelHealth.lastError}`;
         heartbeat();
       });
-    }, renewalMs);
+    }, renewalMs));
   }
 
-  async function configureChannel(sock) {
-    const metadata = await sock.newsletterMetadata("invite", config.inviteCode);
+  async function configureChannel(sock, channel, channelHealth) {
+    const metadata = await sock.newsletterMetadata("invite", channel.inviteCode);
     if (!metadata) throw new Error("channel invite did not resolve");
     const name = metadataName(metadata);
     const jid = metadataJid(metadata);
     if (!jid.endsWith("@newsletter")) throw new Error(`resolved channel has invalid JID: ${jid || "missing"}`);
-    if (!name.toLowerCase().includes(config.channelName.toLowerCase())) {
-      throw new Error(`resolved channel name mismatch: expected ${config.channelName}, received ${name || "missing"}`);
+    if (!name.toLowerCase().includes(channel.expectedName.toLowerCase())) {
+      throw new Error(`resolved channel name mismatch: expected ${channel.expectedName}, received ${name || "missing"}`);
     }
     await sock.newsletterFollow(jid);
-    await subscribe(sock, jid);
-    health.channelJid = jid;
-    health.channelName = name;
-    setMeta(db, "channel", { inviteCode: config.inviteCode, jid, name });
-    const result = await sock.newsletterFetchMessages(jid, config.backfillCount, 0, 0);
-    const messages = decodeBackfillResponse(result, jid).slice(-config.backfillCount);
-    for (const message of messages) {
-      await ingestMessage({ sock, db, config, channelJid: jid, rawMessage: message, logger });
+    await subscribe(sock, channelHealth, jid);
+    channelHealth.channelJid = jid;
+    channelHealth.channelName = name;
+    channelHealth.lastError = null;
+    if (channelHealth === health.channels[0]) {
+      health.channelJid = jid;
+      health.channelName = name;
+      setMeta(db, "channel", { inviteCode: channel.inviteCode, jid, name, source: channel.source });
     }
-    setMeta(db, "last_backfill", { count: messages.length, completedAt: new Date().toISOString() });
-    return jid;
+    setMeta(db, `channel:${jid}`, { inviteCode: channel.inviteCode, jid, name, source: channel.source });
+    const messages = await fetchBackfillMessages(sock, jid, config.backfillCount);
+    const ingestConfig = { ...config, ...channel };
+    for (const message of messages) {
+      await ingestMessage({ sock, db, config: ingestConfig, channelJid: jid, rawMessage: message, logger });
+    }
+    setMeta(db, `last_backfill:${jid}`, { count: messages.length, completedAt: new Date().toISOString() });
+    return { ...channel, jid, name };
   }
 
   async function connect() {
@@ -316,13 +377,21 @@ export async function runListener(config = listenerConfig()) {
       syncFullHistory: false,
     });
     socket = sock;
-    let channelJid = health.channelJid;
+    const channelsByJid = new Map();
     sock.ev.on("creds.update", saveCreds);
     sock.ev.on("messages.upsert", async (event) => {
-      if (!channelJid || !["append", "notify"].includes(event?.type)) return;
+      if (!["append", "notify"].includes(event?.type)) return;
       for (const message of event.messages ?? []) {
+        const channel = channelsByJid.get(message?.key?.remoteJid);
+        if (!channel) continue;
         try {
-          await ingestMessage({ sock, db, config, channelJid, rawMessage: message, logger });
+          await ingestMessage({
+            sock, db,
+            config: { ...config, ...channel },
+            channelJid: channel.jid,
+            rawMessage: message,
+            logger,
+          });
           heartbeat();
         } catch (error) {
           health.lastError = `message ingestion: ${String(error)}`;
@@ -341,17 +410,29 @@ export async function runListener(config = listenerConfig()) {
         health.authenticated = true;
         health.connected = true;
         health.lastError = null;
-        try {
-          channelJid = await configureChannel(sock);
-          heartbeat();
-          if (config.pairing) {
-            logger.info("Pairing complete. The ZimLinks listener is ready.");
-            setTimeout(stop, 1500);
+        health.channelJid = null;
+        health.channelName = null;
+        health.lastSubscriptionAt = null;
+        channelsByJid.clear();
+        for (const [index, channel] of config.channels.entries()) {
+          const channelHealth = health.channels[index];
+          channelHealth.channelJid = null;
+          channelHealth.channelName = null;
+          channelHealth.lastError = null;
+          channelHealth.lastSubscriptionAt = null;
+          try {
+            const resolved = await configureChannel(sock, channel, channelHealth);
+            channelsByJid.set(resolved.jid, resolved);
+          } catch (error) {
+            channelHealth.lastError = String(error);
+            health.lastError = `${channel.source}: ${String(error)}`;
+            logger.error({ error, source: channel.source }, "channel setup failed");
           }
-        } catch (error) {
-          health.lastError = `channel setup: ${String(error)}`;
-          heartbeat();
-          logger.error({ error }, "channel setup failed");
+        }
+        heartbeat();
+        if (config.pairing && channelsByJid.size === config.channels.length) {
+          logger.info("Pairing complete. The Job Scout channel listener is ready.");
+          setTimeout(stop, 1500);
         }
       }
       if (update.connection === "close") {
@@ -379,7 +460,8 @@ export async function runListener(config = listenerConfig()) {
     if (stopped) return;
     stopped = true;
     clearInterval(heartbeatTimer);
-    clearTimeout(renewalTimer);
+    for (const timer of renewalTimers.values()) clearTimeout(timer);
+    renewalTimers.clear();
     health.connected = false;
     heartbeat();
     try { socket?.end?.(); } catch {}
@@ -397,7 +479,7 @@ export async function runListener(config = listenerConfig()) {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   runListener().catch((error) => {
-    process.stderr.write(`ZimLinks listener failed: ${String(error)}\n`);
+    process.stderr.write(`Job Scout channel listener failed: ${String(error)}\n`);
     process.exitCode = 1;
   });
 }
