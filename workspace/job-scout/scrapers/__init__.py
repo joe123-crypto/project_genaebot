@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 import sys
 import time
 
-from . import applynow, base, iharare, post_classifier, vacancybox, vacancymail, zimlinks
+from . import applynow, base, iharare, post_classifier, relevance, vacancybox, vacancymail, zimlinks
 
 # Ordered registry: name -> module exposing fetch(limit, timeout, match, roles).
 SCRAPERS = {
