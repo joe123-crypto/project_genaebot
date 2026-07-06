@@ -67,10 +67,15 @@ from pending_cache import (
   utc_now_iso,
 )
 
-# Extracted Job Scout internals. Re-imported here so the CLI/orchestration layer
-# calls them by bare name and existing mock.patch("job_scout.<name>") targets keep
-# working. Helpers that call each other inside a submodule are patched at their
-# defining module (e.g. jobscout.jsearch.jsearch_request).
+# job_scout.py is the CLI/orchestration layer: the cmd_* handlers, the
+# dispatch_jsearch_locked orchestration, build_parser, and main. All reusable
+# logic lives in the jobscout/ package below and is called from here.
+#
+# api/dispatch_store are called via the module object (api.request_json, ...) so
+# a single mock.patch("jobscout.api.<fn>") covers every caller. The remaining
+# helpers are re-imported by name for terse call sites; tests patch a helper at
+# its owning module when one jobscout submodule calls another internally
+# (e.g. jobscout.jsearch.jsearch_request, jobscout.delivery.run_json_command).
 from jobscout import api
 from jobscout import dispatch_store
 from jobscout.subscriber import (
