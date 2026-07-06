@@ -13,18 +13,21 @@ from unittest import mock
 import urllib.error
 
 import job_scout
+import jobscout.api
+import jobscout.dispatch_store
+import jobscout.subscriber
 
 
 class OpenClawBinResolutionTests(unittest.TestCase):
   def test_openclaw_bin_env_override_wins(self) -> None:
     with mock.patch.dict(job_scout.os.environ, {"OPENCLAW_BIN": "/custom/openclaw"}, clear=True), \
-         mock.patch.object(job_scout.shutil, "which", return_value="/usr/local/bin/openclaw"):
-      self.assertEqual(job_scout.resolve_openclaw_bin(), Path("/custom/openclaw"))
+         mock.patch.object(jobscout.api.shutil, "which", return_value="/usr/local/bin/openclaw"):
+      self.assertEqual(jobscout.api.resolve_openclaw_bin(), Path("/custom/openclaw"))
 
   def test_openclaw_bin_uses_path_discovery(self) -> None:
     with mock.patch.dict(job_scout.os.environ, {}, clear=True), \
-         mock.patch.object(job_scout.shutil, "which", return_value="/usr/local/bin/openclaw"):
-      self.assertEqual(job_scout.resolve_openclaw_bin(), Path("/usr/local/bin/openclaw"))
+         mock.patch.object(jobscout.api.shutil, "which", return_value="/usr/local/bin/openclaw"):
+      self.assertEqual(jobscout.api.resolve_openclaw_bin(), Path("/usr/local/bin/openclaw"))
 
   def test_openclaw_bin_uses_first_executable_fallback(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
@@ -39,15 +42,15 @@ class OpenClawBinResolutionTests(unittest.TestCase):
       second.chmod(0o755)
 
       with mock.patch.dict(job_scout.os.environ, {}, clear=True), \
-           mock.patch.object(job_scout.shutil, "which", return_value=None):
-        self.assertEqual(job_scout.resolve_openclaw_bin((first, second)), first)
+           mock.patch.object(jobscout.api.shutil, "which", return_value=None):
+        self.assertEqual(jobscout.api.resolve_openclaw_bin((first, second)), first)
 
   def test_openclaw_bin_falls_back_to_command_name(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
       missing = Path(tmp) / "missing" / "openclaw"
       with mock.patch.dict(job_scout.os.environ, {}, clear=True), \
-           mock.patch.object(job_scout.shutil, "which", return_value=None):
-        self.assertEqual(job_scout.resolve_openclaw_bin((missing,)), Path("openclaw"))
+           mock.patch.object(jobscout.api.shutil, "which", return_value=None):
+        self.assertEqual(jobscout.api.resolve_openclaw_bin((missing,)), Path("openclaw"))
 
 
 class CvStagingTests(unittest.TestCase):
@@ -59,9 +62,9 @@ class CvStagingTests(unittest.TestCase):
   def test_stage_cv_uploads_pdf_to_r2(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
       source = self._pdf(Path(tmp))
-      with mock.patch.object(job_scout, "linked_user_id", return_value="user-1"), \
-           mock.patch.object(job_scout, "request_multipart", return_value={"ok": True, "key": "user-1/cv/cv.pdf"}) as upload:
-        result = job_scout.stage_cv("+263 785 632 943", str(source))
+      with mock.patch("jobscout.api.linked_user_id", return_value="user-1"), \
+           mock.patch("jobscout.api.request_multipart", return_value={"ok": True, "key": "user-1/cv/cv.pdf"}) as upload:
+        result = jobscout.api.stage_cv("+263 785 632 943", str(source))
 
       self.assertTrue(result["ok"])
       self.assertEqual(result["userId"], "user-1")
@@ -74,10 +77,10 @@ class CvStagingTests(unittest.TestCase):
     with tempfile.TemporaryDirectory() as tmp:
       source = Path(tmp) / "resume.docx"
       source.write_bytes(b"docx content")
-      with mock.patch.object(job_scout, "linked_user_id", return_value="user-1"), \
-           mock.patch.object(job_scout, "request_multipart") as upload:
+      with mock.patch("jobscout.api.linked_user_id", return_value="user-1"), \
+           mock.patch("jobscout.api.request_multipart") as upload:
         with self.assertRaises(SystemExit):
-          job_scout.stage_cv("+263785632943", str(source))
+          jobscout.api.stage_cv("+263785632943", str(source))
       upload.assert_not_called()
 
   def test_save_profile_dry_run_reports_r2_key(self) -> None:
@@ -133,12 +136,12 @@ class CvStagingTests(unittest.TestCase):
 
 class CvDownloadTests(unittest.TestCase):
   def test_subscriber_cv_file_downloads_from_r2(self) -> None:
-    job_scout._cv_download_cache.clear()
+    jobscout.subscriber._cv_download_cache.clear()
     subscriber = {"userId": "user-9", "whatsappPhoneHash": "hash9", "cvFileRef": "user-9/cv/cv.pdf"}
     with tempfile.TemporaryDirectory() as tmp:
       dest = Path(tmp) / "hash9" / "cv.pdf"
-      with mock.patch.object(job_scout, "request_json", return_value={"url": "https://r2.example/presigned"}) as getreq, \
-           mock.patch.object(job_scout, "cv_local_dest", return_value=dest), \
+      with mock.patch("jobscout.api.request_json", return_value={"url": "https://r2.example/presigned"}) as getreq, \
+           mock.patch("jobscout.subscriber.cv_local_dest", return_value=dest), \
            mock.patch.object(job_scout.urllib.request, "urlopen") as urlopen:
         urlopen.return_value.__enter__.return_value.read.return_value = b"%PDF-1.7 data"
         path = job_scout.subscriber_cv_file(subscriber)
@@ -150,28 +153,27 @@ class CvDownloadTests(unittest.TestCase):
       self.assertIn("userId=user-9", called_url)
 
   def test_cv_object_available_true_on_url(self) -> None:
-    with mock.patch.object(job_scout, "api_key", return_value="k"), \
+    with mock.patch("jobscout.api.api_key", return_value="k"), \
          mock.patch.object(job_scout.urllib.request, "urlopen") as urlopen:
       urlopen.return_value.__enter__.return_value.read.return_value = b'{"url": "https://r2/x"}'
-      self.assertTrue(job_scout.cv_object_available("user-9"))
+      self.assertTrue(jobscout.api.cv_object_available("user-9"))
 
   def test_cv_object_available_false_on_404(self) -> None:
     err = job_scout.urllib.error.HTTPError("u", 404, "not found", {}, None)
-    with mock.patch.object(job_scout, "api_key", return_value="k"), \
+    with mock.patch("jobscout.api.api_key", return_value="k"), \
          mock.patch.object(job_scout.urllib.request, "urlopen", side_effect=err):
-      self.assertFalse(job_scout.cv_object_available("user-9"))
+      self.assertFalse(jobscout.api.cv_object_available("user-9"))
 
   def test_download_retries_temporarily_missing_presigned_url(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
       dest = Path(tmp) / "cv.pdf"
-      with mock.patch.object(
-        job_scout,
-        "request_json",
+      with mock.patch(
+        "jobscout.api.request_json",
         side_effect=[{}, {}, {"url": "https://r2.example/presigned"}],
       ) as getreq, mock.patch.object(job_scout.time, "sleep") as sleep, \
            mock.patch.object(job_scout.urllib.request, "urlopen") as urlopen:
         urlopen.return_value.__enter__.return_value.read.return_value = b"%PDF-1.7 data"
-        result = job_scout.download_cv("user-9", dest)
+        result = jobscout.api.download_cv("user-9", dest)
 
     self.assertEqual(result, dest)
     self.assertEqual(getreq.call_count, 3)
@@ -179,10 +181,10 @@ class CvDownloadTests(unittest.TestCase):
 
   def test_download_fails_after_bounded_missing_url_retries(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
-      with mock.patch.object(job_scout, "request_json", return_value={}) as getreq, \
+      with mock.patch("jobscout.api.request_json", return_value={}) as getreq, \
            mock.patch.object(job_scout.time, "sleep") as sleep:
         with self.assertRaisesRegex(RuntimeError, "CV is unavailable"):
-          job_scout.download_cv("user-9", Path(tmp) / "cv.pdf")
+          jobscout.api.download_cv("user-9", Path(tmp) / "cv.pdf")
 
     self.assertEqual(getreq.call_count, job_scout.CV_URL_LOOKUP_ATTEMPTS)
     self.assertEqual(sleep.call_count, job_scout.CV_URL_LOOKUP_ATTEMPTS - 1)
@@ -199,7 +201,7 @@ class JobScoutStatusTests(unittest.TestCase):
       "ready": True,
       "preferences": {"targetRoles": ["Driver"], "locations": ["Nationwide, Zimbabwe"]},
     }
-    with mock.patch.object(job_scout, "request_json", return_value=expected) as request:
+    with mock.patch("jobscout.api.request_json", return_value=expected) as request:
       result = job_scout.cmd_status(argparse.Namespace(phone="+213 555 010 101"))
 
     self.assertEqual(result, expected)
@@ -209,7 +211,7 @@ class JobScoutStatusTests(unittest.TestCase):
     self.assertIn("phone=%2B213555010101", url)
 
   def test_status_does_not_query_the_multi_user_subscriber_feed(self) -> None:
-    with mock.patch.object(job_scout, "request_json", return_value={"configured": False}) as request, \
+    with mock.patch("jobscout.api.request_json", return_value={"configured": False}) as request, \
          mock.patch.object(job_scout, "cmd_list_ready") as list_ready:
       self.assertEqual(
         job_scout.cmd_status(argparse.Namespace(phone="+213555010101")),
@@ -404,7 +406,9 @@ class JSearchTests(unittest.TestCase):
     self.assertEqual(candidate["sourceUrl"], "https://example.com/apply")
 
   def test_fetch_jsearch_candidates_uses_profile_country_and_language(self) -> None:
-    with mock.patch.object(job_scout, "jsearch_request") as request:
+    # jsearch_request is called by fetch_jsearch_candidates within jobscout.jsearch,
+    # so patch it at its defining module rather than the job_scout re-export.
+    with mock.patch("jobscout.jsearch.jsearch_request") as request:
       request.return_value = {
         "data": [
           {
@@ -431,7 +435,7 @@ class JSearchTests(unittest.TestCase):
       {"job_id": "2", "employer_name": "Cafe", "job_title": "Waiter", "job_description": "Serve diners."},
       {"job_id": "3", "employer_name": "Tech", "job_title": "Server Administrator", "job_description": "Maintain Linux servers."},
     ]}
-    with mock.patch.object(job_scout, "jsearch_request", return_value=response) as request:
+    with mock.patch("jobscout.jsearch.jsearch_request", return_value=response) as request:
       candidates, result = job_scout.fetch_jsearch_candidates_with_result(
         {"targetRoles": ["Waitress"], "locations": ["Harare, Zimbabwe"], "country": "zw", "language": "en"},
         5,
@@ -447,7 +451,7 @@ class JSearchTests(unittest.TestCase):
       {"job_id": "1", "employer_name": "Cafe", "job_title": "Waiter", "job_is_expired": True},
       {"job_id": "2", "employer_name": "Hotel", "job_title": "Waitress", "job_is_expired": False},
     ]}
-    with mock.patch.object(job_scout, "jsearch_request", return_value=response):
+    with mock.patch("jobscout.jsearch.jsearch_request", return_value=response):
       candidates, result = job_scout.fetch_jsearch_candidates_with_result(
         {"targetRoles": ["Waitress"], "locations": ["Harare, Zimbabwe"], "country": "zw", "language": "en"},
         5,
@@ -467,7 +471,7 @@ class JSearchTests(unittest.TestCase):
       {"company": "A", "role": "Waiter", "source": "jsearch", "closing": "01 Jul 2026", "candidateId": "1"},
       {"company": "B", "role": "Waiter", "source": "jsearch", "closing": None, "candidateId": "2"},
     ]
-    with mock.patch.object(job_scout, "closing_state", side_effect=["expired", "unknown"]):
+    with mock.patch("jobscout.jsearch.closing_state", side_effect=["expired", "unknown"]):
       selected, stats = job_scout.filter_candidates_with_stats(candidates, {}, [], 5)
     self.assertEqual(selected, [candidates[1]])
     self.assertEqual(stats["jsearch"]["expiredCount"], 1)
@@ -502,7 +506,7 @@ class JSearchTests(unittest.TestCase):
 
   def test_fetch_jsearch_candidates_soft_fails_on_outage(self) -> None:
     # A transient JSearch outage must not raise: the caller falls back to scrapers.
-    with mock.patch.object(job_scout, "jsearch_request", side_effect=job_scout.JSearchUnavailable("HTTP 504")):
+    with mock.patch("jobscout.jsearch.jsearch_request", side_effect=job_scout.JSearchUnavailable("HTTP 504")):
       candidates = job_scout.fetch_jsearch_candidates({"targetRoles": ["Driver"], "locations": ["Harare"]}, 5)
     self.assertEqual(candidates, [])
     self.assertFalse(issubclass(job_scout.JSearchUnavailable, SystemExit))
@@ -510,10 +514,10 @@ class JSearchTests(unittest.TestCase):
   def test_jsearch_request_maps_read_timeout_to_unavailable(self) -> None:
     # A socket read timeout (TimeoutError, not HTTPError/URLError) must still be
     # classified transient so dispatch falls back to the scraped boards.
-    with mock.patch.object(job_scout, "jsearch_provider", return_value="rapidapi"), \
-         mock.patch.object(job_scout, "env_default", side_effect=lambda key, default="": "key" if "KEY" in key else default), \
+    with mock.patch("jobscout.jsearch.jsearch_provider", return_value="rapidapi"), \
+         mock.patch("jobscout.jsearch.env_default", side_effect=lambda key, default="": "key" if "KEY" in key else default), \
          mock.patch("urllib.request.urlopen", side_effect=TimeoutError("The read operation timed out")) as request, \
-         mock.patch.object(job_scout.time, "sleep"):
+         mock.patch("jobscout.jsearch.time.sleep"):
       with self.assertRaises(job_scout.JSearchUnavailable):
         job_scout.jsearch_request("driver", "dz", "fr", 5)
     self.assertEqual(request.call_count, 2)
@@ -521,10 +525,10 @@ class JSearchTests(unittest.TestCase):
   def test_jsearch_request_retries_one_transient_failure(self) -> None:
     response = mock.MagicMock()
     response.__enter__.return_value.read.return_value = b'{"data": []}'
-    with mock.patch.object(job_scout, "jsearch_provider", return_value="rapidapi"), \
-         mock.patch.object(job_scout, "env_default", side_effect=lambda key, default="": "key" if "KEY" in key else default), \
+    with mock.patch("jobscout.jsearch.jsearch_provider", return_value="rapidapi"), \
+         mock.patch("jobscout.jsearch.env_default", side_effect=lambda key, default="": "key" if "KEY" in key else default), \
          mock.patch("urllib.request.urlopen", side_effect=[urllib.error.URLError("dns"), response]) as request, \
-         mock.patch.object(job_scout.time, "sleep") as sleep:
+         mock.patch("jobscout.jsearch.time.sleep") as sleep:
       result = job_scout.jsearch_request("driver", "dz", "fr", 5)
     self.assertEqual(result, {"data": []})
     self.assertEqual(request.call_count, 2)
@@ -532,10 +536,10 @@ class JSearchTests(unittest.TestCase):
 
   def test_jsearch_request_does_not_retry_http_400(self) -> None:
     error = urllib.error.HTTPError("https://example.test", 400, "bad", {}, io.BytesIO(b"bad request"))
-    with mock.patch.object(job_scout, "jsearch_provider", return_value="rapidapi"), \
-         mock.patch.object(job_scout, "env_default", side_effect=lambda key, default="": "key" if "KEY" in key else default), \
+    with mock.patch("jobscout.jsearch.jsearch_provider", return_value="rapidapi"), \
+         mock.patch("jobscout.jsearch.env_default", side_effect=lambda key, default="": "key" if "KEY" in key else default), \
          mock.patch("urllib.request.urlopen", side_effect=error) as request, \
-         mock.patch.object(job_scout.time, "sleep") as sleep:
+         mock.patch("jobscout.jsearch.time.sleep") as sleep:
       with self.assertRaisesRegex(job_scout.JSearchUnavailable, "HTTP 400"):
         job_scout.jsearch_request("driver", "dz", "fr", 5)
     request.assert_called_once()
@@ -631,9 +635,8 @@ class JSearchDispatchTests(unittest.TestCase):
     with (
       mock.patch.object(job_scout, "cmd_list_ready", return_value={"subscribers": [subscriber]}),
       mock.patch.object(job_scout, "cmd_list_applications", return_value={"applications": []}),
-      mock.patch.object(
-        job_scout,
-        "fetch_jsearch_candidates_with_result",
+      mock.patch(
+        "jobscout.jsearch.fetch_jsearch_candidates_with_result",
         return_value=(candidates, {"status": "ok", "rawCount": len(candidates), "durationMs": 1}),
       ),
       mock.patch.object(job_scout, "jsearch_provider", return_value="rapidapi"),
@@ -685,8 +688,8 @@ class JSearchDispatchTests(unittest.TestCase):
       args.phone = "+213 555 010 101"
       with mock.patch.object(job_scout, "cmd_list_ready", return_value={"subscribers": [other, requested]}), \
            mock.patch.object(job_scout, "cmd_list_applications", return_value={"applications": []}) as applications, \
-           mock.patch.object(job_scout, "fetch_jsearch_candidates_with_result", return_value=([], {"status": "ok", "rawCount": 0, "durationMs": 1})), \
-           mock.patch.object(job_scout, "fetch_scraped_candidates_with_results", return_value=([], {name: {"status": "skipped", "rawCount": 0, "durationMs": 0} for name in ("vacancymail", "iharare", "vacancybox", "applynow")})), \
+           mock.patch("jobscout.jsearch.fetch_jsearch_candidates_with_result", return_value=([], {"status": "ok", "rawCount": 0, "durationMs": 1})), \
+           mock.patch("jobscout.jsearch.fetch_scraped_candidates_with_results", return_value=([], {name: {"status": "skipped", "rawCount": 0, "durationMs": 0} for name in ("vacancymail", "iharare", "vacancybox", "applynow")})), \
            mock.patch.object(job_scout, "jsearch_provider", return_value="test"):
         result = job_scout.cmd_dispatch_jsearch(args)
 
@@ -723,15 +726,15 @@ class JSearchDispatchTests(unittest.TestCase):
   def test_dispatch_lock_rejects_overlapping_run(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
       root = Path(tmp) / "dispatch-runs"
-      with job_scout.exclusive_dispatch_lock(root, "first-run"):
+      with jobscout.dispatch_store.exclusive_dispatch_lock(root, "first-run"):
         with self.assertRaisesRegex(SystemExit, "another Job Scout dispatch"):
           job_scout.cmd_dispatch_jsearch(self.args(root, dry_run=True))
 
   def test_dispatch_lock_stays_inside_dispatch_root(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
       root = Path(tmp) / "dispatch-runs"
-      with job_scout.exclusive_dispatch_lock(root, "unit-run"):
-        self.assertEqual(job_scout.dispatch_lock_path(root), root / "dispatch.lock")
+      with jobscout.dispatch_store.exclusive_dispatch_lock(root, "unit-run"):
+        self.assertEqual(jobscout.dispatch_store.dispatch_lock_path(root), root / "dispatch.lock")
         self.assertTrue((root / "dispatch.lock").is_file())
 
   def test_dispatch_records_action_required_when_site_needs_login(self) -> None:
@@ -797,8 +800,8 @@ class JSearchDispatchTests(unittest.TestCase):
   def test_send_application_email_uses_subscriber_uid_sender_selector(self) -> None:
     subscriber = self.subscriber()
     candidate = self.candidate()
-    with mock.patch.object(job_scout, "subscriber_cv_file", return_value="/tmp/cv.pdf"), \
-         mock.patch.object(job_scout, "run_json_command", return_value={"messageId": "msg-1"}) as run:
+    with mock.patch("jobscout.delivery.subscriber_cv_file", return_value="/tmp/cv.pdf"), \
+         mock.patch("jobscout.delivery.run_json_command", return_value={"messageId": "msg-1"}) as run:
       result = job_scout.send_application_email(subscriber, candidate, Path("/tmp/cover-letter.txt"))
 
     self.assertEqual(result["messageId"], "msg-1")
@@ -813,9 +816,8 @@ class JSearchDispatchTests(unittest.TestCase):
       "OPENCLAW_HOME": "/home/joseph/.openclaw",
       "GATEWAY_AUTH_TOKEN": "gateway-token",
       "KEEP_ME": "yes",
-    }, clear=True), mock.patch.object(
-      job_scout,
-      "run_json_command",
+    }, clear=True), mock.patch(
+      "jobscout.delivery.run_json_command",
       return_value={"messageId": "wa-1"},
     ) as run:
       result = job_scout.send_whatsapp_summary("+263700000000", "Job Scout update")
@@ -1297,7 +1299,7 @@ class ScraperIntegrationTests(unittest.TestCase):
   def test_record_application_propagates_board_source(self) -> None:
     candidate = {"company": "Acme", "role": "Driver", "applicationEmail": "hr@acme.co.zw",
                  "sourceUrl": "https://vacancymail.co.zw/jobs/driver-1/", "source": "vacancymail"}
-    with mock.patch.object(job_scout, "request_json", return_value={"ok": True}) as req:
+    with mock.patch("jobscout.api.request_json", return_value={"ok": True}) as req:
       job_scout.record_candidate_application("user-1", candidate, "applied")
     payload = req.call_args.args[2]
     self.assertEqual(payload["source"], "vacancymail")

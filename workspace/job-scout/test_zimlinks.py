@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from scrapers import zimlinks
+from scrapers import post_classifier, zimlinks
 
 
 class ZimLinksSourceTests(unittest.TestCase):
@@ -51,7 +51,7 @@ class ZimLinksSourceTests(unittest.TestCase):
       database = self.create_db(Path(tmp))
       self.insert_post(database, "10", "VACANCY: Driver\nCompany: Acme Logistics\nEmail: jobs@example.com")
       with mock.patch.dict(os.environ, {"JOB_SCOUT_CHANNEL_DB": str(database)}, clear=False), \
-           mock.patch.object(zimlinks, "classify_with_model") as classifier:
+           mock.patch.object(post_classifier, "classify_with_model") as classifier:
         candidates = zimlinks.fetch(limit=5)
       classifier.assert_not_called()
       self.assertEqual(len(candidates), 1)
@@ -90,7 +90,7 @@ class ZimLinksSourceTests(unittest.TestCase):
       database = self.create_db(Path(tmp))
       self.insert_post(database, "11", "Two rooms available to let in Harare")
       with mock.patch.dict(os.environ, {"JOB_SCOUT_CHANNEL_DB": str(database)}, clear=False), \
-           mock.patch.object(zimlinks, "classify_with_model") as classifier:
+           mock.patch.object(post_classifier, "classify_with_model") as classifier:
         self.assertEqual(zimlinks.fetch(limit=5), [])
       classifier.assert_not_called()
       conn = sqlite3.connect(database)
@@ -111,7 +111,7 @@ class ZimLinksSourceTests(unittest.TestCase):
         "description": "Graduate trainee opportunity",
       }
       with mock.patch.dict(os.environ, {"JOB_SCOUT_CHANNEL_DB": str(database)}, clear=False), \
-           mock.patch.object(zimlinks, "classify_with_model", return_value=(result, "test/model")):
+           mock.patch.object(post_classifier, "classify_with_model", return_value=(result, "test/model")):
         candidate = zimlinks.fetch(limit=5)[0]
       self.assertEqual(candidate["applyLinks"], ["https://apply.example/jobs/12"])
       self.assertEqual(candidate["applicationEmails"], [])
@@ -157,7 +157,7 @@ class ZimLinksSourceTests(unittest.TestCase):
         )
 
       with mock.patch.dict(os.environ, {"JOB_SCOUT_CHANNEL_DB": str(database)}, clear=False), \
-           mock.patch.object(zimlinks, "classify_with_model", side_effect=classify_while_listener_writes):
+           mock.patch.object(post_classifier, "classify_with_model", side_effect=classify_while_listener_writes):
         candidates = zimlinks.fetch(limit=5, timeout=5)
 
       self.assertEqual([candidate["sourcePostId"] for candidate in candidates], ["ambiguous"])

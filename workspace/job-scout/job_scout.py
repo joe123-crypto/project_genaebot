@@ -4,18 +4,11 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
 from datetime import datetime, timezone
-import fcntl
-import hashlib
 import json
-import mimetypes
 import os
 from pathlib import Path
-import pwd
 import re
-import shutil
-import subprocess
 import sys
 import time
 import urllib.error
@@ -24,36 +17,30 @@ import urllib.request
 
 from country_codes import country_code, country_name
 
+from jobscout.constants import (
+  CV_URL_LOOKUP_ATTEMPTS,
+  CV_URL_LOOKUP_RETRY_SECONDS,
+  DEFAULT_DISPATCH_ROOT,
+  DEFAULT_JSEARCH_COUNTRY,
+  DEFAULT_JSEARCH_DATE_POSTED,
+  DEFAULT_JSEARCH_LANGUAGE,
+  DEFAULT_OPENWEBNINJA_BASE_URL,
+  DEFAULT_RAPIDAPI_BASE_URL,
+  DEFAULT_RAPIDAPI_HOST,
+  DEFAULT_STORAGE_ROOT,
+  DEFAULT_WEB_APPLY_URL,
+  DISPATCH_STATUSES,
+  GENAIE_MAIL_BIN,
+  JSEARCH_RETRY_SECONDS,
+  MAX_APPLICATION_ATTEMPTS,
+  OPENCLAW_BIN_FALLBACKS,
+  PUBLIC_DISPATCH_FAILURE_MESSAGE,
+  RUNTIME_ROOT,
+  TERMINAL_APPLICATION_STATUSES,
+  WHATSAPP_CHANNEL_SOURCES,
+  WORKSPACE,
+)
 
-WORKSPACE = Path("/home/joseph/.openclaw/workspace")
-RUNTIME_ROOT = Path(os.environ.get("JOB_SCOUT_RUNTIME_ROOT", "/home/joseph/.openclaw/runtime/job-scout"))
-DEFAULT_STORAGE_ROOT = RUNTIME_ROOT / "users"
-DEFAULT_DISPATCH_ROOT = RUNTIME_ROOT / "dispatch-runs"
-DISPATCH_STATUSES = {"applied", "action_required", "physical_submission", "no_matches", "failed"}
-TERMINAL_APPLICATION_STATUSES = {"applied", "skipped", "action_required", "physical_submission"}
-MAX_APPLICATION_ATTEMPTS = 3
-WHATSAPP_CHANNEL_SOURCES = ("zimlinks-whatsapp", "zim-job-vacancies-whatsapp")
-CV_URL_LOOKUP_ATTEMPTS = 3
-CV_URL_LOOKUP_RETRY_SECONDS = 2
-DEFAULT_WEB_APPLY_URL = "http://job-scout-browser:8787/apply"
-DEFAULT_JSEARCH_COUNTRY = "dz"
-DEFAULT_JSEARCH_LANGUAGE = "fr"
-DEFAULT_JSEARCH_DATE_POSTED = "month"
-DEFAULT_OPENWEBNINJA_BASE_URL = "https://api.openwebninja.com/jsearch"
-DEFAULT_RAPIDAPI_BASE_URL = "https://jsearch.p.rapidapi.com"
-DEFAULT_RAPIDAPI_HOST = "jsearch.p.rapidapi.com"
-JSEARCH_REQUEST_TIMEOUT = 20
-JSEARCH_REQUEST_ATTEMPTS = 2
-JSEARCH_RETRY_SECONDS = 2
-GENAIE_MAIL_BIN = Path("/home/joseph/.openclaw/workspace/bin/genaie-mail")
-OPENCLAW_BIN_FALLBACKS = (
-  Path("/usr/local/bin/openclaw"),
-  Path("/home/joseph/.npm-global/bin/openclaw"),
-)
-PUBLIC_DISPATCH_FAILURE_MESSAGE = (
-  "Job Scout could not finish today's job check because the service failed. "
-  "I recorded it and will try again on the next run."
-)
 os.environ.setdefault(
   "OPENCLAW_PENDING_LINKS_PATH",
   "/home/joseph/.openclaw/runtime/account-link/pending-links.json",
@@ -81,1002 +68,96 @@ from pending_cache import (
   utc_now_iso,
 )
 
-
-def resolve_openclaw_bin(fallbacks: tuple[Path, ...] = OPENCLAW_BIN_FALLBACKS) -> Path:
-  configured = os.environ.get("OPENCLAW_BIN", "").strip()
-  if configured:
-    return Path(configured)
-
-  discovered = shutil.which("openclaw")
-  if discovered:
-    return Path(discovered)
-
-  for candidate in fallbacks:
-    if candidate.is_file() and os.access(candidate, os.X_OK):
-      return candidate
-
-  return Path("openclaw")
-
-
-OPENCLAW_BIN = resolve_openclaw_bin()
-
-
-class JSearchUnavailable(RuntimeError):
-  """Transient JSearch failure (HTTP/network). Non-fatal: the run continues with the
-  scraped boards so a JSearch outage can't take the rest of dispatch down with it.
-  Missing-credential errors stay as SystemExit (real misconfiguration, must be loud)."""
-
-
-def normalize_phone(value: str) -> str:
-  digits = re.sub(r"\D", "", str(value or ""))
-  if not digits:
-    raise SystemExit("phone is required")
-  phone = f"+{digits}"
-  if len(phone) < 9 or len(phone) > 16:
-    raise SystemExit("phone must normalize to 9-16 digits")
-  return phone
-
-
-def phone_hash(phone: str) -> str:
-  return hashlib.sha256(f"whatsapp:{normalize_phone(phone)}".encode("utf-8")).hexdigest()[:12]
-
-
-def user_key(user_id: str) -> str:
-  text = str(user_id or "").strip()
-  if not text:
-    raise SystemExit("user-id is required")
-  return hashlib.sha256(f"job-scout-user:{text}".encode("utf-8")).hexdigest()[:16]
-
-
-def utc_now() -> str:
-  return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def safe_run_id(value: str) -> str:
-  text = re.sub(r"[^A-Za-z0-9_.:-]", "-", str(value or "").strip())
-  text = text.strip(".-_:")
-  if not text:
-    raise SystemExit("run-id is required")
-  if len(text) > 160:
-    raise SystemExit("run-id is too long")
-  return text
-
-
-def effective_user() -> str:
-  try:
-    return pwd.getpwuid(os.geteuid()).pw_name
-  except KeyError:
-    return str(os.geteuid())
-
-
-def pending_links_path() -> Path:
-  return Path(
-    os.environ.get(
-      "OPENCLAW_PENDING_LINKS_PATH",
-      "/home/joseph/.openclaw/runtime/account-link/pending-links.json",
-    )
-  ).expanduser()
-
-
-def request_json(method: str, url: str, payload: dict | None = None) -> dict:
-  key = api_key()
-  if not key:
-    raise SystemExit("Missing AGENT_GENAI_INTERNAL_API_KEY.")
-  data = json.dumps(payload or {}).encode("utf-8") if payload is not None else None
-  request = urllib.request.Request(
-    url,
-    data=data,
-    method=method,
-    headers={
-      "Authorization": f"Bearer {key}",
-      "Content-Type": "application/json",
-    },
-  )
-  try:
-    with urllib.request.urlopen(request, timeout=45) as response:
-      body = response.read().decode("utf-8")
-      return json.loads(body) if body else {}
-  except urllib.error.HTTPError as err:
-    body = err.read().decode("utf-8", errors="replace")
-    print(f"Agent Genaie Job Scout API failed with HTTP {err.code}: {body}", file=sys.stderr)
-    raise SystemExit(1) from err
-  except urllib.error.URLError as err:
-    print(f"Could not reach Agent Genaie Job Scout API: {err}", file=sys.stderr)
-    raise SystemExit(1) from err
-
-
-def request_multipart(url: str, fields: dict[str, str], file_field: str, file_path: Path, filename: str, content_type: str) -> dict:
-  key = api_key()
-  if not key:
-    raise SystemExit("Missing AGENT_GENAI_INTERNAL_API_KEY.")
-  boundary = "----genaebot" + os.urandom(16).hex()
-  chunks: list[bytes] = []
-  for name, value in fields.items():
-    if value is None:
-      continue
-    chunks.append(f"--{boundary}\r\n".encode("utf-8"))
-    chunks.append(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("utf-8"))
-    chunks.append(f"{value}\r\n".encode("utf-8"))
-  chunks.append(f"--{boundary}\r\n".encode("utf-8"))
-  chunks.append(f'Content-Disposition: form-data; name="{file_field}"; filename="{filename}"\r\n'.encode("utf-8"))
-  chunks.append(f"Content-Type: {content_type}\r\n\r\n".encode("utf-8"))
-  chunks.append(Path(file_path).read_bytes())
-  chunks.append(f"\r\n--{boundary}--\r\n".encode("utf-8"))
-  body = b"".join(chunks)
-  request = urllib.request.Request(
-    url,
-    data=body,
-    method="POST",
-    headers={
-      "Authorization": f"Bearer {key}",
-      "Content-Type": f"multipart/form-data; boundary={boundary}",
-    },
-  )
-  try:
-    with urllib.request.urlopen(request, timeout=60) as response:
-      raw = response.read().decode("utf-8")
-      return json.loads(raw) if raw else {}
-  except urllib.error.HTTPError as err:
-    raw = err.read().decode("utf-8", errors="replace")
-    print(f"Agent Genaie Job Scout API failed with HTTP {err.code}: {raw}", file=sys.stderr)
-    raise SystemExit(1) from err
-  except urllib.error.URLError as err:
-    print(f"Could not reach Agent Genaie Job Scout API: {err}", file=sys.stderr)
-    raise SystemExit(1) from err
-
-
-def upload_cv(user_id: str, source: str | Path) -> dict:
-  """Upload a CV PDF to the agent-genaie R2 bucket and return {ok, key}."""
-  src = Path(source).expanduser().resolve()
-  if not src.exists() or not src.is_file():
-    raise SystemExit(f"CV file not found: {src}")
-  if safe_cv_suffix(src) != ".pdf":
-    raise SystemExit("CV must be a PDF file (the R2 store accepts application/pdf only).")
-  user = str(user_id or "").strip()
-  if not user:
-    raise SystemExit("user-id is required to upload a CV.")
-  return request_multipart(
-    endpoint("/internal/job-scout/cv"),
-    {"userId": user},
-    "file",
-    src,
-    "cv.pdf",
-    "application/pdf",
-  )
-
-
-def download_cv(user_id: str, dest: Path) -> Path:
-  """Fetch a presigned CV URL from agent-genaie and download it to dest."""
-  user = str(user_id or "").strip()
-  if not user:
-    raise SystemExit("user-id is required to download a CV.")
-  query = urllib.parse.urlencode({"userId": user})
-  url = ""
-  for attempt in range(CV_URL_LOOKUP_ATTEMPTS):
-    result = request_json("GET", endpoint(f"/internal/job-scout/cv?{query}"))
-    url = str(result.get("url") or "").strip()
-    if url:
-      break
-    if attempt + 1 < CV_URL_LOOKUP_ATTEMPTS:
-      time.sleep(CV_URL_LOOKUP_RETRY_SECONDS)
-  if not url:
-    raise RuntimeError("subscriber CV is unavailable; re-upload is required")
-  request = urllib.request.Request(url, method="GET", headers={"Accept": "*/*"})
-  try:
-    with urllib.request.urlopen(request, timeout=60) as response:
-      data = response.read()
-  except (urllib.error.URLError, TimeoutError, OSError) as err:
-    raise RuntimeError("could not download subscriber CV from storage") from err
-  dest.parent.mkdir(parents=True, exist_ok=True)
-  dest.write_bytes(data)
-  return dest
-
-
-def cv_object_available(user_id: str) -> bool:
-  """Non-fatal readiness probe: does the user's CV actually exist in R2?
-
-  The GET endpoint returns 404 when there is no cvFileRef or the object is
-  missing, so a 200 with a URL means the CV is truly downloadable.
-  """
-  user = str(user_id or "").strip()
-  key = api_key()
-  if not user or not key:
-    return False
-  url = endpoint(f"/internal/job-scout/cv?{urllib.parse.urlencode({'userId': user})}")
-  request = urllib.request.Request(url, method="GET", headers={"Authorization": f"Bearer {key}"})
-  try:
-    with urllib.request.urlopen(request, timeout=30) as response:
-      data = json.loads(response.read().decode("utf-8") or "{}")
-  except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
-    return False
-  return bool(str(data.get("url") or "").strip())
-
-
-def clean_items(values: list[str] | None) -> list[str]:
-  output: list[str] = []
-  seen: set[str] = set()
-  if isinstance(values, str):
-    iterable = [values]
-  else:
-    iterable = values or []
-  for value in iterable:
-    text = re.sub(r"\s+", " ", str(value or "")).strip()
-    if not text:
-      continue
-    key = text.casefold()
-    if key in seen:
-      continue
-    seen.add(key)
-    output.append(text)
-  return output
-
-
-def resolve_preferred_locations(values: list[str] | None) -> dict:
-  locations = clean_items(values)
-  if not locations:
-    raise SystemExit("preferred location is required")
-
-  codes: set[str] = set()
-  for location in locations:
-    locality, separator, country_value = location.rpartition(",")
-    locality = locality.strip()
-    country_value = country_value.strip()
-    if not separator or not locality or not country_value:
-      raise SystemExit(
-        f'Preferred location must include the country, for example "Bindura, Zimbabwe": {location}'
-      )
-    code = country_code(country_value)
-    if not code:
-      raise SystemExit(f"Preferred location country is not recognized: {country_value}")
-    codes.add(code)
-
-  if len(codes) != 1:
-    countries = ", ".join(sorted(country_name(code) for code in codes))
-    raise SystemExit(
-      f"Preferred locations must be in one country because Job Scout uses one country filter: {countries}"
-    )
-
-  code = next(iter(codes))
-  return {
-    "locations": locations,
-    "country": code,
-    "countryName": country_name(code),
-  }
-
-
-def normalize_stored_locations(
-  values: list[str] | None,
-  stored_country: str | None = None,
-) -> dict:
-  locations = clean_items(values)
-  if not locations:
-    return {"locations": [], "country": None}
-
-  stored_code = None
-  if str(stored_country or "").strip():
-    stored_code = country_code(stored_country)
-    if not stored_code:
-      raise SystemExit(f"Stored search country is not recognized: {stored_country}")
-
-  normalized: list[str] = []
-  codes: set[str] = set()
-  for location in locations:
-    if "," in location:
-      resolved = resolve_preferred_locations([location])
-      code = str(resolved["country"])
-      normalized.append(location)
-    else:
-      inferred_code = country_code(location)
-      if inferred_code:
-        code = inferred_code
-        normalized.append(f"Nationwide, {country_name(code)}")
-      else:
-        if not stored_code:
-          raise SystemExit(
-            f"Stored preferred location needs a valid country before it can be normalized: {location}"
-          )
-        code = stored_code
-        normalized.append(f"{location}, {country_name(code)}")
-    codes.add(code)
-
-  if len(codes) != 1:
-    countries = ", ".join(sorted(country_name(code) for code in codes))
-    raise SystemExit(
-      f"Preferred locations must be in one country because Job Scout uses one country filter: {countries}"
-    )
-
-  code = next(iter(codes))
-  if stored_code and stored_code != code:
-    raise SystemExit(
-      f"Stored search country {stored_code} conflicts with preferred location country {code}"
-    )
-  return {"locations": clean_items(normalized), "country": code}
-
-
-def resolved_profile_country(
-  locations: list[str],
-  explicit_country: str | None = None,
-  fallback_country: str | None = None,
-) -> str:
-  if locations:
-    resolved = resolve_preferred_locations(locations)
-    derived = str(resolved["country"])
-    if explicit_country:
-      supplied = country_code(explicit_country)
-      if not supplied:
-        raise SystemExit(f"Search country is not recognized: {explicit_country}")
-      if supplied != derived:
-        raise SystemExit(
-          f"Search country {supplied} conflicts with preferred location country {derived}"
-        )
-    return derived
-
-  supplied_value = explicit_country or fallback_country or DEFAULT_JSEARCH_COUNTRY
-  supplied = country_code(supplied_value)
-  if not supplied:
-    raise SystemExit(f"Search country is not recognized: {supplied_value}")
-  return supplied
-
-
-def resolve_profile_locations(
-  stored_locations: list[str] | None,
-  submitted_locations: list[str] | None = None,
-  explicit_country: str | None = None,
-  stored_country: str | None = None,
-) -> dict:
-  stored = normalize_stored_locations(stored_locations, stored_country)
-  submitted_values = clean_items(submitted_locations)
-  submitted = resolve_preferred_locations(submitted_values) if submitted_values else None
-
-  codes = {
-    str(resolved["country"])
-    for resolved in (stored, submitted)
-    if resolved and resolved.get("country")
-  }
-  if len(codes) != 1 and codes:
-    countries = ", ".join(sorted(country_name(code) for code in codes))
-    raise SystemExit(
-      f"Preferred locations must be in one country because Job Scout uses one country filter: {countries}"
-    )
-
-  locations = clean_items([
-    *stored["locations"],
-    *(submitted["locations"] if submitted else []),
-  ])
-  if codes:
-    country = resolved_profile_country(locations, explicit_country)
-  else:
-    country = resolved_profile_country([], explicit_country, stored_country)
-  return {"locations": locations, "country": country}
-
-
-def profile_values(profile: dict, key: str) -> list[str]:
-  value = profile.get(key, [])
-  if isinstance(value, list):
-    return value
-  if value is None:
-    return []
-  return [str(value)]
-
-
-def preference_code(profile: dict, key: str, default: str) -> str:
-  text = re.sub(r"[^A-Za-z]", "", str(profile.get(key) or default)).lower()
-  return text if re.fullmatch(r"[a-z]{2}", text) else default
-
-
-def max_applications(profile: dict, default: int = 5) -> int:
-  try:
-    value = int(profile.get("maxApplicationsPerRun", default))
-  except (TypeError, ValueError):
-    value = default
-  return max(0, min(value, 5))
-
-
-def load_profile_json(value: str | None) -> dict:
-  if not value:
-    return {}
-  if value.startswith("@"):
-    return json.loads(Path(value[1:]).read_text(encoding="utf-8"))
-  return json.loads(value)
-
-
-def linked_user_id(phone: str) -> str:
-  query = urllib.parse.urlencode({"phone": normalize_phone(phone)})
-  result = request_json("GET", endpoint(f"/internal/account-link/status?{query}"))
-  user_id = str(result.get("userId") or "").strip()
-  if not result.get("linked") or not user_id:
-    raise SystemExit("phone is not linked to an Agent Genaie user")
-  return user_id
-
-
-def subscriber_preferences(subscriber: dict) -> dict:
-  preferences = subscriber.get("preferences")
-  return preferences if isinstance(preferences, dict) else {}
-
-
-def subscriber_user_id(subscriber: dict) -> str:
-  for key in ("userId", "uid", "id"):
-    value = str(subscriber.get(key) or "").strip()
-    if value:
-      return value
-  raise SystemExit("subscriber is missing userId")
-
-
-def jsearch_location(location: str) -> str:
-  """Use the country alone for nationwide profiles without changing stored preferences."""
-  text = str(location or "").strip()
-  locality, separator, country = text.rpartition(",")
-  if separator and locality.strip().casefold() == "nationwide" and country.strip():
-    return country.strip()
-  return text
-
-
-def search_queries(preferences: dict) -> list[str]:
-  roles = clean_items(profile_values(preferences, "targetRoles") or profile_values(preferences, "roles"))
-  try:
-    from scrapers import base as scraper_base
-    roles = scraper_base.jsearch_roles(roles)
-  except Exception:
-    pass
-  locations = clean_items([jsearch_location(location) for location in profile_values(preferences, "locations")])
-  language = preference_code(preferences, "language", DEFAULT_JSEARCH_LANGUAGE)
-  location_connector = "à" if language == "fr" else "in"
-  if not roles:
-    return []
-  if not locations:
-    locations = ["Algeria"]
-  queries: list[str] = []
-  seen: set[str] = set()
-  for role in roles:
-    for location in locations:
-      query = f"{role} {location_connector} {location}".strip()
-      key = query.casefold()
-      if key in seen:
-        continue
-      seen.add(key)
-      queries.append(query)
-  return queries
-
-
-def jsearch_provider() -> str:
-  requested = env_default("JSEARCH_PROVIDER", "auto").strip().lower() or "auto"
-  if requested not in {"auto", "openwebninja", "rapidapi"}:
-    raise SystemExit("JSEARCH_PROVIDER must be auto, openwebninja, or rapidapi")
-  if requested != "auto":
-    return requested
-  if env_default("JSEARCH_API_KEY"):
-    return "openwebninja"
-  if env_default("JSEARCH_RAPIDAPI_KEY") or env_default("RAPIDAPI_KEY"):
-    return "rapidapi"
-  raise SystemExit("Missing JSearch credentials: set JSEARCH_API_KEY or JSEARCH_RAPIDAPI_KEY.")
-
-
-def jsearch_request(query: str, country: str, language: str, limit: int, cursor: str | None = None) -> dict:
-  provider = jsearch_provider()
-  if provider == "rapidapi":
-    key = env_default("JSEARCH_RAPIDAPI_KEY") or env_default("RAPIDAPI_KEY")
-    if not key:
-      raise SystemExit("Missing JSEARCH_RAPIDAPI_KEY.")
-    base_url = env_default("JSEARCH_RAPIDAPI_BASE_URL", DEFAULT_RAPIDAPI_BASE_URL).rstrip("/")
-    host = env_default("JSEARCH_RAPIDAPI_HOST", DEFAULT_RAPIDAPI_HOST)
-    params = {
-      "query": query,
-      "country": country,
-      "date_posted": env_default("JSEARCH_DATE_POSTED", DEFAULT_JSEARCH_DATE_POSTED),
-      "num_pages": "1",
-      "page": cursor or "1",
-    }
-    headers = {
-      "X-RapidAPI-Key": key,
-      "X-RapidAPI-Host": host,
-    }
-    url = f"{base_url}/search?{urllib.parse.urlencode(params)}"
-  else:
-    key = env_default("JSEARCH_API_KEY")
-    if not key:
-      raise SystemExit("Missing JSEARCH_API_KEY.")
-    base_url = env_default("JSEARCH_BASE_URL", DEFAULT_OPENWEBNINJA_BASE_URL).rstrip("/")
-    params = {
-      "query": query,
-      "country": country,
-      "language": language,
-      "date_posted": env_default("JSEARCH_DATE_POSTED", DEFAULT_JSEARCH_DATE_POSTED),
-      "num": str(max(1, min(limit, 25))),
-    }
-    if cursor:
-      params["cursor"] = cursor
-    headers = {"x-api-key": key}
-    url = f"{base_url}/search-v2?{urllib.parse.urlencode(params)}"
-
-  for attempt in range(JSEARCH_REQUEST_ATTEMPTS):
-    request = urllib.request.Request(url, headers={**headers, "Accept": "application/json"})
-    try:
-      with urllib.request.urlopen(request, timeout=JSEARCH_REQUEST_TIMEOUT) as response:
-        body = response.read().decode("utf-8")
-        return json.loads(body) if body else {}
-    except urllib.error.HTTPError as err:
-      body = err.read().decode("utf-8", errors="replace")
-      print(f"JSearch request failed with HTTP {err.code}: {body[:1000]}", file=sys.stderr)
-      if 500 <= err.code < 600 and attempt + 1 < JSEARCH_REQUEST_ATTEMPTS:
-        time.sleep(JSEARCH_RETRY_SECONDS)
-        continue
-      raise JSearchUnavailable(f"HTTP {err.code}") from err
-    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as err:
-      # DNS, connection, read-timeout, and malformed-response failures are transient.
-      print(f"Could not reach JSearch API: {err}", file=sys.stderr)
-      if attempt + 1 < JSEARCH_REQUEST_ATTEMPTS:
-        time.sleep(JSEARCH_RETRY_SECONDS)
-        continue
-      raise JSearchUnavailable("network error") from err
-  raise JSearchUnavailable("network error")
-
-
-def jsearch_items(response: dict) -> list[dict]:
-  for key in ("data", "jobs", "results"):
-    value = response.get(key)
-    if isinstance(value, list):
-      return [item for item in value if isinstance(item, dict)]
-  return []
-
-
-EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
-
-
-def extract_emails(*values: object) -> list[str]:
-  emails: list[str] = []
-  seen: set[str] = set()
-  for value in values:
-    for email in EMAIL_RE.findall(str(value or "")):
-      key = email.casefold()
-      if key in seen:
-        continue
-      seen.add(key)
-      emails.append(email)
-  return emails
-
-
-def apply_links(item: dict) -> list[str]:
-  links: list[str] = []
-  for key in ("job_apply_link", "job_google_link", "employer_website"):
-    value = str(item.get(key) or "").strip()
-    if value:
-      links.append(value)
-  options = item.get("apply_options")
-  if isinstance(options, list):
-    for option in options:
-      if not isinstance(option, dict):
-        continue
-      value = str(option.get("apply_link") or option.get("link") or "").strip()
-      if value:
-        links.append(value)
-  output: list[str] = []
-  seen: set[str] = set()
-  for link in links:
-    if link in seen:
-      continue
-    seen.add(link)
-    output.append(link)
-  return output
-
-
-def normalized_candidate(item: dict, query: str) -> dict:
-  company = re.sub(r"\s+", " ", str(item.get("employer_name") or item.get("company") or "Unknown employer")).strip()
-  role = re.sub(r"\s+", " ", str(item.get("job_title") or item.get("title") or "Unknown role")).strip()
-  links = apply_links(item)
-  description = re.sub(r"\s+", " ", str(item.get("job_description") or item.get("description") or "")).strip()
-  emails = extract_emails(description, item.get("job_apply_link"), item.get("apply_options"))
-  location = ", ".join(clean_items([
-    item.get("job_city"),
-    item.get("job_state"),
-    item.get("job_country"),
-  ]))
-  source_url = links[0] if links else None
-  raw_id = str(item.get("job_id") or item.get("id") or "").strip()
-  closing = item.get("job_offer_expiration_datetime_utc") or item.get("job_offer_expiration_datetime")
-  if not closing and item.get("job_offer_expiration_timestamp") is not None:
-    try:
-      closing = datetime.fromtimestamp(float(item["job_offer_expiration_timestamp"]), tz=timezone.utc).isoformat()
-    except (TypeError, ValueError, OSError):
-      closing = None
-  fallback_id = hashlib.sha256(f"{company}\n{role}\n{source_url or ''}".encode("utf-8")).hexdigest()[:24]
-  return {
-    "candidateId": raw_id or fallback_id,
-    "source": "jsearch",
-    "sourceUrl": source_url,
-    "applyLinks": links,
-    "applicationEmails": emails,
-    "applicationEmail": emails[0] if emails else None,
-    "company": company,
-    "role": role,
-    "location": location,
-    "query": query,
-    "closing": closing,
-    "description": description[:2000],
-  }
-
-
-def candidate_key(candidate: dict) -> str:
-  return hashlib.sha256(
-    "\n".join([
-      str(candidate.get("company") or "").casefold(),
-      str(candidate.get("role") or "").casefold(),
-      str(candidate.get("sourceUrl") or "").casefold(),
-      str(candidate.get("candidateId") or "").casefold(),
-    ]).encode("utf-8")
-  ).hexdigest()
-
-
-def application_key(value: dict) -> tuple[str, str]:
-  return (
-    str(value.get("company") or "").strip().casefold(),
-    str(value.get("role") or "").strip().casefold(),
-  )
-
-
-def closing_state(value: object, now: datetime | None = None) -> str:
-  text = str(value or "").strip()
-  if not text:
-    return "unknown"
-  current = now or datetime.now(timezone.utc)
-  cleaned = re.sub(r"^(?:expires?|due|closing(?: date)?|deadline)\s*:?\s*", "", text, flags=re.I).strip()
-  for fmt in ("%Y-%m-%d", "%d %B %Y", "%d %b %Y", "%d %B, %Y", "%d %b, %Y"):
-    try:
-      closing_date = datetime.strptime(cleaned, fmt).date()
-      return "expired" if closing_date < current.date() else "open"
-    except ValueError:
-      continue
-  try:
-    parsed = datetime.fromisoformat(cleaned.replace("Z", "+00:00"))
-    if parsed.tzinfo is None:
-      parsed = parsed.replace(tzinfo=timezone.utc)
-    return "expired" if parsed < current else "open"
-  except ValueError:
-    pass
-  return "malformed"
-
-
-def filter_candidates_with_stats(
-  candidates: list[dict],
-  preferences: dict,
-  applications: list[dict],
-  limit: int,
-) -> tuple[list[dict], dict[str, dict[str, int]]]:
-  exclusions = [item.casefold() for item in clean_items(profile_values(preferences, "exclusions"))]
-  existing: set[tuple[str, str]] = set()
-  for application in applications:
-    status = str(application.get("status") or "").strip().lower()
-    try:
-      attempts = int(application.get("attemptCount") or 0)
-    except (TypeError, ValueError):
-      attempts = 0
-    # Historical records without a status and manual-submission records are
-    # deliberately terminal: users may already have applied after receiving the URL.
-    if not status or status in TERMINAL_APPLICATION_STATUSES:
-      existing.add(application_key(application))
-    elif status == "failed" and attempts >= MAX_APPLICATION_ATTEMPTS:
-      existing.add(application_key(application))
-  seen: set[str] = set()
-  output: list[dict] = []
-  stats: dict[str, dict[str, int]] = {}
-  for candidate in candidates:
-    source = str(candidate.get("source") or "unknown")
-    source_stats = stats.setdefault(source, {
-      "eligibleCount": 0,
-      "expiredCount": 0,
-      "duplicateCount": 0,
-      "excludedCount": 0,
-      "unknownDeadlineCount": 0,
-      "malformedDeadlineCount": 0,
-    })
-    deadline = closing_state(candidate.get("closing"))
-    if deadline == "expired":
-      source_stats["expiredCount"] += 1
-      continue
-    if deadline == "unknown":
-      source_stats["unknownDeadlineCount"] += 1
-    elif deadline == "malformed":
-      source_stats["malformedDeadlineCount"] += 1
-    text = " ".join([
-      str(candidate.get("company") or ""),
-      str(candidate.get("role") or ""),
-      str(candidate.get("description") or ""),
-    ]).casefold()
-    if any(exclusion in text for exclusion in exclusions):
-      source_stats["excludedCount"] += 1
-      continue
-    appkey = application_key(candidate)
-    # Skip jobs already applied to (prior runs) and collapse same company/role
-    # across sources within this run, so a JSearch + board duplicate is applied once.
-    if appkey in existing:
-      source_stats["duplicateCount"] += 1
-      continue
-    key = candidate_key(candidate)
-    if key in seen:
-      source_stats["duplicateCount"] += 1
-      continue
-    if len(output) >= limit:
-      continue
-    seen.add(key)
-    existing.add(appkey)
-    output.append(candidate)
-    source_stats["eligibleCount"] += 1
-  return output, stats
-
-
-def filter_candidates(candidates: list[dict], preferences: dict, applications: list[dict], limit: int) -> list[dict]:
-  output, _ = filter_candidates_with_stats(candidates, preferences, applications, limit)
-  return output
-
-
-def apply_source_filter_stats(source_results: dict[str, dict], filter_stats: dict[str, dict[str, int]]) -> None:
-  for source, stats in filter_stats.items():
-    result = source_results.setdefault(source, {"status": "ok", "rawCount": 0, "durationMs": 0})
-    for key, value in stats.items():
-      if key == "expiredCount":
-        result[key] = int(result.get(key) or 0) + value
-      else:
-        result[key] = value
-  for result in source_results.values():
-    for key in (
-      "eligibleCount",
-      "expiredCount",
-      "duplicateCount",
-      "excludedCount",
-      "unknownDeadlineCount",
-      "malformedDeadlineCount",
-    ):
-      result.setdefault(key, 0)
-
-
-def fetch_jsearch_candidates_with_result(preferences: dict, limit: int) -> tuple[list[dict], dict]:
-  started = time.monotonic()
-  country = preference_code(preferences, "country", DEFAULT_JSEARCH_COUNTRY)
-  language = preference_code(preferences, "language", DEFAULT_JSEARCH_LANGUAGE)
-  candidates: list[dict] = []
-  raw_count = 0
-  expired_count = 0
-  roles = clean_items(profile_values(preferences, "targetRoles") or profile_values(preferences, "roles"))
-  try:
-    from scrapers import base as scraper_base
-    match = scraper_base.build_candidate_matcher(roles) if scraper_base.uses_waitstaff_family(roles) else lambda role, text: True
-  except Exception:
-    match = lambda role, text: True
-  for query in search_queries(preferences):
-    try:
-      response = jsearch_request(query, country, language, limit)
-    except JSearchUnavailable as err:
-      print(f"JSearch unavailable, continuing without it: {public_text(err)}", file=sys.stderr)
-      return candidates, {
-        "status": "unavailable",
-        "rawCount": raw_count,
-        "error": public_text(err),
-        "durationMs": round((time.monotonic() - started) * 1000),
-      }
-    items = jsearch_items(response)
-    raw_count += len(items)
-    for item in items:
-      if item.get("job_is_expired") is True or str(item.get("job_is_expired") or "").casefold() == "true":
-        expired_count += 1
-        continue
-      candidate = normalized_candidate(item, query)
-      if match(str(candidate.get("role") or ""), str(candidate.get("description") or "")):
-        candidates.append(candidate)
-    if len(candidates) >= limit:
-      break
-  return candidates, {
-    "status": "ok",
-    "rawCount": raw_count,
-    "matchedCount": len(candidates),
-    "expiredCount": expired_count,
-    "durationMs": round((time.monotonic() - started) * 1000),
-  }
-
-
-def fetch_jsearch_candidates(preferences: dict, limit: int) -> list[dict]:
-  candidates, _ = fetch_jsearch_candidates_with_result(preferences, limit)
-  return candidates
-
-
-# Zimbabwe job boards (VacancyMail, iHarare, VacancyBox) are scraped to extend JSearch
-# for ZW-targeting subscribers only. JSearch still runs for everyone.
-ZIMBABWE_HINTS = {
-  "zimbabwe", "harare", "bulawayo", "mutare", "gweru", "kwekwe", "masvingo",
-  "chitungwiza", "kadoma", "chinhoyi", "marondera", "victoria falls", "zvishavane",
-  "bindura", "beitbridge", "hwange", "redcliff", "norton", "ruwa", "chegutu",
-  "kariba", "rusape", "chiredzi", "gwanda", "midlands",
-}
-
-
-def zw_targeted(preferences: dict) -> bool:
-  country_raw = str(preferences.get("country") or "").strip().casefold()
-  if country_raw == "zw" or "zimbabwe" in country_raw:
-    return True
-  if preference_code(preferences, "country", DEFAULT_JSEARCH_COUNTRY) == "zw":
-    return True
-  for location in clean_items(profile_values(preferences, "locations")):
-    text = location.casefold()
-    if any(hint in text for hint in ZIMBABWE_HINTS):
-      return True
-  return False
-
-
-def fetch_scraped_candidates(preferences: dict, limit: int) -> list[dict]:
-  """Board-scraped candidates for ZW-targeting users. Never raises; merged alongside
-  JSearch results. Returns [] when not ZW-targeted or the scrapers are unavailable."""
-  if limit <= 0 or not zw_targeted(preferences):
-    return []
-  try:
-    import scrapers  # lazily imported so a scraper import error can't break JSearch
-    return scrapers.fetch_scraped_candidates(preferences, limit)
-  except Exception as err:
-    print(f"Scraper sources failed: {public_text(err)}", file=sys.stderr)
-    return []
-
-
-def fetch_scraped_candidates_with_results(preferences: dict, limit: int) -> tuple[list[dict], dict[str, dict]]:
-  if limit <= 0 or not zw_targeted(preferences):
-    return [], {
-      name: {"status": "skipped", "rawCount": 0, "durationMs": 0}
-      for name in ("vacancymail", "iharare", "vacancybox", "applynow")
-    }
-  try:
-    import scrapers
-    return scrapers.fetch_scraped_candidates_with_results(preferences, limit)
-  except Exception as err:
-    message = public_text(err, 180)
-    return [], {
-      name: {"status": "unavailable", "rawCount": 0, "error": message, "durationMs": 0}
-      for name in ("vacancymail", "iharare", "vacancybox", "applynow")
-    }
-
-
-def fetch_zimlinks_candidates(preferences: dict, limit: int) -> list[dict]:
-  """Read fresh WhatsApp channel candidates first for Zimbabwe-targeted subscribers."""
-  if limit <= 0 or not zw_targeted(preferences):
-    return []
-  try:
-    from scrapers import base as scraper_base, target_roles, zimlinks
-    match = scraper_base.build_candidate_matcher(target_roles(preferences))
-    return zimlinks.fetch(limit=limit, match=match)
-  except Exception as err:
-    print(f"WhatsApp channel source failed: {public_text(err)}", file=sys.stderr)
-    return []
-
-
-def fetch_whatsapp_channel_candidates_with_results(preferences: dict, limit: int) -> tuple[list[dict], dict[str, dict]]:
-  if limit <= 0 or not zw_targeted(preferences):
-    return [], {
-      source: {"status": "skipped", "rawCount": 0, "durationMs": 0}
-      for source in WHATSAPP_CHANNEL_SOURCES
-    }
-  started = time.monotonic()
-  try:
-    from scrapers import base as scraper_base, target_roles, zimlinks
-    match = scraper_base.build_candidate_matcher(target_roles(preferences))
-    candidates = zimlinks.fetch(limit=limit, match=match)
-    counts: dict[str, int] = {}
-    for candidate in candidates:
-      source = str(candidate.get("source") or "whatsapp-channel")
-      counts[source] = counts.get(source, 0) + 1
-    duration = round((time.monotonic() - started) * 1000)
-    sources = set(WHATSAPP_CHANNEL_SOURCES) | set(counts)
-    return candidates, {
-      source: {"status": "ok", "rawCount": counts.get(source, 0), "durationMs": duration}
-      for source in sorted(sources)
-    }
-  except Exception as err:
-    print(f"WhatsApp channel source failed: {public_text(err)}", file=sys.stderr)
-    return [], {
-      source: {
-        "status": "unavailable",
-        "rawCount": 0,
-        "error": public_text(err, 180),
-        "durationMs": round((time.monotonic() - started) * 1000),
-      }
-      for source in WHATSAPP_CHANNEL_SOURCES
-    }
-
-
-def fetch_candidate_sources(preferences: dict, limit: int) -> tuple[list[dict], dict[str, dict]]:
-  channel_candidates, channel_results = fetch_whatsapp_channel_candidates_with_results(preferences, limit)
-  jsearch, jsearch_result = fetch_jsearch_candidates_with_result(preferences, limit)
-  boards, board_results = fetch_scraped_candidates_with_results(preferences, limit)
-  results = {
-    **channel_results,
-    "jsearch": jsearch_result,
-    **board_results,
-  }
-  for result in results.values():
-    if result.get("error"):
-      result["error"] = public_text(result["error"], 180)
-  return channel_candidates + jsearch + boards, results
-
-
-def register_channel_candidate_eligibility(run_id: str, user_id: str, candidates: list[dict]) -> None:
-  """Record selected channel candidates without making source bookkeeping fatal."""
-  try:
-    from scrapers import zimlinks
-    zimlinks.register_eligibility(run_id, user_key(user_id), candidates)
-  except Exception as err:
-    print(f"WhatsApp channel eligibility tracking failed: {public_text(err)}", file=sys.stderr)
-
-
-def record_channel_candidate_outcome(
-  run_id: str,
-  user_id: str,
-  candidate: dict,
-  outcome: str,
-  attempt_count: int = 0,
-) -> None:
-  try:
-    from scrapers import zimlinks
-    zimlinks.record_outcome(run_id, user_key(user_id), candidate, outcome, attempt_count)
-  except Exception as err:
-    print(f"WhatsApp channel outcome tracking failed: {public_text(err)}", file=sys.stderr)
-
-
-def finalize_channel_candidate_dispatch(run_id: str) -> None:
-  try:
-    from scrapers import zimlinks
-    zimlinks.finalize_dispatch(run_id)
-  except Exception as err:
-    print(f"WhatsApp channel cleanup failed: {public_text(err)}", file=sys.stderr)
-
-
-def dispatch_path(run_id: str, root: Path = DEFAULT_DISPATCH_ROOT) -> Path:
-  return root / f"{safe_run_id(run_id)}.json"
-
-
-def count_arg(value: int, name: str) -> int:
-  if value < 0:
-    raise SystemExit(f"{name} must be >= 0")
-  return value
-
-
-def load_dispatch(run_id: str, root: Path = DEFAULT_DISPATCH_ROOT) -> dict:
-  path = dispatch_path(run_id, root)
-  if not path.exists():
-    raise SystemExit(f"Dispatch run not found: {safe_run_id(run_id)}")
-  try:
-    return json.loads(path.read_text(encoding="utf-8"))
-  except json.JSONDecodeError as err:
-    raise SystemExit(f"Dispatch run marker is invalid JSON: {path}") from err
-
-
-def save_dispatch(data: dict, root: Path = DEFAULT_DISPATCH_ROOT) -> dict:
-  run_id = safe_run_id(data.get("runId", ""))
-  root.mkdir(parents=True, exist_ok=True)
-  path = dispatch_path(run_id, root)
-  tmp = path.with_suffix(".json.tmp")
-  tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-  tmp.replace(path)
-  return {"ok": True, "runId": run_id, "path": str(path)}
-
-
-def safe_cv_suffix(path: Path) -> str:
-  suffix = path.suffix.lower()
-  allowed = {".pdf", ".doc", ".docx", ".txt"}
-  if suffix not in allowed:
-    guessed = mimetypes.guess_type(path.name)[0] or ""
-    if guessed == "application/pdf":
-      return ".pdf"
-    raise SystemExit("CV must be a PDF, DOC, DOCX, or TXT file for v1.")
-  return suffix
-
-
-def stage_cv(phone: str, source: str) -> dict:
-  normalized_phone = normalize_phone(phone)
-  src = Path(source).expanduser().resolve()
-  user_id = linked_user_id(normalized_phone)
-  result = upload_cv(user_id, src)
-  return {
-    "ok": True,
-    "phoneHash": phone_hash(normalized_phone),
-    "userId": user_id,
-    "cvFileRef": result.get("key"),
-    "originalPath": str(src),
-    "storedAt": utc_now(),
-  }
+# job_scout.py is the CLI/orchestration layer: the cmd_* handlers, the
+# dispatch_jsearch_locked orchestration, build_parser, and main. All reusable
+# logic lives in the jobscout/ package below and is called from here.
+#
+# api/dispatch_store are called via the module object (api.request_json, ...) so
+# a single mock.patch("jobscout.api.<fn>") covers every caller. The remaining
+# helpers are re-imported by name for terse call sites; tests patch a helper at
+# its owning module when one jobscout submodule calls another internally
+# (e.g. jobscout.jsearch.jsearch_request, jobscout.delivery.run_json_command).
+from jobscout import api
+from jobscout import dispatch_store
+from jobscout.subscriber import (
+  application_artifact_dir,
+  applicant_name,
+  cv_local_dest,
+  display_name,
+  subscriber_cv_file,
+  subscriber_phone,
+  subscriber_phone_hash,
+  subscriber_sender_email,
+)
+from jobscout.textutil import public_text
+from jobscout.delivery import (
+  parse_json_output,
+  request_web_application,
+  result_message_id,
+  run_json_command,
+  send_application_email,
+  send_whatsapp_summary,
+)
+from jobscout.application import (
+  action_instruction,
+  applications_from_response,
+  build_user_summary,
+  candidate_application_url,
+  candidate_attempt,
+  cover_letter_text,
+  match_reason,
+  web_apply_payload,
+  write_cover_letter,
+)
+from jobscout.util import (
+  count_arg,
+  effective_user,
+  normalize_phone,
+  phone_hash,
+  safe_run_id,
+  slug_part,
+  utc_now,
+)
+from jobscout.profile import (
+  clean_items,
+  load_profile_json,
+  max_applications,
+  normalize_stored_locations,
+  preference_code,
+  profile_values,
+  resolve_preferred_locations,
+  resolve_profile_locations,
+  resolved_profile_country,
+  search_queries,
+  subscriber_preferences,
+  subscriber_user_id,
+  user_key,
+)
+from jobscout.jsearch import (
+  JSearchUnavailable,
+  application_key,
+  apply_links,
+  apply_source_filter_stats,
+  candidate_key,
+  closing_state,
+  extract_emails,
+  fetch_candidate_sources,
+  fetch_jsearch_candidates,
+  fetch_jsearch_candidates_with_result,
+  fetch_scraped_candidates,
+  fetch_whatsapp_channel_candidates_with_results,
+  fetch_zimlinks_candidates,
+  filter_candidates,
+  filter_candidates_with_stats,
+  finalize_channel_candidate_dispatch,
+  jsearch_items,
+  jsearch_provider,
+  jsearch_request,
+  normalized_candidate,
+  record_channel_candidate_outcome,
+  register_channel_candidate_eligibility,
+  zw_targeted,
+)
 
 
 def cmd_create_invite(args: argparse.Namespace) -> dict:
@@ -1100,7 +181,7 @@ def cmd_create_invite(args: argparse.Namespace) -> dict:
   cached = get_pending_link(cache_key)
   if cached:
     return cached
-  result = request_json("POST", endpoint("/internal/job-scout/invite"), {"phone": phone, "ttlSeconds": args.ttl_seconds})
+  result = api.request_json("POST", endpoint("/internal/job-scout/invite"), {"phone": phone, "ttlSeconds": args.ttl_seconds})
   if result.get("setupUrl") and result.get("expiresAt"):
     cached_result = store_pending_link(
       {
@@ -1115,7 +196,7 @@ def cmd_create_invite(args: argparse.Namespace) -> dict:
 
 
 def cmd_check_runtime(args: argparse.Namespace) -> dict:
-  cache_path = pending_links_path()
+  cache_path = api.pending_links_path()
   cache_parent = cache_path.parent
   probe = cache_parent / f".{cache_path.name}.{os.getpid()}.check"
   tmp = cache_parent / f".{cache_path.name}.{os.getpid()}.tmp"
@@ -1185,7 +266,7 @@ def cmd_check_runtime(args: argparse.Namespace) -> dict:
       accessible_cv_count = sum(
         1
         for subscriber in ready
-        if cv_object_available(str(subscriber.get("userId") or subscriber.get("uid") or subscriber.get("id") or ""))
+        if api.cv_object_available(str(subscriber.get("userId") or subscriber.get("uid") or subscriber.get("id") or ""))
       )
       if subscriber_count == 0:
         errors.append("no Job Scout subscribers are ready")
@@ -1225,18 +306,18 @@ def resolve_cv_ref(user_id: str, cv_arg: str, do_upload: bool) -> str:
   if text == expected_key:
     return text  # already staged via stage-cv; value is this user's R2 object key
   if Path(text).expanduser().is_file():
-    return str(upload_cv(user_id, text).get("key") or "") if do_upload else expected_key
+    return str(api.upload_cv(user_id, text).get("key") or "") if do_upload else expected_key
   # Not a real local file and not the expected staged key: never persist a bogus ref.
   raise SystemExit(f"CV file not found (and not a staged CV reference): {text}")
 
 
 def cmd_stage_cv(args: argparse.Namespace) -> dict:
-  return stage_cv(args.phone, args.cv)
+  return api.stage_cv(args.phone, args.cv)
 
 
 def cmd_save_profile(args: argparse.Namespace) -> dict:
   phone = normalize_phone(args.phone)
-  user_id = str(args.user_id or "").strip() or linked_user_id(phone)
+  user_id = str(args.user_id or "").strip() or api.linked_user_id(phone)
   profile_confirmed = bool(getattr(args, "profile_confirmed", False))
   safety_acknowledged = bool(getattr(args, "safety_acknowledged", False))
   if not profile_confirmed:
@@ -1291,26 +372,26 @@ def cmd_save_profile(args: argparse.Namespace) -> dict:
     "profileConfirmed": profile_confirmed,
     "safetyAcknowledged": safety_acknowledged,
   }
-  result = request_json("POST", endpoint("/internal/job-scout/profile"), payload)
+  result = api.request_json("POST", endpoint("/internal/job-scout/profile"), payload)
   remove_pending_links(phone=phone, service="job-scout")
   return result
 
 
 def cmd_list_ready(args: argparse.Namespace) -> dict:
   query = urllib.parse.urlencode({"limit": args.limit})
-  return request_json("GET", endpoint(f"/internal/job-scout/subscribers?{query}"))
+  return api.request_json("GET", endpoint(f"/internal/job-scout/subscribers?{query}"))
 
 
 def cmd_status(args: argparse.Namespace) -> dict:
   """Return requester-scoped readiness from the authoritative backend evaluator."""
   phone = normalize_phone(args.phone)
   query = urllib.parse.urlencode({"phone": phone})
-  return request_json("GET", endpoint(f"/internal/job-scout/status?{query}"))
+  return api.request_json("GET", endpoint(f"/internal/job-scout/status?{query}"))
 
 
 def cmd_list_applications(args: argparse.Namespace) -> dict:
   query = urllib.parse.urlencode({"userId": args.user_id})
-  return request_json("GET", endpoint(f"/internal/job-scout/applications?{query}"))
+  return api.request_json("GET", endpoint(f"/internal/job-scout/applications?{query}"))
 
 
 def cmd_record_application(args: argparse.Namespace) -> dict:
@@ -1333,7 +414,7 @@ def cmd_record_application(args: argparse.Namespace) -> dict:
     "evidence": getattr(args, "evidence", None),
     "replace": args.replace,
   }
-  return request_json("POST", endpoint("/internal/job-scout/applications"), payload)
+  return api.request_json("POST", endpoint("/internal/job-scout/applications"), payload)
 
 
 def cmd_fetch_candidates(args: argparse.Namespace) -> dict:
@@ -1377,314 +458,6 @@ def cmd_resolve_location(args: argparse.Namespace) -> dict:
   return {"ok": True, **resolved}
 
 
-def write_candidate_artifact(root: Path, run_id: str, user_id: str, data: dict) -> str:
-  artifact_dir = root / safe_run_id(run_id)
-  artifact_dir.mkdir(parents=True, exist_ok=True)
-  path = artifact_dir / f"{user_key(user_id)}.candidates.json"
-  tmp = path.with_suffix(".json.tmp")
-  tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-  tmp.replace(path)
-  return str(path)
-
-
-def applications_from_response(result: dict) -> list[dict]:
-  applications = result.get("applications")
-  if isinstance(applications, list):
-    return [item for item in applications if isinstance(item, dict)]
-  if isinstance(result, list):
-    return [item for item in result if isinstance(item, dict)]
-  return []
-
-
-def candidate_attempt(applications: list[dict], candidate: dict) -> tuple[int, bool]:
-  key = application_key(candidate)
-  for application in applications:
-    if application_key(application) != key:
-      continue
-    try:
-      previous = int(application.get("attemptCount") or 0)
-    except (TypeError, ValueError):
-      previous = 0
-    return min(previous + 1, MAX_APPLICATION_ATTEMPTS), True
-  return 1, False
-
-
-def public_text(value: object, max_len: int = 180) -> str:
-  text = re.sub(r"[\r\n\t]+", " ", str(value or ""))
-  text = re.sub(r"\s+", " ", text).strip()
-  text = re.sub(r"/home/joseph/\S+", "[local path]", text)
-  text = re.sub(r"Bearer\s+[A-Za-z0-9._~+/=-]+", "Bearer [redacted]", text, flags=re.I)
-  text = re.sub(r"([A-Za-z0-9._%+-]{2})[A-Za-z0-9._%+-]*(@[A-Za-z0-9.-]+\.[A-Za-z]{2,})", r"\1***\2", text)
-  return text[:max_len]
-
-
-def display_name(subscriber: dict) -> str:
-  profile = subscriber.get("profile")
-  profile = profile if isinstance(profile, dict) else {}
-  for value in (
-    profile.get("displayName"),
-    profile.get("name"),
-    subscriber.get("displayName"),
-    subscriber.get("name"),
-    subscriber.get("senderEmail"),
-    profile.get("email"),
-  ):
-    text = re.sub(r"\s+", " ", str(value or "")).strip()
-    if text:
-      return text.split("@", 1)[0]
-  return "Applicant"
-
-
-def subscriber_phone(subscriber: dict) -> str:
-  phone = str(subscriber.get("whatsappPhone") or "").strip()
-  if not phone:
-    raise RuntimeError("subscriber is missing whatsappPhone")
-  return phone
-
-
-def subscriber_sender_email(subscriber: dict) -> str:
-  email = str(subscriber.get("senderEmail") or "").strip()
-  if not email:
-    raise RuntimeError("subscriber is missing senderEmail")
-  return email
-
-
-# cvFileRef is now an R2 object key, not a local path. Downloaded CVs are cached
-# per user for the duration of a dispatch run so multiple candidates reuse one
-# download.
-_cv_download_cache: dict[str, str] = {}
-
-
-def cv_local_dest(subscriber: dict) -> Path:
-  return DEFAULT_STORAGE_ROOT / subscriber_phone_hash(subscriber) / "cv.pdf"
-
-
-def subscriber_cv_file(subscriber: dict) -> str:
-  user_id = subscriber_user_id(subscriber)
-  cached = _cv_download_cache.get(user_id)
-  if cached and Path(cached).is_file():
-    return cached
-  if not str(subscriber.get("cvFileRef") or "").strip():
-    raise RuntimeError("subscriber is missing cvFileRef")
-  path = str(download_cv(user_id, cv_local_dest(subscriber)))
-  _cv_download_cache[user_id] = path
-  return path
-
-
-def subscriber_phone_hash(subscriber: dict) -> str:
-  value = str(subscriber.get("whatsappPhoneHash") or "").strip()
-  if value:
-    return re.sub(r"[^A-Za-z0-9_.:-]", "-", value)[:80]
-  return phone_hash(subscriber_phone(subscriber))
-
-
-def slug_part(value: object) -> str:
-  text = re.sub(r"[^A-Za-z0-9]+", "-", str(value or "").lower())
-  text = text.strip("-")
-  return text[:80] or "job"
-
-
-def application_artifact_dir(subscriber: dict, candidate: dict) -> Path:
-  return (
-    DEFAULT_STORAGE_ROOT.parent
-    / "users"
-    / subscriber_phone_hash(subscriber)
-    / "applications"
-    / slug_part(f"{candidate.get('company', '')}-{candidate.get('role', '')}")
-  )
-
-
-def match_reason(preferences: dict, candidate: dict) -> str:
-  roles = clean_items(profile_values(preferences, "targetRoles") or profile_values(preferences, "roles"))
-  role_hint = roles[0] if roles else str(candidate.get("role") or "the target role")
-  return public_text(f"Matches requested work around {role_hint} and the configured location/preferences.", 220)
-
-
-def cover_letter_text(subscriber: dict, preferences: dict, candidate: dict) -> str:
-  name = display_name(subscriber)
-  role = public_text(candidate.get("role"), 120) or "the advertised role"
-  company = public_text(candidate.get("company"), 120) or "your organization"
-  qualifications = clean_items(profile_values(preferences, "qualifications"))
-  skills = clean_items(profile_values(preferences, "skills"))
-  experience = clean_items(profile_values(preferences, "experience"))
-  strengths = ", ".join([*qualifications[:2], *skills[:3], *experience[:2]]) or "relevant experience and a strong work ethic"
-  return "\n".join([
-    f"Dear Hiring Team at {company},",
-    "",
-    f"I am applying for the {role} position at {company}.",
-    f"My background includes {strengths}, and I am ready to contribute reliably from the first day.",
-    "I work carefully, communicate clearly, and take responsibility for completing assigned tasks.",
-    "I have attached my CV for your review and would appreciate the opportunity to discuss how I can help your team.",
-    "",
-    f"Kind regards,",
-    name,
-  ]) + "\n"
-
-
-def write_cover_letter(subscriber: dict, preferences: dict, candidate: dict) -> Path:
-  directory = application_artifact_dir(subscriber, candidate)
-  directory.mkdir(parents=True, exist_ok=True)
-  path = directory / "cover-letter.txt"
-  path.write_text(cover_letter_text(subscriber, preferences, candidate), encoding="utf-8")
-  return path
-
-
-def parse_json_output(output: str) -> dict:
-  try:
-    data = json.loads(output or "{}")
-  except json.JSONDecodeError:
-    return {}
-  return data if isinstance(data, dict) else {}
-
-
-def run_json_command(command: list[str], timeout: int = 90, env: dict[str, str] | None = None) -> dict:
-  try:
-    completed = subprocess.run(
-      command,
-      check=False,
-      capture_output=True,
-      text=True,
-      timeout=timeout,
-      env=env,
-    )
-  except (OSError, subprocess.TimeoutExpired) as err:
-    raise RuntimeError(public_text(err, 240)) from err
-  if completed.returncode != 0:
-    detail = completed.stderr or completed.stdout or f"exit {completed.returncode}"
-    raise RuntimeError(public_text(detail, 240))
-  return parse_json_output(completed.stdout)
-
-
-def send_application_email(subscriber: dict, candidate: dict, cover_letter: Path) -> dict:
-  email = str(candidate.get("applicationEmail") or "").strip()
-  if not email:
-    raise RuntimeError("candidate is missing applicationEmail")
-  subject = f"Application for {public_text(candidate.get('role'), 120)} - {display_name(subscriber)}"
-  return run_json_command([
-    str(GENAIE_MAIL_BIN),
-    "send",
-    "--from",
-    subscriber_sender_email(subscriber),
-    "--sender-uid",
-    subscriber_user_id(subscriber),
-    "--to",
-    email,
-    "--subject",
-    subject,
-    "--body-file",
-    str(cover_letter),
-    "--attach",
-    subscriber_cv_file(subscriber),
-    "--force",
-  ])
-
-
-def send_whatsapp_summary(phone: str, message: str) -> dict:
-  command_env = os.environ.copy()
-  command_env.pop("OPENCLAW_HOME", None)
-  gateway_token = command_env.get("GATEWAY_AUTH_TOKEN", "").strip()
-  if gateway_token:
-    command_env["OPENCLAW_GATEWAY_TOKEN"] = gateway_token
-  return run_json_command([
-    str(OPENCLAW_BIN),
-    "message",
-    "send",
-    "--channel",
-    "whatsapp",
-    "--target",
-    phone,
-    "--message",
-    message,
-    "--json",
-  ], env=command_env)
-
-
-def result_message_id(result: dict) -> str | None:
-  for key in ("messageId", "id", "gmailMessageId"):
-    value = str(result.get(key) or "").strip()
-    if value:
-      return value
-  nested = result.get("message")
-  if isinstance(nested, dict):
-    for key in ("id", "messageId"):
-      value = str(nested.get(key) or "").strip()
-      if value:
-        return value
-  return None
-
-
-def candidate_application_url(candidate: dict) -> str | None:
-  links = candidate.get("applyLinks")
-  if isinstance(links, list):
-    for value in links:
-      link = str(value or "").strip()
-      if link.startswith(("https://", "http://")):
-        return link
-  # The channel permalink is provenance, not an application form.
-  if str(candidate.get("source") or "") in WHATSAPP_CHANNEL_SOURCES or (
-    candidate.get("sourceChannelJid") and candidate.get("sourcePostId")
-  ):
-    return None
-  source = str(candidate.get("sourceUrl") or "").strip()
-  return source if source.startswith(("https://", "http://")) else None
-
-
-def applicant_name(subscriber: dict) -> tuple[str, str]:
-  parts = display_name(subscriber).split()
-  if len(parts) <= 1:
-    return (parts[0] if parts else "Applicant", "")
-  return parts[0], " ".join(parts[1:])
-
-
-def web_apply_payload(subscriber: dict, preferences: dict, candidate: dict, cover_letter: Path) -> dict:
-  first_name, last_name = applicant_name(subscriber)
-  locations = clean_items(profile_values(preferences, "locations"))
-  return {
-    "attemptId": candidate_key(candidate),
-    "applicationUrl": candidate_application_url(candidate),
-    "applicant": {
-      "firstName": first_name,
-      "lastName": last_name,
-      "fullName": display_name(subscriber),
-      "email": subscriber_sender_email(subscriber),
-      "phone": subscriber_phone(subscriber),
-      "location": locations[0] if locations else "",
-    },
-    "cvPath": subscriber_cv_file(subscriber),
-    "coverLetterPath": str(cover_letter),
-    "autoSubmit": True,
-  }
-
-
-def request_web_application(payload: dict, timeout: int = 180) -> dict:
-  url = env_default("JOB_SCOUT_WEB_APPLY_URL", DEFAULT_WEB_APPLY_URL).strip()
-  token = env_default("JOB_SCOUT_BROWSER_TOKEN", "").strip()
-  if not url:
-    raise RuntimeError("website application worker is not configured")
-  if not token:
-    raise RuntimeError("website application worker token is not configured")
-  request = urllib.request.Request(
-    url,
-    data=json.dumps(payload).encode("utf-8"),
-    method="POST",
-    headers={
-      "Content-Type": "application/json",
-      "Accept": "application/json",
-      "Authorization": f"Bearer {token}",
-    },
-  )
-  try:
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-      data = json.loads(response.read().decode("utf-8") or "{}")
-  except urllib.error.HTTPError as err:
-    raise RuntimeError(f"website application worker returned HTTP {err.code}") from err
-  except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as err:
-    raise RuntimeError("website application worker is unavailable") from err
-  if not isinstance(data, dict) or data.get("outcome") not in {"submitted", "action_required", "failed"}:
-    raise RuntimeError("website application worker returned an invalid result")
-  return data
-
-
 def record_candidate_application(
   user_id: str,
   candidate: dict,
@@ -1720,82 +493,6 @@ def record_candidate_application(
   ))
 
 
-def action_instruction(candidate: dict, blocker_code: str | None = None) -> str:
-  link = candidate_application_url(candidate) or str(candidate.get("sourcePostUrl") or candidate.get("sourceUrl") or "").strip()
-  reasons = {
-    "login_required": "The site requires you to sign in.",
-    "captcha_required": "The site requires a CAPTCHA.",
-    "unknown_required_field": "The form asks a required question I cannot answer safely.",
-    "legal_declaration": "The form requires a declaration only you should confirm.",
-    "payment_required": "The site asks for payment; I will never submit or pay it.",
-    "unsupported_site": "This site's application form is not safely automatable yet.",
-    "channel_post_manual": "The channel post has no application form or email. Review the original advert and apply manually.",
-  }
-  prefix = reasons.get(str(blocker_code or ""), "This application needs your input.")
-  if link:
-    return f"{prefix} Continue here: {link}"
-  return prefix
-
-
-def build_user_summary(date_label: str, applied: list[dict], action_required: list[dict], failed_note: str | None = None) -> str:
-  lines = [f"Job Scout - {date_label}", ""]
-  if applied:
-    for index, item in enumerate(applied, 1):
-      candidate = item["candidate"]
-      lines.extend([
-        f"{index}. {public_text(candidate.get('role'), 100)} - APPLIED",
-        f"Company: {public_text(candidate.get('company'), 100)}",
-      ])
-      location = public_text(candidate.get("location"), 100)
-      if location:
-        lines.append(f"Location: {location}")
-      source = public_text(candidate.get("sourceUrl"), 180)
-      if source:
-        lines.append(f"Source: {source}")
-      reason = public_text(item.get("reason"), 180)
-      if reason:
-        lines.append(f"Why: {reason}")
-      lines.append("")
-  if action_required:
-    for item in action_required:
-      candidate = item["candidate"] if isinstance(item, dict) and "candidate" in item else item
-      blocker_code = item.get("blockerCode") if isinstance(item, dict) else None
-      lines.extend([
-        f"- {public_text(candidate.get('role'), 100)} - ACTION NEEDED",
-        f"Company: {public_text(candidate.get('company'), 100)}",
-        action_instruction(candidate, blocker_code),
-        "",
-      ])
-  if failed_note:
-    lines.append(PUBLIC_DISPATCH_FAILURE_MESSAGE)
-  if not applied and not action_required and not failed_note:
-    lines.append("No strong matches today. I will keep checking.")
-  return "\n".join(line for line in lines).strip()
-
-
-def dispatch_lock_path(dispatch_root: Path) -> Path:
-  return Path(dispatch_root).resolve() / "dispatch.lock"
-
-
-@contextmanager
-def exclusive_dispatch_lock(dispatch_root: Path, run_id: str):
-  lock_path = dispatch_lock_path(dispatch_root)
-  lock_path.parent.mkdir(parents=True, exist_ok=True)
-  with lock_path.open("a+", encoding="utf-8") as lock_file:
-    try:
-      fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError as err:
-      raise SystemExit("another Job Scout dispatch is already running") from err
-    lock_file.seek(0)
-    lock_file.truncate()
-    lock_file.write(json.dumps({"runId": run_id, "pid": os.getpid(), "startedAt": utc_now()}) + "\n")
-    lock_file.flush()
-    try:
-      yield
-    finally:
-      fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-
-
 def scoped_subscribers(subscribers: list[dict], phone: str | None) -> list[dict]:
   if not phone:
     return subscribers
@@ -1828,7 +525,7 @@ def subscriber_is_dispatch_ready(subscriber: dict) -> bool:
 def cmd_dispatch_jsearch(args: argparse.Namespace) -> dict:
   run_id = args.run_id or f"job-scout-jsearch-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
   run_id = safe_run_id(run_id)
-  with exclusive_dispatch_lock(args.dispatch_root, run_id):
+  with dispatch_store.exclusive_dispatch_lock(args.dispatch_root, run_id):
     return dispatch_jsearch_locked(args, run_id)
 
 
@@ -2115,7 +812,7 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
       "sourceResults": source_results,
       "candidates": candidates,
     }
-    artifact_path = None if args.dry_run else write_candidate_artifact(args.dispatch_root, run_id, user_id, artifact)
+    artifact_path = None if args.dry_run else dispatch_store.write_candidate_artifact(args.dispatch_root, run_id, user_id, artifact)
     users.append({
       "userKey": user_key(user_id),
       "status": status,
@@ -2180,13 +877,13 @@ def cmd_start_dispatch(args: argparse.Namespace) -> dict:
     "outcomes": {},
     "finalCounts": None,
   }
-  result = save_dispatch(data, args.dispatch_root)
+  result = dispatch_store.save_dispatch(data, args.dispatch_root)
   result["readyCount"] = ready_count
   return result
 
 
 def cmd_record_dispatch_outcome(args: argparse.Namespace) -> dict:
-  data = load_dispatch(args.run_id, args.dispatch_root)
+  data = dispatch_store.load_dispatch(args.run_id, args.dispatch_root)
   status = args.status
   if status not in DISPATCH_STATUSES:
     raise SystemExit(f"status must be one of: {', '.join(sorted(DISPATCH_STATUSES))}")
@@ -2202,13 +899,13 @@ def cmd_record_dispatch_outcome(args: argparse.Namespace) -> dict:
     "recordedAt": utc_now(),
   }
   data["updatedAt"] = utc_now()
-  result = save_dispatch(data, args.dispatch_root)
+  result = dispatch_store.save_dispatch(data, args.dispatch_root)
   result["outcomeCount"] = len(outcomes)
   return result
 
 
 def cmd_finish_dispatch(args: argparse.Namespace) -> dict:
-  data = load_dispatch(args.run_id, args.dispatch_root)
+  data = dispatch_store.load_dispatch(args.run_id, args.dispatch_root)
   counts = {
     "readyCount": count_arg(args.ready_count, "ready-count"),
     "processedCount": count_arg(args.processed_count, "processed-count"),
@@ -2224,13 +921,13 @@ def cmd_finish_dispatch(args: argparse.Namespace) -> dict:
   data["finalCounts"] = counts
   data["finishedAt"] = utc_now()
   data["updatedAt"] = data["finishedAt"]
-  result = save_dispatch(data, args.dispatch_root)
+  result = dispatch_store.save_dispatch(data, args.dispatch_root)
   result["finalCounts"] = counts
   return result
 
 
 def cmd_verify_dispatch(args: argparse.Namespace) -> dict:
-  data = load_dispatch(args.run_id, args.dispatch_root)
+  data = dispatch_store.load_dispatch(args.run_id, args.dispatch_root)
   errors: list[str] = []
   ready_count = int(data.get("readyCount", -1))
   outcomes = data.get("outcomes") if isinstance(data.get("outcomes"), dict) else {}

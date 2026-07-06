@@ -4,15 +4,38 @@
 from __future__ import annotations
 
 import argparse
-import fcntl
-import hashlib
 import json
 import os
 import pathlib
 import re
 import sys
-import tempfile
-from datetime import datetime, timezone
+
+# Shared registry helpers live in workspace/lib; resolve it relative to this
+# script so it works in the deployed workspace and in a git worktree.
+LIB_DIR = str((pathlib.Path(__file__).resolve().parent.parent / "lib"))
+if LIB_DIR not in sys.path:
+    sys.path.insert(0, LIB_DIR)
+from phone_utils import normalize_phone, phone_hash
+from registry_store import load_json, now_iso, with_locked_registry, write_json
+from allowlist import load_allowlisted
+
+# Record-model normalizers/shaping live in the sibling subscription_model module;
+# importlib doesn't add this script's dir to sys.path, so add it explicitly.
+THIS_DIR = str(pathlib.Path(__file__).resolve().parent)
+if THIS_DIR not in sys.path:
+    sys.path.insert(0, THIS_DIR)
+from subscription_model import (  # noqa: E402
+    DEFAULT_DELIVERY_MODE,
+    DEFAULT_REMINDER_MINUTES,
+    DELIVERY_MODES,
+    normalize_categories,
+    normalize_delivery_mode,
+    normalize_pending_offers,
+    normalize_reminders,
+    parse_offers_json,
+    sanitize_record,
+    subscriber_record,
+)
 
 
 DEFAULT_REGISTRY = pathlib.Path(
@@ -29,181 +52,7 @@ DEFAULT_INVITES_STORE = pathlib.Path(
     )
 )
 
-# Stored as minutes-before-start to match the Phase A calendar API reminderOverrides.
-DEFAULT_REMINDER_MINUTES = [1440, 120]
-DEFAULT_DELIVERY_MODE = "approval"
-DELIVERY_MODES = {"approval", "auto_add"}
 MAX_STORED_EVENT_IDS = 500
-OFFER_FIELDS = (
-    "source_id",
-    "summary",
-    "location",
-    "source_url",
-    "category",
-    "start_date",
-    "end_date",
-    "range",
-)
-
-
-def now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-
-
-def normalize_phone(value: str) -> str:
-    value = str(value or "").strip()
-    digits = re.sub(r"\D", "", value)
-    if not digits:
-        raise ValueError("phone is required")
-    normalized = f"+{digits}"
-    if len(normalized) < 9 or len(normalized) > 16:
-        raise ValueError("phone must normalize to 9-16 digits")
-    return normalized
-
-
-def phone_hash(phone: str) -> str:
-    return hashlib.sha256(f"whatsapp:{phone}".encode("utf-8")).hexdigest()[:12]
-
-
-def load_json(path: pathlib.Path) -> dict:
-    if not path.exists():
-        return {"version": 1, "subscribers": {}}
-    text = path.read_text(encoding="utf-8")
-    if not text.strip():
-        return {"version": 1, "subscribers": {}}
-    payload = json.loads(text)
-    if not isinstance(payload, dict):
-        raise ValueError("registry root must be a JSON object")
-    payload.setdefault("version", 1)
-    payload.setdefault("subscribers", {})
-    if not isinstance(payload["subscribers"], dict):
-        raise ValueError("registry subscribers must be a JSON object")
-    return payload
-
-
-def write_json(path: pathlib.Path, payload: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh, indent=2, sort_keys=True)
-            fh.write("\n")
-        os.replace(tmp_name, path)
-    finally:
-        try:
-            os.unlink(tmp_name)
-        except FileNotFoundError:
-            pass
-
-
-def with_locked_registry(path: pathlib.Path, mutate):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = path.with_suffix(path.suffix + ".lock")
-    with lock_path.open("a+", encoding="utf-8") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        payload = load_json(path)
-        result = mutate(payload)
-        write_json(path, payload)
-        return result
-
-
-def normalize_categories(values: list[str]) -> list[str]:
-    """Lower-cased, whitespace-collapsed, de-duplicated event category filters."""
-    deduped = []
-    seen = set()
-    for value in values or []:
-        category = re.sub(r"\s+", " ", str(value or "")).strip(" .:-").lower()
-        if category and category not in seen:
-            seen.add(category)
-            deduped.append(category)
-    return deduped[:12]
-
-
-def normalize_reminders(values: list[int]) -> list[int]:
-    """De-duplicated, non-negative minutes-before-start, order preserved."""
-    deduped = []
-    seen = set()
-    for value in values or []:
-        try:
-            minutes = int(value)
-        except (TypeError, ValueError):
-            raise ValueError(f"reminder minutes must be integers: {value!r}")
-        if minutes < 0:
-            raise ValueError("reminder minutes must be >= 0")
-        if minutes not in seen:
-            seen.add(minutes)
-            deduped.append(minutes)
-    return deduped
-
-
-def normalize_delivery_mode(value: str | None) -> str:
-    value = re.sub(r"[\s-]+", "_", str(value or DEFAULT_DELIVERY_MODE).strip().lower())
-    aliases = {
-        "manual": "approval",
-        "pick": "approval",
-        "approval": "approval",
-        "auto": "auto_add",
-        "auto_add": "auto_add",
-        "autoadd": "auto_add",
-    }
-    mode = aliases.get(value, value)
-    if mode not in DELIVERY_MODES:
-        raise ValueError(f"delivery_mode must be one of: {', '.join(sorted(DELIVERY_MODES))}")
-    return mode
-
-
-def normalize_offer(raw: dict) -> dict:
-    if not isinstance(raw, dict):
-        raise ValueError("event offer must be an object")
-    offer = {field: re.sub(r"\s+", " ", str(raw.get(field, "") or "")).strip() for field in OFFER_FIELDS}
-    if not offer["source_id"]:
-        raise ValueError("event offer source_id is required")
-    if not offer["summary"]:
-        raise ValueError("event offer summary is required")
-    if not offer["start_date"] or not offer["end_date"]:
-        raise ValueError("event offer dates are required")
-    if not offer["range"]:
-        offer["range"] = offer["start_date"] if offer["start_date"] == offer["end_date"] else f"{offer['start_date']} to {offer['end_date']}"
-    return offer
-
-
-def normalize_pending_offers(values: list[dict]) -> list[dict]:
-    offers = []
-    seen = set()
-    for raw in values or []:
-        try:
-            offer = normalize_offer(raw)
-        except ValueError:
-            continue
-        if offer["source_id"] in seen:
-            continue
-        seen.add(offer["source_id"])
-        offers.append(offer)
-    return offers
-
-
-def with_choice_numbers(offers: list[dict]) -> list[dict]:
-    return [{**offer, "choice_number": index} for index, offer in enumerate(offers, start=1)]
-
-
-def parse_offers_json(value: str) -> list[dict]:
-    try:
-        payload = json.loads(value or "[]")
-    except json.JSONDecodeError as err:
-        raise ValueError("events_json must be valid JSON") from err
-    if not isinstance(payload, list):
-        raise ValueError("events_json must be a JSON list")
-    return [normalize_offer(item) for item in payload]
-
-
-def subscriber_record(phone: str, existing: dict | None = None) -> dict:
-    record = dict(existing or {})
-    record["phone"] = phone
-    record["phone_hash"] = phone_hash(phone)
-    record.setdefault("created_at", now_iso())
-    record["updated_at"] = now_iso()
-    record.setdefault("services", {})
-    return record
 
 
 def cmd_register(args: argparse.Namespace) -> dict:
@@ -385,73 +234,6 @@ def cmd_record_delivery(args: argparse.Namespace) -> dict:
         return sanitize_record(record)
 
     return with_locked_registry(args.registry, mutate)
-
-
-def load_unlocked_invite_members(invites_store: pathlib.Path) -> set[str]:
-    if not invites_store.exists():
-        return set()
-    payload = json.loads(invites_store.read_text(encoding="utf-8"))
-    members = payload.get("members", {})
-    if not isinstance(members, dict):
-        return set()
-    allowlisted = set()
-    for phone, record in members.items():
-        if not isinstance(record, dict) or record.get("status") != "unlocked":
-            continue
-        try:
-            allowlisted.add(normalize_phone(record.get("phone") or phone))
-        except ValueError:
-            continue
-    return allowlisted
-
-
-def load_allowlisted(config_path: pathlib.Path, invites_store: pathlib.Path) -> set[str]:
-    normalized = load_unlocked_invite_members(invites_store)
-    if not config_path.exists():
-        return normalized
-    config = json.loads(config_path.read_text(encoding="utf-8"))
-    whatsapp = config.get("channels", {}).get("whatsapp", {})
-    values = list(whatsapp.get("allowFrom", []) or [])
-    direct = whatsapp.get("direct", {})
-    if isinstance(direct, dict):
-        values.extend(direct.keys())
-    public_gate = config.get("plugins", {}).get("entries", {}).get("public-service-gate", {}).get("config", {})
-    values.extend(public_gate.get("publicUsers", []) or [])
-    values.extend(public_gate.get("whatsappAdminUsers", []) or [])
-    for value in values:
-        try:
-            normalized.add(normalize_phone(value))
-        except ValueError:
-            continue
-    return normalized
-
-
-def sanitize_record(record: dict) -> dict:
-    events = dict(record.get("services", {}).get("events", {}))
-    try:
-        delivery_mode = normalize_delivery_mode(events.get("delivery_mode"))
-    except ValueError:
-        delivery_mode = DEFAULT_DELIVERY_MODE
-    pending_offers = normalize_pending_offers(events.get("pending_offers", []))
-    return {
-        "phone": record.get("phone"),
-        "phone_hash": record.get("phone_hash"),
-        "events": {
-            "enabled": bool(events.get("enabled")),
-            "user_id": events.get("user_id"),
-            "categories": list(events.get("categories", [])),
-            "location": events.get("location", ""),
-            "reminder_minutes": list(events.get("reminder_minutes", []) or DEFAULT_REMINDER_MINUTES),
-            "delivery_mode": delivery_mode,
-            "synced_event_ids": list(events.get("synced_event_ids", [])),
-            "offered_event_ids": [str(event_id) for event_id in events.get("offered_event_ids", []) if str(event_id)],
-            "pending_offers": with_choice_numbers(pending_offers),
-            "last_synced_at": events.get("last_synced_at"),
-            "last_offered_at": events.get("last_offered_at"),
-            "last_status": events.get("last_status"),
-            "last_message": events.get("last_message", ""),
-        },
-    }
 
 
 def cmd_list_enabled(args: argparse.Namespace) -> dict:
