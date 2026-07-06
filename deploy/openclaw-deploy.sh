@@ -417,17 +417,17 @@ reject_staged_runtime_files() {
 
 require_staged_workspace_files() {
   local missing=0
+  # Stable deploy entrypoints/artifacts only. Internal module layout
+  # (jobscout/, scrapers/) is validated by the CI test suite, not enumerated
+  # here, so restructuring internals never trips this deploy sanity check.
   for path in \
     "$STAGE_DIR/workspace/bin/job-scout" \
     "$STAGE_DIR/workspace/job-scout/job_scout.py" \
-    "$STAGE_DIR/workspace/job-scout/country_codes.py" \
     "$STAGE_DIR/workspace/job-scout/web_apply_server.mjs" \
     "$STAGE_DIR/deploy/job-scout-browser.Dockerfile" \
     "$STAGE_DIR/deploy/job-scout-channel-listener.Dockerfile" \
     "$STAGE_DIR/workspace/job-scout/channel-listener/listener.mjs" \
-    "$STAGE_DIR/workspace/job-scout/channel-listener/package-lock.json" \
-    "$STAGE_DIR/workspace/job-scout/scrapers/__init__.py" \
-    "$STAGE_DIR/workspace/job-scout/jobscout/jsearch.py"; do
+    "$STAGE_DIR/workspace/job-scout/channel-listener/package-lock.json"; do
     if [ ! -f "$path" ]; then
       printf 'missing required staged workspace file: %s\n' "$path" >&2
       missing=1

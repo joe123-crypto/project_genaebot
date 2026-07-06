@@ -105,9 +105,14 @@ Tracked categories:
 - `workspace/cron/**/*.py` and `workspace/cron/**/*.sh`
 - `workspace/docs/**`
 - custom source folders such as `account-link/`, `public-news/`,
-  `webetu-preferences/`, and `job-scout/` (including its `scrapers/` and
-  `jobscout/` helper packages, both tracked and staged by
-  `deploy/stage-workspace.rsync`)
+  `webetu-preferences/`, and `job-scout/` (including its `scrapers/`,
+  `jobscout/`, and `channel-listener/` helper packages). Each service folder is
+  staged whole by a per-service recursive glob in
+  `deploy/stage-workspace.rsync` (e.g. `+ /job-scout/***`), so adding or
+  splitting an internal module ships automatically without editing the deploy
+  allowlist; the global runtime/state/cache excludes at the top of that filter
+  still keep `__pycache__/`, `node_modules/`, `*.log`, and `*.json` state files
+  out of the deployable source.
 - selected custom skills plus `workspace/skills.lock.json`
 
 Ignored categories:
