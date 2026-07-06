@@ -4,15 +4,20 @@
 from __future__ import annotations
 
 import argparse
-import fcntl
-import hashlib
 import json
 import os
 import pathlib
 import re
 import sys
-import tempfile
-from datetime import datetime, timezone
+
+# Shared registry helpers live in workspace/lib; resolve it relative to this
+# script so it works in the deployed workspace and in a git worktree.
+LIB_DIR = str((pathlib.Path(__file__).resolve().parent.parent / "lib"))
+if LIB_DIR not in sys.path:
+    sys.path.insert(0, LIB_DIR)
+from phone_utils import normalize_phone, phone_hash
+from registry_store import load_json, now_iso, with_locked_registry, write_json
+from allowlist import load_allowlisted
 
 
 DEFAULT_REGISTRY = pathlib.Path(
@@ -29,67 +34,6 @@ DEFAULT_INVITES_STORE = pathlib.Path(
     )
 )
 LEGACY_INVITES_STORE = pathlib.Path("/home/joseph/.openclaw/workspace/invites/invites.json")
-
-
-def now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-
-
-def normalize_phone(value: str) -> str:
-    value = str(value or "").strip()
-    digits = re.sub(r"\D", "", value)
-    if not digits:
-        raise ValueError("phone is required")
-    normalized = f"+{digits}"
-    if len(normalized) < 9 or len(normalized) > 16:
-        raise ValueError("phone must normalize to 9-16 digits")
-    return normalized
-
-
-def phone_hash(phone: str) -> str:
-    return hashlib.sha256(f"whatsapp:{phone}".encode("utf-8")).hexdigest()[:12]
-
-
-def load_json(path: pathlib.Path) -> dict:
-    if not path.exists():
-        return {"version": 1, "subscribers": {}}
-    text = path.read_text(encoding="utf-8")
-    if not text.strip():
-        return {"version": 1, "subscribers": {}}
-    payload = json.loads(text)
-    if not isinstance(payload, dict):
-        raise ValueError("registry root must be a JSON object")
-    payload.setdefault("version", 1)
-    payload.setdefault("subscribers", {})
-    if not isinstance(payload["subscribers"], dict):
-        raise ValueError("registry subscribers must be a JSON object")
-    return payload
-
-
-def write_json(path: pathlib.Path, payload: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh, indent=2, sort_keys=True)
-            fh.write("\n")
-        os.replace(tmp_name, path)
-    finally:
-        try:
-            os.unlink(tmp_name)
-        except FileNotFoundError:
-            pass
-
-
-def with_locked_registry(path: pathlib.Path, mutate):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = path.with_suffix(path.suffix + ".lock")
-    with lock_path.open("a+", encoding="utf-8") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        payload = load_json(path)
-        result = mutate(payload)
-        write_json(path, payload)
-        return result
 
 
 def normalize_topics(values: list[str]) -> list[str]:
@@ -166,47 +110,6 @@ def cmd_disable(args: argparse.Namespace) -> dict:
     return with_locked_registry(args.registry, mutate)
 
 
-def load_unlocked_invite_members(invites_store: pathlib.Path) -> set[str]:
-    if not invites_store.exists() and invites_store == DEFAULT_INVITES_STORE and LEGACY_INVITES_STORE.exists():
-        invites_store = LEGACY_INVITES_STORE
-    if not invites_store.exists():
-        return set()
-    payload = json.loads(invites_store.read_text(encoding="utf-8"))
-    members = payload.get("members", {})
-    if not isinstance(members, dict):
-        return set()
-    allowlisted = set()
-    for phone, record in members.items():
-        if not isinstance(record, dict) or record.get("status") != "unlocked":
-            continue
-        try:
-            allowlisted.add(normalize_phone(record.get("phone") or phone))
-        except ValueError:
-            continue
-    return allowlisted
-
-
-def load_allowlisted(config_path: pathlib.Path, invites_store: pathlib.Path) -> set[str]:
-    normalized = load_unlocked_invite_members(invites_store)
-    if not config_path.exists():
-        return normalized
-    config = json.loads(config_path.read_text(encoding="utf-8"))
-    whatsapp = config.get("channels", {}).get("whatsapp", {})
-    values = list(whatsapp.get("allowFrom", []) or [])
-    direct = whatsapp.get("direct", {})
-    if isinstance(direct, dict):
-        values.extend(direct.keys())
-    public_gate = config.get("plugins", {}).get("entries", {}).get("public-service-gate", {}).get("config", {})
-    values.extend(public_gate.get("publicUsers", []) or [])
-    values.extend(public_gate.get("whatsappAdminUsers", []) or [])
-    for value in values:
-        try:
-            normalized.add(normalize_phone(value))
-        except ValueError:
-            continue
-    return normalized
-
-
 def sanitize_record(record: dict) -> dict:
     news = dict(record.get("services", {}).get("news", {}))
     return {
@@ -225,7 +128,16 @@ def sanitize_record(record: dict) -> dict:
 
 def cmd_list_enabled(args: argparse.Namespace) -> dict:
     payload = load_json(args.registry)
-    allowlisted = load_allowlisted(args.openclaw_config, args.invites_store) if args.allowlisted_only else None
+    allowlisted = (
+        load_allowlisted(
+            args.openclaw_config,
+            args.invites_store,
+            default_store=DEFAULT_INVITES_STORE,
+            legacy_store=LEGACY_INVITES_STORE,
+        )
+        if args.allowlisted_only
+        else None
+    )
     subscribers = []
     skipped = 0
     for record in payload.get("subscribers", {}).values():

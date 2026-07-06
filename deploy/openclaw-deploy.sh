@@ -426,7 +426,8 @@ require_staged_workspace_files() {
     "$STAGE_DIR/deploy/job-scout-channel-listener.Dockerfile" \
     "$STAGE_DIR/workspace/job-scout/channel-listener/listener.mjs" \
     "$STAGE_DIR/workspace/job-scout/channel-listener/package-lock.json" \
-    "$STAGE_DIR/workspace/job-scout/scrapers/__init__.py"; do
+    "$STAGE_DIR/workspace/job-scout/scrapers/__init__.py" \
+    "$STAGE_DIR/workspace/job-scout/jobscout/jsearch.py"; do
     if [ ! -f "$path" ]; then
       printf 'missing required staged workspace file: %s\n' "$path" >&2
       missing=1

@@ -31,6 +31,8 @@
 + /job-scout/channel-listener/***
 + /job-scout/scrapers/
 + /job-scout/scrapers/***
++ /job-scout/jobscout/
++ /job-scout/jobscout/***
 + /cron/***
 + /skills.lock.json
 + /skills/

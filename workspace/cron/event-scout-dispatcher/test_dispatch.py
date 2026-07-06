@@ -10,6 +10,11 @@ SPEC = importlib.util.spec_from_file_location("event_scout_dispatch", MODULE_PAT
 dispatch = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(dispatch)
 
+# Loading dispatch inserts its directory on sys.path, so the taxonomy helpers it
+# extracted are importable here too. Internal taxonomy calls resolve names in this
+# module, so tests that fake those internals must patch `taxonomy`, not `dispatch`.
+import taxonomy  # noqa: E402
+
 
 EVENT = {
     "source_id": "algeria-exhibitions:10",
@@ -40,18 +45,19 @@ def subscriber(**event_overrides):
 
 
 class PatchDispatch:
-    def __init__(self, **patches):
+    def __init__(self, _target=None, **patches):
+        self.target = _target if _target is not None else dispatch
         self.patches = patches
         self.originals = {}
 
     def __enter__(self):
         for name, value in self.patches.items():
-            self.originals[name] = getattr(dispatch, name)
-            setattr(dispatch, name, value)
+            self.originals[name] = getattr(self.target, name)
+            setattr(self.target, name, value)
 
     def __exit__(self, exc_type, exc, tb):
         for name, value in self.originals.items():
-            setattr(dispatch, name, value)
+            setattr(self.target, name, value)
 
 
 class EventScoutDispatchTest(unittest.TestCase):
@@ -88,7 +94,7 @@ class EventScoutDispatchTest(unittest.TestCase):
                 )
             raise AssertionError(f"unexpected URL: {url}")
 
-        with PatchDispatch(taxonomy_http_get=fake_taxonomy_http_get):
+        with PatchDispatch(taxonomy, taxonomy_http_get=fake_taxonomy_http_get):
             options = dispatch.catalog_options_from_taxonomy()
 
         self.assertEqual(options["source"], "taxonomy")
@@ -110,7 +116,7 @@ class EventScoutDispatchTest(unittest.TestCase):
                 )
             raise AssertionError(f"unexpected URL: {url}")
 
-        with PatchDispatch(taxonomy_http_get=fake_taxonomy_http_get):
+        with PatchDispatch(taxonomy, taxonomy_http_get=fake_taxonomy_http_get):
             terms = dispatch.fetch_taxonomy_terms("eventcat")
 
         self.assertEqual(terms[0]["slug"], "technology")
@@ -119,7 +125,9 @@ class EventScoutDispatchTest(unittest.TestCase):
 
     def test_fetch_catalog_options_does_not_fall_back_to_event_list(self):
         with PatchDispatch(
+            taxonomy,
             catalog_options_from_taxonomy=lambda: (_ for _ in ()).throw(RuntimeError("taxonomy down")),
+        ), PatchDispatch(
             fetch_catalog_listing=lambda: self.fail("event-list fallback should not run"),
         ):
             with self.assertRaisesRegex(RuntimeError, "taxonomy down"):

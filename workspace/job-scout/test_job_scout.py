@@ -404,7 +404,9 @@ class JSearchTests(unittest.TestCase):
     self.assertEqual(candidate["sourceUrl"], "https://example.com/apply")
 
   def test_fetch_jsearch_candidates_uses_profile_country_and_language(self) -> None:
-    with mock.patch.object(job_scout, "jsearch_request") as request:
+    # jsearch_request is called by fetch_jsearch_candidates within jobscout.jsearch,
+    # so patch it at its defining module rather than the job_scout re-export.
+    with mock.patch("jobscout.jsearch.jsearch_request") as request:
       request.return_value = {
         "data": [
           {
@@ -431,7 +433,7 @@ class JSearchTests(unittest.TestCase):
       {"job_id": "2", "employer_name": "Cafe", "job_title": "Waiter", "job_description": "Serve diners."},
       {"job_id": "3", "employer_name": "Tech", "job_title": "Server Administrator", "job_description": "Maintain Linux servers."},
     ]}
-    with mock.patch.object(job_scout, "jsearch_request", return_value=response) as request:
+    with mock.patch("jobscout.jsearch.jsearch_request", return_value=response) as request:
       candidates, result = job_scout.fetch_jsearch_candidates_with_result(
         {"targetRoles": ["Waitress"], "locations": ["Harare, Zimbabwe"], "country": "zw", "language": "en"},
         5,
@@ -447,7 +449,7 @@ class JSearchTests(unittest.TestCase):
       {"job_id": "1", "employer_name": "Cafe", "job_title": "Waiter", "job_is_expired": True},
       {"job_id": "2", "employer_name": "Hotel", "job_title": "Waitress", "job_is_expired": False},
     ]}
-    with mock.patch.object(job_scout, "jsearch_request", return_value=response):
+    with mock.patch("jobscout.jsearch.jsearch_request", return_value=response):
       candidates, result = job_scout.fetch_jsearch_candidates_with_result(
         {"targetRoles": ["Waitress"], "locations": ["Harare, Zimbabwe"], "country": "zw", "language": "en"},
         5,
@@ -467,7 +469,7 @@ class JSearchTests(unittest.TestCase):
       {"company": "A", "role": "Waiter", "source": "jsearch", "closing": "01 Jul 2026", "candidateId": "1"},
       {"company": "B", "role": "Waiter", "source": "jsearch", "closing": None, "candidateId": "2"},
     ]
-    with mock.patch.object(job_scout, "closing_state", side_effect=["expired", "unknown"]):
+    with mock.patch("jobscout.jsearch.closing_state", side_effect=["expired", "unknown"]):
       selected, stats = job_scout.filter_candidates_with_stats(candidates, {}, [], 5)
     self.assertEqual(selected, [candidates[1]])
     self.assertEqual(stats["jsearch"]["expiredCount"], 1)
@@ -486,7 +488,7 @@ class JSearchTests(unittest.TestCase):
 
   def test_fetch_jsearch_candidates_soft_fails_on_outage(self) -> None:
     # A transient JSearch outage must not raise: the caller falls back to scrapers.
-    with mock.patch.object(job_scout, "jsearch_request", side_effect=job_scout.JSearchUnavailable("HTTP 504")):
+    with mock.patch("jobscout.jsearch.jsearch_request", side_effect=job_scout.JSearchUnavailable("HTTP 504")):
       candidates = job_scout.fetch_jsearch_candidates({"targetRoles": ["Driver"], "locations": ["Harare"]}, 5)
     self.assertEqual(candidates, [])
     self.assertFalse(issubclass(job_scout.JSearchUnavailable, SystemExit))
@@ -494,10 +496,10 @@ class JSearchTests(unittest.TestCase):
   def test_jsearch_request_maps_read_timeout_to_unavailable(self) -> None:
     # A socket read timeout (TimeoutError, not HTTPError/URLError) must still be
     # classified transient so dispatch falls back to the scraped boards.
-    with mock.patch.object(job_scout, "jsearch_provider", return_value="rapidapi"), \
-         mock.patch.object(job_scout, "env_default", side_effect=lambda key, default="": "key" if "KEY" in key else default), \
+    with mock.patch("jobscout.jsearch.jsearch_provider", return_value="rapidapi"), \
+         mock.patch("jobscout.jsearch.env_default", side_effect=lambda key, default="": "key" if "KEY" in key else default), \
          mock.patch("urllib.request.urlopen", side_effect=TimeoutError("The read operation timed out")) as request, \
-         mock.patch.object(job_scout.time, "sleep"):
+         mock.patch("jobscout.jsearch.time.sleep"):
       with self.assertRaises(job_scout.JSearchUnavailable):
         job_scout.jsearch_request("driver", "dz", "fr", 5)
     self.assertEqual(request.call_count, 2)
@@ -505,10 +507,10 @@ class JSearchTests(unittest.TestCase):
   def test_jsearch_request_retries_one_transient_failure(self) -> None:
     response = mock.MagicMock()
     response.__enter__.return_value.read.return_value = b'{"data": []}'
-    with mock.patch.object(job_scout, "jsearch_provider", return_value="rapidapi"), \
-         mock.patch.object(job_scout, "env_default", side_effect=lambda key, default="": "key" if "KEY" in key else default), \
+    with mock.patch("jobscout.jsearch.jsearch_provider", return_value="rapidapi"), \
+         mock.patch("jobscout.jsearch.env_default", side_effect=lambda key, default="": "key" if "KEY" in key else default), \
          mock.patch("urllib.request.urlopen", side_effect=[urllib.error.URLError("dns"), response]) as request, \
-         mock.patch.object(job_scout.time, "sleep") as sleep:
+         mock.patch("jobscout.jsearch.time.sleep") as sleep:
       result = job_scout.jsearch_request("driver", "dz", "fr", 5)
     self.assertEqual(result, {"data": []})
     self.assertEqual(request.call_count, 2)
@@ -516,10 +518,10 @@ class JSearchTests(unittest.TestCase):
 
   def test_jsearch_request_does_not_retry_http_400(self) -> None:
     error = urllib.error.HTTPError("https://example.test", 400, "bad", {}, io.BytesIO(b"bad request"))
-    with mock.patch.object(job_scout, "jsearch_provider", return_value="rapidapi"), \
-         mock.patch.object(job_scout, "env_default", side_effect=lambda key, default="": "key" if "KEY" in key else default), \
+    with mock.patch("jobscout.jsearch.jsearch_provider", return_value="rapidapi"), \
+         mock.patch("jobscout.jsearch.env_default", side_effect=lambda key, default="": "key" if "KEY" in key else default), \
          mock.patch("urllib.request.urlopen", side_effect=error) as request, \
-         mock.patch.object(job_scout.time, "sleep") as sleep:
+         mock.patch("jobscout.jsearch.time.sleep") as sleep:
       with self.assertRaisesRegex(job_scout.JSearchUnavailable, "HTTP 400"):
         job_scout.jsearch_request("driver", "dz", "fr", 5)
     request.assert_called_once()
@@ -615,9 +617,8 @@ class JSearchDispatchTests(unittest.TestCase):
     with (
       mock.patch.object(job_scout, "cmd_list_ready", return_value={"subscribers": [subscriber]}),
       mock.patch.object(job_scout, "cmd_list_applications", return_value={"applications": []}),
-      mock.patch.object(
-        job_scout,
-        "fetch_jsearch_candidates_with_result",
+      mock.patch(
+        "jobscout.jsearch.fetch_jsearch_candidates_with_result",
         return_value=(candidates, {"status": "ok", "rawCount": len(candidates), "durationMs": 1}),
       ),
       mock.patch.object(job_scout, "jsearch_provider", return_value="rapidapi"),
@@ -669,8 +670,8 @@ class JSearchDispatchTests(unittest.TestCase):
       args.phone = "+213 555 010 101"
       with mock.patch.object(job_scout, "cmd_list_ready", return_value={"subscribers": [other, requested]}), \
            mock.patch.object(job_scout, "cmd_list_applications", return_value={"applications": []}) as applications, \
-           mock.patch.object(job_scout, "fetch_jsearch_candidates_with_result", return_value=([], {"status": "ok", "rawCount": 0, "durationMs": 1})), \
-           mock.patch.object(job_scout, "fetch_scraped_candidates_with_results", return_value=([], {name: {"status": "skipped", "rawCount": 0, "durationMs": 0} for name in ("vacancymail", "iharare", "vacancybox", "applynow")})), \
+           mock.patch("jobscout.jsearch.fetch_jsearch_candidates_with_result", return_value=([], {"status": "ok", "rawCount": 0, "durationMs": 1})), \
+           mock.patch("jobscout.jsearch.fetch_scraped_candidates_with_results", return_value=([], {name: {"status": "skipped", "rawCount": 0, "durationMs": 0} for name in ("vacancymail", "iharare", "vacancybox", "applynow")})), \
            mock.patch.object(job_scout, "jsearch_provider", return_value="test"):
         result = job_scout.cmd_dispatch_jsearch(args)
 
