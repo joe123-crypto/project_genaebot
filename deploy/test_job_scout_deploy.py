@@ -36,6 +36,10 @@ class JobScoutDeploymentTests(unittest.TestCase):
 
     self.assertIn("- job-scout-channel", compose)
     self.assertIn("JOB_SCOUT_CHANNEL_BACKFILL_COUNT: \"10\"", compose)
+    self.assertIn("JOB_SCOUT_CHANNELS_JSON:", compose)
+    self.assertIn("0029VaYITFn2v1IsGm9zxP1k", compose)
+    self.assertIn("0029VaQ9LFe8PgsLScuJES32", compose)
+    self.assertIn("zim-job-vacancies-whatsapp", compose)
     self.assertIn("runtime/job-scout-channel:/data", compose)
     self.assertNotIn(".openclaw/credentials", compose)
     self.assertIn("cap_drop:\n      - ALL", compose)

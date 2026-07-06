@@ -61,6 +61,30 @@ class ZimLinksSourceTests(unittest.TestCase):
       self.assertEqual(candidates[0]["applicationEmail"], "jobs@example.com")
       self.assertEqual(candidates[0]["applyLinks"], [])
 
+  def test_channel_metadata_assigns_distinct_source_and_name(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      database = self.create_db(Path(tmp))
+      self.insert_post(database, "new-source", "VACANCY: Driver\nCompany: Example")
+      conn = sqlite3.connect(database)
+      conn.execute(
+        "INSERT INTO listener_meta(key,value,updated_at) VALUES(?,?,?)",
+        (
+          "channel:123@newsletter",
+          json.dumps({
+            "jid": "123@newsletter",
+            "name": "ZIM•JOB•VACANCIES🇿🇼",
+            "source": "zim-job-vacancies-whatsapp",
+          }),
+          datetime.now(timezone.utc).isoformat(),
+        ),
+      )
+      conn.commit()
+      conn.close()
+      with mock.patch.dict(os.environ, {"JOB_SCOUT_CHANNEL_DB": str(database)}, clear=False):
+        candidate = zimlinks.fetch(limit=5)[0]
+      self.assertEqual(candidate["source"], "zim-job-vacancies-whatsapp")
+      self.assertEqual(candidate["sourceChannelName"], "ZIM•JOB•VACANCIES🇿🇼")
+
   def test_non_job_post_is_purged_without_model(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
       database = self.create_db(Path(tmp))
@@ -152,7 +176,7 @@ class ZimLinksSourceTests(unittest.TestCase):
       media.write_bytes(b"media")
       self.insert_post(database, "13", "VACANCY: Driver", media_path=str(media))
       candidate = {
-        "source": "zimlinks-whatsapp",
+        "source": "zim-job-vacancies-whatsapp",
         "sourceChannelJid": "123@newsletter",
         "sourcePostId": "13",
       }

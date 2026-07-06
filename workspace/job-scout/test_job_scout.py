@@ -479,14 +479,30 @@ class JSearchTests(unittest.TestCase):
 
   def test_channel_permalink_is_not_treated_as_application_url(self) -> None:
     candidate = {
-      "source": "zimlinks-whatsapp",
+      "source": "zim-job-vacancies-whatsapp",
       "sourceUrl": "https://whatsapp.com/channel/invite/123",
       "sourcePostUrl": "https://whatsapp.com/channel/invite/123",
+      "sourceChannelJid": "123@newsletter",
+      "sourcePostId": "123",
       "applyLinks": [],
     }
     self.assertIsNone(job_scout.candidate_application_url(candidate))
     self.assertIn("Review the original advert", job_scout.action_instruction(candidate, "channel_post_manual"))
     self.assertIn(candidate["sourcePostUrl"], job_scout.action_instruction(candidate, "channel_post_manual"))
+
+  def test_whatsapp_channel_results_are_reported_per_source(self) -> None:
+    candidates = [
+      {"source": "zimlinks-whatsapp", "role": "Driver"},
+      {"source": "zim-job-vacancies-whatsapp", "role": "Assistant"},
+    ]
+    with mock.patch("scrapers.zimlinks.fetch", return_value=candidates):
+      found, results = job_scout.fetch_whatsapp_channel_candidates_with_results(
+        {"targetRoles": ["Any"], "country": "zw"},
+        5,
+      )
+    self.assertEqual(found, candidates)
+    self.assertEqual(results["zimlinks-whatsapp"]["rawCount"], 1)
+    self.assertEqual(results["zim-job-vacancies-whatsapp"]["rawCount"], 1)
 
   def test_fetch_jsearch_candidates_soft_fails_on_outage(self) -> None:
     # A transient JSearch outage must not raise: the caller falls back to scrapers.

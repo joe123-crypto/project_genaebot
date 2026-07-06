@@ -37,6 +37,7 @@ from jobscout.constants import (
   PUBLIC_DISPATCH_FAILURE_MESSAGE,
   RUNTIME_ROOT,
   TERMINAL_APPLICATION_STATUSES,
+  WHATSAPP_CHANNEL_SOURCES,
   WORKSPACE,
 )
 
@@ -144,6 +145,7 @@ from jobscout.jsearch import (
   fetch_jsearch_candidates,
   fetch_jsearch_candidates_with_result,
   fetch_scraped_candidates,
+  fetch_whatsapp_channel_candidates_with_results,
   fetch_zimlinks_candidates,
   filter_candidates,
   filter_candidates_with_stats,
@@ -559,7 +561,7 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
     failed_note = None
     source_results = {
       source: {"status": "skipped", "rawCount": 0, "durationMs": 0}
-      for source in ("zimlinks-whatsapp", "jsearch", "vacancymail", "iharare", "vacancybox", "applynow")
+      for source in (*WHATSAPP_CHANNEL_SOURCES, "jsearch", "vacancymail", "iharare", "vacancybox", "applynow")
     }
     if per_user_limit <= 0 or not queries:
       status = "no_matches"
@@ -729,7 +731,7 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
             )
             record_channel_candidate_outcome(run_id, user_id, candidate, "action_required", 0)
           user_action_required.append({"candidate": candidate, "blockerCode": blocker_code})
-        elif str(candidate.get("source") or "") == "zimlinks-whatsapp":
+        elif candidate.get("sourceChannelJid") and candidate.get("sourcePostId"):
           blocker_code = "channel_post_manual"
           if not args.dry_run:
             record_candidate_application(

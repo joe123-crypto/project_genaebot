@@ -31,6 +31,7 @@ from .constants import (
   JSEARCH_RETRY_SECONDS,
   MAX_APPLICATION_ATTEMPTS,
   TERMINAL_APPLICATION_STATUSES,
+  WHATSAPP_CHANNEL_SOURCES,
 )
 from .profile import clean_items, preference_code, profile_values, search_queries, user_key
 from .textutil import public_text
@@ -435,7 +436,7 @@ def fetch_scraped_candidates_with_results(preferences: dict, limit: int) -> tupl
 
 
 def fetch_zimlinks_candidates(preferences: dict, limit: int) -> list[dict]:
-  """Read fresh channel candidates first for Zimbabwe-targeted subscribers."""
+  """Read fresh WhatsApp channel candidates first for Zimbabwe-targeted subscribers."""
   if limit <= 0 or not zw_targeted(preferences):
     return []
   try:
@@ -443,46 +444,57 @@ def fetch_zimlinks_candidates(preferences: dict, limit: int) -> list[dict]:
     match = scraper_base.build_candidate_matcher(target_roles(preferences))
     return zimlinks.fetch(limit=limit, match=match)
   except Exception as err:
-    print(f"ZimLinks source failed: {public_text(err)}", file=sys.stderr)
+    print(f"WhatsApp channel source failed: {public_text(err)}", file=sys.stderr)
     return []
 
 
-def fetch_zimlinks_candidates_with_result(preferences: dict, limit: int) -> tuple[list[dict], dict]:
+def fetch_whatsapp_channel_candidates_with_results(preferences: dict, limit: int) -> tuple[list[dict], dict[str, dict]]:
   if limit <= 0 or not zw_targeted(preferences):
-    return [], {"status": "skipped", "rawCount": 0, "durationMs": 0}
+    return [], {
+      source: {"status": "skipped", "rawCount": 0, "durationMs": 0}
+      for source in WHATSAPP_CHANNEL_SOURCES
+    }
   started = time.monotonic()
   try:
     from scrapers import base as scraper_base, target_roles, zimlinks
     match = scraper_base.build_candidate_matcher(target_roles(preferences))
     candidates = zimlinks.fetch(limit=limit, match=match)
+    counts: dict[str, int] = {}
+    for candidate in candidates:
+      source = str(candidate.get("source") or "whatsapp-channel")
+      counts[source] = counts.get(source, 0) + 1
+    duration = round((time.monotonic() - started) * 1000)
+    sources = set(WHATSAPP_CHANNEL_SOURCES) | set(counts)
     return candidates, {
-      "status": "ok",
-      "rawCount": len(candidates),
-      "durationMs": round((time.monotonic() - started) * 1000),
+      source: {"status": "ok", "rawCount": counts.get(source, 0), "durationMs": duration}
+      for source in sorted(sources)
     }
   except Exception as err:
-    print(f"ZimLinks source failed: {public_text(err)}", file=sys.stderr)
+    print(f"WhatsApp channel source failed: {public_text(err)}", file=sys.stderr)
     return [], {
-      "status": "unavailable",
-      "rawCount": 0,
-      "error": public_text(err, 180),
-      "durationMs": round((time.monotonic() - started) * 1000),
+      source: {
+        "status": "unavailable",
+        "rawCount": 0,
+        "error": public_text(err, 180),
+        "durationMs": round((time.monotonic() - started) * 1000),
+      }
+      for source in WHATSAPP_CHANNEL_SOURCES
     }
 
 
 def fetch_candidate_sources(preferences: dict, limit: int) -> tuple[list[dict], dict[str, dict]]:
-  zimlinks, zimlinks_result = fetch_zimlinks_candidates_with_result(preferences, limit)
+  channel_candidates, channel_results = fetch_whatsapp_channel_candidates_with_results(preferences, limit)
   jsearch, jsearch_result = fetch_jsearch_candidates_with_result(preferences, limit)
   boards, board_results = fetch_scraped_candidates_with_results(preferences, limit)
   results = {
-    "zimlinks-whatsapp": zimlinks_result,
+    **channel_results,
     "jsearch": jsearch_result,
     **board_results,
   }
   for result in results.values():
     if result.get("error"):
       result["error"] = public_text(result["error"], 180)
-  return zimlinks + jsearch + boards, results
+  return channel_candidates + jsearch + boards, results
 
 
 def register_channel_candidate_eligibility(run_id: str, user_id: str, candidates: list[dict]) -> None:
@@ -491,7 +503,7 @@ def register_channel_candidate_eligibility(run_id: str, user_id: str, candidates
     from scrapers import zimlinks
     zimlinks.register_eligibility(run_id, user_key(user_id), candidates)
   except Exception as err:
-    print(f"ZimLinks eligibility tracking failed: {public_text(err)}", file=sys.stderr)
+    print(f"WhatsApp channel eligibility tracking failed: {public_text(err)}", file=sys.stderr)
 
 
 def record_channel_candidate_outcome(
@@ -505,7 +517,7 @@ def record_channel_candidate_outcome(
     from scrapers import zimlinks
     zimlinks.record_outcome(run_id, user_key(user_id), candidate, outcome, attempt_count)
   except Exception as err:
-    print(f"ZimLinks outcome tracking failed: {public_text(err)}", file=sys.stderr)
+    print(f"WhatsApp channel outcome tracking failed: {public_text(err)}", file=sys.stderr)
 
 
 def finalize_channel_candidate_dispatch(run_id: str) -> None:
@@ -513,6 +525,6 @@ def finalize_channel_candidate_dispatch(run_id: str) -> None:
     from scrapers import zimlinks
     zimlinks.finalize_dispatch(run_id)
   except Exception as err:
-    print(f"ZimLinks cleanup failed: {public_text(err)}", file=sys.stderr)
+    print(f"WhatsApp channel cleanup failed: {public_text(err)}", file=sys.stderr)
 
 

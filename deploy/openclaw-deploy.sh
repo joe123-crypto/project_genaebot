@@ -260,20 +260,20 @@ start_optional_job_scout_channel_listener() {
   boundary_active || return 0
   auth_file="/home/joseph/projects/genaebot/runtime/job-scout-channel/auth/creds.json"
   if [ ! -s "$auth_file" ]; then
-    log "ZimLinks listener not started: run deploy/pair-job-scout-channel.sh to scan its separate QR code"
+    log "Job Scout channel listener not started: run deploy/pair-job-scout-channel.sh to scan its separate QR code"
     (cd "$DEPLOY_DIR" && "$docker" compose --profile job-scout-channel stop job-scout-channel-listener >/dev/null 2>&1) || true
     return 0
   fi
-  log "Build and start ZimLinks channel listener"
+  log "Build and start Job Scout channel listener"
   if ! (cd "$DEPLOY_DIR" && "$docker" compose --profile job-scout-channel up -d --build --force-recreate job-scout-channel-listener); then
-    log "WARNING: ZimLinks listener failed to build or start; core gateway remains available"
+    log "WARNING: Job Scout channel listener failed to build or start; core gateway remains available"
     return 0
   fi
   listener_id="$(cd "$DEPLOY_DIR" && "$docker" compose --profile job-scout-channel ps -q job-scout-channel-listener)"
   for _attempt in $(seq 1 24); do
     health="$("$docker" inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$listener_id" 2>/dev/null || true)"
     if [ "$health" = "healthy" ]; then
-      log "ZimLinks channel listener is ready"
+      log "Job Scout channel listener is ready"
       bash "$OC_DIR/deploy/install-job-scout-channel-health.sh"
       return 0
     fi
@@ -282,7 +282,7 @@ start_optional_job_scout_channel_listener() {
     fi
     sleep 5
   done
-  log "WARNING: ZimLinks listener is not ready (health=${health:-missing})"
+  log "WARNING: Job Scout channel listener is not ready (health=${health:-missing})"
   return 0
 }
 

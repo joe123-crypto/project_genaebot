@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Transient WhatsApp Channel source for ZimLinks job adverts.
+"""Transient WhatsApp Channel sources for Job Scout job adverts.
 
 The isolated Node listener captures raw posts into SQLite. This module performs
 bounded classification/normalization and exposes candidates in Job Scout's
@@ -17,7 +17,6 @@ import sqlite3
 
 from . import base
 from . import post_classifier
-from .post_classifier import SOURCE
 
 
 DEFAULT_DB = Path("/home/joseph/.openclaw/runtime/job-scout-channel/posts.sqlite3")
@@ -60,6 +59,11 @@ CREATE TABLE IF NOT EXISTS post_outcomes (
   attempt_count INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL,
   PRIMARY KEY (run_id, channel_jid, post_id, user_key)
 );
+CREATE TABLE IF NOT EXISTS listener_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 """
 
 
@@ -80,6 +84,27 @@ def connect(path: Path | None = None) -> sqlite3.Connection | None:
 
 def utc_now() -> str:
   return datetime.now(timezone.utc).isoformat()
+
+
+def channel_metadata(conn: sqlite3.Connection) -> dict[str, dict]:
+  metadata: dict[str, dict] = {}
+  try:
+    rows = conn.execute(
+      "SELECT key,value FROM listener_meta WHERE key='channel' OR key LIKE 'channel:%' ORDER BY key",
+    ).fetchall()
+  except sqlite3.Error:
+    return metadata
+  for row in rows:
+    try:
+      value = json.loads(row["value"])
+    except (TypeError, json.JSONDecodeError):
+      continue
+    if not isinstance(value, dict):
+      continue
+    jid = str(value.get("jid") or "").strip()
+    if jid:
+      metadata[jid] = value
+  return metadata
 
 
 def safe_unlink(media_path: str | None, database: Path) -> None:
@@ -144,6 +169,7 @@ def process_pending(conn: sqlite3.Connection, timeout: int) -> None:
     """,
     (MAX_PARSE_ATTEMPTS,),
   ).fetchall()
+  channels = channel_metadata(conn)
   model_calls = 0
   for row in rows:
     text = str(row["raw_text"] or "").strip()
@@ -186,7 +212,7 @@ def process_pending(conn: sqlite3.Connection, timeout: int) -> None:
     else:
       fields["description"] = text
     with conn:
-      save_candidate(conn, row, post_classifier.candidate_from(row, fields), model)
+      save_candidate(conn, row, post_classifier.candidate_from(row, fields, channels.get(str(row["channel_jid"]))), model)
 
 
 def cleanup(conn: sqlite3.Connection) -> None:
@@ -236,7 +262,7 @@ def register_eligibility(run_id: str, user_key: str, candidates: list[dict]) -> 
   try:
     now = utc_now()
     for candidate in candidates:
-      if candidate.get("source") != SOURCE:
+      if not candidate.get("sourceChannelJid") or not candidate.get("sourcePostId"):
         continue
       conn.execute(
         "INSERT OR IGNORE INTO post_eligibility(run_id,channel_jid,post_id,user_key,created_at) VALUES (?,?,?,?,?)",
@@ -248,7 +274,7 @@ def register_eligibility(run_id: str, user_key: str, candidates: list[dict]) -> 
 
 
 def record_outcome(run_id: str, user_key: str, candidate: dict, outcome: str, attempt_count: int = 0) -> None:
-  if candidate.get("source") != SOURCE:
+  if not candidate.get("sourceChannelJid") or not candidate.get("sourcePostId"):
     return
   conn = connect()
   if conn is None:

@@ -9,7 +9,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .constants import MAX_APPLICATION_ATTEMPTS, PUBLIC_DISPATCH_FAILURE_MESSAGE
+from .constants import (
+  MAX_APPLICATION_ATTEMPTS,
+  PUBLIC_DISPATCH_FAILURE_MESSAGE,
+  WHATSAPP_CHANNEL_SOURCES,
+)
 from .jsearch import application_key, candidate_key
 from .profile import clean_items, profile_values
 from .subscriber import (
@@ -88,7 +92,9 @@ def candidate_application_url(candidate: dict) -> str | None:
       if link.startswith(("https://", "http://")):
         return link
   # The channel permalink is provenance, not an application form.
-  if str(candidate.get("source") or "") == "zimlinks-whatsapp":
+  if str(candidate.get("source") or "") in WHATSAPP_CHANNEL_SOURCES or (
+    candidate.get("sourceChannelJid") and candidate.get("sourcePostId")
+  ):
     return None
   source = str(candidate.get("sourceUrl") or "").strip()
   return source if source.startswith(("https://", "http://")) else None

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Bounded classification/normalization of untrusted ZimLinks channel posts.
+"""Bounded classification/normalization of untrusted WhatsApp channel posts.
 
 Pure text handling plus the structured-model fallback: turn a raw WhatsApp
-Channel post into a Job Scout candidate dict. No SQLite or dispatch state — the
+Channel post into a Job Scout candidate dict (per-channel source/name comes
+from the listener_meta channel record). No SQLite or dispatch state — the
 persistence/lifecycle layer lives in zimlinks.py and calls into this module.
 """
 
@@ -176,7 +177,7 @@ def classify_with_model(text: str, *, timeout: int) -> tuple[dict, str]:
   return result, model
 
 
-def candidate_from(row: sqlite3.Row, fields: dict) -> dict:
+def candidate_from(row: sqlite3.Row, fields: dict, channel: dict | None = None) -> dict:
   text = str(row["raw_text"] or "")
   apply_links, contact_links = original_urls(text)
   role = clean_line(fields.get("role"), 120) or "Unknown role"
@@ -184,9 +185,10 @@ def candidate_from(row: sqlite3.Row, fields: dict) -> dict:
   description = clean_line(fields.get("description"), 2000) or base.collapse_ws(text)[:2000]
   identity = hashlib.sha256(f"{row['channel_jid']}\n{row['post_id']}".encode("utf-8")).hexdigest()[:24]
   emails = base.extract_emails(text)
+  channel = channel if isinstance(channel, dict) else {}
   return {
     "candidateId": identity,
-    "source": SOURCE,
+    "source": str(channel.get("source") or SOURCE),
     "sourceUrl": row["post_url"],
     "sourcePostUrl": row["post_url"],
     "applyLinks": apply_links,
@@ -200,5 +202,6 @@ def candidate_from(row: sqlite3.Row, fields: dict) -> dict:
     "closing": clean_line(fields.get("closing"), 100) or None,
     "description": description,
     "sourceChannelJid": row["channel_jid"],
+    "sourceChannelName": clean_line(channel.get("name"), 140) or None,
     "sourcePostId": row["post_id"],
   }

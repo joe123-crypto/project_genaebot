@@ -69,8 +69,7 @@ services:
     image: genaie-job-scout-channel-listener:1.0.0
     restart: unless-stopped
     environment:
-      JOB_SCOUT_CHANNEL_INVITE_CODE: "0029VaYITFn2v1IsGm9zxP1k"
-      JOB_SCOUT_CHANNEL_NAME: "ZimLinks"
+      JOB_SCOUT_CHANNELS_JSON: '[{"inviteCode":"0029VaYITFn2v1IsGm9zxP1k","expectedName":"ZimLinks","source":"zimlinks-whatsapp"},{"inviteCode":"0029VaQ9LFe8PgsLScuJES32","expectedName":"ZIM•JOB•VACANCIES","source":"zim-job-vacancies-whatsapp"}]'
       JOB_SCOUT_CHANNEL_BACKFILL_COUNT: "10"
       JOB_SCOUT_CHANNEL_MAX_MEDIA_BYTES: "26214400"
     user: node
