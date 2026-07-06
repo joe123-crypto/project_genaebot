@@ -4,9 +4,7 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
 from datetime import datetime, timezone
-import fcntl
 import json
 import os
 from pathlib import Path
@@ -75,6 +73,7 @@ from pending_cache import (
 # working. Helpers that call each other inside a submodule are patched at their
 # defining module (e.g. jobscout.jsearch.jsearch_request).
 from jobscout import api
+from jobscout import dispatch_store
 from jobscout.textutil import public_text
 from jobscout.util import (
   count_arg,
@@ -124,30 +123,6 @@ from jobscout.jsearch import (
   register_channel_candidate_eligibility,
   zw_targeted,
 )
-
-
-def dispatch_path(run_id: str, root: Path = DEFAULT_DISPATCH_ROOT) -> Path:
-  return root / f"{safe_run_id(run_id)}.json"
-
-
-def load_dispatch(run_id: str, root: Path = DEFAULT_DISPATCH_ROOT) -> dict:
-  path = dispatch_path(run_id, root)
-  if not path.exists():
-    raise SystemExit(f"Dispatch run not found: {safe_run_id(run_id)}")
-  try:
-    return json.loads(path.read_text(encoding="utf-8"))
-  except json.JSONDecodeError as err:
-    raise SystemExit(f"Dispatch run marker is invalid JSON: {path}") from err
-
-
-def save_dispatch(data: dict, root: Path = DEFAULT_DISPATCH_ROOT) -> dict:
-  run_id = safe_run_id(data.get("runId", ""))
-  root.mkdir(parents=True, exist_ok=True)
-  path = dispatch_path(run_id, root)
-  tmp = path.with_suffix(".json.tmp")
-  tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-  tmp.replace(path)
-  return {"ok": True, "runId": run_id, "path": str(path)}
 
 
 def cmd_create_invite(args: argparse.Namespace) -> dict:
@@ -446,16 +421,6 @@ def cmd_fetch_candidates(args: argparse.Namespace) -> dict:
 def cmd_resolve_location(args: argparse.Namespace) -> dict:
   resolved = resolve_preferred_locations(args.location)
   return {"ok": True, **resolved}
-
-
-def write_candidate_artifact(root: Path, run_id: str, user_id: str, data: dict) -> str:
-  artifact_dir = root / safe_run_id(run_id)
-  artifact_dir.mkdir(parents=True, exist_ok=True)
-  path = artifact_dir / f"{user_key(user_id)}.candidates.json"
-  tmp = path.with_suffix(".json.tmp")
-  tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-  tmp.replace(path)
-  return str(path)
 
 
 def applications_from_response(result: dict) -> list[dict]:
@@ -827,29 +792,6 @@ def build_user_summary(date_label: str, applied: list[dict], action_required: li
   return "\n".join(line for line in lines).strip()
 
 
-def dispatch_lock_path(dispatch_root: Path) -> Path:
-  return Path(dispatch_root).resolve() / "dispatch.lock"
-
-
-@contextmanager
-def exclusive_dispatch_lock(dispatch_root: Path, run_id: str):
-  lock_path = dispatch_lock_path(dispatch_root)
-  lock_path.parent.mkdir(parents=True, exist_ok=True)
-  with lock_path.open("a+", encoding="utf-8") as lock_file:
-    try:
-      fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError as err:
-      raise SystemExit("another Job Scout dispatch is already running") from err
-    lock_file.seek(0)
-    lock_file.truncate()
-    lock_file.write(json.dumps({"runId": run_id, "pid": os.getpid(), "startedAt": utc_now()}) + "\n")
-    lock_file.flush()
-    try:
-      yield
-    finally:
-      fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-
-
 def scoped_subscribers(subscribers: list[dict], phone: str | None) -> list[dict]:
   if not phone:
     return subscribers
@@ -882,7 +824,7 @@ def subscriber_is_dispatch_ready(subscriber: dict) -> bool:
 def cmd_dispatch_jsearch(args: argparse.Namespace) -> dict:
   run_id = args.run_id or f"job-scout-jsearch-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
   run_id = safe_run_id(run_id)
-  with exclusive_dispatch_lock(args.dispatch_root, run_id):
+  with dispatch_store.exclusive_dispatch_lock(args.dispatch_root, run_id):
     return dispatch_jsearch_locked(args, run_id)
 
 
@@ -1169,7 +1111,7 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
       "sourceResults": source_results,
       "candidates": candidates,
     }
-    artifact_path = None if args.dry_run else write_candidate_artifact(args.dispatch_root, run_id, user_id, artifact)
+    artifact_path = None if args.dry_run else dispatch_store.write_candidate_artifact(args.dispatch_root, run_id, user_id, artifact)
     users.append({
       "userKey": user_key(user_id),
       "status": status,
@@ -1234,13 +1176,13 @@ def cmd_start_dispatch(args: argparse.Namespace) -> dict:
     "outcomes": {},
     "finalCounts": None,
   }
-  result = save_dispatch(data, args.dispatch_root)
+  result = dispatch_store.save_dispatch(data, args.dispatch_root)
   result["readyCount"] = ready_count
   return result
 
 
 def cmd_record_dispatch_outcome(args: argparse.Namespace) -> dict:
-  data = load_dispatch(args.run_id, args.dispatch_root)
+  data = dispatch_store.load_dispatch(args.run_id, args.dispatch_root)
   status = args.status
   if status not in DISPATCH_STATUSES:
     raise SystemExit(f"status must be one of: {', '.join(sorted(DISPATCH_STATUSES))}")
@@ -1256,13 +1198,13 @@ def cmd_record_dispatch_outcome(args: argparse.Namespace) -> dict:
     "recordedAt": utc_now(),
   }
   data["updatedAt"] = utc_now()
-  result = save_dispatch(data, args.dispatch_root)
+  result = dispatch_store.save_dispatch(data, args.dispatch_root)
   result["outcomeCount"] = len(outcomes)
   return result
 
 
 def cmd_finish_dispatch(args: argparse.Namespace) -> dict:
-  data = load_dispatch(args.run_id, args.dispatch_root)
+  data = dispatch_store.load_dispatch(args.run_id, args.dispatch_root)
   counts = {
     "readyCount": count_arg(args.ready_count, "ready-count"),
     "processedCount": count_arg(args.processed_count, "processed-count"),
@@ -1278,13 +1220,13 @@ def cmd_finish_dispatch(args: argparse.Namespace) -> dict:
   data["finalCounts"] = counts
   data["finishedAt"] = utc_now()
   data["updatedAt"] = data["finishedAt"]
-  result = save_dispatch(data, args.dispatch_root)
+  result = dispatch_store.save_dispatch(data, args.dispatch_root)
   result["finalCounts"] = counts
   return result
 
 
 def cmd_verify_dispatch(args: argparse.Namespace) -> dict:
-  data = load_dispatch(args.run_id, args.dispatch_root)
+  data = dispatch_store.load_dispatch(args.run_id, args.dispatch_root)
   errors: list[str] = []
   ready_count = int(data.get("readyCount", -1))
   outcomes = data.get("outcomes") if isinstance(data.get("outcomes"), dict) else {}

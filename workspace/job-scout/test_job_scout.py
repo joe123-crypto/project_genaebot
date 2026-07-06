@@ -14,6 +14,7 @@ import urllib.error
 
 import job_scout
 import jobscout.api
+import jobscout.dispatch_store
 
 
 class OpenClawBinResolutionTests(unittest.TestCase):
@@ -708,15 +709,15 @@ class JSearchDispatchTests(unittest.TestCase):
   def test_dispatch_lock_rejects_overlapping_run(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
       root = Path(tmp) / "dispatch-runs"
-      with job_scout.exclusive_dispatch_lock(root, "first-run"):
+      with jobscout.dispatch_store.exclusive_dispatch_lock(root, "first-run"):
         with self.assertRaisesRegex(SystemExit, "another Job Scout dispatch"):
           job_scout.cmd_dispatch_jsearch(self.args(root, dry_run=True))
 
   def test_dispatch_lock_stays_inside_dispatch_root(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
       root = Path(tmp) / "dispatch-runs"
-      with job_scout.exclusive_dispatch_lock(root, "unit-run"):
-        self.assertEqual(job_scout.dispatch_lock_path(root), root / "dispatch.lock")
+      with jobscout.dispatch_store.exclusive_dispatch_lock(root, "unit-run"):
+        self.assertEqual(jobscout.dispatch_store.dispatch_lock_path(root), root / "dispatch.lock")
         self.assertTrue((root / "dispatch.lock").is_file())
 
   def test_dispatch_records_action_required_when_site_needs_login(self) -> None:
