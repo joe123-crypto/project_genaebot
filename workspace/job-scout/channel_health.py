@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Health probe for the isolated ZimLinks WhatsApp Channel listener."""
+"""Health probe for the isolated Job Scout WhatsApp Channel listener."""
 
 from __future__ import annotations
 
@@ -38,9 +38,22 @@ def check(health_path: Path, db_path: Path, max_age_seconds: int) -> dict:
     errors.append("listener is disconnected")
   if health.get("authenticated") is not True:
     errors.append("listener authentication is unavailable")
-  channel_jid = str(health.get("channelJid") or "")
-  if not channel_jid.endswith("@newsletter"):
-    errors.append("ZimLinks channel JID is unresolved")
+  raw_channels = health.get("channels")
+  channels = raw_channels if isinstance(raw_channels, list) else []
+  if channels:
+    for channel in channels:
+      source = str(channel.get("source") or "unknown channel") if isinstance(channel, dict) else "unknown channel"
+      channel_jid = str(channel.get("channelJid") or "") if isinstance(channel, dict) else ""
+      if not channel_jid.endswith("@newsletter"):
+        errors.append(f"{source} channel JID is unresolved")
+      if not str(channel.get("lastSubscriptionAt") or ""):
+        errors.append(f"{source} channel subscription is unavailable")
+      if channel.get("lastError"):
+        errors.append(f"{source} channel error: {channel['lastError']}")
+  else:
+    channel_jid = str(health.get("channelJid") or "")
+    if not channel_jid.endswith("@newsletter"):
+      errors.append("WhatsApp channel JID is unresolved")
   counts: dict[str, int] = {}
   media_bytes = 0
   try:
@@ -55,8 +68,9 @@ def check(health_path: Path, db_path: Path, max_age_seconds: int) -> dict:
     "errors": errors,
     "connected": health.get("connected") is True,
     "authenticated": health.get("authenticated") is True,
-    "channelJid": channel_jid or None,
+    "channelJid": str(health.get("channelJid") or "") or None,
     "channelName": health.get("channelName"),
+    "channels": channels,
     "heartbeatAgeSeconds": None if age is None else round(age, 1),
     "lastSubscriptionAt": health.get("lastSubscriptionAt"),
     "reconnectCount": int(health.get("reconnectCount") or 0),

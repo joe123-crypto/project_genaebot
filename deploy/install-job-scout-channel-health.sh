@@ -30,4 +30,4 @@ fi
 "${openclaw[@]}" cron edit "$existing_id" \
   --failure-alert --failure-alert-after 1 --failure-alert-channel whatsapp \
   --failure-alert-to "$ALERT_TO" --failure-alert-cooldown 1h >/dev/null
-printf 'ZimLinks listener health check scheduled every 15 minutes.\n'
+printf 'Job Scout channel listener health check scheduled every 15 minutes.\n'

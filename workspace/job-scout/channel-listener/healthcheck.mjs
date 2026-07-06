@@ -6,6 +6,12 @@ try {
   const health = JSON.parse(fs.readFileSync(path, "utf8"));
   const age = Date.now() - Date.parse(health.lastHeartbeatAt || "");
   if (!health.connected || !health.authenticated || !Number.isFinite(age) || age > maxAgeMs) process.exit(1);
+  if (!Array.isArray(health.channels) || health.channels.length === 0) process.exit(1);
+  if (health.channels.some((channel) => (
+    !String(channel?.channelJid || "").endsWith("@newsletter")
+    || !channel?.lastSubscriptionAt
+    || channel?.lastError
+  ))) process.exit(1);
   process.exit(0);
 } catch {
   process.exit(1);
