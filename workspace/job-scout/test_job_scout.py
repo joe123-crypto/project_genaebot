@@ -784,8 +784,8 @@ class JSearchDispatchTests(unittest.TestCase):
   def test_send_application_email_uses_subscriber_uid_sender_selector(self) -> None:
     subscriber = self.subscriber()
     candidate = self.candidate()
-    with mock.patch.object(job_scout, "subscriber_cv_file", return_value="/tmp/cv.pdf"), \
-         mock.patch.object(job_scout, "run_json_command", return_value={"messageId": "msg-1"}) as run:
+    with mock.patch("jobscout.delivery.subscriber_cv_file", return_value="/tmp/cv.pdf"), \
+         mock.patch("jobscout.delivery.run_json_command", return_value={"messageId": "msg-1"}) as run:
       result = job_scout.send_application_email(subscriber, candidate, Path("/tmp/cover-letter.txt"))
 
     self.assertEqual(result["messageId"], "msg-1")
@@ -800,9 +800,8 @@ class JSearchDispatchTests(unittest.TestCase):
       "OPENCLAW_HOME": "/home/joseph/.openclaw",
       "GATEWAY_AUTH_TOKEN": "gateway-token",
       "KEEP_ME": "yes",
-    }, clear=True), mock.patch.object(
-      job_scout,
-      "run_json_command",
+    }, clear=True), mock.patch(
+      "jobscout.delivery.run_json_command",
       return_value={"messageId": "wa-1"},
     ) as run:
       result = job_scout.send_whatsapp_summary("+263700000000", "Job Scout update")
