@@ -15,6 +15,7 @@ import urllib.error
 import job_scout
 import jobscout.api
 import jobscout.dispatch_store
+import jobscout.subscriber
 
 
 class OpenClawBinResolutionTests(unittest.TestCase):
@@ -135,12 +136,12 @@ class CvStagingTests(unittest.TestCase):
 
 class CvDownloadTests(unittest.TestCase):
   def test_subscriber_cv_file_downloads_from_r2(self) -> None:
-    job_scout._cv_download_cache.clear()
+    jobscout.subscriber._cv_download_cache.clear()
     subscriber = {"userId": "user-9", "whatsappPhoneHash": "hash9", "cvFileRef": "user-9/cv/cv.pdf"}
     with tempfile.TemporaryDirectory() as tmp:
       dest = Path(tmp) / "hash9" / "cv.pdf"
       with mock.patch("jobscout.api.request_json", return_value={"url": "https://r2.example/presigned"}) as getreq, \
-           mock.patch.object(job_scout, "cv_local_dest", return_value=dest), \
+           mock.patch("jobscout.subscriber.cv_local_dest", return_value=dest), \
            mock.patch.object(job_scout.urllib.request, "urlopen") as urlopen:
         urlopen.return_value.__enter__.return_value.read.return_value = b"%PDF-1.7 data"
         path = job_scout.subscriber_cv_file(subscriber)
