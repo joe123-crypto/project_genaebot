@@ -14,6 +14,7 @@ WORKSPACE = Path("/home/joseph/.openclaw/workspace")
 RUNTIME_ROOT = Path(os.environ.get("JOB_SCOUT_RUNTIME_ROOT", "/home/joseph/.openclaw/runtime/job-scout"))
 DEFAULT_STORAGE_ROOT = RUNTIME_ROOT / "users"
 DEFAULT_DISPATCH_ROOT = RUNTIME_ROOT / "dispatch-runs"
+DEFAULT_GROUP_FEED_ROOT = RUNTIME_ROOT / "group-feed"
 DISPATCH_STATUSES = {"applied", "action_required", "physical_submission", "no_matches", "failed"}
 TERMINAL_APPLICATION_STATUSES = {"applied", "skipped", "action_required", "physical_submission"}
 MAX_APPLICATION_ATTEMPTS = 3
@@ -41,3 +42,8 @@ PUBLIC_DISPATCH_FAILURE_MESSAGE = (
   "Job Scout could not finish today's job check because the service failed. "
   "I recorded it and will try again on the next run."
 )
+DEFAULT_GROUP_FEED_INVITE_URL = "https://chat.whatsapp.com/JZvh9lwFOvc3N2sSs8F1QD"
+DEFAULT_GROUP_FEED_CACHE_MAX_AGE_SECONDS = 6 * 60 * 60
+DEFAULT_GROUP_FEED_LIMIT = 80
+DEFAULT_GROUP_FEED_MAX_MESSAGES = 15
+DEFAULT_GROUP_FEED_SEND_DELAY_SECONDS = 3.0

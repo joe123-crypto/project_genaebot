@@ -21,6 +21,12 @@ from jobscout.constants import (
   CV_URL_LOOKUP_ATTEMPTS,
   CV_URL_LOOKUP_RETRY_SECONDS,
   DEFAULT_DISPATCH_ROOT,
+  DEFAULT_GROUP_FEED_CACHE_MAX_AGE_SECONDS,
+  DEFAULT_GROUP_FEED_INVITE_URL,
+  DEFAULT_GROUP_FEED_LIMIT,
+  DEFAULT_GROUP_FEED_MAX_MESSAGES,
+  DEFAULT_GROUP_FEED_ROOT,
+  DEFAULT_GROUP_FEED_SEND_DELAY_SECONDS,
   DEFAULT_JSEARCH_COUNTRY,
   DEFAULT_JSEARCH_DATE_POSTED,
   DEFAULT_JSEARCH_LANGUAGE,
@@ -81,6 +87,7 @@ from pending_cache import (
 # (e.g. jobscout.jsearch.jsearch_request, jobscout.delivery.run_json_command).
 from jobscout import api
 from jobscout import dispatch_store
+from jobscout import group_feed
 from jobscout.subscriber import (
   application_artifact_dir,
   applicant_name,
@@ -98,6 +105,7 @@ from jobscout.delivery import (
   result_message_id,
   run_json_command,
   send_application_email,
+  send_whatsapp_message,
   send_whatsapp_summary,
 )
 from jobscout.application import (
@@ -539,6 +547,107 @@ def cmd_dispatch_jsearch(args: argparse.Namespace) -> dict:
     return dispatch_jsearch_locked(args, run_id)
 
 
+def maybe_write_group_feed_cache(args: argparse.Namespace, run_id: str) -> dict | None:
+  if not getattr(args, "write_group_feed_cache", False):
+    return None
+  try:
+    return group_feed.build_group_feed_cache(
+      run_id,
+      root=getattr(args, "group_feed_root", DEFAULT_GROUP_FEED_ROOT),
+      limit=getattr(args, "group_feed_limit", DEFAULT_GROUP_FEED_LIMIT),
+      write=not args.dry_run,
+    )
+  except Exception as err:
+    return {
+      "ok": False,
+      "error": public_text(err, 240),
+      "path": str(group_feed.latest_cache_path(getattr(args, "group_feed_root", DEFAULT_GROUP_FEED_ROOT))),
+    }
+
+
+def group_feed_target_from_args(args: argparse.Namespace) -> str:
+  target = str(getattr(args, "target", "") or os.environ.get("JOB_SCOUT_GROUP_FEED_TARGET", "")).strip()
+  invite_url = str(
+    getattr(args, "invite_url", "")
+    or os.environ.get("JOB_SCOUT_GROUP_FEED_INVITE_URL", DEFAULT_GROUP_FEED_INVITE_URL)
+  ).strip()
+  if not target:
+    raise SystemExit(
+      "JOB_SCOUT_GROUP_FEED_TARGET is required; resolve the group invite "
+      f"{invite_url} to a WhatsApp group target ending in @g.us"
+    )
+  if "chat.whatsapp.com/" in target:
+    raise SystemExit("JOB_SCOUT_GROUP_FEED_TARGET must be a WhatsApp group target, not an invite URL")
+  return target
+
+
+def cmd_deliver_group_feed(args: argparse.Namespace) -> dict:
+  target = group_feed_target_from_args(args)
+  root = args.group_feed_root
+  with group_feed.exclusive_delivery_lock(root):
+    cache = group_feed.load_latest_cache(root, args.cache_max_age_seconds)
+    state = group_feed.load_delivered_state(root)
+    delivered = state.setdefault("delivered", {})
+    candidates = cache.get("candidates") if isinstance(cache.get("candidates"), list) else []
+    pending = [
+      candidate
+      for candidate in candidates
+      if group_feed.candidate_delivery_key(candidate) not in delivered
+    ]
+    if args.max_messages > 0:
+      pending = pending[:args.max_messages]
+
+    delay = max(0.0, float(getattr(args, "send_delay_seconds", DEFAULT_GROUP_FEED_SEND_DELAY_SECONDS)))
+    sent_count = 0
+    skipped_count = len(candidates) - len(pending)
+    failed_count = 0
+    messages: list[dict] = []
+    for candidate in pending:
+      key = group_feed.candidate_delivery_key(candidate)
+      message = group_feed.format_group_feed_message(candidate)
+      if args.dry_run:
+        messages.append({
+          "key": key,
+          "role": public_text(candidate.get("role"), 160),
+          "message": message,
+        })
+        continue
+      if delay > 0 and sent_count > 0:
+        time.sleep(delay)
+      try:
+        result = send_whatsapp_message(target, message)
+      except Exception as err:
+        failed_count += 1
+        messages.append({
+          "key": key,
+          "role": public_text(candidate.get("role"), 160),
+          "error": public_text(err, 240),
+        })
+        break
+      delivered[key] = group_feed.delivery_record(candidate, result, target, str(cache.get("runId") or "group-feed"))
+      group_feed.save_delivered_state(root, state)
+      sent_count += 1
+      messages.append({
+        "key": key,
+        "role": public_text(candidate.get("role"), 160),
+        "messageId": delivered[key].get("messageId"),
+      })
+
+  return {
+    "ok": failed_count == 0,
+    "dryRun": args.dry_run,
+    "target": target,
+    "cacheRunId": cache.get("runId"),
+    "cacheCreatedAt": cache.get("createdAt"),
+    "candidateCount": len(candidates),
+    "pendingCount": len(pending),
+    "sentCount": sent_count,
+    "skippedCount": skipped_count,
+    "failedCount": failed_count,
+    "messages": messages,
+  }
+
+
 def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
   ready_result = cmd_list_ready(argparse.Namespace(limit=args.limit_ready))
   subscribers = ready_result.get("subscribers") if isinstance(ready_result, dict) else []
@@ -558,6 +667,7 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
   users: list[dict] = []
   date_label = datetime.now(timezone.utc).date().isoformat()
   allow_browser_apply = browser_apply_enabled(args)
+  group_feed_cache = maybe_write_group_feed_cache(args, run_id)
 
   for subscriber in subscribers:
     processed_count += 1
@@ -873,6 +983,7 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
     "physicalCount": 0,
     "failedCount": failed_count,
     "noMatchesCount": no_matches_count,
+    "groupFeedCache": group_feed_cache,
     "users": users,
   }
 
@@ -1097,12 +1208,30 @@ def build_parser() -> argparse.ArgumentParser:
   dispatch_jsearch.add_argument("--max-candidates-per-user", type=int, default=5)
   dispatch_jsearch.add_argument("--dispatch-root", type=Path, default=DEFAULT_DISPATCH_ROOT)
   dispatch_jsearch.add_argument("--dry-run", action="store_true")
+  dispatch_jsearch.add_argument("--write-group-feed-cache", action="store_true")
+  dispatch_jsearch.add_argument("--group-feed-root", type=Path, default=DEFAULT_GROUP_FEED_ROOT)
+  dispatch_jsearch.add_argument("--group-feed-limit", type=int, default=DEFAULT_GROUP_FEED_LIMIT)
   dispatch_jsearch.add_argument(
     "--browser-apply",
     action="store_true",
     help="enable website/browser auto-submission for candidates without an application email",
   )
   dispatch_jsearch.set_defaults(func=cmd_dispatch_jsearch)
+
+  deliver_group_feed = subparsers.add_parser("deliver-group-feed", help="send cached broad job adverts to a WhatsApp group")
+  deliver_group_feed.add_argument("--target", help="WhatsApp group target, for example 120...@g.us")
+  deliver_group_feed.add_argument("--invite-url", default=DEFAULT_GROUP_FEED_INVITE_URL)
+  deliver_group_feed.add_argument("--group-feed-root", type=Path, default=DEFAULT_GROUP_FEED_ROOT)
+  deliver_group_feed.add_argument("--cache-max-age-seconds", type=int, default=DEFAULT_GROUP_FEED_CACHE_MAX_AGE_SECONDS)
+  deliver_group_feed.add_argument("--max-messages", type=int, default=DEFAULT_GROUP_FEED_MAX_MESSAGES, help="0 means no cap")
+  deliver_group_feed.add_argument(
+    "--send-delay-seconds",
+    type=float,
+    default=DEFAULT_GROUP_FEED_SEND_DELAY_SECONDS,
+    help="pause between group sends to avoid flooding",
+  )
+  deliver_group_feed.add_argument("--dry-run", action="store_true")
+  deliver_group_feed.set_defaults(func=cmd_deliver_group_feed)
 
   start_dispatch = subparsers.add_parser("start-dispatch", help="start a sanitized Job Scout dispatch marker")
   start_dispatch.add_argument("--run-id", required=True)

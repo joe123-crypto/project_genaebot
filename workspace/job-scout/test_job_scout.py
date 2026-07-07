@@ -14,7 +14,9 @@ import urllib.error
 
 import job_scout
 import jobscout.api
+import jobscout.constants
 import jobscout.dispatch_store
+import jobscout.group_feed
 import jobscout.subscriber
 
 
@@ -575,6 +577,176 @@ class JSearchTests(unittest.TestCase):
 
   def test_jsearch_default_window_is_one_month(self) -> None:
     self.assertEqual(job_scout.DEFAULT_JSEARCH_DATE_POSTED, "month")
+
+
+class GroupFeedTests(unittest.TestCase):
+  def candidate(self, **overrides) -> dict:
+    data = {
+      "candidateId": "job-1",
+      "source": "vacancymail",
+      "sourceUrl": "https://vacancymail.co.zw/jobs/poultry-supervisor/",
+      "applyLinks": ["https://vacancymail.co.zw/jobs/poultry-supervisor/"],
+      "applicationEmails": ["learnmore@tirufresh.co.zw"],
+      "applicationEmail": "learnmore@tirufresh.co.zw",
+      "company": "Tiru Fresh",
+      "role": "Poultry Supervisor",
+      "location": "Lot 4 Pollockshields Estate, Selous",
+      "closing": "14 July 2026",
+      "description": (
+        "About Us We are a leading commercial poultry farming company. "
+        "Key Responsibilities • Supervise daily poultry house operations. "
+        "Application Interested candidates should submit their CV."
+      ),
+    }
+    data.update(overrides)
+    return data
+
+  def test_group_feed_message_uses_requested_advert_shape(self) -> None:
+    message = jobscout.group_feed.format_group_feed_message(self.candidate())
+
+    self.assertTrue(message.startswith("Job Title: Poultry Supervisor\n\nLocation: Lot 4 Pollockshields Estate, Selous"))
+    self.assertIn("About Us", message)
+    self.assertIn("Key Responsibilities", message)
+    self.assertIn("- Supervise daily poultry house operations.", message)
+    self.assertIn("Closing Date: 14 July 2026", message)
+    self.assertIn("Email: learnmore@tirufresh.co.zw", message)
+    self.assertIn("Source: https://vacancymail.co.zw/jobs/poultry-supervisor/", message)
+
+  def test_group_feed_cache_dedupes_and_writes_latest(self) -> None:
+    candidate = self.candidate()
+    duplicate = {**candidate, "candidateId": "job-duplicate"}
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      with mock.patch(
+        "jobscout.group_feed.fetch_whatsapp_channel_candidates_with_results",
+        return_value=([candidate], {"zimlinks-whatsapp": {"status": "ok", "rawCount": 1, "durationMs": 1}}),
+      ), mock.patch(
+        "jobscout.group_feed.fetch_scraped_candidates_with_results",
+        return_value=([duplicate], {"vacancymail": {"status": "ok", "rawCount": 1, "durationMs": 1}}),
+      ):
+        result = jobscout.group_feed.build_group_feed_cache("run-1", root=root, limit=10)
+
+      self.assertTrue(result["ok"])
+      cache = json.loads((root / "latest.json").read_text(encoding="utf-8"))
+      self.assertEqual(cache["candidateCount"], 1)
+      self.assertEqual(cache["candidates"][0]["role"], "Poultry Supervisor")
+
+  def test_deliver_group_feed_reads_cache_and_marks_success_only(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      candidate = self.candidate()
+      jobscout.group_feed.write_group_feed_cache(
+        "cache-run",
+        [{**candidate, "groupFeedKey": jobscout.group_feed.candidate_delivery_key(candidate)}],
+        {},
+        root,
+      )
+      args = argparse.Namespace(
+        target="120363000000000000@g.us",
+        invite_url="https://chat.whatsapp.com/example",
+        group_feed_root=root,
+        cache_max_age_seconds=3600,
+        max_messages=0,
+        dry_run=False,
+      )
+      with mock.patch("jobscout.group_feed.fetch_whatsapp_channel_candidates_with_results") as channel_fetch, \
+           mock.patch("jobscout.group_feed.fetch_scraped_candidates_with_results") as board_fetch, \
+           mock.patch.object(job_scout, "send_whatsapp_message", return_value={"messageId": "wa-1"}) as send:
+        result = job_scout.cmd_deliver_group_feed(args)
+
+      self.assertTrue(result["ok"])
+      self.assertEqual(result["sentCount"], 1)
+      send.assert_called_once()
+      channel_fetch.assert_not_called()
+      board_fetch.assert_not_called()
+      state = json.loads((root / "delivered.json").read_text(encoding="utf-8"))
+      self.assertEqual(len(state["delivered"]), 1)
+
+      with mock.patch.object(job_scout, "send_whatsapp_message") as send_again:
+        second = job_scout.cmd_deliver_group_feed(args)
+      self.assertEqual(second["sentCount"], 0)
+      self.assertEqual(second["skippedCount"], 1)
+      send_again.assert_not_called()
+
+  def test_deliver_group_feed_does_not_mark_failed_send(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      candidate = self.candidate()
+      jobscout.group_feed.write_group_feed_cache("cache-run", [candidate], {}, root)
+      args = argparse.Namespace(
+        target="120363000000000000@g.us",
+        invite_url="https://chat.whatsapp.com/example",
+        group_feed_root=root,
+        cache_max_age_seconds=3600,
+        max_messages=0,
+        dry_run=False,
+      )
+      with mock.patch.object(job_scout, "send_whatsapp_message", side_effect=RuntimeError("send failed")):
+        result = job_scout.cmd_deliver_group_feed(args)
+
+      self.assertFalse(result["ok"])
+      self.assertEqual(result["failedCount"], 1)
+      self.assertFalse((root / "delivered.json").exists())
+
+  def test_deliver_group_feed_caps_and_spaces_sends(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      candidates = [
+        self.candidate(
+          candidateId=f"job-{index}",
+          sourceUrl=f"https://vacancymail.co.zw/jobs/role-{index}/",
+        )
+        for index in range(20)
+      ]
+      jobscout.group_feed.write_group_feed_cache("cache-run", candidates, {}, root)
+      args = argparse.Namespace(
+        target="120363000000000000@g.us",
+        invite_url="https://chat.whatsapp.com/example",
+        group_feed_root=root,
+        cache_max_age_seconds=3600,
+        max_messages=jobscout.constants.DEFAULT_GROUP_FEED_MAX_MESSAGES,
+        send_delay_seconds=5,
+        dry_run=False,
+      )
+      with mock.patch.object(job_scout, "send_whatsapp_message", return_value={"messageId": "wa"}) as send, \
+           mock.patch.object(job_scout.time, "sleep") as sleep:
+        result = job_scout.cmd_deliver_group_feed(args)
+
+      self.assertTrue(result["ok"])
+      self.assertEqual(result["sentCount"], jobscout.constants.DEFAULT_GROUP_FEED_MAX_MESSAGES)
+      self.assertEqual(send.call_count, jobscout.constants.DEFAULT_GROUP_FEED_MAX_MESSAGES)
+      # A pause sits between sends, never before the first one.
+      self.assertEqual(sleep.call_count, jobscout.constants.DEFAULT_GROUP_FEED_MAX_MESSAGES - 1)
+      sleep.assert_called_with(5.0)
+
+  def test_deliver_group_feed_default_cap_is_applied_via_parser(self) -> None:
+    parser = job_scout.build_parser()
+    args = parser.parse_args(["deliver-group-feed", "--target", "120363000000000000@g.us"])
+    self.assertEqual(args.max_messages, jobscout.constants.DEFAULT_GROUP_FEED_MAX_MESSAGES)
+    self.assertEqual(args.send_delay_seconds, jobscout.constants.DEFAULT_GROUP_FEED_SEND_DELAY_SECONDS)
+
+  def test_dispatch_cache_write_is_opt_in(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      args = argparse.Namespace(
+        run_id="unit-dispatch",
+        phone=None,
+        limit_ready=10,
+        max_candidates_per_user=5,
+        dispatch_root=Path(tmp),
+        dry_run=True,
+        browser_apply=False,
+        write_group_feed_cache=True,
+        group_feed_root=Path(tmp) / "group-feed",
+        group_feed_limit=10,
+      )
+      with mock.patch.object(job_scout, "cmd_list_ready", return_value={"subscribers": []}), \
+           mock.patch("jobscout.group_feed.fetch_whatsapp_channel_candidates_with_results", return_value=([], {})) as channel_fetch, \
+           mock.patch("jobscout.group_feed.fetch_scraped_candidates_with_results", return_value=([], {})):
+        result = job_scout.cmd_dispatch_jsearch(args)
+
+    self.assertTrue(result["groupFeedCache"]["dryRun"])
+    channel_fetch.assert_called_once()
+
 
 class JSearchDispatchTests(unittest.TestCase):
   def subscriber(self, auto_apply: bool = True) -> dict:

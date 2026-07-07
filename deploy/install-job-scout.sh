@@ -8,7 +8,7 @@ LEGACY_NAME="job-scout-pilot"
 CRON_EXPR="0 9 * * *"
 TZ="Africa/Harare"
 ALERT_TO="${JOB_SCOUT_FAILURE_ALERT_TO:-+213563719936}"
-COMMAND_ARGV='["/home/joseph/.openclaw/workspace/bin/job-scout","dispatch-jsearch","--limit-ready","100"]'
+COMMAND_ARGV='["/home/joseph/.openclaw/workspace/bin/job-scout","dispatch-jsearch","--limit-ready","100","--write-group-feed-cache"]'
 
 job_scout=("$DOCKER" exec -u joseph "$CONTAINER" /home/joseph/.openclaw/workspace/bin/job-scout)
 openclaw=("$DOCKER" exec -u joseph "$CONTAINER" sh -lc 'exec env -u OPENCLAW_HOME OPENCLAW_GATEWAY_TOKEN="$GATEWAY_AUTH_TOKEN" openclaw "$@"' openclaw)
@@ -88,7 +88,7 @@ done < <(printf '%s' "$jobs_json" | jq -r --arg name "$LEGACY_NAME" '.jobs[] | s
     .enabled == true and
     .schedule.expr == "0 9 * * *" and
     .schedule.tz == "Africa/Harare" and
-    .payload.argv == ["/home/joseph/.openclaw/workspace/bin/job-scout", "dispatch-jsearch", "--limit-ready", "100"] and
+    .payload.argv == ["/home/joseph/.openclaw/workspace/bin/job-scout", "dispatch-jsearch", "--limit-ready", "100", "--write-group-feed-cache"] and
     .failureAlert.after == 1
   )' >/dev/null
 

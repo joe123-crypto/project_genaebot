@@ -64,6 +64,19 @@ class JobScoutDeploymentTests(unittest.TestCase):
     self.assertNotIn("--pilot-only", installer)
     self.assertNotIn("JOB_SCOUT_PILOT_USER_IDS", installer)
     self.assertIn('"--limit-ready","100"', installer)
+    self.assertIn('"--write-group-feed-cache"', installer)
+
+  def test_group_feed_scheduler_is_separate_delivery_only_cron(self) -> None:
+    installer = (ROOT / "deploy/install-job-scout-group-feed.sh").read_text(encoding="utf-8")
+    main_installer = (ROOT / "deploy/install-job-scout.sh").read_text(encoding="utf-8")
+
+    self.assertIn('NAME="job-scout-group-feed"', installer)
+    self.assertIn('CRON_EXPR="20 9 * * *"', installer)
+    self.assertIn('"deliver-group-feed"', installer)
+    self.assertIn("JOB_SCOUT_GROUP_FEED_TARGET", installer)
+    self.assertIn("directory groups list --channel whatsapp", installer)
+    self.assertIn("@g.us", installer)
+    self.assertNotIn("deliver-group-feed", main_installer)
 
   def test_healthcheck_exercises_chromium_readiness(self) -> None:
     compose = (ROOT / "deploy/docker-compose.override.yml").read_text(encoding="utf-8")

@@ -72,7 +72,7 @@ def send_application_email(subscriber: dict, candidate: dict, cover_letter: Path
   ])
 
 
-def send_whatsapp_summary(phone: str, message: str) -> dict:
+def send_whatsapp_message(target: str, message: str) -> dict:
   command_env = os.environ.copy()
   command_env.pop("OPENCLAW_HOME", None)
   gateway_token = command_env.get("GATEWAY_AUTH_TOKEN", "").strip()
@@ -85,11 +85,15 @@ def send_whatsapp_summary(phone: str, message: str) -> dict:
     "--channel",
     "whatsapp",
     "--target",
-    phone,
+    target,
     "--message",
     message,
     "--json",
   ], env=command_env)
+
+
+def send_whatsapp_summary(phone: str, message: str) -> dict:
+  return send_whatsapp_message(phone, message)
 
 
 def result_message_id(result: dict) -> str | None:
