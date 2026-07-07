@@ -13,7 +13,7 @@ Commands:
 - If not linked, create login link: `/home/joseph/.openclaw/workspace/bin/account-link create-invite --phone "<whatsapp phone>" --purpose jobs --next-path /connect-gmail`
 - After linked, create Job Scout setup link: `/home/joseph/.openclaw/workspace/bin/job-scout create-invite --phone "<whatsapp phone>"`
 - Validate the preferred location before saving: `/home/joseph/.openclaw/workspace/bin/job-scout resolve-location --location "Bindura, Zimbabwe"`
-- Save a confirmed profile and CV after the safety acknowledgement: `/home/joseph/.openclaw/workspace/bin/job-scout save-profile --phone "<whatsapp phone>" --cv "/path/to/cv.pdf" --target-role "..." --location "City or area, Country" --language fr --profile-confirmed --safety-acknowledged`
+- Save a confirmed profile and CV after the safety acknowledgement: `/home/joseph/.openclaw/workspace/bin/job-scout save-profile --phone "<whatsapp phone>" --cv "/path/to/cv.pdf" --target-role "..." --location "City or area, Country" --language en --profile-confirmed --safety-acknowledged`
 - Check one requester's setup: `/home/joseph/.openclaw/workspace/bin/job-scout status --phone "<whatsapp phone>"`
 - List applications: `/home/joseph/.openclaw/workspace/bin/job-scout list-applications --user-id "<firebase uid>"`
 - Record application: `/home/joseph/.openclaw/workspace/bin/job-scout record-application --user-id "<firebase uid>" --company "..." --role "..." --status applied`
@@ -41,4 +41,4 @@ Rules:
 - Use `status --phone` when answering whether a requester is set up. Cloud R2 is authoritative for CV availability; never infer it from files under `runtime/job-scout/users`.
 - `save-profile` requires both `--profile-confirmed` and `--safety-acknowledged`. Never pass either flag until the requester has explicitly completed that step.
 - `list-ready` and full dispatch commands are operator-only because their output can include multiple users. Never use them to answer a public user's status question.
-- Job discovery must use the deterministic JSearch dispatcher only. Each saved preferred location supplies that user's JSearch country code. Algeria (`dz`) remains the fallback when no location is supplied outside onboarding; default language is French (`fr`).
+- Job discovery must use the deterministic JSearch dispatcher only. Each saved preferred location supplies that user's JSearch country code. Algeria (`dz`) remains the fallback when no location is supplied outside onboarding; default language is English (`en`).

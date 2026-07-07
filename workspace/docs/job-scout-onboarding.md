@@ -123,7 +123,7 @@ Friendly field mapping:
 - Jobs to look for -> `--target-role` (repeat for multiple roles)
 - Preferred city or area plus country -> `--location` in `City or area, Country` format (repeat only for locations in the same country)
 - Search country -> derived by `resolve-location`; Algeria (`dz`) remains the fallback only when no location is supplied outside onboarding
-- Search language -> `--language`; it controls the JSearch language and query wording (`à` for French, `in` otherwise), with `fr` as the default
+- Search language -> `--language`; it controls the JSearch language and query wording (`à` for French, `in` otherwise), with `en` as the default
 - Qualifications or certificates -> `--qualification`
 - Work experience -> `--experience`
 - Useful skills -> `--skill`
@@ -222,7 +222,7 @@ After the user has provided enough details, uploaded a CV, confirmed the summary
   --cv "<cvFileRef returned by stage-cv>" \
   --target-role "General worker" \
   --location "Algiers, Algeria" \
-  --language fr \
+  --language en \
   --qualification "O Level Mathematics and English" \
   --experience "General work" \
   --skill "Computer literacy" \

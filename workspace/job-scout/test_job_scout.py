@@ -355,10 +355,10 @@ class PreferredLocationTests(unittest.TestCase):
          mock.patch.object(job_scout, "jsearch_provider", return_value="test"):
       result = job_scout.cmd_fetch_candidates(args)
 
-    normalized = {"targetRoles": ["Driver"], "locations": ["Harare, Zimbabwe"], "country": "zw", "language": "fr", "exclusions": [], "maxApplicationsPerRun": 5}
+    normalized = {"targetRoles": ["Driver"], "locations": ["Harare, Zimbabwe"], "country": "zw", "language": "en", "exclusions": [], "maxApplicationsPerRun": 5}
     jsearch.assert_called_once_with(normalized, 5)
     scraped.assert_called_once_with(normalized, 5)
-    self.assertEqual(result["queries"], ["Driver à Harare, Zimbabwe"])
+    self.assertEqual(result["queries"], ["Driver in Harare, Zimbabwe"])
     self.assertEqual(base["locations"], ["Harare"])
 
 
@@ -381,7 +381,7 @@ class JSearchTests(unittest.TestCase):
       ["Waitress in Zimbabwe"],
     )
     self.assertEqual(
-      job_scout.search_queries({"targetRoles": ["Cleaner"], "language": "en"}),
+      job_scout.search_queries({"targetRoles": ["Cleaner"]}),
       ["Cleaner in Algeria"],
     )
 
