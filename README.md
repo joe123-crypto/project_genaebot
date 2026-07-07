@@ -225,8 +225,8 @@ ready CV is accessible. It prints the failing readiness check and runs daily at
 
 ### WhatsApp Channel sources
 
-Job Scout can also consume job adverts from the ZimLinks and
-ZIM•JOB•VACANCIES WhatsApp Channels. A
+Job Scout can also consume job adverts from the ZimLinks,
+ZIM•JOB•VACANCIES, and EveryDayVacancies WhatsApp Channels. A
 separate `job-scout-channel-listener` container uses its own linked-device auth;
 never point it at OpenClaw's WhatsApp auth directory. It captures posts in real
 time, backfills the latest 10 from each channel after pairing/reconnect, and keeps transient state
