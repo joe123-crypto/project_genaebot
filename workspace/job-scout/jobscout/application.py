@@ -122,6 +122,8 @@ def web_apply_payload(subscriber: dict, preferences: dict, candidate: dict, cove
 
 def action_instruction(candidate: dict, blocker_code: str | None = None) -> str:
   link = candidate_application_url(candidate) or str(candidate.get("sourcePostUrl") or candidate.get("sourceUrl") or "").strip()
+  if str(blocker_code or "") == "auto_apply_disabled" and link:
+    return f"Apply manually here: {link}"
   reasons = {
     "login_required": "The site requires you to sign in.",
     "captcha_required": "The site requires a CAPTCHA.",
@@ -129,6 +131,7 @@ def action_instruction(candidate: dict, blocker_code: str | None = None) -> str:
     "legal_declaration": "The form requires a declaration only you should confirm.",
     "payment_required": "The site asks for payment; I will never submit or pay it.",
     "unsupported_site": "This site's application form is not safely automatable yet.",
+    "auto_apply_disabled": "Apply manually here.",
     "channel_post_manual": "The channel post has no application form or email. Review the original advert and apply manually.",
   }
   prefix = reasons.get(str(blocker_code or ""), "This application needs your input.")

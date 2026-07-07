@@ -160,6 +160,14 @@ from jobscout.jsearch import (
 )
 
 
+def browser_apply_enabled(args: argparse.Namespace) -> bool:
+  override = getattr(args, "browser_apply", None)
+  if override is not None:
+    return bool(override)
+  value = str(os.environ.get("JOB_SCOUT_BROWSER_APPLY_ENABLED", "")).strip().casefold()
+  return value in {"1", "true", "yes", "on"}
+
+
 def cmd_create_invite(args: argparse.Namespace) -> dict:
   phone = normalize_phone(args.phone)
   cache_key = pending_criteria(
@@ -547,6 +555,7 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
   applied_count = 0
   users: list[dict] = []
   date_label = datetime.now(timezone.utc).date().isoformat()
+  allow_browser_apply = browser_apply_enabled(args)
 
   for subscriber in subscribers:
     processed_count += 1
@@ -650,7 +659,7 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
               pass
             record_channel_candidate_outcome(run_id, user_id, candidate, "failed", attempt_count)
             break
-        elif application_url and auto_apply:
+        elif application_url and auto_apply and allow_browser_apply:
           if args.dry_run:
             user_action_required.append({
               "candidate": candidate,
@@ -1086,6 +1095,11 @@ def build_parser() -> argparse.ArgumentParser:
   dispatch_jsearch.add_argument("--max-candidates-per-user", type=int, default=5)
   dispatch_jsearch.add_argument("--dispatch-root", type=Path, default=DEFAULT_DISPATCH_ROOT)
   dispatch_jsearch.add_argument("--dry-run", action="store_true")
+  dispatch_jsearch.add_argument(
+    "--browser-apply",
+    action="store_true",
+    help="enable website/browser auto-submission for candidates without an application email",
+  )
   dispatch_jsearch.set_defaults(func=cmd_dispatch_jsearch)
 
   start_dispatch = subparsers.add_parser("start-dispatch", help="start a sanitized Job Scout dispatch marker")

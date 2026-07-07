@@ -597,7 +597,7 @@ class JSearchDispatchTests(unittest.TestCase):
       },
     }
 
-  def args(self, root: Path, dry_run: bool = False) -> argparse.Namespace:
+  def args(self, root: Path, dry_run: bool = False, browser_apply: bool = False) -> argparse.Namespace:
     return argparse.Namespace(
       run_id="unit-dispatch",
       phone=None,
@@ -605,6 +605,7 @@ class JSearchDispatchTests(unittest.TestCase):
       max_candidates_per_user=5,
       dispatch_root=root,
       dry_run=dry_run,
+      browser_apply=browser_apply,
     )
 
   def candidate(self, email: str | None = "hr@example.dz", link: str = "https://jobs.example/apply") -> dict:
@@ -628,6 +629,7 @@ class JSearchDispatchTests(unittest.TestCase):
     root: Path,
     candidates: list[dict],
     auto_apply: bool = True,
+    browser_apply: bool = False,
     send_error: Exception | None = None,
     web_result: dict | None = None,
   ) -> dict:
@@ -655,7 +657,7 @@ class JSearchDispatchTests(unittest.TestCase):
       else:
         send_patch = mock.patch.object(job_scout, "send_application_email", side_effect=send_error)
       with send_patch as send:
-        result = job_scout.cmd_dispatch_jsearch(self.args(root))
+        result = job_scout.cmd_dispatch_jsearch(self.args(root, browser_apply=browser_apply))
     result["_record_calls"] = record.call_args_list
     result["_send_calls"] = send.call_args_list
     result["_whatsapp_calls"] = whatsapp.call_args_list
@@ -737,7 +739,7 @@ class JSearchDispatchTests(unittest.TestCase):
         self.assertEqual(jobscout.dispatch_store.dispatch_lock_path(root), root / "dispatch.lock")
         self.assertTrue((root / "dispatch.lock").is_file())
 
-  def test_dispatch_records_action_required_when_site_needs_login(self) -> None:
+  def test_dispatch_records_manual_action_required_when_browser_apply_disabled(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
       result = self.dispatch_with(Path(tmp), [self.candidate(email=None)])
 
@@ -745,8 +747,27 @@ class JSearchDispatchTests(unittest.TestCase):
       self.assertEqual(result["actionRequiredCount"], 1)
       self.assertEqual(result["physicalCount"], 0)
       self.assertEqual(result["users"][0]["status"], "action_required")
+      self.assertEqual(result["_web_calls"], [])
       record_args = result["_record_calls"][0].args[0]
       self.assertEqual(record_args.status, "action_required")
+      self.assertEqual(record_args.submission_method, "manual")
+      self.assertEqual(record_args.blocker_code, "auto_apply_disabled")
+      public_message = result["_whatsapp_calls"][0].args[1]
+      self.assertIn("ACTION NEEDED", public_message)
+      self.assertIn("Apply manually here: https://jobs.example/apply", public_message)
+
+  def test_dispatch_records_action_required_when_browser_site_needs_login(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      result = self.dispatch_with(Path(tmp), [self.candidate(email=None)], browser_apply=True)
+
+      self.assertEqual(result["appliedCount"], 0)
+      self.assertEqual(result["actionRequiredCount"], 1)
+      self.assertEqual(result["physicalCount"], 0)
+      self.assertEqual(result["users"][0]["status"], "action_required")
+      self.assertEqual(len(result["_web_calls"]), 1)
+      record_args = result["_record_calls"][0].args[0]
+      self.assertEqual(record_args.status, "action_required")
+      self.assertEqual(record_args.submission_method, "website")
       self.assertEqual(record_args.blocker_code, "login_required")
 
   def test_dispatch_submits_website_candidate_without_email(self) -> None:
@@ -754,6 +775,7 @@ class JSearchDispatchTests(unittest.TestCase):
       result = self.dispatch_with(
         Path(tmp),
         [self.candidate(email=None)],
+        browser_apply=True,
         web_result={
           "outcome": "submitted",
           "confirmation": "Application submitted",
