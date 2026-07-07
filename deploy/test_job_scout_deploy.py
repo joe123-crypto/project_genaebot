@@ -40,6 +40,8 @@ class JobScoutDeploymentTests(unittest.TestCase):
     self.assertIn("0029VaYITFn2v1IsGm9zxP1k", compose)
     self.assertIn("0029VaQ9LFe8PgsLScuJES32", compose)
     self.assertIn("zim-job-vacancies-whatsapp", compose)
+    self.assertIn("0029VacRRi9GE56qqFobOZ2K", compose)
+    self.assertIn("everyday-vacancies-whatsapp", compose)
     self.assertIn("runtime/job-scout-channel:/data", compose)
     self.assertNotIn(".openclaw/credentials", compose)
     self.assertIn("cap_drop:\n      - ALL", compose)
