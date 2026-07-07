@@ -26,14 +26,15 @@ resolve_target() {
     groups_json="$("${openclaw[@]}" directory groups list --channel whatsapp --json --limit 200)"
   fi
 
-  printf '%s' "$groups_json" | python3 - "$INVITE_URL" "$GROUP_QUERY" <<'PY'
+  GROUPS_JSON="$groups_json" python3 - "$INVITE_URL" "$GROUP_QUERY" <<'PY'
 import json
+import os
 import sys
 
 invite_url = sys.argv[1]
 query = sys.argv[2].casefold()
 code = invite_url.rstrip("/").split("/")[-1].casefold()
-text = sys.stdin.read()
+text = os.environ.get("GROUPS_JSON", "")
 lines = text.splitlines()
 payload = None
 for index in range(len(lines)):
