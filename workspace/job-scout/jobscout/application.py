@@ -7,11 +7,14 @@ shaping over subscriber/candidate/preference data; imported by dispatch.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from .constants import (
   MAX_APPLICATION_ATTEMPTS,
   PUBLIC_DISPATCH_FAILURE_MESSAGE,
+  UNKNOWN_EMPLOYER,
+  UNKNOWN_ROLE,
   WHATSAPP_CHANNEL_SOURCES,
 )
 from .jsearch import application_key, candidate_key
@@ -55,23 +58,49 @@ def match_reason(preferences: dict, candidate: dict) -> str:
   return public_text(f"Matches requested work around {role_hint} and the configured location/preferences.", 220)
 
 
+def clean_role(value: object) -> str:
+  """A letter-safe job title, or a bare noun phrase when the role is unusable.
+
+  Upstream sources sometimes put a description blurb in the role field (a whole
+  "we are looking for ..." sentence), truncated mid-word. A genuine title is
+  short, so anything long or multi-clause falls back to a generic phrase. The
+  return value is a bare noun phrase so it reads correctly in "the {role}
+  position" (never "the the advertised role position").
+  """
+  text = public_text(value, 120)
+  if not text or text == UNKNOWN_ROLE:
+    return "advertised role"
+  first = re.split(r"[.\n|;•]", text, maxsplit=1)[0].strip(" -–—")
+  if not first or len(first) > 70 or len(first.split()) > 9:
+    return "advertised role"
+  return first
+
+
 def cover_letter_text(subscriber: dict, preferences: dict, candidate: dict) -> str:
   name = display_name(subscriber)
-  role = public_text(candidate.get("role"), 120) or "the advertised role"
-  company = public_text(candidate.get("company"), 120) or "your organization"
+  role = clean_role(candidate.get("role"))
+  company = public_text(candidate.get("company"), 120)
+  # When the employer is unknown, never reference them anywhere in the letter.
+  company_known = bool(company) and company != UNKNOWN_EMPLOYER
   qualifications = clean_items(profile_values(preferences, "qualifications"))
   skills = clean_items(profile_values(preferences, "skills"))
   experience = clean_items(profile_values(preferences, "experience"))
   strengths = ", ".join([*qualifications[:2], *skills[:3], *experience[:2]]) or "relevant experience and a strong work ethic"
+  greeting = f"Dear Hiring Team at {company}," if company_known else "Dear Hiring Team,"
+  opener = (
+    f"I am applying for the {role} position at {company}."
+    if company_known
+    else f"I am applying for the {role} position."
+  )
   return "\n".join([
-    f"Dear Hiring Team at {company},",
+    greeting,
     "",
-    f"I am applying for the {role} position at {company}.",
+    opener,
     f"My background includes {strengths}, and I am ready to contribute reliably from the first day.",
     "I work carefully, communicate clearly, and take responsibility for completing assigned tasks.",
     "I have attached my CV for your review and would appreciate the opportunity to discuss how I can help your team.",
     "",
-    f"Kind regards,",
+    "Kind regards,",
     name,
   ]) + "\n"
 
@@ -146,7 +175,7 @@ def build_user_summary(date_label: str, applied: list[dict], action_required: li
     for index, item in enumerate(applied, 1):
       candidate = item["candidate"]
       lines.extend([
-        f"{index}. {public_text(candidate.get('role'), 100)} - APPLIED",
+        f"{index}. {clean_role(candidate.get('role'))} - APPLIED",
         f"Company: {public_text(candidate.get('company'), 100)}",
       ])
       location = public_text(candidate.get("location"), 100)
@@ -164,7 +193,7 @@ def build_user_summary(date_label: str, applied: list[dict], action_required: li
       candidate = item["candidate"] if isinstance(item, dict) and "candidate" in item else item
       blocker_code = item.get("blockerCode") if isinstance(item, dict) else None
       lines.extend([
-        f"- {public_text(candidate.get('role'), 100)} - ACTION NEEDED",
+        f"- {clean_role(candidate.get('role'))} - ACTION NEEDED",
         f"Company: {public_text(candidate.get('company'), 100)}",
         action_instruction(candidate, blocker_code),
         "",

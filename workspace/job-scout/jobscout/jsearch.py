@@ -31,6 +31,8 @@ from .constants import (
   JSEARCH_RETRY_SECONDS,
   MAX_APPLICATION_ATTEMPTS,
   TERMINAL_APPLICATION_STATUSES,
+  UNKNOWN_EMPLOYER,
+  UNKNOWN_ROLE,
   WHATSAPP_CHANNEL_SOURCES,
 )
 from .profile import clean_items, preference_code, profile_values, search_queries, user_key
@@ -165,8 +167,8 @@ def apply_links(item: dict) -> list[str]:
 
 
 def normalized_candidate(item: dict, query: str) -> dict:
-  company = re.sub(r"\s+", " ", str(item.get("employer_name") or item.get("company") or "Unknown employer")).strip()
-  role = re.sub(r"\s+", " ", str(item.get("job_title") or item.get("title") or "Unknown role")).strip()
+  company = re.sub(r"\s+", " ", str(item.get("employer_name") or item.get("company") or UNKNOWN_EMPLOYER)).strip()
+  role = re.sub(r"\s+", " ", str(item.get("job_title") or item.get("title") or UNKNOWN_ROLE)).strip()
   links = apply_links(item)
   description = re.sub(r"\s+", " ", str(item.get("job_description") or item.get("description") or "")).strip()
   emails = extract_emails(description, item.get("job_apply_link"), item.get("apply_options"))
