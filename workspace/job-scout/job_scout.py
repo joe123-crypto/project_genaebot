@@ -37,6 +37,8 @@ from jobscout.constants import (
   PUBLIC_DISPATCH_FAILURE_MESSAGE,
   RUNTIME_ROOT,
   TERMINAL_APPLICATION_STATUSES,
+  UNKNOWN_EMPLOYER,
+  UNKNOWN_ROLE,
   WHATSAPP_CHANNEL_SOURCES,
   WORKSPACE,
 )
@@ -482,8 +484,8 @@ def record_candidate_application(
 ) -> dict:
   return cmd_record_application(argparse.Namespace(
     user_id=user_id,
-    company=str(candidate.get("company") or "Unknown employer"),
-    role=str(candidate.get("role") or "Unknown role"),
+    company=str(candidate.get("company") or UNKNOWN_EMPLOYER),
+    role=str(candidate.get("role") or UNKNOWN_ROLE),
     status=status,
     application_email=candidate.get("applicationEmail"),
     source=str(candidate.get("source") or "jsearch"),
