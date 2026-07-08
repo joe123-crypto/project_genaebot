@@ -567,10 +567,7 @@ def maybe_write_group_feed_cache(args: argparse.Namespace, run_id: str) -> dict 
 
 def group_feed_target_from_args(args: argparse.Namespace) -> str:
   target = str(getattr(args, "target", "") or os.environ.get("JOB_SCOUT_GROUP_FEED_TARGET", "")).strip()
-  invite_url = str(
-    getattr(args, "invite_url", "")
-    or os.environ.get("JOB_SCOUT_GROUP_FEED_INVITE_URL", DEFAULT_GROUP_FEED_INVITE_URL)
-  ).strip()
+  invite_url = group_feed_invite_url_from_args(args)
   if not target:
     raise SystemExit(
       "JOB_SCOUT_GROUP_FEED_TARGET is required; resolve the group invite "
@@ -581,8 +578,16 @@ def group_feed_target_from_args(args: argparse.Namespace) -> str:
   return target
 
 
+def group_feed_invite_url_from_args(args: argparse.Namespace) -> str:
+  return str(
+    getattr(args, "invite_url", "")
+    or os.environ.get("JOB_SCOUT_GROUP_FEED_INVITE_URL", DEFAULT_GROUP_FEED_INVITE_URL)
+  ).strip()
+
+
 def cmd_deliver_group_feed(args: argparse.Namespace) -> dict:
   target = group_feed_target_from_args(args)
+  invite_url = group_feed_invite_url_from_args(args)
   root = args.group_feed_root
   with group_feed.exclusive_delivery_lock(root):
     cache = group_feed.load_latest_cache(root, args.cache_max_age_seconds)
@@ -604,7 +609,7 @@ def cmd_deliver_group_feed(args: argparse.Namespace) -> dict:
     messages: list[dict] = []
     for candidate in pending:
       key = group_feed.candidate_delivery_key(candidate)
-      message = group_feed.format_group_feed_message(candidate)
+      message = group_feed.format_group_feed_message(candidate, invite_url=invite_url)
       if args.dry_run:
         messages.append({
           "key": key,
@@ -1220,7 +1225,7 @@ def build_parser() -> argparse.ArgumentParser:
 
   deliver_group_feed = subparsers.add_parser("deliver-group-feed", help="send cached broad job adverts to a WhatsApp group")
   deliver_group_feed.add_argument("--target", help="WhatsApp group target, for example 120...@g.us")
-  deliver_group_feed.add_argument("--invite-url", default=DEFAULT_GROUP_FEED_INVITE_URL)
+  deliver_group_feed.add_argument("--invite-url")
   deliver_group_feed.add_argument("--group-feed-root", type=Path, default=DEFAULT_GROUP_FEED_ROOT)
   deliver_group_feed.add_argument("--cache-max-age-seconds", type=int, default=DEFAULT_GROUP_FEED_CACHE_MAX_AGE_SECONDS)
   deliver_group_feed.add_argument("--max-messages", type=int, default=DEFAULT_GROUP_FEED_MAX_MESSAGES, help="0 means no cap")

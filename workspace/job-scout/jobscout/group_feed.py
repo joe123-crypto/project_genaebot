@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 import fcntl
 import hashlib
+import html
 import json
 import os
 from pathlib import Path
@@ -17,6 +18,7 @@ import re
 
 from .constants import (
   DEFAULT_GROUP_FEED_CACHE_MAX_AGE_SECONDS,
+  DEFAULT_GROUP_FEED_INVITE_URL,
   DEFAULT_GROUP_FEED_LIMIT,
   DEFAULT_GROUP_FEED_ROOT,
 )
@@ -275,8 +277,76 @@ def exclusive_delivery_lock(root: Path = DEFAULT_GROUP_FEED_ROOT):
 
 
 def _clean_line(value: object, limit: int = 400) -> str:
-  text = re.sub(r"\s+", " ", str(value or "")).strip()
+  text = _remove_inline_internal_fragments(_strip_markup(str(value or "")))
+  text = re.sub(r"\s+", " ", text).strip()
+  if _looks_internal_line(text):
+    return ""
   return text[:limit].rstrip()
+
+
+def _strip_markup(value: str) -> str:
+  text = html.unescape(value or "")
+  text = re.sub(r"<!--.*?-->", " ", text, flags=re.S)
+  text = re.sub(r"<\s*(script|style|noscript|iframe|ins)\b[^>]*>.*?</\s*\1\s*>", " ", text, flags=re.I | re.S)
+  text = re.sub(r"<\s*br\s*/?>", "\n", text, flags=re.I)
+  text = re.sub(r"</\s*(?:p|div|li|ul|ol|h[1-6]|section|article|tr|table)\s*>", "\n", text, flags=re.I)
+  text = re.sub(r"<[^>]+>", " ", text)
+  return text
+
+
+def _remove_inline_internal_fragments(value: str) -> str:
+  text = value
+  text = re.sub(
+    r"\(?\s*adsbygoogle\s*=\s*window\.adsbygoogle\s*\|\|\s*\[\]\s*\)?\s*\.push\s*\([^)]*\)\s*;?",
+    " ",
+    text,
+    flags=re.I,
+  )
+  text = re.sub(r"\(?\s*window\.adsbygoogle\s*=\s*window\.adsbygoogle\s*\|\|\s*\[\]\s*\)?\s*;?", " ", text, flags=re.I)
+  text = re.sub(r"\bgoogletag\.cmd\.push\s*\([^)]*\)\s*;?", " ", text, flags=re.I)
+  return text
+
+
+INTERNAL_LINE_PATTERNS = tuple(
+  re.compile(pattern, re.I)
+  for pattern in (
+    r"\badsbygoogle\b",
+    r"\bgooglesyndication\b",
+    r"\bgoogletag\b",
+    r"\bgoogle_ad_",
+    r"\bdoubleclick\b",
+    r"\bdata-ad-",
+    r"\bapplication/ld\+json\b",
+    r"\bschema\.org\b",
+    r'"@context"\s*:',
+    r'"@type"\s*:',
+    r"\bwindow\.",
+    r"\bdocument\.",
+    r"\bconsole\.",
+    r"^\s*(?:async\s+)?function(?:\s+[A-Za-z_$][\w$]*)?\s*\([^)]*\)\s*\{",
+    r"\b(?:var|let|const)\s+[A-Za-z_$][\w$]*\s*=",
+    r"\bwp-(?:content|json|includes)\b",
+    r"\b(?:yoast|rankmath|recaptcha|captcha)\b",
+  )
+)
+
+
+def _looks_internal_line(line: str) -> bool:
+  text = line.strip()
+  if not text:
+    return False
+  if any(pattern.search(text) for pattern in INTERNAL_LINE_PATTERNS):
+    return True
+  if re.fullmatch(r"[{}\[\],;:]+", text):
+    return True
+  if re.search(r"[.#]?[A-Za-z0-9_-]+\s*\{[^{}]*:[^{}]*\}", text):
+    return True
+  if re.match(r"^[\"']?[A-Za-z0-9_.$-]+[\"']?\s*:\s*[\[{]", text):
+    return True
+  brace_count = text.count("{") + text.count("}") + text.count("[") + text.count("]")
+  if brace_count >= 2 and (";" in text or re.search(r"[\"']\w+[\"']\s*:", text)):
+    return True
+  return False
 
 
 SECTION_HEADINGS = (
@@ -298,8 +368,39 @@ SECTION_HEADINGS = (
 )
 
 
+ROLE_SPLIT_RE = re.compile(r"[\n|;•]")
+BAD_ROLE_START_RE = re.compile(
+  r"^(?:motivated|detail-oriented|detail oriented|enthusiastic|young|innovative|hardworking|reliable|eager|highly|suitably|qualified|experienced)\b",
+  re.I,
+)
+
+
+def _role_candidate(value: object) -> str:
+  text = _clean_line(value, 240)
+  text = re.sub(r"[*_`]+", "", text).strip(" -:.,")
+  text = ROLE_SPLIT_RE.split(text, maxsplit=1)[0].strip(" -:.,")
+  if not text or text.casefold() == "unknown role":
+    return ""
+  if BAD_ROLE_START_RE.search(text):
+    return ""
+  if len(text) > 70 or len(text.split()) > 9:
+    return ""
+  if text[0].islower():
+    return ""
+  return text
+
+
+def _job_title(candidate: dict) -> str:
+  for key in ("role", "title", "jobTitle", "job_title"):
+    title = _role_candidate(candidate.get(key))
+    if title:
+      return title
+  return "Unknown role"
+
+
 def _description_text(value: object) -> str:
-  text = str(value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+  text = _strip_markup(str(value or "")).replace("\r\n", "\n").replace("\r", "\n").strip()
+  text = _remove_inline_internal_fragments(text)
   if not text:
     return ""
   if "\n" not in text:
@@ -314,7 +415,10 @@ def _description_text(value: object) -> str:
   lines: list[str] = []
   blank = False
   for raw in text.splitlines():
-    line = re.sub(r"[ \t]+", " ", raw).strip()
+    line = _remove_inline_internal_fragments(raw)
+    line = re.sub(r"[ \t]+", " ", line).strip()
+    if _looks_internal_line(line):
+      continue
     if not line:
       if lines and not blank:
         lines.append("")
@@ -330,8 +434,20 @@ def _description_has(description: str, value: object) -> bool:
   return bool(text) and text.casefold() in description.casefold()
 
 
-def format_group_feed_message(candidate: dict) -> str:
-  role = _clean_line(candidate.get("role"), 180) or "Unknown role"
+def _append_group_join_link(lines: list[str], invite_url: str) -> None:
+  invite = _clean_line(invite_url, 240)
+  if not invite:
+    return
+  current = "\n".join(lines)
+  if invite in current:
+    return
+  if lines and lines[-1] != "":
+    lines.append("")
+  lines.append(f"Join the group for more jobs: {invite}")
+
+
+def format_group_feed_message(candidate: dict, invite_url: str = DEFAULT_GROUP_FEED_INVITE_URL) -> str:
+  role = _job_title(candidate)
   location = _clean_line(candidate.get("location"), 180)
   company = _clean_line(candidate.get("company"), 180)
   description = _description_text(candidate.get("description"))
@@ -369,6 +485,7 @@ def format_group_feed_message(candidate: dict) -> str:
     application_lines.append(f"Source: {source}")
   if application_lines:
     lines.extend(["Application", "", *application_lines])
+  _append_group_join_link(lines, invite_url)
   return "\n".join(lines).strip()
 
 

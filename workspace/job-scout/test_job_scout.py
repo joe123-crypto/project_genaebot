@@ -611,6 +611,61 @@ class GroupFeedTests(unittest.TestCase):
     self.assertIn("Closing Date: 14 July 2026", message)
     self.assertIn("Email: learnmore@tirufresh.co.zw", message)
     self.assertIn("Source: https://vacancymail.co.zw/jobs/poultry-supervisor/", message)
+    self.assertIn(f"Join the group for more jobs: {jobscout.constants.DEFAULT_GROUP_FEED_INVITE_URL}", message)
+
+  def test_group_feed_message_strips_web_internal_fragments(self) -> None:
+    message = jobscout.group_feed.format_group_feed_message(self.candidate(
+      description=(
+        "About Us\n"
+        "We are hiring for a public-facing role.\n"
+        "<script>window.adsbygoogle = window.adsbygoogle || [];</script>\n"
+        "(adsbygoogle = window.adsbygoogle || []).push({});\n"
+        '{"@context":"https://schema.org","@type":"JobPosting"}\n'
+        ".entry-content{display:block;color:#111;}\n"
+        "Key Responsibilities\n"
+        "- Drive safely across assigned routes.\n"
+      ),
+    ))
+
+    self.assertIn("We are hiring for a public-facing role.", message)
+    self.assertIn("- Drive safely across assigned routes.", message)
+    self.assertNotIn("adsbygoogle", message)
+    self.assertNotIn("window.", message)
+    self.assertNotIn("@context", message)
+    self.assertNotIn("schema.org", message)
+    self.assertNotIn("entry-content", message)
+    self.assertTrue(message.endswith(jobscout.constants.DEFAULT_GROUP_FEED_INVITE_URL))
+
+  def test_group_feed_message_keeps_prose_that_resembles_code(self) -> None:
+    message = jobscout.group_feed.format_group_feed_message(self.candidate(
+      description=(
+        "You will own the finance function (reporting to the CFO).\n"
+        "Deliverables => weekly reports and monthly reconciliations.\n"
+        "const tracker = window.adsbygoogle || [];\n"
+      ),
+    ))
+
+    self.assertIn("You will own the finance function (reporting to the CFO).", message)
+    self.assertIn("Deliverables => weekly reports and monthly reconciliations.", message)
+    self.assertNotIn("window.adsbygoogle", message)
+
+  def test_group_feed_message_uses_clean_short_title(self) -> None:
+    message = jobscout.group_feed.format_group_feed_message(self.candidate(
+      role="motivated, detail-oriented, and enthusiastic Accounting Intern to join our Finance Department",
+      description="Application Send your CV to hr@example.co.zw.",
+    ))
+    self.assertTrue(message.startswith("Job Title: Unknown role"))
+
+    doctor = jobscout.group_feed.format_group_feed_message(self.candidate(
+      role="Doctor* to attend to patients in accordance with regulations.",
+    ))
+    self.assertTrue(doctor.startswith("Job Title: Doctor to attend to patients"))
+
+    assistant = jobscout.group_feed.format_group_feed_message(self.candidate(role="Assistant to the CEO"))
+    self.assertTrue(assistant.startswith("Job Title: Assistant to the CEO"))
+
+    officer = jobscout.group_feed.format_group_feed_message(self.candidate(role="Officer for Finance"))
+    self.assertTrue(officer.startswith("Job Title: Officer for Finance"))
 
   def test_group_feed_cache_dedupes_and_writes_latest(self) -> None:
     candidate = self.candidate()
@@ -657,6 +712,7 @@ class GroupFeedTests(unittest.TestCase):
       self.assertTrue(result["ok"])
       self.assertEqual(result["sentCount"], 1)
       send.assert_called_once()
+      self.assertIn("Join the group for more jobs: https://chat.whatsapp.com/example", send.call_args.args[1])
       channel_fetch.assert_not_called()
       board_fetch.assert_not_called()
       state = json.loads((root / "delivered.json").read_text(encoding="utf-8"))
@@ -724,6 +780,29 @@ class GroupFeedTests(unittest.TestCase):
     args = parser.parse_args(["deliver-group-feed", "--target", "120363000000000000@g.us"])
     self.assertEqual(args.max_messages, jobscout.constants.DEFAULT_GROUP_FEED_MAX_MESSAGES)
     self.assertEqual(args.send_delay_seconds, jobscout.constants.DEFAULT_GROUP_FEED_SEND_DELAY_SECONDS)
+    self.assertIsNone(args.invite_url)
+
+  def test_deliver_group_feed_invite_url_env_is_used_when_flag_omitted(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      candidate = self.candidate()
+      jobscout.group_feed.write_group_feed_cache("cache-run", [candidate], {}, root)
+      parser = job_scout.build_parser()
+      args = parser.parse_args([
+        "deliver-group-feed",
+        "--target",
+        "120363000000000000@g.us",
+        "--group-feed-root",
+        str(root),
+        "--max-messages",
+        "1",
+        "--dry-run",
+      ])
+      with mock.patch.dict(job_scout.os.environ, {"JOB_SCOUT_GROUP_FEED_INVITE_URL": "https://chat.whatsapp.com/CUSTOM_FROM_ENV"}):
+        result = job_scout.cmd_deliver_group_feed(args)
+
+      self.assertTrue(result["ok"])
+      self.assertIn("Join the group for more jobs: https://chat.whatsapp.com/CUSTOM_FROM_ENV", result["messages"][0]["message"])
 
   def test_dispatch_cache_write_is_opt_in(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
