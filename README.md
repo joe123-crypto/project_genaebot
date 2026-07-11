@@ -29,10 +29,14 @@ read/write **boundary** (`deploy/docker-compose.override.yml`, installed):
 
 - `workspace/` is mounted **read-only** from the staged `live-source` — code and
   context the container cannot modify; it changes only via deploy.
-- `runtime/` and `agent-workspace/` are **host bind-mounts from
-  `/home/joseph/projects/genaebot/`** — editable in one place and live to the
-  container immediately (e.g. `runtime/public-service-gate/invites.json`). There is
-  no separate "host copy" to keep in sync.
+- `runtime/`, `agent-workspace-admin/`, and `agent-workspace-public/` are host
+  bind-mounts from `/home/joseph/projects/genaebot/`. Runtime state remains live
+  in one place. Agent context files are mounted individually from staged,
+  source-controlled templates so the gateway cannot rewrite them.
+- OpenClaw routes administrator DMs to the `main` agent in
+  `agent-workspace-admin/` and other WhatsApp DMs to the restricted `public`
+  agent in `agent-workspace-public/`. The public agent has no `MEMORY.md` or
+  `COMMANDS.md` and is limited to the sender-bound `public_service` tool.
 - credentials, identity, state, and `openclaw.json` stay in the base
   `openclaw-state` Docker volume.
 - The override also mounts the current `entrypoint.sh` over the image's baked one,
@@ -70,10 +74,12 @@ confinement, which is why the editable checkout lives under `projects/`.
 │   ├── patch-openclaw-config.py
 │   ├── github-actions/           # Source-controlled host automation helpers
 │   ├── docker-compose.override.yml
-│   ├── agent-workspace/          # Files copied into the live agent workspace
+│   ├── agent-workspace-admin/    # Private administrator context template
+│   ├── agent-workspace-public/   # Restricted public context template
 │   └── container/entrypoint.sh   # Tracked custom container entrypoint
 ├── workspace/                    # Developer-owned source/context
-├── agent-workspace/              # Small writable agent workspace, ignored
+├── agent-workspace-admin/        # Live private admin workspace, ignored
+├── agent-workspace-public/       # Live restricted public workspace, ignored
 ├── runtime/                      # Command/runtime state, ignored
 └── gitclaw/                      # Retired GitClaw archive, ignored
 ```
@@ -82,8 +88,11 @@ confinement, which is why the editable checkout lives under `projects/`.
 docs, selected skills, and agent identity files. It is not the public bot's active
 working room anymore.
 
-`agent-workspace/` is the public bot's active room in the live container. It is
-small by design: read-only context files plus writable `data/` and `files/`.
+`agent-workspace-admin/` is the `main` agent's private room and contains operator
+memory and context. `agent-workspace-public/` is the public agent's room; its
+bootstrap files contain public-only context and are mounted read-only. OpenClaw
+may write its small workspace-state file there, but the public model has no
+general shell or filesystem tools.
 
 `runtime/` is for mutable command state such as account-link caches, public-news
 subscriptions, public-service routing state, cron state, and cron logs. It is
@@ -263,7 +272,9 @@ The deploy script used by both paths:
   boundary is active — `workspace/` and agent-room docs then arrive via the
   read-only bind mounts instead)
 - applies `config/openclaw.template.json` to the container's live config
-- verifies `agents.defaults.workspace=/home/joseph/.openclaw/agent-workspace`
+- verifies the `main` and `public` agent definitions, their separate workspace
+  paths, required context files, and the absence of public `MEMORY.md` and
+  `COMMANDS.md`
   with bounded retries while the recreated container stabilizes
 - restarts `openclaw-gateway-container.service`
 - runs the deployment health check
