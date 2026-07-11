@@ -1,5 +1,5 @@
 import { expandHome, getPluginConfig } from "../lib/config.js";
-import { HELPER_TIMEOUT_MS, busyReply, helperLimiter, isQueueFullError, runJsonCommand, sanitizeLogText } from "../lib/runtime.js";
+import { busyReply, isQueueFullError, sanitizeLogText } from "../lib/runtime.js";
 import {
   accountLinkInvite,
   accountLinkRequiredText,
@@ -36,11 +36,6 @@ function getJobScoutScript(api) {
   return expandHome(configuredPath);
 }
 
-function runJobScoutScript(api, args) {
-  const script = getJobScoutScript(api);
-  return helperLimiter(() => runJsonCommand(script, args, { timeoutMs: HELPER_TIMEOUT_MS }));
-}
-
 function logJobScoutFailure(api, phase, script, err) {
   const status = err?.status ?? err?.code;
   const statusPart = status === undefined ? "" : ` status=${status}`;
@@ -72,11 +67,10 @@ export function isJobScoutSetupCommand(text) {
 }
 
 function jobScoutStartText(setupUrl) {
-  return `Connect Gmail here:
-${setupUrl}
+  return `How do you want to set up Job Scout?
 
-1. Answer a few short questions.
-2. Upload your CV.`;
+1. Set it up in the web app: ${setupUrl}
+2. Set it up here in chat`;
 }
 
 export async function handleJobScoutRequest(api, sender) {
@@ -85,7 +79,6 @@ export async function handleJobScoutRequest(api, sender) {
   }
   try {
     const accountLinkScript = getAccountLinkScript(api);
-    const jobScoutScript = getJobScoutScript(api);
     let status;
     try {
       status = await accountLinkStatus(api, sender);
@@ -107,14 +100,7 @@ export async function handleJobScoutRequest(api, sender) {
         text: accountLinkRequiredText(linkInvite.setupUrl, "Job Scout"),
       };
     }
-    let invite;
-    try {
-      invite = await runJobScoutScript(api, ["create-invite", "--phone", sender]);
-    } catch (err) {
-      logJobScoutFailure(api, "Job Scout invite creation", jobScoutScript, err);
-      throw err;
-    }
-    const setupUrl = invite.setupUrl || scopedAppUrl(api, status.publicUserId, "/connect-gmail");
+    const setupUrl = scopedAppUrl(api, status.publicUserId, "/job-scout");
     return {
       handled: true,
       text: jobScoutStartText(setupUrl),

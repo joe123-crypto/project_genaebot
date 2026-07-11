@@ -6,11 +6,13 @@ Purpose: onboard a public WhatsApp user for Job Scout without exposing internal 
 
 Allowed in public chat:
 
-- Send the Agent Genaie setup link created for this WhatsApp chat.
+- Send the Agent Genaie account-link setup URL for unlinked users.
+- Send the scoped Agent Genaie Job Scout setup page for linked users.
 - Tell the user to sign in and connect Gmail in the app.
-- Offer two setup paths: guided questions or CV autofill.
+- Offer two setup paths: web setup or chat setup.
+- If the user chooses chat setup, offer guided questions or CV autofill.
 - Ask only one or two onboarding questions per message.
-- Ask the user to upload their CV in this WhatsApp chat.
+- Ask the user to upload their CV in this WhatsApp chat only after they choose chat setup.
 - Read/extract CV details only after the user explicitly permits it.
 - Confirm that Job Scout will use this WhatsApp chat for updates.
 - Give the scam-safety warning and require acknowledgement before saving the final Job Scout profile.
@@ -33,8 +35,10 @@ Agent checks whether this WhatsApp chat is linked to an Agent Genaie login
 If not linked, agent creates an account-link URL for the requester's WhatsApp phone
 User signs in to Agent Genaie with their email
 Setup link binds this WhatsApp chat to that app user
-User connects Gmail in the app
-Agent asks whether the user wants guided questions or CV autofill
+Agent sends two setup choices: web app or chat
+If user chooses web setup, agent sends the scoped Agent Genaie Job Scout Setup page
+If user chooses chat setup, user connects Gmail in the app
+Agent asks whether the user wants guided questions or CV autofill inside chat
 Agent collects target roles, a preferred location that includes its country, and other details gradually, one or two questions per message
 Agent summarizes the profile and asks for corrections
 Agent sends scam warning and requires acknowledgement
@@ -72,28 +76,45 @@ Check Spam if the sign-in email doesn't arrive.
 
 Stop here until the user has opened the link and signed in. Do not collect CV/profile details before this WhatsApp chat is linked.
 
-If the status says `"linked": true`, create or reuse the Job Scout setup path:
-
-```bash
-/home/joseph/.openclaw/workspace/bin/job-scout create-invite --phone "<whatsapp phone>"
-```
-
-Send the returned `setupUrl` to the user with this public text:
+If the status says `"linked": true`, use the returned `publicUserId` to build the scoped Job Scout setup page:
 
 ```text
-Connect Gmail here:
-<setupUrl>
-
-1. Answer a few short questions.
-2. Upload your CV so I can use its details.
+https://agent-genaie.../<publicUserId>/job-scout
 ```
 
-## Setup Option Choice
-
-If the user has not chosen a setup path, ask:
+Send this public text:
 
 ```text
 How do you want to set up Job Scout?
+
+1. Set it up in the web app: https://agent-genaie.../<publicUserId>/job-scout
+2. Set it up here in chat
+```
+
+Use `/login?next=%2Fjob-scout` as a fallback only if the frontend supports that redirect behavior. Otherwise, rely on the account-link status `publicUserId` and fail gracefully if it is absent. Do not collect CV/profile details before the user chooses chat setup.
+
+## Setup Option Choice
+
+If the linked user has not chosen web setup or chat setup, ask:
+
+```text
+How do you want to set up Job Scout?
+
+1. Set it up in the web app.
+2. Set it up here in chat.
+```
+
+If the user chooses option 1, send the scoped Job Scout setup page and stop:
+
+```text
+Set it up here:
+https://agent-genaie.../<publicUserId>/job-scout
+```
+
+If the user chooses option 2, continue in chat and ask:
+
+```text
+How do you want to set up Job Scout in chat?
 
 1. Answer a few questions.
 2. Upload your CV.
@@ -200,7 +221,7 @@ Save only after the user confirms or corrects the summary.
 Before saving the final Job Scout profile, send this warning:
 
 ```text
-Never pay upfront for an application, interview, medical check, training, uniform, or job placement. Genaie can't guarantee every listing is legitimate.
+Never pay upfront for an application, interview, medical check, training, uniform, or job placement. Scammers exist, and Genaie is not accountable if you get scammed.
 
 Reply "I understand" to continue.
 ```

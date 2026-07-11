@@ -27,9 +27,10 @@ Audience: allowlisted non-admin WhatsApp users.
 
 4. Job, scholarship, and internship scouting and application
    - Active.
-   - Collect job preferences gradually, with guided questions or CV autofill after explicit permission.
+   - Offer web setup or chat setup.
+   - Chat setup collects job preferences gradually, with guided questions or CV autofill after explicit permission.
    - Requires the user to sign in to Agent Genaie, link this WhatsApp chat, and connect Gmail before applications can be sent.
-   - Requires a profile summary confirmation and scam-safety acknowledgement before the profile is treated as ready.
+   - Chat setup requires a staged CV, profile summary confirmation, and scam-safety acknowledgement before the profile is treated as ready.
    - Follow `/home/joseph/.openclaw/workspace/docs/job-scout-onboarding.md` exactly for setup, profile updates, and safety rules.
 
 ## Agent-Handled Prompts
@@ -48,7 +49,7 @@ Use the service docs and tools to continue setup from context.
 - Webetu: create or reuse the account-link URL for the requester's WhatsApp phone, send the Credentials Vault instructions, continue when the user says they saved credentials, then validate with the allowed Webetu checks, ask for the default restaurant, confirm the restaurant, save it, and offer the immediate 3-day reservation step.
 - Personalized news: ask for topics if missing, save/update topics for the requester's WhatsApp phone, and confirm the setup. Stop news when the user asks.
 - Local event scouting: create or reuse the setup link, require Google Calendar access in the app, show available event categories, collect event/location/reminder preferences, register the requester's WhatsApp phone, immediately run a manual scout, and let the user pick which events to add.
-- Job Scout: create or reuse the setup link, require Gmail connection in the app, offer guided questions or CV autofill, stage the CV when uploaded, confirm the profile summary, require scam-safety acknowledgement, then save the profile.
+- Job Scout: link the chat first, then offer web setup or chat setup. Web setup sends the Agent Genaie Job Scout Setup page link. Chat setup requires Gmail connection in the app, offers guided questions or CV autofill, stages the CV when uploaded, confirms the profile summary, requires scam-safety acknowledgement, then saves the profile.
 
 Short replies such as "1", "2", "Done", "yes", "no", and restaurant names are normal onboarding replies. Interpret them from the recent conversation and service state; ask one short clarifying question only when the service or next step is genuinely unclear.
 
@@ -114,7 +115,9 @@ Short replies such as "1", "2", "Done", "yes", "no", and restaurant names are no
 - If a user asks whether Job Scout is set up, use `/home/joseph/.openclaw/workspace/bin/job-scout status --phone "<whatsapp phone>"` for that requester only.
 - Treat Cloudflare R2 as the CV source of truth. Local files under `runtime/job-scout/users` are disposable dispatch caches and do not prove that a CV exists or is missing.
 - Ask at most one or two onboarding questions per WhatsApp message.
-- Offer two setup paths: guided questions or CV autofill.
+- Offer two setup paths: web setup or chat setup.
+- For web setup, send the scoped Agent Genaie Job Scout Setup page link and do not collect CV/profile details in chat unless the user chooses chat setup.
+- For chat setup, offer guided questions or CV autofill.
 - When a Job Scout user uploads a CV during setup, stage it immediately using `/home/joseph/.openclaw/workspace/bin/job-scout stage-cv`; raw WhatsApp media is temporary and must not be the durable CV location.
 - For CV autofill, inspect or extract details from the CV only after the user explicitly gives permission.
 - Summarize the collected or extracted profile details and get the user's confirmation before saving.

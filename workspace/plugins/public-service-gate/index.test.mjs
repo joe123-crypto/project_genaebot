@@ -125,6 +125,104 @@ test("job scout onboarding has a generic disabled response", async () => {
   assert.doesNotMatch(reply.text, /pilot/i);
 });
 
+test("linked job scout onboarding offers web app and chat setup", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-jobs-"));
+  const accountLinkScript = path.join(dir, "account-link");
+  const jobScoutScript = path.join(dir, "job-scout");
+  const helperLog = path.join(dir, "helper.log");
+  writeExecutable(
+    accountLinkScript,
+    `#!/usr/bin/env bash
+set -eu
+case "$1" in
+  status)
+    printf '{"linked":true,"publicUserId":"public-123"}\\n'
+    ;;
+  *) exit 2 ;;
+esac
+`,
+  );
+  writeExecutable(
+    jobScoutScript,
+    `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "${helperLog}"
+exit 2
+`,
+  );
+  const api = {
+    config: {
+      plugins: {
+        entries: {
+          "public-service-gate": {
+            config: {
+              enabled: true,
+              accountLinkScript,
+              jobScoutScript,
+              jobScoutOnboardingEnabled: true,
+              agentGenaiePublicBaseUrl: "https://app.example.test",
+            },
+          },
+        },
+      },
+    },
+    logger: {
+      warn() {},
+    },
+  };
+
+  const reply = await handleJobScoutRequest(api, MEMBER);
+
+  assert.equal(reply.handled, true);
+  assert.match(reply.text, /1\. Set it up in the web app: https:\/\/app\.example\.test\/public-123\/job-scout/);
+  assert.match(reply.text, /2\. Set it up here in chat/);
+  assert.equal(fs.existsSync(helperLog), false);
+});
+
+test("unlinked job scout onboarding sends account-link setup link", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-jobs-"));
+  const accountLinkScript = path.join(dir, "account-link");
+  writeExecutable(
+    accountLinkScript,
+    `#!/usr/bin/env bash
+set -eu
+case "$1" in
+  status)
+    printf '{"linked":false}\\n'
+    ;;
+  create-invite)
+    if [ "$5" != "jobs" ]; then exit 2; fi
+    printf '{"setupUrl":"https://app.example.test/link-jobs"}\\n'
+    ;;
+  *) exit 2 ;;
+esac
+`,
+  );
+  const api = {
+    config: {
+      plugins: {
+        entries: {
+          "public-service-gate": {
+            config: {
+              enabled: true,
+              accountLinkScript,
+              jobScoutOnboardingEnabled: true,
+            },
+          },
+        },
+      },
+    },
+    logger: {
+      warn() {},
+    },
+  };
+
+  const reply = await handleJobScoutRequest(api, MEMBER);
+
+  assert.equal(reply.handled, true);
+  assert.match(reply.text, /Sign in here to set up Job Scout/);
+  assert.match(reply.text, /https:\/\/app\.example\.test\/link-jobs/);
+});
+
 function eventFor(text, sender = MEMBER) {
   return {
     channel: "whatsapp",

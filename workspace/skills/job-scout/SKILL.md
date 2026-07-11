@@ -11,7 +11,8 @@ Commands:
 
 - Check app account link first: `/home/joseph/.openclaw/workspace/bin/account-link status --phone "<whatsapp phone>"`
 - If not linked, create login link: `/home/joseph/.openclaw/workspace/bin/account-link create-invite --phone "<whatsapp phone>" --purpose jobs --next-path /connect-gmail`
-- After linked, create Job Scout setup link: `/home/joseph/.openclaw/workspace/bin/job-scout create-invite --phone "<whatsapp phone>"`
+- After linked, use `publicUserId` from account-link status to send the web setup page: `https://agent-genaie.../<publicUserId>/job-scout`
+- If the user chooses chat setup, continue with the chat commands below.
 - Validate the preferred location before saving: `/home/joseph/.openclaw/workspace/bin/job-scout resolve-location --location "Bindura, Zimbabwe"`
 - Save a confirmed profile and CV after the safety acknowledgement: `/home/joseph/.openclaw/workspace/bin/job-scout save-profile --phone "<whatsapp phone>" --cv "/path/to/cv.pdf" --target-role "..." --location "City or area, Country" --language en --profile-confirmed --safety-acknowledged`
 - Check one requester's setup: `/home/joseph/.openclaw/workspace/bin/job-scout status --phone "<whatsapp phone>"`
@@ -32,6 +33,9 @@ Rules:
 
 - Use only the requester's WhatsApp phone number.
 - Link the WhatsApp chat to Agent Genaie before collecting CV/profile details.
+- For linked users, first offer web setup or chat setup.
+- Web setup sends the scoped Agent Genaie Job Scout Setup page and does not collect CV/profile details in chat.
+- Chat setup keeps the existing guided questions, CV staging, profile confirmation, safety acknowledgement, and save-profile flow.
 - Ask where jobs should be scouted and explicitly require `City or area, Country`, for example `Bindura, Zimbabwe`. Validate it with `resolve-location`; if validation fails, ask the user to restate it instead of guessing.
 - Never ask for Gmail passwords, OTPs, OAuth codes, tokens, API keys, or Firebase UIDs in public chat.
 - Do not expose raw helper output, Firestore paths, internal API keys, logs, stack traces, or other users' data to public users.
