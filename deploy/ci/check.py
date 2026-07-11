@@ -140,7 +140,7 @@ def check_staged_source(files: dict[str, str], checks: Checks) -> None:
         for rel, staged_path in staged.items():
             if rel.startswith("workspace/"):
                 source_rel = rel
-            elif rel.startswith("agent-workspace/"):
+            elif rel.startswith(("agent-workspace-admin/", "agent-workspace-public/")):
                 source_rel = f"deploy/{rel}"
             else:
                 source_rel = rel
@@ -214,8 +214,13 @@ def check_runtime_references(checks: Checks) -> None:
 
     compose = (ROOT / "deploy/docker-compose.override.yml").read_text(encoding="utf-8")
     checks.require(
-        "./live-source/workspace/USER.md:/home/joseph/.openclaw/agent-workspace/USER.md:ro" in compose,
-        "container boundary does not mount USER.md read-only into agent-workspace",
+        "./live-source/workspace/USER.md:/home/joseph/.openclaw/agent-workspace-admin/USER.md:ro" in compose,
+        "container boundary does not mount USER.md read-only into the admin workspace",
+    )
+    checks.require(
+        "/home/joseph/.openclaw/agent-workspace-public/MEMORY.md" not in compose
+        and "/home/joseph/.openclaw/agent-workspace-public/COMMANDS.md" not in compose,
+        "public workspace must not mount MEMORY.md or COMMANDS.md",
     )
 
 

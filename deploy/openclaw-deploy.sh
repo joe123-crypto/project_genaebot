@@ -199,6 +199,23 @@ recreate_boundary_stack() {
   local docker
   docker="$(docker_bin)"
   boundary_active || return 0
+  install -d -o joseph -g joseph -m 0700 \
+    /home/joseph/projects/genaebot/agent-workspace-admin \
+    /home/joseph/projects/genaebot/agent-workspace-admin/data \
+    /home/joseph/projects/genaebot/agent-workspace-admin/files \
+    /home/joseph/projects/genaebot/agent-workspace-public \
+    /home/joseph/projects/genaebot/agent-workspace-public/data \
+    /home/joseph/projects/genaebot/agent-workspace-public/files
+  find /home/joseph/projects/genaebot/agent-workspace-public -maxdepth 1 -type f \
+    \( -name MEMORY.md -o -name COMMANDS.md \) \
+    -delete
+  if [ -d /home/joseph/projects/genaebot/agent-workspace ] && \
+     [ ! -e /home/joseph/projects/genaebot/agent-workspace-admin/.migrated-from-agent-workspace ]; then
+    log "Migrate existing private agent workspace into agent-workspace-admin"
+    rsync -a /home/joseph/projects/genaebot/agent-workspace/ /home/joseph/projects/genaebot/agent-workspace-admin/
+    touch /home/joseph/projects/genaebot/agent-workspace-admin/.migrated-from-agent-workspace
+    chown -R joseph:joseph /home/joseph/projects/genaebot/agent-workspace-admin
+  fi
   install -d -o joseph -g joseph -m 0700 /home/joseph/projects/genaebot/runtime/job-scout
   install -d -o joseph -g joseph -m 0700 \
     /home/joseph/projects/genaebot/runtime/job-scout-channel \
@@ -350,7 +367,7 @@ def sha256(path: Path) -> str:
 def source_for_stage(rel: str) -> str | None:
     if rel.startswith("workspace/"):
         return rel
-    if rel.startswith("agent-workspace/"):
+    if rel.startswith(("agent-workspace-admin/", "agent-workspace-public/")):
         return f"deploy/{rel}"
     if rel == "config/openclaw.template.json":
         return rel
@@ -448,9 +465,12 @@ sync_source_to_container() {
   log "Sync staged source into live container volume"
   "$docker" exec "$CONTAINER" mkdir -p \
     /home/joseph/.openclaw/workspace \
-    /home/joseph/.openclaw/agent-workspace \
-    /home/joseph/.openclaw/agent-workspace/data \
-    /home/joseph/.openclaw/agent-workspace/files \
+    /home/joseph/.openclaw/agent-workspace-admin \
+    /home/joseph/.openclaw/agent-workspace-admin/data \
+    /home/joseph/.openclaw/agent-workspace-admin/files \
+    /home/joseph/.openclaw/agent-workspace-public \
+    /home/joseph/.openclaw/agent-workspace-public/data \
+    /home/joseph/.openclaw/agent-workspace-public/files \
     /home/joseph/.openclaw/runtime \
     /home/joseph/.openclaw/runtime/account-link \
     /home/joseph/.openclaw/runtime/cron-state/algeria-exhibitions-listener \
@@ -461,38 +481,32 @@ sync_source_to_container() {
   "$docker" cp "$STAGE_DIR/workspace/." "$CONTAINER:/home/joseph/.openclaw/workspace/"
   "$docker" exec "$CONTAINER" chown -R joseph:joseph \
     /home/joseph/.openclaw/workspace \
-    /home/joseph/.openclaw/agent-workspace/data \
-    /home/joseph/.openclaw/agent-workspace/files \
+    /home/joseph/.openclaw/agent-workspace-admin/data \
+    /home/joseph/.openclaw/agent-workspace-admin/files \
+    /home/joseph/.openclaw/agent-workspace-public/data \
+    /home/joseph/.openclaw/agent-workspace-public/files \
     /home/joseph/.openclaw/runtime
 
-  for doc in AGENTS.md HEARTBEAT.md IDENTITY.md MEMORY.md README.md SOUL.md TOOLS.md USER.md; do
-    if [ -f "$STAGE_DIR/agent-workspace/$doc" ]; then
-      "$docker" cp "$STAGE_DIR/agent-workspace/$doc" "$CONTAINER:/home/joseph/.openclaw/agent-workspace/$doc"
-    elif [ -f "$STAGE_DIR/workspace/$doc" ]; then
-      "$docker" cp "$STAGE_DIR/workspace/$doc" "$CONTAINER:/home/joseph/.openclaw/agent-workspace/$doc"
+  for doc in AGENTS.md COMMANDS.md README.md; do
+    if [ -f "$STAGE_DIR/agent-workspace-admin/$doc" ]; then
+      "$docker" cp "$STAGE_DIR/agent-workspace-admin/$doc" "$CONTAINER:/home/joseph/.openclaw/agent-workspace-admin/$doc"
     fi
   done
-  "$docker" cp "$STAGE_DIR/agent-workspace/COMMANDS.md" "$CONTAINER:/home/joseph/.openclaw/agent-workspace/COMMANDS.md"
-  "$docker" exec "$CONTAINER" chown root:root \
-    /home/joseph/.openclaw/agent-workspace/AGENTS.md \
-    /home/joseph/.openclaw/agent-workspace/HEARTBEAT.md \
-    /home/joseph/.openclaw/agent-workspace/IDENTITY.md \
-    /home/joseph/.openclaw/agent-workspace/MEMORY.md \
-    /home/joseph/.openclaw/agent-workspace/README.md \
-    /home/joseph/.openclaw/agent-workspace/SOUL.md \
-    /home/joseph/.openclaw/agent-workspace/TOOLS.md \
-    /home/joseph/.openclaw/agent-workspace/USER.md \
-    /home/joseph/.openclaw/agent-workspace/COMMANDS.md
-  "$docker" exec "$CONTAINER" chmod 0444 \
-    /home/joseph/.openclaw/agent-workspace/AGENTS.md \
-    /home/joseph/.openclaw/agent-workspace/HEARTBEAT.md \
-    /home/joseph/.openclaw/agent-workspace/IDENTITY.md \
-    /home/joseph/.openclaw/agent-workspace/MEMORY.md \
-    /home/joseph/.openclaw/agent-workspace/README.md \
-    /home/joseph/.openclaw/agent-workspace/SOUL.md \
-    /home/joseph/.openclaw/agent-workspace/TOOLS.md \
-    /home/joseph/.openclaw/agent-workspace/USER.md \
-    /home/joseph/.openclaw/agent-workspace/COMMANDS.md
+  for doc in HEARTBEAT.md IDENTITY.md MEMORY.md SOUL.md TOOLS.md USER.md; do
+    if [ -f "$STAGE_DIR/workspace/$doc" ]; then
+      "$docker" cp "$STAGE_DIR/workspace/$doc" "$CONTAINER:/home/joseph/.openclaw/agent-workspace-admin/$doc"
+    fi
+  done
+  for doc in AGENTS.md README.md; do
+    if [ -f "$STAGE_DIR/agent-workspace-public/$doc" ]; then
+      "$docker" cp "$STAGE_DIR/agent-workspace-public/$doc" "$CONTAINER:/home/joseph/.openclaw/agent-workspace-public/$doc"
+    elif [ -f "$STAGE_DIR/workspace/$doc" ]; then
+      "$docker" cp "$STAGE_DIR/workspace/$doc" "$CONTAINER:/home/joseph/.openclaw/agent-workspace-public/$doc"
+    fi
+  done
+  "$docker" exec "$CONTAINER" chown -R joseph:joseph \
+    /home/joseph/.openclaw/agent-workspace-admin \
+    /home/joseph/.openclaw/agent-workspace-public
 }
 
 apply_config_template() {
@@ -583,7 +597,7 @@ diagnose_health_failure() {
 verify_live_workspace() {
   local docker rc _attempt
   docker="$(docker_bin)"
-  log "Verify live workspace setting"
+  log "Verify live agent workspace split"
   rc=1
   for _attempt in $(seq 1 5); do
     set +e
@@ -592,16 +606,26 @@ import json
 from pathlib import Path
 
 config = json.loads(Path("/home/joseph/.openclaw/openclaw.json").read_text(encoding="utf-8"))
-workspace = config.get("agents", {}).get("defaults", {}).get("workspace")
-print(f"agents.defaults.workspace={workspace}")
-if workspace != "/home/joseph/.openclaw/agent-workspace":
-    raise SystemExit("live container still points at the old workspace")
-
-root = Path(workspace)
-expected = ["AGENTS.md", "COMMANDS.md", "README.md", "data", "files"]
-missing = [name for name in expected if not (root / name).exists()]
-if missing:
-    raise SystemExit(f"agent-workspace missing: {', '.join(missing)}")
+agents = config.get("agents", {})
+listed = {entry.get("id"): entry for entry in agents.get("list", [])}
+admin = listed.get("main", {})
+public = listed.get("public", {})
+if admin.get("workspace") != "/home/joseph/.openclaw/agent-workspace-admin":
+    raise SystemExit("main agent workspace is not isolated")
+if public.get("workspace") != "/home/joseph/.openclaw/agent-workspace-public":
+    raise SystemExit("public agent workspace is not isolated")
+for workspace, expected in {
+    admin["workspace"]: ["AGENTS.md", "COMMANDS.md", "README.md", "MEMORY.md", "USER.md", "data", "files"],
+    public["workspace"]: ["AGENTS.md", "HEARTBEAT.md", "README.md", "TOOLS.md", "USER.md"],
+}.items():
+    root = Path(workspace)
+    missing = [name for name in expected if not (root / name).exists()]
+    if missing:
+        raise SystemExit(f"{workspace} missing: {', '.join(missing)}")
+public_root = Path(public["workspace"])
+for forbidden in ("MEMORY.md", "COMMANDS.md"):
+    if (public_root / forbidden).exists():
+        raise SystemExit(f"public workspace contains forbidden context: {forbidden}")
 
 job_scout = Path("/home/joseph/.openclaw/workspace/bin/job-scout")
 if not job_scout.is_file():

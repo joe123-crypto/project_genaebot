@@ -40,6 +40,7 @@ esac
     );
     effectiveConfig = { ...effectiveConfig, inviteScript };
   }
+  let toolFactory;
   const api = {
     config: {
       plugins: {
@@ -96,6 +97,9 @@ esac
     on(name, callback, options = {}) {
       handlers.push({ name, callback, priority: options?.priority ?? 0 });
     },
+    registerTool(factory, options) {
+      if (options?.name === "public_service") toolFactory = factory;
+    },
   };
   plugin.register(api);
   handlers.sort((a, b) => b.priority - a.priority);
@@ -115,8 +119,20 @@ esac
     }
     return undefined;
   };
+  dispatch.publicTool = (ctx) => toolFactory?.(ctx);
   return dispatch;
 }
+
+test("public service tool is exposed only to the public WhatsApp agent with a trusted sender", () => {
+  const handler = registerHandler({});
+  assert.equal(handler.publicTool({ agentId: "main", requesterSenderId: MEMBER, messageChannel: "whatsapp" }), null);
+  assert.equal(handler.publicTool({ agentId: "public", requesterSenderId: "", messageChannel: "whatsapp" }).name, "public_service");
+  assert.equal(handler.publicTool({ agentId: "public", requesterSenderId: MEMBER, messageChannel: "telegram" }).name, "public_service");
+  const tool = handler.publicTool({ agentId: "public", requesterSenderId: MEMBER, messageChannel: "whatsapp" });
+  assert.equal(tool.name, "public_service");
+  assert.equal(Object.hasOwn(tool.parameters.properties, "phone"), false);
+  assert.deepEqual(tool.parameters.required, ["action"]);
+});
 
 test("job scout onboarding has a generic disabled response", async () => {
   const reply = await handleJobScoutRequest({ pluginConfig: { jobScoutOnboardingEnabled: false } }, UNKNOWN);

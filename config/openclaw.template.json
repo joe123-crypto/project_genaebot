@@ -22,7 +22,7 @@
           "vercel-ai-gateway/deepseek/deepseek-v4-pro"
         ]
       },
-      "workspace": "/home/joseph/.openclaw/agent-workspace",
+      "workspace": "/home/joseph/.openclaw/agent-workspace-admin",
       "typingMode": "instant",
       "typingIntervalSeconds": 6,
       "blockStreamingDefault": "off",
@@ -48,8 +48,44 @@
         }
       },
       "thinkingDefault": "max"
-    }
+    },
+    "list": [
+      {
+        "id": "main",
+        "default": true,
+        "workspace": "/home/joseph/.openclaw/agent-workspace-admin"
+      },
+      {
+        "id": "public",
+        "workspace": "/home/joseph/.openclaw/agent-workspace-public",
+        "memorySearch": {
+          "enabled": false
+        },
+        "tools": {
+          "allow": ["public_service"],
+          "deny": ["exec", "process", "read", "write", "edit", "apply_patch", "browser", "gateway", "cron", "sessions_list", "sessions_history", "sessions_send", "subagents", "agents_list", "message"]
+        }
+      }
+    ]
   },
+  "bindings": [
+    {
+      "agentId": "public",
+      "match": {
+        "channel": "whatsapp",
+        "accountId": "*",
+        "peer": { "kind": "direct", "id": "*" }
+      }
+    },
+    {
+      "agentId": "main",
+      "match": {
+        "channel": "whatsapp",
+        "accountId": "*",
+        "peer": { "kind": "group", "id": "*" }
+      }
+    }
+  ],
   "plugins": {
     "entries": {
       "vercel-ai-gateway": {

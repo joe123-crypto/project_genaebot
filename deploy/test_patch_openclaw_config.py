@@ -45,6 +45,25 @@ class ApplyTemplateTests(unittest.TestCase):
             merged["plugins"]["entries"]["public-service-gate"]["config"]["whatsappAdminUsers"],
             ["+213000000000"],
         )
+        self.assertEqual(merged["bindings"][0]["agentId"], "main")
+        self.assertEqual(merged["bindings"][0]["match"]["peer"]["id"], "+213000000000")
+        self.assertEqual(direct["+213000000000"]["systemPrompt"], "peer override")
+
+    def test_admin_prompt_is_added_without_overwriting_public_wildcard(self):
+        live = {
+            "plugins": {"entries": {"public-service-gate": {"config": {"whatsappAdminUsers": ["+213000000000"]}}}}
+        }
+        template = {
+            "bindings": [{"agentId": "public", "match": {"channel": "whatsapp"}}],
+            "plugins": {"entries": {"public-service-gate": {"config": {}}}},
+        }
+
+        merged = PATCHER.apply_template(live, template, "public prompt")
+
+        direct = merged["channels"]["whatsapp"]["direct"]
+        self.assertEqual(direct["*"]["systemPrompt"], "public prompt")
+        self.assertIn("private administrator", direct["+213000000000"]["systemPrompt"])
+        self.assertEqual([binding["agentId"] for binding in merged["bindings"]], ["main", "public"])
 
     def test_empty_prompt_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "prompt is empty"):

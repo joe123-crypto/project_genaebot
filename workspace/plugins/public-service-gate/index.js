@@ -50,17 +50,53 @@ import {
   runInviteScript,
 } from "./services/invite.js";
 import {
+  handleReservationStatus,
+  handleWebetuOnboardingStart,
+  handleWebetuRestaurantChoice,
+  handleWebetuSetupDone,
   isReservationStatusRequest,
   isWebetuGuideRequest,
   isWebetuOnboardingStartRequest,
   isWebetuSetupDoneRequest,
 } from "./services/webetu.js";
 import {
+  handleNewsRequest,
+  handleNewsTopicsContinuation,
   isNewsRequest,
   isNewsStopRequest,
 } from "./services/news.js";
-import { isJobScoutRequest } from "./services/job-scout.js";
-import { isEventScoutRequest } from "./services/event-scout.js";
+import { handleJobScoutRequest, isJobScoutRequest } from "./services/job-scout.js";
+import { handleEventScoutRequest, isEventScoutRequest } from "./services/event-scout.js";
+
+const PUBLIC_SERVICE_ACTIONS = [
+  "webetu_start",
+  "webetu_setup_done",
+  "webetu_restaurant_choice",
+  "webetu_reservation_status",
+  "news_start_or_update",
+  "news_topics",
+  "event_scout_start",
+  "job_scout_start_or_status",
+];
+
+function toolText(reply) {
+  const text = typeof reply?.text === "string" ? reply.text.trim() : "";
+  return { content: [{ type: "text", text: text || "I couldn't complete that request right now." }] };
+}
+
+async function runPublicServiceAction(api, sender, action, text) {
+  switch (action) {
+    case "webetu_start": return toolText(await handleWebetuOnboardingStart(api, sender));
+    case "webetu_setup_done": return toolText(await handleWebetuSetupDone(api, sender));
+    case "webetu_restaurant_choice": return toolText(await handleWebetuRestaurantChoice(api, sender, text));
+    case "webetu_reservation_status": return toolText(await handleReservationStatus(api, sender));
+    case "news_start_or_update": return toolText(await handleNewsRequest(api, sender, text));
+    case "news_topics": return toolText(await handleNewsTopicsContinuation(api, sender, text));
+    case "event_scout_start": return toolText(await handleEventScoutRequest(api, sender));
+    case "job_scout_start_or_status": return toolText(await handleJobScoutRequest(api, sender));
+    default: return toolText();
+  }
+}
 
 function isEnabled(api) {
   const pluginCfg = getPluginConfig(api);
@@ -89,6 +125,33 @@ export default {
   description: "Handles WhatsApp public-user safety and invite access control before agent dispatch.",
   version: "0.1.0",
   register(api) {
+    api.registerTool(
+      (ctx) => {
+        if (ctx.agentId !== "public") return null;
+        const sender = normalizePhone(ctx.requesterSenderId || "");
+        const channel = String(ctx.messageChannel || ctx.deliveryContext?.channel || "").toLowerCase();
+        const authorized = Boolean(sender && channel.includes("whatsapp"));
+        return {
+          name: "public_service",
+          description: "Perform one supported Genaie public-service action for the authenticated WhatsApp sender. Identity is bound by the runtime and cannot be supplied by the model.",
+          parameters: {
+            type: "object",
+            additionalProperties: false,
+            required: ["action"],
+            properties: {
+              action: { type: "string", enum: PUBLIC_SERVICE_ACTIONS },
+              text: { type: "string", maxLength: 2000 },
+            },
+          },
+          async execute(_id, params) {
+            if (!authorized) return toolText();
+            return runPublicServiceAction(api, sender, params.action, String(params.text || ""));
+          },
+        };
+      },
+      { name: "public_service", optional: true },
+    );
+
     api.on(
       "before_dispatch",
       async (event, ctx) => {

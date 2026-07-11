@@ -86,6 +86,37 @@ def set_public_whatsapp_prompt(config: dict, prompt: str) -> None:
     wildcard["systemPrompt"] = prompt
 
 
+def set_admin_bindings(config: dict) -> None:
+    """Route configured admin DMs to main ahead of the public wildcard."""
+    plugin = config.get("plugins", {}).get("entries", {}).get("public-service-gate", {})
+    admins = plugin.get("config", {}).get("whatsappAdminUsers", [])
+    if not isinstance(admins, list):
+        raise ValueError("whatsappAdminUsers must be an array")
+    bindings = config.setdefault("bindings", [])
+    if not isinstance(bindings, list):
+        raise ValueError("bindings must be an array")
+    generated = [
+        {
+            "agentId": "main",
+            "match": {
+                "channel": "whatsapp",
+                "accountId": "*",
+                "peer": {"kind": "direct", "id": phone},
+            },
+        }
+        for phone in admins
+        if isinstance(phone, str) and phone.strip()
+    ]
+    config["bindings"] = generated + bindings
+    direct = config.setdefault("channels", {}).setdefault("whatsapp", {}).setdefault("direct", {})
+    for phone in admins:
+        if not isinstance(phone, str) or not phone.strip():
+            continue
+        peer = direct.setdefault(phone, {})
+        if isinstance(peer, dict):
+            peer.setdefault("systemPrompt", "This is a private administrator chat. Use the administrator workspace and policies.")
+
+
 def apply_template(live: dict, template: dict, public_whatsapp_prompt: str) -> dict:
     """Authoritative apply of the template, preserving runtime/PII paths from live."""
     merged = json.loads(json.dumps(template))  # deep copy
@@ -94,6 +125,7 @@ def apply_template(live: dict, template: dict, public_whatsapp_prompt: str) -> d
         if found:
             set_path(merged, path, json.loads(json.dumps(value)))
     set_public_whatsapp_prompt(merged, public_whatsapp_prompt)
+    set_admin_bindings(merged)
     return merged
 
 

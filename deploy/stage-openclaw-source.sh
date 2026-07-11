@@ -12,7 +12,8 @@ filter_file="$source_root/deploy/stage-workspace.rsync"
 
 for required in \
   "$source_root/workspace" \
-  "$source_root/deploy/agent-workspace" \
+  "$source_root/deploy/agent-workspace-admin" \
+  "$source_root/deploy/agent-workspace-public" \
   "$source_root/config/openclaw.template.json" \
   "$source_root/deploy/patch-openclaw-config.py" \
   "$source_root/deploy/job-scout-browser.Dockerfile" \
@@ -28,16 +29,27 @@ done
 # they were created against.
 mkdir -p \
   "$stage_root/workspace" \
-  "$stage_root/agent-workspace" \
+  "$stage_root/agent-workspace-admin" \
+  "$stage_root/agent-workspace-public" \
   "$stage_root/config" \
   "$stage_root/deploy"
+
+# Remove the obsolete single-agent context tree after the admin/public split.
+# This is generated staging output only; the live private workspace is migrated
+# separately by openclaw-deploy.sh before the container is recreated.
+if [ -d "$stage_root/agent-workspace" ]; then
+  find "$stage_root/agent-workspace" -depth -mindepth 1 -delete
+  rmdir "$stage_root/agent-workspace"
+fi
 
 rsync -a --delete --filter="merge $filter_file" \
   "$source_root/workspace/" "$stage_root/workspace/"
 mkdir -p "$stage_root/workspace/tmp"
 
 rsync -a --delete \
-  "$source_root/deploy/agent-workspace/" "$stage_root/agent-workspace/"
+  "$source_root/deploy/agent-workspace-admin/" "$stage_root/agent-workspace-admin/"
+rsync -a --delete \
+  "$source_root/deploy/agent-workspace-public/" "$stage_root/agent-workspace-public/"
 install -m 0644 \
   "$source_root/config/openclaw.template.json" \
   "$stage_root/config/openclaw.template.json"

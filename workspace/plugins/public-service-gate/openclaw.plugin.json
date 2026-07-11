@@ -6,6 +6,14 @@
   "activation": {
     "onStartup": true
   },
+  "contracts": {
+    "tools": ["public_service"]
+  },
+  "toolMetadata": {
+    "public_service": {
+      "optional": true
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
