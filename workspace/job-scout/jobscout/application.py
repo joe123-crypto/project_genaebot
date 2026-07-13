@@ -7,14 +7,12 @@ shaping over subscriber/candidate/preference data; imported by dispatch.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 from .constants import (
   MAX_APPLICATION_ATTEMPTS,
   PUBLIC_DISPATCH_FAILURE_MESSAGE,
   UNKNOWN_EMPLOYER,
-  UNKNOWN_ROLE,
   WHATSAPP_CHANNEL_SOURCES,
 )
 from .jsearch import application_key, candidate_key
@@ -27,7 +25,7 @@ from .subscriber import (
   subscriber_phone,
   subscriber_sender_email,
 )
-from .textutil import public_text
+from .textutil import clean_job_title, public_text
 
 
 def applications_from_response(result: dict) -> list[dict]:
@@ -67,13 +65,7 @@ def clean_role(value: object) -> str:
   return value is a bare noun phrase so it reads correctly in "the {role}
   position" (never "the the advertised role position").
   """
-  text = public_text(value, 120)
-  if not text or text == UNKNOWN_ROLE:
-    return "advertised role"
-  first = re.split(r"[.\n|;•]", text, maxsplit=1)[0].strip(" -–—")
-  if not first or len(first) > 70 or len(first.split()) > 9:
-    return "advertised role"
-  return first
+  return clean_job_title(value) or "advertised role"
 
 
 def cover_letter_text(subscriber: dict, preferences: dict, candidate: dict) -> str:

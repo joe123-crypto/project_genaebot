@@ -28,7 +28,7 @@ from .jsearch import (
   fetch_scraped_candidates_with_results,
   fetch_whatsapp_channel_candidates_with_results,
 )
-from .textutil import public_text
+from .textutil import clean_job_title, public_text
 from .util import safe_run_id, utc_now
 
 
@@ -368,26 +368,8 @@ SECTION_HEADINGS = (
 )
 
 
-ROLE_SPLIT_RE = re.compile(r"[\n|;•]")
-BAD_ROLE_START_RE = re.compile(
-  r"^(?:motivated|detail-oriented|detail oriented|enthusiastic|young|innovative|hardworking|reliable|eager|highly|suitably|qualified|experienced)\b",
-  re.I,
-)
-
-
 def _role_candidate(value: object) -> str:
-  text = _clean_line(value, 240)
-  text = re.sub(r"[*_`]+", "", text).strip(" -:.,")
-  text = ROLE_SPLIT_RE.split(text, maxsplit=1)[0].strip(" -:.,")
-  if not text or text.casefold() == "unknown role":
-    return ""
-  if BAD_ROLE_START_RE.search(text):
-    return ""
-  if len(text) > 70 or len(text.split()) > 9:
-    return ""
-  if text[0].islower():
-    return ""
-  return text
+  return clean_job_title(_clean_line(value, 240))
 
 
 def _job_title(candidate: dict) -> str:

@@ -22,6 +22,17 @@ def letter(candidate: dict, preferences: dict | None = None) -> str:
 class CleanRoleTests(unittest.TestCase):
   def test_clean_title_kept(self) -> None:
     self.assertEqual(clean_role("Personal Assistant"), "Personal Assistant")
+    self.assertEqual(clean_role("IT Support Technician"), "IT Support Technician")
+
+  def test_hiring_headline_extracts_role(self) -> None:
+    self.assertEqual(
+      clean_role("CLIMAtlantic is hiring a Climate Adaptation Support Assistant"),
+      "Climate Adaptation Support Assistant",
+    )
+    self.assertEqual(
+      clean_role("Cimas Health Group is hiring: Internal Auditor | Closing Date: 10 July 2026"),
+      "Internal Auditor",
+    )
 
   def test_unknown_role_sentinel(self) -> None:
     self.assertEqual(clean_role("Unknown role"), "advertised role")
@@ -42,6 +53,15 @@ class CoverLetterTests(unittest.TestCase):
     text = letter({"role": "Personal Assistant", "company": "Acme Ltd"})
     self.assertIn("Dear Hiring Team at Acme Ltd,", text)
     self.assertIn("I am applying for the Personal Assistant position at Acme Ltd.", text)
+
+  def test_hiring_headline_uses_clean_role(self) -> None:
+    text = letter({
+      "role": "Cimas Health Group is hiring: Internal Auditor | Closing Date: 10 July 2026",
+      "company": "Cimas Health Group",
+    })
+    self.assertIn("I am applying for the Internal Auditor position at Cimas Health Group.", text)
+    self.assertNotIn("is hiring", text)
+    self.assertNotIn("Closing Date", text)
 
   def test_unknown_employer_never_referenced(self) -> None:
     text = letter({"role": "Personal Assistant", "company": "Unknown employer"})
