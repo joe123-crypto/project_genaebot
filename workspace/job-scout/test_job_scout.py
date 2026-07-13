@@ -475,7 +475,7 @@ class JSearchTests(unittest.TestCase):
     ]
     with mock.patch("jobscout.jsearch.closing_state", side_effect=["expired", "unknown"]):
       selected, stats = job_scout.filter_candidates_with_stats(candidates, {}, [], 5)
-    self.assertEqual(selected, [candidates[1]])
+    self.assertEqual([item["company"] for item in selected], ["B"])
     self.assertEqual(stats["jsearch"]["expiredCount"], 1)
     self.assertEqual(stats["jsearch"]["unknownDeadlineCount"], 1)
 
@@ -561,7 +561,7 @@ class JSearchTests(unittest.TestCase):
       5,
     )
 
-    self.assertEqual(filtered, [candidates[3]])
+    self.assertEqual([item["company"] for item in filtered], ["C"])
 
   def test_filter_retries_failed_but_not_historical_manual_records(self) -> None:
     candidates = [
@@ -573,7 +573,97 @@ class JSearchTests(unittest.TestCase):
       {"company": "B", "role": "Clerk", "status": "physical_submission"},
     ]
 
-    self.assertEqual(job_scout.filter_candidates(candidates, {}, applications, 5), [candidates[0]])
+    self.assertEqual([item["company"] for item in job_scout.filter_candidates(candidates, {}, applications, 5)], ["A"])
+
+  def test_global_filter_drops_expired_and_keeps_email_duplicate_variant(self) -> None:
+    candidates = [
+      {
+        "company": "Acme",
+        "role": "Driver",
+        "source": "jsearch",
+        "sourceUrl": "https://jobs.example/acme-driver",
+        "candidateId": "a",
+        "closing": "01 Jul 2026",
+      },
+      {
+        "company": "Beta",
+        "role": "Clerk",
+        "source": "jsearch",
+        "sourceUrl": "https://jobs.example/beta-clerk",
+        "candidateId": "b",
+        "applicationEmail": None,
+      },
+      {
+        "company": "Beta",
+        "role": "Clerk",
+        "source": "vacancymail",
+        "sourceUrl": "https://board.example/beta-clerk",
+        "candidateId": "c",
+        "applicationEmail": "hr@beta.example",
+      },
+    ]
+
+    cleaned, stats, by_key = job_scout.global_filter_candidates(candidates)
+
+    self.assertEqual([item["company"] for item in cleaned], ["Beta"])
+    self.assertEqual(cleaned[0]["applicationEmail"], "hr@beta.example")
+    self.assertEqual(stats["jsearch"]["expiredCount"], 1)
+    self.assertEqual(stats["jsearch"]["duplicateCount"], 1)
+    self.assertIn(job_scout.duplicate_key(candidates[2]), by_key)
+
+  def test_filter_ranks_email_candidates_before_earlier_manual_candidates(self) -> None:
+    candidates = [
+      {
+        "company": "Manual Co",
+        "role": "Driver",
+        "source": "jsearch",
+        "sourceUrl": "https://manual.example/job",
+        "candidateId": "manual",
+      },
+      {
+        "company": "Email Co",
+        "role": "Assistant",
+        "source": "vacancymail",
+        "sourceUrl": "https://email.example/job",
+        "candidateId": "email",
+        "applicationEmail": "jobs@email.example",
+      },
+    ]
+
+    selected = job_scout.filter_candidates(candidates, {"targetRoles": ["Driver"]}, [], 1)
+
+    self.assertEqual(selected[0]["company"], "Email Co")
+    self.assertEqual(selected[0]["applicationPriority"], "email")
+    self.assertEqual(selected[0]["selectionRank"], 1)
+
+  def test_filter_ranks_stronger_profile_fit_within_same_application_priority(self) -> None:
+    candidates = [
+      {
+        "company": "Weak Co",
+        "role": "Assistant",
+        "description": "General office work.",
+        "source": "jsearch",
+        "candidateId": "weak",
+        "applicationEmail": "jobs@weak.example",
+      },
+      {
+        "company": "Strong Co",
+        "role": "IT Support Technician",
+        "description": "Computer literacy, Microsoft Office, and troubleshooting.",
+        "source": "jsearch",
+        "candidateId": "strong",
+        "applicationEmail": "jobs@strong.example",
+      },
+    ]
+    preferences = {
+      "targetRoles": ["IT Support"],
+      "skills": ["Computer literacy", "Microsoft Office"],
+    }
+
+    selected = job_scout.filter_candidates(candidates, preferences, [], 1)
+
+    self.assertEqual(selected[0]["company"], "Strong Co")
+    self.assertGreater(selected[0]["selectionScore"], 0)
 
   def test_jsearch_default_window_is_one_month(self) -> None:
     self.assertEqual(job_scout.DEFAULT_JSEARCH_DATE_POSTED, "month")
@@ -887,6 +977,7 @@ class JSearchDispatchTests(unittest.TestCase):
     browser_apply: bool = False,
     send_error: Exception | None = None,
     web_result: dict | None = None,
+    max_candidates_per_user: int = 5,
   ) -> dict:
     subscriber = self.subscriber(auto_apply=auto_apply)
     with (
@@ -912,7 +1003,9 @@ class JSearchDispatchTests(unittest.TestCase):
       else:
         send_patch = mock.patch.object(job_scout, "send_application_email", side_effect=send_error)
       with send_patch as send:
-        result = job_scout.cmd_dispatch_jsearch(self.args(root, browser_apply=browser_apply))
+        args = self.args(root, browser_apply=browser_apply)
+        args.max_candidates_per_user = max_candidates_per_user
+        result = job_scout.cmd_dispatch_jsearch(args)
     result["_record_calls"] = record.call_args_list
     result["_send_calls"] = send.call_args_list
     result["_whatsapp_calls"] = whatsapp.call_args_list
@@ -931,6 +1024,56 @@ class JSearchDispatchTests(unittest.TestCase):
       record_args = result["_record_calls"][0].args[0]
       self.assertEqual(record_args.status, "applied")
       self.assertEqual(record_args.source, "jsearch")
+
+  def test_dispatch_applies_top_ranked_candidates_within_user_limit(self) -> None:
+    candidates = [
+      {
+        "candidateId": "manual",
+        "source": "jsearch",
+        "sourceUrl": "https://jobs.example/manual",
+        "applyLinks": ["https://jobs.example/manual"],
+        "company": "Manual Logistics",
+        "role": "Driver",
+        "location": "Algiers, DZ",
+        "query": "Driver a Algiers",
+        "closing": None,
+        "description": "Delivery role.",
+      },
+      {
+        "candidateId": "weak",
+        "source": "jsearch",
+        "sourceUrl": "https://jobs.example/weak",
+        "applyLinks": ["https://jobs.example/weak"],
+        "applicationEmails": ["weak@example.dz"],
+        "applicationEmail": "weak@example.dz",
+        "company": "Weak Logistics",
+        "role": "Assistant",
+        "location": "Algiers, DZ",
+        "query": "Driver a Algiers",
+        "closing": None,
+        "description": "General office work.",
+      },
+      {
+        "candidateId": "strong",
+        "source": "jsearch",
+        "sourceUrl": "https://jobs.example/strong",
+        "applyLinks": ["https://jobs.example/strong"],
+        "applicationEmails": ["strong@example.dz"],
+        "applicationEmail": "strong@example.dz",
+        "company": "Strong Logistics",
+        "role": "Driver",
+        "location": "Algiers, DZ",
+        "query": "Driver a Algiers",
+        "closing": None,
+        "description": "Delivery driver role.",
+      },
+    ]
+    with tempfile.TemporaryDirectory() as tmp:
+      result = self.dispatch_with(Path(tmp), candidates, max_candidates_per_user=2)
+
+      self.assertEqual(result["appliedCount"], 2)
+      self.assertEqual([call.args[1]["company"] for call in result["_send_calls"]], ["Strong Logistics", "Weak Logistics"])
+      self.assertEqual(result["users"][0]["candidateCount"], 2)
 
   def test_dispatch_phone_scope_selects_only_requested_subscriber(self) -> None:
     requested = self.subscriber()
