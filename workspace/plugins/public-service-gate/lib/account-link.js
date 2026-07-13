@@ -37,6 +37,18 @@ export function accountLinkInvite(api, phone, purpose, nextPath) {
   ]);
 }
 
+export function accountLinkStartOnboarding(api, phone, service, channel) {
+  return runAccountLinkScript(api, [
+    "start-onboarding",
+    "--phone",
+    phone,
+    "--service",
+    service,
+    "--channel",
+    channel,
+  ]);
+}
+
 export function getAgentGenaiePublicBaseUrl(api) {
   const pluginCfg = getPluginConfig(api);
   const configured =

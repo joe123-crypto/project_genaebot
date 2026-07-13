@@ -141,28 +141,27 @@ test("job scout onboarding has a generic disabled response", async () => {
   assert.doesNotMatch(reply.text, /pilot/i);
 });
 
-test("linked job scout onboarding offers web app and chat setup", async () => {
+test("job scout asks for web or WhatsApp before creating a link", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-jobs-"));
   const accountLinkScript = path.join(dir, "account-link");
   const jobScoutScript = path.join(dir, "job-scout");
+  const serviceStatePath = path.join(dir, "state.json");
   const helperLog = path.join(dir, "helper.log");
   writeExecutable(
-    accountLinkScript,
+    jobScoutScript,
     `#!/usr/bin/env bash
 set -eu
 case "$1" in
-  status)
-    printf '{"linked":true,"publicUserId":"public-123"}\\n'
-    ;;
+  status) printf '{"linked":false,"ready":false,"onboardingChannel":null,"onboardingNextStep":"channel_selection"}\\n' ;;
   *) exit 2 ;;
 esac
 `,
   );
   writeExecutable(
-    jobScoutScript,
+    accountLinkScript,
     `#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "${helperLog}"
-exit 2
+printf '{"linked":false,"channel":"web","nextStep":"whatsapp","setupUrl":"https://app.example.test/whatsapp?token=abc"}\\n'
 `,
   );
   const api = {
@@ -174,43 +173,50 @@ exit 2
               enabled: true,
               accountLinkScript,
               jobScoutScript,
+              serviceStatePath,
               jobScoutOnboardingEnabled: true,
-              agentGenaiePublicBaseUrl: "https://app.example.test",
             },
           },
         },
       },
     },
-    logger: {
-      warn() {},
-    },
+    logger: { debug() {}, warn() {} },
   };
 
-  const reply = await handleJobScoutRequest(api, MEMBER);
-
-  assert.equal(reply.handled, true);
-  assert.match(reply.text, /1\. Set it up in the web app: https:\/\/app\.example\.test\/public-123\/job-scout/);
-  assert.match(reply.text, /2\. Set it up here in chat/);
+  const firstReply = await handleJobScoutRequest(api, MEMBER, "Set up Job Scout");
+  assert.equal(firstReply.handled, true);
+  assert.match(firstReply.text, /1\. In the web app/);
+  assert.match(firstReply.text, /2\. Here in WhatsApp/);
+  assert.doesNotMatch(firstReply.text, /https?:\/\//);
   assert.equal(fs.existsSync(helperLog), false);
+
+  const secondReply = await handleJobScoutRequest(api, MEMBER, "web");
+  assert.match(secondReply.text, /Finish setting up Job Scout in the web app/);
+  assert.match(secondReply.text, /https:\/\/app\.example\.test\/whatsapp\?token=abc/);
+  assert.match(fs.readFileSync(helperLog, "utf8"), /start-onboarding --phone \+233208864185 --service jobs --channel web/);
 });
 
-test("unlinked job scout onboarding sends account-link setup link", async () => {
+test("job scout chat selection creates the link only after the choice", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-jobs-"));
   const accountLinkScript = path.join(dir, "account-link");
+  const jobScoutScript = path.join(dir, "job-scout");
+  const serviceStatePath = path.join(dir, "state.json");
+  writeExecutable(
+    jobScoutScript,
+    `#!/usr/bin/env bash
+set -eu
+case "$1" in
+  status) printf '{"linked":false,"ready":false,"onboardingChannel":null}\\n' ;;
+  *) exit 2 ;;
+esac
+`,
+  );
   writeExecutable(
     accountLinkScript,
     `#!/usr/bin/env bash
 set -eu
-case "$1" in
-  status)
-    printf '{"linked":false}\\n'
-    ;;
-  create-invite)
-    if [ "$5" != "jobs" ]; then exit 2; fi
-    printf '{"setupUrl":"https://app.example.test/link-jobs"}\\n'
-    ;;
-  *) exit 2 ;;
-esac
+if [ "$1" != "start-onboarding" ] || [ "$7" != "chat" ]; then exit 2; fi
+printf '{"linked":false,"channel":"chat","nextStep":"whatsapp","setupUrl":"https://app.example.test/whatsapp?token=chat"}\\n'
 `,
   );
   const api = {
@@ -221,22 +227,46 @@ esac
             config: {
               enabled: true,
               accountLinkScript,
+              jobScoutScript,
+              serviceStatePath,
               jobScoutOnboardingEnabled: true,
             },
           },
         },
       },
     },
-    logger: {
-      warn() {},
-    },
+    logger: { debug() {}, warn() {} },
   };
 
-  const reply = await handleJobScoutRequest(api, MEMBER);
-
+  const firstReply = await handleJobScoutRequest(api, MEMBER, "Set up Job Scout");
+  assert.doesNotMatch(firstReply.text, /https?:\/\//);
+  const reply = await handleJobScoutRequest(api, MEMBER, "2");
   assert.equal(reply.handled, true);
-  assert.match(reply.text, /Sign in here to set up Job Scout/);
-  assert.match(reply.text, /https:\/\/app\.example\.test\/link-jobs/);
+  assert.match(reply.text, /Connect your account and Gmail here/);
+  assert.match(reply.text, /https:\/\/app\.example\.test\/whatsapp\?token=chat/);
+});
+
+test("public service forwards the user's Job Scout channel choice", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-tool-jobs-"));
+  const accountLinkScript = path.join(dir, "account-link");
+  const jobScoutScript = path.join(dir, "job-scout");
+  writeExecutable(
+    jobScoutScript,
+    `#!/usr/bin/env bash
+printf '{"linked":false,"ready":false,"onboardingChannel":null}\\n'
+`,
+  );
+  writeExecutable(
+    accountLinkScript,
+    `#!/usr/bin/env bash
+printf '{"linked":false,"channel":"web","nextStep":"whatsapp","setupUrl":"https://app.example.test/whatsapp?token=tool"}\\n'
+`,
+  );
+  const handler = registerHandler({ accountLinkScript, jobScoutScript });
+  const tool = handler.publicTool({ agentId: "public", requesterSenderId: MEMBER, messageChannel: "whatsapp" });
+
+  const result = await tool.execute("test", { action: "job_scout_start_or_status", text: "web" });
+  assert.match(result.content[0].text, /whatsapp\?token=tool/);
 });
 
 function eventFor(text, sender = MEMBER) {

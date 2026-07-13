@@ -93,7 +93,7 @@ async function runPublicServiceAction(api, sender, action, text) {
     case "news_start_or_update": return toolText(await handleNewsRequest(api, sender, text));
     case "news_topics": return toolText(await handleNewsTopicsContinuation(api, sender, text));
     case "event_scout_start": return toolText(await handleEventScoutRequest(api, sender));
-    case "job_scout_start_or_status": return toolText(await handleJobScoutRequest(api, sender));
+    case "job_scout_start_or_status": return toolText(await handleJobScoutRequest(api, sender, text));
     default: return toolText();
   }
 }
@@ -140,7 +140,11 @@ export default {
             required: ["action"],
             properties: {
               action: { type: "string", enum: PUBLIC_SERVICE_ACTIONS },
-              text: { type: "string", maxLength: 2000 },
+              text: {
+                type: "string",
+                maxLength: 2000,
+                description: "The user's current message. Include it so short onboarding choices such as 1, 2, web, or WhatsApp can continue the saved flow.",
+              },
             },
           },
           async execute(_id, params) {

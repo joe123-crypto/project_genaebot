@@ -6,8 +6,8 @@ Purpose: onboard a public WhatsApp user for Job Scout without exposing internal 
 
 Allowed in public chat:
 
-- Send the Agent Genaie account-link setup URL for unlinked users.
-- Send the scoped Agent Genaie Job Scout setup page for linked users.
+- Ask whether the user wants web or WhatsApp setup before sending any URL.
+- Send the canonical Agent Genaie WhatsApp-link URL only after that choice.
 - Tell the user to sign in and connect Gmail in the app.
 - Offer two setup paths: web setup or chat setup.
 - If the user chooses chat setup, offer guided questions or CV autofill.
@@ -31,13 +31,13 @@ Use 1-2 short sentences by default. Use plain language, and never use em dashes.
 
 ```text
 User asks for Job Scout
-Agent checks whether this WhatsApp chat is linked to an Agent Genaie login
-If not linked, agent creates an account-link URL for the requester's WhatsApp phone
+Agent asks whether setup should continue in the web app or in WhatsApp
+Agent records that choice and starts or resumes Job Scout for the requester
+If the chat is not linked, Agent Genaie creates the canonical WhatsApp-link URL
 User signs in to Agent Genaie with their email
-Setup link binds this WhatsApp chat to that app user
-Agent sends two setup choices: web app or chat
-If user chooses web setup, agent sends the scoped Agent Genaie Job Scout Setup page
-If user chooses chat setup, user connects Gmail in the app
+The scoped WhatsApp page shows the originating number and asks only for confirmation
+If user chose web setup, normal web onboarding continues with Job Scout already selected
+If user chose chat setup, user connects Gmail in the app and returns to WhatsApp
 Agent asks whether the user wants guided questions or CV autofill inside chat
 Agent collects target roles, a preferred location that includes its country, and other details gradually, one or two questions per message
 Agent summarizes the profile and asks for corrections
@@ -48,70 +48,42 @@ Daily dispatcher finds ready users and applies for matching jobs
 
 ## Start Setup
 
-Use the requester's WhatsApp phone number only.
+Use the sender-bound `public_service` action `job_scout_start_or_status` and pass the user's current message as `text`. The tool owns the requester's phone and setup state.
 
-First check whether this WhatsApp chat is already linked to an Agent Genaie login:
-
-```bash
-/home/joseph/.openclaw/workspace/bin/account-link status --phone "<whatsapp phone>"
-```
-
-If the status says `"linked": false`, create an account-link invite for Job Scout:
-
-```bash
-/home/joseph/.openclaw/workspace/bin/account-link create-invite \
-  --phone "<whatsapp phone>" \
-  --purpose jobs \
-  --next-path /connect-gmail
-```
-
-Send the returned `setupUrl` to the user:
-
-```text
-Sign in here to link this chat:
-<setupUrl>
-
-Check Spam if the sign-in email doesn't arrive.
-```
-
-Stop here until the user has opened the link and signed in. Do not collect CV/profile details before this WhatsApp chat is linked.
-
-If the status says `"linked": true`, use the returned `publicUserId` to build the scoped Job Scout setup page:
-
-```text
-https://agent-genaie.../<publicUserId>/job-scout
-```
-
-Send this public text:
+On the first setup request, send only this choice. Do not create or send a link yet:
 
 ```text
 How do you want to set up Job Scout?
 
-1. Set it up in the web app: https://agent-genaie.../<publicUserId>/job-scout
-2. Set it up here in chat
+1. In the web app
+2. Here in WhatsApp
 ```
 
-Use `/login?next=%2Fjob-scout` as a fallback only if the frontend supports that redirect behavior. Otherwise, rely on the account-link status `publicUserId` and fail gracefully if it is absent. Do not collect CV/profile details before the user chooses chat setup.
+Call the same action again with the user's choice. A current choice replaces an older pending Job Scout choice or link. If the user is already linked, the tool returns the next missing step instead of restarting setup.
+
+For an unlinked user, the returned URL must use `/whatsapp?token=...`. After sign-in it becomes `/<publicUserId>/whatsapp?token=...`. The page shows the masked originating WhatsApp number and a **Confirm and link** action; it must not ask that user to type a number.
+
+Do not send or recreate `/account-link/setup`, `/job-scout/setup`, or either legacy confirm URL.
 
 ## Setup Option Choice
 
-If the linked user has not chosen web setup or chat setup, ask:
+If the user has not chosen web setup or WhatsApp setup, ask:
 
 ```text
 How do you want to set up Job Scout?
 
-1. Set it up in the web app.
-2. Set it up here in chat.
+1. In the web app
+2. Here in WhatsApp
 ```
 
-If the user chooses option 1, send the scoped Job Scout setup page and stop:
+If the user chooses option 1, send the returned canonical or resume URL and stop. After confirmation, Agent Genaie continues the normal web onboarding flow with Job Scout preselected. Only service selection is skipped; WhatsApp confirmation, Gmail connection, and the Job Scout profile remain part of onboarding.
 
 ```text
-Set it up here:
-https://agent-genaie.../<publicUserId>/job-scout
+Finish setting up Job Scout in the web app:
+<setupUrl or nextUrl>
 ```
 
-If the user chooses option 2, continue in chat and ask:
+If the user chooses option 2, send the returned canonical link or Gmail resume URL. After Gmail is connected, Agent Genaie hands the user back to WhatsApp. Then ask:
 
 ```text
 How do you want to set up Job Scout in chat?
@@ -120,7 +92,7 @@ How do you want to set up Job Scout in chat?
 2. Upload your CV.
 ```
 
-Do not continue to CV extraction unless the user clearly chooses option 2 and gives permission.
+Do not continue to CV extraction unless the user chose WhatsApp setup and gives permission. Saving a ready WhatsApp-collected profile completes the in-progress Job Scout onboarding automatically.
 
 ## Guided Question Flow
 

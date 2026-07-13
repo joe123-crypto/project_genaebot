@@ -12,11 +12,7 @@ import urllib.request
 
 from genaie_env import agent_base_url, agent_base_url_source, api_key, endpoint, env_default
 from pending_cache import (
-  criteria as pending_criteria,
-  get_pending_link,
   remove_pending_links,
-  store_pending_link,
-  utc_now_iso,
 )
 
 from . import api
@@ -33,41 +29,6 @@ from .profile import (
 )
 from .textutil import public_text
 from .util import effective_user, normalize_phone, phone_hash, utc_now
-
-def cmd_create_invite(args: argparse.Namespace) -> dict:
-  phone = normalize_phone(args.phone)
-  cache_key = pending_criteria(
-    phone=phone,
-    phone_hash=phone_hash(phone),
-    service="job-scout",
-    purpose="jobs",
-    next_path="/connect-gmail",
-  )
-  if args.dry_run:
-    return {
-      "dryRun": True,
-      "phoneHash": phone_hash(phone),
-      "endpoint": endpoint("/internal/job-scout/invite"),
-      "service": "job-scout",
-      "purpose": "jobs",
-      "nextPath": "/connect-gmail",
-    }
-  cached = get_pending_link(cache_key)
-  if cached:
-    return cached
-  result = api.request_json("POST", endpoint("/internal/job-scout/invite"), {"phone": phone, "ttlSeconds": args.ttl_seconds})
-  if result.get("setupUrl") and result.get("expiresAt"):
-    cached_result = store_pending_link(
-      {
-        **cache_key,
-        "setupUrl": result["setupUrl"],
-        "expiresAt": result["expiresAt"],
-        "createdAt": result.get("createdAt") or utc_now_iso(),
-      }
-    )
-    return {**result, **cached_result}
-  return result
-
 
 def cmd_check_runtime(args: argparse.Namespace) -> dict:
   cache_path = api.pending_links_path()
@@ -330,5 +291,4 @@ def cmd_fetch_candidates(args: argparse.Namespace) -> dict:
 def cmd_resolve_location(args: argparse.Namespace) -> dict:
   resolved = resolve_preferred_locations(args.location)
   return {"ok": True, **resolved}
-
 

@@ -52,9 +52,9 @@ def normalize_next_path(value: str) -> str:
   text = str(value or "/").strip()
   if not text or not text.startswith("/") or text.startswith("//"):
     return "/"
-  if text in {"/", "/connect-gmail", "/vault"}:
+  if text in {"/", "/connect-gmail", "/vault", "/whatsapp", "/onboarding"}:
     return text
-  match = re.match(r"^/(connect-gmail|vault)/?(\?.*)?$", text)
+  match = re.match(r"^/(connect-gmail|vault|whatsapp|onboarding)/?(\?.*)?$", text)
   if match:
     return f"/{match.group(1)}{match.group(2) or ''}"
   return "/"
@@ -87,6 +87,14 @@ def request_json(method: str, url: str, payload: dict | None = None) -> dict:
     raise SystemExit(1) from err
 
 
+def is_canonical_setup_url(value: str) -> bool:
+  try:
+    parsed = urllib.parse.urlsplit(str(value or "").strip())
+  except ValueError:
+    return False
+  return parsed.path.rstrip("/") == "/whatsapp" and bool(urllib.parse.parse_qs(parsed.query).get("token"))
+
+
 def cmd_create_invite(args: argparse.Namespace) -> dict:
   phone = normalize_phone(args.phone)
   purpose = normalize_purpose(args.purpose)
@@ -107,8 +115,10 @@ def cmd_create_invite(args: argparse.Namespace) -> dict:
       "nextPath": next_path,
     }
   cached = get_pending_link(cache_key)
-  if cached:
+  if cached and is_canonical_setup_url(cached.get("setupUrl")):
     return cached
+  if cached:
+    remove_pending_links(phone=phone, service="account-link", purpose=purpose, next_path=next_path)
   result = request_json(
     "POST",
     endpoint("/internal/account-link/invite"),
@@ -143,6 +153,50 @@ def cmd_status(args: argparse.Namespace) -> dict:
   return result
 
 
+def cmd_start_onboarding(args: argparse.Namespace) -> dict:
+  phone = normalize_phone(args.phone)
+  service = str(args.service or "").strip().lower()
+  channel = str(args.channel or "").strip().lower()
+  if service not in {"jobs", "webetu"}:
+    raise SystemExit("service must be jobs or webetu")
+  if channel not in {"web", "chat"}:
+    raise SystemExit("channel must be web or chat")
+  route = endpoint("/internal/onboarding/start")
+  if args.dry_run:
+    return {
+      "dryRun": True,
+      "phoneHash": phone_hash(phone),
+      "endpoint": route,
+      "service": service,
+      "channel": channel,
+    }
+
+  result = request_json(
+    "POST",
+    route,
+    {"phone": phone, "service": service, "channel": channel},
+  )
+  remove_pending_links(phone=phone, service="account-link", purpose=service)
+  if result.get("setupUrl") and result.get("expiresAt"):
+    cache_key = pending_criteria(
+      phone=phone,
+      phone_hash=phone_hash(phone),
+      service="account-link",
+      purpose=service,
+      next_path="/onboarding",
+    )
+    cached_result = store_pending_link(
+      {
+        **cache_key,
+        "setupUrl": result["setupUrl"],
+        "expiresAt": result["expiresAt"],
+        "createdAt": result.get("createdAt") or utc_now_iso(),
+      }
+    )
+    return {**result, **cached_result, "channel": channel}
+  return result
+
+
 def build_parser() -> argparse.ArgumentParser:
   parser = argparse.ArgumentParser(description="Create/check Agent Genaie account-link invites.")
   subparsers = parser.add_subparsers(dest="command", required=True)
@@ -159,6 +213,13 @@ def build_parser() -> argparse.ArgumentParser:
   status.add_argument("--phone", required=True, help="WhatsApp phone number")
   status.add_argument("--dry-run", action="store_true")
   status.set_defaults(func=cmd_status)
+
+  onboarding = subparsers.add_parser("start-onboarding", help="Start or resume one service onboarding route")
+  onboarding.add_argument("--phone", required=True, help="WhatsApp phone number")
+  onboarding.add_argument("--service", required=True, choices=["jobs", "webetu"])
+  onboarding.add_argument("--channel", required=True, choices=["web", "chat"])
+  onboarding.add_argument("--dry-run", action="store_true")
+  onboarding.set_defaults(func=cmd_start_onboarding)
   return parser
 
 

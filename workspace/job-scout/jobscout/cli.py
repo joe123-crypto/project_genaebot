@@ -10,7 +10,6 @@ from .commands_dispatch import cmd_finish_dispatch, cmd_record_dispatch_outcome,
 from .commands_group_feed import cmd_deliver_group_feed
 from .commands_setup import (
   cmd_check_runtime,
-  cmd_create_invite,
   cmd_fetch_candidates,
   cmd_list_applications,
   cmd_list_ready,
@@ -35,12 +34,6 @@ from .dispatch_runner import cmd_dispatch_jsearch
 def build_parser() -> argparse.ArgumentParser:
   parser = argparse.ArgumentParser(prog="job-scout")
   subparsers = parser.add_subparsers(dest="command", required=True)
-
-  invite = subparsers.add_parser("create-invite", help="create a WhatsApp-to-app setup link")
-  invite.add_argument("--phone", required=True)
-  invite.add_argument("--ttl-seconds", type=int, default=24 * 60 * 60)
-  invite.add_argument("--dry-run", action="store_true")
-  invite.set_defaults(func=cmd_create_invite)
 
   check_runtime = subparsers.add_parser("check-runtime", help="check Job Scout runtime prerequisites")
   check_runtime.add_argument("--check-browser", action="store_true")
@@ -200,5 +193,4 @@ def main() -> int:
   result = args.func(args)
   print(json.dumps(result, indent=2, sort_keys=True))
   return 0
-
 

@@ -173,7 +173,6 @@ from jobscout.jsearch import (
 # focused jobscout modules.
 from jobscout.commands_setup import (
   cmd_check_runtime,
-  cmd_create_invite,
   cmd_fetch_candidates,
   cmd_list_applications,
   cmd_list_ready,

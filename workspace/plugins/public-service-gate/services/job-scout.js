@@ -1,12 +1,14 @@
 import { expandHome, getPluginConfig } from "../lib/config.js";
-import { busyReply, isQueueFullError, sanitizeLogText } from "../lib/runtime.js";
 import {
-  accountLinkInvite,
-  accountLinkRequiredText,
-  accountLinkStatus,
-  getAccountLinkScript,
-  scopedAppUrl,
-} from "../lib/account-link.js";
+  HELPER_TIMEOUT_MS,
+  busyReply,
+  helperLimiter,
+  isQueueFullError,
+  runJsonCommand,
+  sanitizeLogText,
+} from "../lib/runtime.js";
+import { accountLinkStartOnboarding, getAccountLinkScript } from "../lib/account-link.js";
+import { clearServiceState, loadServiceState, saveServiceState } from "../lib/state.js";
 
 const DEFAULT_JOB_SCOUT_SCRIPT = "~/.openclaw/workspace/bin/job-scout";
 const DEFAULT_JOB_SCOUT_SETUP_FAILED = `I couldn't start Job Scout. Try again later.`;
@@ -66,45 +68,85 @@ export function isJobScoutSetupCommand(text) {
   return JOB_SCOUT_SETUP_PATTERNS.some((pattern) => pattern.test(compact));
 }
 
-function jobScoutStartText(setupUrl) {
+function jobScoutChannelQuestion() {
   return `How do you want to set up Job Scout?
 
-1. Set it up in the web app: ${setupUrl}
-2. Set it up here in chat`;
+1. In the web app
+2. Here in WhatsApp`;
 }
 
-export async function handleJobScoutRequest(api, sender) {
+function selectedChannel(text) {
+  const compact = String(text ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+  if (!compact) return null;
+  const web = /^(?:1|web|web app|website|browser)[.!]?$/.test(compact)
+    || /\b(?:choose|pick|use|want|prefer|continue|finish|set\s*up)(?:\s+(?:it|this|setup))?\s+(?:on|in|with|using|through)?\s*(?:the\s+)?(?:web|web app|website|browser)\b/.test(compact);
+  const chat = /^(?:2|chat|whatsapp|here|in chat)[.!]?$/.test(compact)
+    || /\b(?:choose|pick|use|want|prefer|continue|finish|set\s*up)(?:\s+(?:it|this|setup))?\s+(?:on|in|with|using|through)?\s*(?:this\s+)?(?:chat|whatsapp|here)\b/.test(compact);
+  if (web === chat) return null;
+  return web ? "web" : "chat";
+}
+
+function jobScoutStatus(api, sender) {
+  return helperLimiter(() => runJsonCommand(
+    getJobScoutScript(api),
+    ["status", "--phone", sender],
+    { timeoutMs: HELPER_TIMEOUT_MS },
+  ));
+}
+
+function selectedChannelReply(channel, result) {
+  const url = String(result?.setupUrl || result?.nextUrl || "").trim();
+  if (channel === "web") {
+    if (!url) return "Your Job Scout setup is ready.";
+    return `Finish setting up Job Scout in the web app:
+${url}`;
+  }
+  if (result?.nextStep === "dashboard") return "Your Job Scout setup is ready.";
+  if (result?.nextStep === "whatsapp_chat") {
+    return "You're ready to continue here. Do you want guided questions or CV autofill?";
+  }
+  if (!url) return "Continue your Job Scout setup here in WhatsApp.";
+  return `Connect your account and Gmail here:
+${url}
+
+Then come back here to finish your Job Scout profile.`;
+}
+
+export async function handleJobScoutRequest(api, sender, text = "") {
   if (getPluginConfig(api).jobScoutOnboardingEnabled !== true) {
     return { handled: true, text: JOB_SCOUT_UNAVAILABLE };
   }
   try {
-    const accountLinkScript = getAccountLinkScript(api);
     let status;
     try {
-      status = await accountLinkStatus(api, sender);
+      status = await jobScoutStatus(api, sender);
     } catch (err) {
-      logJobScoutFailure(api, "account-link status", accountLinkScript, err);
+      logJobScoutFailure(api, "Job Scout status", getJobScoutScript(api), err);
       throw err;
     }
-    if (!status.linked) {
-      let linkInvite;
-      try {
-        linkInvite = await accountLinkInvite(api, sender, "jobs", "/connect-gmail");
-        if (!linkInvite.setupUrl) throw new Error("missing setupUrl");
-      } catch (err) {
-        logJobScoutFailure(api, "account-link invite", accountLinkScript, err);
-        throw err;
-      }
-      return {
-        handled: true,
-        text: accountLinkRequiredText(linkInvite.setupUrl, "Job Scout"),
-      };
+    if (status.ready === true) {
+      clearServiceState(api, sender);
+      return { handled: true, text: "Your Job Scout setup is ready." };
     }
-    const setupUrl = scopedAppUrl(api, status.publicUserId, "/job-scout");
-    return {
-      handled: true,
-      text: jobScoutStartText(setupUrl),
-    };
+
+    const state = loadServiceState(api, sender);
+    const pendingChoice = state?.service === "job-scout" && state?.step === "job-scout.awaiting_setup_channel";
+    const explicitChannel = selectedChannel(text);
+    const channel = explicitChannel || (pendingChoice ? selectedChannel(text) : null) || status.onboardingChannel || null;
+    if (!channel) {
+      saveServiceState(api, sender, "job-scout", "job-scout.awaiting_setup_channel");
+      return { handled: true, text: jobScoutChannelQuestion() };
+    }
+
+    let result;
+    try {
+      result = await accountLinkStartOnboarding(api, sender, "jobs", channel);
+    } catch (err) {
+      logJobScoutFailure(api, "onboarding start", getAccountLinkScript(api), err);
+      throw err;
+    }
+    clearServiceState(api, sender);
+    return { handled: true, text: selectedChannelReply(channel, result) };
   } catch (err) {
     if (isQueueFullError(err)) return busyReply();
     if (!err?.publicServiceGateLogged) {
