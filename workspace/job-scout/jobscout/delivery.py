@@ -19,7 +19,7 @@ from jobscout import api
 from .constants import DEFAULT_WEB_APPLY_URL, GENAIE_MAIL_BIN
 from .profile import subscriber_user_id
 from .subscriber import display_name, subscriber_cv_file, subscriber_sender_email
-from .textutil import clean_job_title, public_text
+from .textutil import clean_job_title, natural_email_text, public_text
 
 
 def parse_json_output(output: str) -> dict:
@@ -53,7 +53,7 @@ def send_application_email(subscriber: dict, candidate: dict, cover_letter: Path
   if not email:
     raise RuntimeError("candidate is missing applicationEmail")
   role = clean_job_title(candidate.get("role")) or "advertised role"
-  subject = f"Application for {role} - {display_name(subscriber)}"
+  subject = natural_email_text(f"Application for {role} - {display_name(subscriber)}", 180)
   return run_json_command([
     str(GENAIE_MAIL_BIN),
     "send",

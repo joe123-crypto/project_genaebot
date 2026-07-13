@@ -17,6 +17,10 @@ TRAILING_ROLE_META_RE = re.compile(
   r"\s+(?:-|--|–|—)\s*(?:closing\s+date|apply\s+by|deadline|closes|expires)\b.*$",
   re.I,
 )
+TRAILING_RECRUITING_CLAUSE_RE = re.compile(
+  r"\s+to\s+join\s+(?:(?:them|us)\b|(?:(?:our|their|the|a|an)\s+)?(?:team|company|organisation|organization|department|division|group|workforce)\b).*$",
+  re.I,
+)
 
 
 def public_text(value: object, max_len: int = 180) -> str:
@@ -25,6 +29,13 @@ def public_text(value: object, max_len: int = 180) -> str:
   text = re.sub(r"/home/joseph/\S+", "[local path]", text)
   text = re.sub(r"Bearer\s+[A-Za-z0-9._~+/=-]+", "Bearer [redacted]", text, flags=re.I)
   text = re.sub(r"([A-Za-z0-9._%+-]{2})[A-Za-z0-9._%+-]*(@[A-Za-z0-9.-]+\.[A-Za-z]{2,})", r"\1***\2", text)
+  return text[:max_len]
+
+
+def natural_email_text(value: object, max_len: int = 180) -> str:
+  text = public_text(value, max_len)
+  text = text.replace("—", " - ").replace("–", " - ")
+  text = re.sub(r"\s+", " ", text).strip()
   return text[:max_len]
 
 
@@ -39,6 +50,7 @@ def clean_job_title(value: object) -> str:
     text = hiring.group("role").strip(" -:.,")
 
   text = TRAILING_ROLE_META_RE.sub("", text).strip(" -:.,")
+  text = TRAILING_RECRUITING_CLAUSE_RE.sub("", text).strip(" -:.,")
   text = ROLE_SPLIT_RE.split(text, maxsplit=1)[0].strip(" -:.,")
   if not text or text.casefold() == "unknown role":
     return ""
@@ -48,4 +60,4 @@ def clean_job_title(value: object) -> str:
     return ""
   if text[0].islower():
     return ""
-  return text
+  return natural_email_text(text, 120)

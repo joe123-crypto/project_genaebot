@@ -25,7 +25,7 @@ from .subscriber import (
   subscriber_phone,
   subscriber_sender_email,
 )
-from .textutil import clean_job_title, public_text
+from .textutil import clean_job_title, natural_email_text, public_text
 
 
 def applications_from_response(result: dict) -> list[dict]:
@@ -71,7 +71,7 @@ def clean_role(value: object) -> str:
 def cover_letter_text(subscriber: dict, preferences: dict, candidate: dict) -> str:
   name = display_name(subscriber)
   role = clean_role(candidate.get("role"))
-  company = public_text(candidate.get("company"), 120)
+  company = natural_email_text(candidate.get("company"), 120)
   # When the employer is unknown, never reference them anywhere in the letter.
   company_known = bool(company) and company != UNKNOWN_EMPLOYER
   qualifications = clean_items(profile_values(preferences, "qualifications"))

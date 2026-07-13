@@ -1225,7 +1225,7 @@ class JSearchDispatchTests(unittest.TestCase):
   def test_send_application_email_uses_subscriber_uid_sender_selector(self) -> None:
     subscriber = self.subscriber()
     candidate = self.candidate()
-    candidate["role"] = "Cimas Health Group is hiring: Internal Auditor | Closing Date: 10 July 2026"
+    candidate["role"] = "Cimas Health Group is hiring: Internal Auditor — Risk | Closing Date: 10 July 2026"
     with mock.patch("jobscout.delivery.subscriber_cv_file", return_value="/tmp/cv.pdf"), \
          mock.patch("jobscout.delivery.run_json_command", return_value={"messageId": "msg-1"}) as run:
       result = job_scout.send_application_email(subscriber, candidate, Path("/tmp/cover-letter.txt"))
@@ -1237,7 +1237,10 @@ class JSearchDispatchTests(unittest.TestCase):
     self.assertIn("--sender-uid", command)
     self.assertEqual(command[command.index("--sender-uid") + 1], "user-1")
     self.assertIn("--subject", command)
-    self.assertEqual(command[command.index("--subject") + 1], "Application for Internal Auditor - Test Applicant")
+    subject = command[command.index("--subject") + 1]
+    self.assertEqual(subject, "Application for Internal Auditor - Risk - Test Applicant")
+    self.assertNotIn("—", subject)
+    self.assertNotIn("–", subject)
 
   def test_send_whatsapp_summary_uses_gateway_state_and_token(self) -> None:
     with mock.patch.dict(job_scout.os.environ, {

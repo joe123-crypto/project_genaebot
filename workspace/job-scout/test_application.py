@@ -23,6 +23,8 @@ class CleanRoleTests(unittest.TestCase):
   def test_clean_title_kept(self) -> None:
     self.assertEqual(clean_role("Personal Assistant"), "Personal Assistant")
     self.assertEqual(clean_role("IT Support Technician"), "IT Support Technician")
+    self.assertEqual(clean_role("Assistant to the CEO"), "Assistant to the CEO")
+    self.assertEqual(clean_role("Officer for Finance"), "Officer for Finance")
 
   def test_hiring_headline_extracts_role(self) -> None:
     self.assertEqual(
@@ -37,6 +39,10 @@ class CleanRoleTests(unittest.TestCase):
       clean_role("Aviation Ground Services is hiring: Accounts Clerk | Apply by 13 July 2026"),
       "Accounts Clerk",
     )
+
+  def test_recruiting_suffix_removed(self) -> None:
+    self.assertEqual(clean_role("Human Resources Officer to join them soon."), "Human Resources Officer")
+    self.assertEqual(clean_role("Accounting Intern to join our team"), "Accounting Intern")
 
   def test_unknown_role_sentinel(self) -> None:
     self.assertEqual(clean_role("Unknown role"), "advertised role")
@@ -66,6 +72,18 @@ class CoverLetterTests(unittest.TestCase):
     self.assertIn("I am applying for the Internal Auditor position at Cimas Health Group.", text)
     self.assertNotIn("is hiring", text)
     self.assertNotIn("Closing Date", text)
+
+  def test_cover_letter_uses_natural_dash_punctuation(self) -> None:
+    text = letter({"role": "Control Room Operator – Dry Mortar Operations", "company": "Acme — Zimbabwe"})
+    self.assertIn("Dear Hiring Team at Acme - Zimbabwe,", text)
+    self.assertIn("I am applying for the Control Room Operator - Dry Mortar Operations position at Acme - Zimbabwe.", text)
+    self.assertNotIn("—", text)
+    self.assertNotIn("–", text)
+
+  def test_recruiting_suffix_uses_clean_role(self) -> None:
+    text = letter({"role": "Human Resources Officer to join them soon.", "company": "Unknown employer"})
+    self.assertIn("I am applying for the Human Resources Officer position.", text)
+    self.assertNotIn("to join them soon", text)
 
   def test_unknown_employer_never_referenced(self) -> None:
     text = letter({"role": "Personal Assistant", "company": "Unknown employer"})
