@@ -10,7 +10,7 @@ BAD_ROLE_START_RE = re.compile(
   re.I,
 )
 HIRING_PREFIX_RE = re.compile(
-  r"^.+?\b(?:is\s+)?hiring\s*:?\s*(?:for\s+)?(?:a|an|the)?\s*(?P<role>.+)$",
+  r"^.+?\b(?:is\s+)?hiring\s*:?\s*(?:for\s+)?(?:(?:a|an|the)\s+)?(?P<role>.+)$",
   re.I,
 )
 TRAILING_ROLE_META_RE = re.compile(

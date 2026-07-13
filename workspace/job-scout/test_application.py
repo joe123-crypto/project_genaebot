@@ -33,6 +33,10 @@ class CleanRoleTests(unittest.TestCase):
       clean_role("Cimas Health Group is hiring: Internal Auditor | Closing Date: 10 July 2026"),
       "Internal Auditor",
     )
+    self.assertEqual(
+      clean_role("Aviation Ground Services is hiring: Accounts Clerk | Apply by 13 July 2026"),
+      "Accounts Clerk",
+    )
 
   def test_unknown_role_sentinel(self) -> None:
     self.assertEqual(clean_role("Unknown role"), "advertised role")
