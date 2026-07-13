@@ -15,6 +15,7 @@ import urllib.error
 import job_scout
 import jobscout.api
 import jobscout.constants
+import jobscout.delivery
 import jobscout.dispatch_store
 import jobscout.group_feed
 import jobscout.subscriber
@@ -983,6 +984,7 @@ class JSearchDispatchTests(unittest.TestCase):
     send_error: Exception | None = None,
     web_result: dict | None = None,
     max_candidates_per_user: int = 5,
+    gmail_connected: bool = True,
   ) -> dict:
     subscriber = self.subscriber(auto_apply=auto_apply)
     with (
@@ -1002,6 +1004,7 @@ class JSearchDispatchTests(unittest.TestCase):
       ) as web_apply,
       mock.patch.object(job_scout, "send_whatsapp_summary", return_value={"ok": True}) as whatsapp,
       mock.patch.object(job_scout, "cmd_record_application", return_value={"ok": True}) as record,
+      mock.patch.object(job_scout, "gmail_sender_connected", return_value=gmail_connected) as gmail_check,
     ):
       if send_error is None:
         send_patch = mock.patch.object(job_scout, "send_application_email", return_value={"messageId": "msg-1"})
@@ -1015,6 +1018,7 @@ class JSearchDispatchTests(unittest.TestCase):
     result["_send_calls"] = send.call_args_list
     result["_whatsapp_calls"] = whatsapp.call_args_list
     result["_web_calls"] = web_apply.call_args_list
+    result["_gmail_check_calls"] = gmail_check.call_args_list
     return result
 
   def test_dispatch_applies_email_candidate_and_records_outcome(self) -> None:
@@ -1026,9 +1030,26 @@ class JSearchDispatchTests(unittest.TestCase):
       self.assertEqual(result["failedCount"], 0)
       self.assertEqual(result["users"][0]["status"], "applied")
       self.assertEqual(result["_send_calls"][0].args[1]["applicationEmail"], "hr@example.dz")
+      self.assertEqual(len(result["_gmail_check_calls"]), 1)
       record_args = result["_record_calls"][0].args[0]
       self.assertEqual(record_args.status, "applied")
       self.assertEqual(record_args.source, "jsearch")
+
+  def test_dispatch_records_action_required_when_gmail_sender_missing(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      result = self.dispatch_with(Path(tmp), [self.candidate()], gmail_connected=False)
+
+      self.assertEqual(result["appliedCount"], 0)
+      self.assertEqual(result["actionRequiredCount"], 1)
+      self.assertEqual(result["failedCount"], 0)
+      self.assertEqual(result["users"][0]["status"], "action_required")
+      self.assertEqual(result["_send_calls"], [])
+      record_args = result["_record_calls"][0].args[0]
+      self.assertEqual(record_args.status, "action_required")
+      self.assertEqual(record_args.submission_method, "manual")
+      self.assertEqual(record_args.blocker_code, "gmail_not_connected")
+      public_message = result["_whatsapp_calls"][0].args[1]
+      self.assertIn("Reconnect Gmail", public_message)
 
   def test_dispatch_applies_top_ranked_candidates_within_user_limit(self) -> None:
     candidates = [
@@ -1241,6 +1262,14 @@ class JSearchDispatchTests(unittest.TestCase):
     self.assertEqual(subject, "Application for Internal Auditor - Risk - Test Applicant")
     self.assertNotIn("—", subject)
     self.assertNotIn("–", subject)
+
+  def test_gmail_sender_connected_checks_sender_registry_key(self) -> None:
+    subscriber = self.subscriber()
+    sender_key = jobscout.delivery.token_store_key_for_uid("user-1")
+    with mock.patch("jobscout.delivery.run_json_command", return_value={"senders": {sender_key: ["central"]}}) as run:
+      self.assertTrue(job_scout.gmail_sender_connected(subscriber))
+
+    self.assertEqual(run.call_args.args[0], [str(job_scout.GENAIE_MAIL_BIN), "senders"])
 
   def test_send_whatsapp_summary_uses_gateway_state_and_token(self) -> None:
     with mock.patch.dict(job_scout.os.environ, {
