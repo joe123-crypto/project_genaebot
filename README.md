@@ -267,7 +267,8 @@ The deploy script used by both paths:
   become detached from the newly staged files
 - stamps `live-source` with `.OPENCLAW_GENERATED` and a source manifest
 - excludes runtime files such as `state.json`, `pending-links.json`,
-  `subscriptions.json`, `*.log`, caches, and bytecode
+  `subscriptions.json`, `*.log`, caches, and bytecode, and removes stale
+  excluded files from the existing generated mirror during restaging
 - syncs curated source into the live container (skipped when the container
   boundary is active — `workspace/` and agent-room docs then arrive via the
   read-only bind mounts instead)
