@@ -1,8 +1,5 @@
-"""Job Scout internals, extracted from the top-level job_scout.py entrypoint.
+"""Importable Job Scout domain logic and CLI command implementations.
 
-job_scout.py remains the CLI + orchestration hub and re-imports the public names
-defined here, so existing ``mock.patch("job_scout.<name>")`` targets keep working
-for anything the orchestration layer calls directly. Helpers that call each other
-within a submodule are patched at their defining module (e.g.
-``jobscout.jsearch.jsearch_request``).
+The top-level job_scout.py file is a compatibility entrypoint that re-exports
+the established public names from these focused modules.
 """
