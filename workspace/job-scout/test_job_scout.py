@@ -602,7 +602,9 @@ class GroupFeedTests(unittest.TestCase):
     return data
 
   def test_group_feed_message_uses_requested_advert_shape(self) -> None:
-    message = jobscout.group_feed.format_group_feed_message(self.candidate())
+    message = jobscout.group_feed.format_group_feed_message(self.candidate(
+      applyLinks=["https://tirufresh.co.zw/apply/poultry-supervisor"],
+    ))
 
     self.assertTrue(message.startswith("Job Title: Poultry Supervisor\n\nLocation: Lot 4 Pollockshields Estate, Selous"))
     self.assertIn("About Us", message)
@@ -610,7 +612,9 @@ class GroupFeedTests(unittest.TestCase):
     self.assertIn("- Supervise daily poultry house operations.", message)
     self.assertIn("Closing Date: 14 July 2026", message)
     self.assertIn("Email: learnmore@tirufresh.co.zw", message)
-    self.assertIn("Source: https://vacancymail.co.zw/jobs/poultry-supervisor/", message)
+    self.assertIn("Apply: https://tirufresh.co.zw/apply/poultry-supervisor", message)
+    self.assertNotIn("Source:", message)
+    self.assertNotIn("https://vacancymail.co.zw/jobs/poultry-supervisor/", message)
     self.assertIn(f"Join the group for more jobs: {jobscout.constants.DEFAULT_GROUP_FEED_INVITE_URL}", message)
 
   def test_group_feed_message_strips_web_internal_fragments(self) -> None:

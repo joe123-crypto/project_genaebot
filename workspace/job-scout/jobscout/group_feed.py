@@ -481,8 +481,6 @@ def format_group_feed_message(candidate: dict, invite_url: str = DEFAULT_GROUP_F
   for link in links:
     if link != source and not _description_has(description, link):
       application_lines.append(f"Apply: {link}")
-  if source and not _description_has(description, source):
-    application_lines.append(f"Source: {source}")
   if application_lines:
     lines.extend(["Application", "", *application_lines])
   _append_group_join_link(lines, invite_url)
