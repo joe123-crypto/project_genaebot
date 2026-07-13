@@ -127,6 +127,14 @@ def check_skills(files: dict[str, str], checks: Checks) -> None:
 def check_staged_source(files: dict[str, str], checks: Checks) -> None:
     with tempfile.TemporaryDirectory(prefix="genaebot-stage-") as temp:
         stage = Path(temp) / "live-source"
+        stale_files = [
+            stage / "workspace/job-scout/jobscout/__pycache__/group_feed.cpython-314.pyc",
+            stage / "workspace/lib/__pycache__/genaie_env.cpython-314.pyc",
+            stage / "workspace/obsolete-runtime/file.txt",
+        ]
+        for stale_file in stale_files:
+            stale_file.parent.mkdir(parents=True, exist_ok=True)
+            stale_file.write_text("stale\n", encoding="utf-8")
         subprocess.run(
             ["bash", str(ROOT / "deploy/stage-openclaw-source.sh"), str(ROOT), str(stage)],
             check=True,
@@ -136,6 +144,8 @@ def check_staged_source(files: dict[str, str], checks: Checks) -> None:
             for path in stage.rglob("*")
             if path.is_file()
         }
+        for stale_file in stale_files:
+            checks.require(not stale_file.exists(), f"stale staged file survived restaging: {stale_file.relative_to(stage).as_posix()}")
 
         for rel, staged_path in staged.items():
             if rel.startswith("workspace/"):

@@ -42,7 +42,7 @@ if [ -d "$stage_root/agent-workspace" ]; then
   rmdir "$stage_root/agent-workspace"
 fi
 
-rsync -a --delete --filter="merge $filter_file" \
+rsync -a --delete --delete-excluded --filter="merge $filter_file" \
   "$source_root/workspace/" "$stage_root/workspace/"
 mkdir -p "$stage_root/workspace/tmp"
 
