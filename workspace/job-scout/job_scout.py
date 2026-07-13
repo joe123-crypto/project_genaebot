@@ -101,6 +101,7 @@ from jobscout.subscriber import (
 from jobscout.textutil import public_text
 from jobscout.delivery import (
   parse_json_output,
+  gmail_sender_connected,
   request_web_application,
   result_message_id,
   run_json_command,
@@ -816,6 +817,23 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
         if email and auto_apply:
           if args.dry_run:
             user_applied.append({"candidate": candidate, "reason": reason, "method": "email", "dryRun": True})
+            continue
+          if not gmail_sender_connected(subscriber):
+            blocker_code = "gmail_not_connected"
+            record_candidate_application(
+              user_id,
+              candidate,
+              "action_required",
+              notes=action_instruction(candidate, blocker_code),
+              match=reason,
+              submission_method="manual",
+              application_url=application_url,
+              blocker_code=blocker_code,
+              attempt_count=attempt_count,
+              replace=replace_existing,
+            )
+            record_channel_candidate_outcome(run_id, user_id, candidate, "action_required", attempt_count)
+            user_action_required.append({"candidate": candidate, "blockerCode": blocker_code})
             continue
           try:
             cover_letter = write_cover_letter(subscriber, preferences, candidate)

@@ -6,6 +6,8 @@ website-application worker HTTP call. Imported by dispatch orchestration.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -30,6 +32,12 @@ def parse_json_output(output: str) -> dict:
   return data if isinstance(data, dict) else {}
 
 
+def token_store_key_for_uid(uid: str) -> str:
+  digest = hashlib.sha256(str(uid or "").encode("utf-8")).digest()
+  encoded = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+  return f"firebase:{encoded}"
+
+
 def run_json_command(command: list[str], timeout: int = 90, env: dict[str, str] | None = None) -> dict:
   try:
     completed = subprocess.run(
@@ -46,6 +54,14 @@ def run_json_command(command: list[str], timeout: int = 90, env: dict[str, str] 
     detail = completed.stderr or completed.stdout or f"exit {completed.returncode}"
     raise RuntimeError(public_text(detail, 240))
   return parse_json_output(completed.stdout)
+
+
+def gmail_sender_connected(subscriber: dict) -> bool:
+  result = run_json_command([str(GENAIE_MAIL_BIN), "senders"], timeout=45)
+  senders = result.get("senders")
+  if not isinstance(senders, dict):
+    return False
+  return token_store_key_for_uid(subscriber_user_id(subscriber)) in senders
 
 
 def send_application_email(subscriber: dict, candidate: dict, cover_letter: Path) -> dict:
