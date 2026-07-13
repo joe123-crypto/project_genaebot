@@ -158,12 +158,15 @@ from jobscout.jsearch import (
   fetch_whatsapp_channel_candidates_with_results,
   fetch_zimlinks_candidates,
   filter_candidates,
+  filter_candidates_for_user_with_stats,
   filter_candidates_with_stats,
   finalize_channel_candidate_dispatch,
+  global_filter_candidates,
   jsearch_items,
   jsearch_provider,
   jsearch_request,
   normalized_candidate,
+  duplicate_key,
   record_channel_candidate_outcome,
   register_channel_candidate_eligibility,
   zw_targeted,
@@ -674,65 +677,135 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
   allow_browser_apply = browser_apply_enabled(args)
   group_feed_cache = maybe_write_group_feed_cache(args, run_id)
 
+  prepared_users: list[dict] = []
+  raw_pool: list[dict] = []
   for subscriber in subscribers:
     processed_count += 1
     user_id = subscriber_user_id(subscriber)
     preferences = subscriber_preferences(subscriber)
     per_user_limit = min(args.max_candidates_per_user, max_applications(preferences))
     queries = search_queries(preferences)
-    auto_apply = preferences.get("autoApply", True) is not False
-    user_applied: list[dict] = []
-    user_action_required: list[dict] = []
-    applications: list[dict] = []
-    failed_note = None
     source_results = {
       source: {"status": "skipped", "rawCount": 0, "durationMs": 0}
       for source in (*WHATSAPP_CHANNEL_SOURCES, "jsearch", "vacancymail", "iharare", "vacancybox", "applynow")
     }
     if per_user_limit <= 0 or not queries:
-      status = "no_matches"
-      candidates: list[dict] = []
+      prepared_users.append({
+        "subscriber": subscriber,
+        "userId": user_id,
+        "preferences": preferences,
+        "perUserLimit": per_user_limit,
+        "queries": queries,
+        "applications": [],
+        "rawKeys": [],
+        "sourceResults": source_results,
+        "status": "no_matches",
+        "error": None,
+      })
     else:
       try:
         applications_result = cmd_list_applications(argparse.Namespace(user_id=user_id))
         applications = applications_from_response(applications_result)
         raw_candidates, source_results = fetch_candidate_sources(preferences, per_user_limit)
-        candidates, filter_stats = filter_candidates_with_stats(
-          raw_candidates,
-          preferences,
-          applications,
-          per_user_limit,
-        )
-        apply_source_filter_stats(source_results, filter_stats)
-        if not args.dry_run:
-          register_channel_candidate_eligibility(run_id, user_id, candidates)
+        raw_keys = [duplicate_key(candidate) for candidate in raw_candidates]
+        raw_pool.extend(raw_candidates)
+        prepared_users.append({
+          "subscriber": subscriber,
+          "userId": user_id,
+          "preferences": preferences,
+          "perUserLimit": per_user_limit,
+          "queries": queries,
+          "applications": applications,
+          "rawKeys": raw_keys,
+          "sourceResults": source_results,
+          "status": None,
+          "error": None,
+        })
       except SystemExit:
         raise
       except Exception as err:
-        status = "failed"
-        candidates = []
-        failed_count += 1
-        failed_note = public_text(err)
-        users.append({
-          "userKey": user_key(user_id),
-          "status": status,
+        prepared_users.append({
+          "subscriber": subscriber,
+          "userId": user_id,
+          "preferences": preferences,
+          "perUserLimit": per_user_limit,
+          "queries": queries,
+          "applications": [],
+          "rawKeys": [],
           "sourceResults": source_results,
-          "error": failed_note,
+          "status": "failed",
+          "error": public_text(err),
         })
-        if not args.dry_run:
-          try:
-            send_whatsapp_summary(subscriber_phone(subscriber), build_user_summary(date_label, [], [], failed_note))
-          except Exception:
-            pass
-          cmd_record_dispatch_outcome(argparse.Namespace(
-            run_id=run_id,
-            user_id=user_id,
-            status=status,
-            applied_count=0,
-            physical_count=0,
-            dispatch_root=args.dispatch_root,
-          ))
-        continue
+
+  cleaned_pool, global_filter_stats, global_candidates = global_filter_candidates(raw_pool)
+  global_filter_summary = {
+    "rawCount": len(raw_pool),
+    "candidateCount": len(cleaned_pool),
+    "expiredCount": sum(int(stats.get("expiredCount") or 0) for stats in global_filter_stats.values()),
+    "duplicateCount": sum(int(stats.get("duplicateCount") or 0) for stats in global_filter_stats.values()),
+    "sourceResults": global_filter_stats,
+  }
+
+  for prepared in prepared_users:
+    subscriber = prepared["subscriber"]
+    user_id = prepared["userId"]
+    preferences = prepared["preferences"]
+    per_user_limit = prepared["perUserLimit"]
+    queries = prepared["queries"]
+    applications = prepared["applications"]
+    source_results = prepared["sourceResults"]
+    auto_apply = preferences.get("autoApply", True) is not False
+    user_applied: list[dict] = []
+    user_action_required: list[dict] = []
+    failed_note = prepared.get("error")
+    candidates: list[dict] = []
+    prepared_status = prepared.get("status")
+
+    if prepared_status == "failed":
+      failed_count += 1
+      users.append({
+        "userKey": user_key(user_id),
+        "status": "failed",
+        "sourceResults": source_results,
+        "globalFilter": global_filter_summary,
+        "error": failed_note,
+      })
+      if not args.dry_run:
+        try:
+          send_whatsapp_summary(subscriber_phone(subscriber), build_user_summary(date_label, [], [], failed_note))
+        except Exception:
+          pass
+        cmd_record_dispatch_outcome(argparse.Namespace(
+          run_id=run_id,
+          user_id=user_id,
+          status="failed",
+          applied_count=0,
+          physical_count=0,
+          dispatch_root=args.dispatch_root,
+        ))
+      continue
+
+    if prepared_status == "no_matches":
+      status = "no_matches"
+    else:
+      candidate_pool = []
+      seen_keys: set[tuple[str, str]] = set()
+      for key in prepared.get("rawKeys") or []:
+        if key in seen_keys:
+          continue
+        seen_keys.add(key)
+        candidate = global_candidates.get(key)
+        if candidate is not None:
+          candidate_pool.append(candidate)
+      candidates, filter_stats = filter_candidates_for_user_with_stats(
+        candidate_pool,
+        preferences,
+        applications,
+        per_user_limit,
+      )
+      apply_source_filter_stats(source_results, filter_stats)
+      if not args.dry_run:
+        register_channel_candidate_eligibility(run_id, user_id, candidates)
 
     if candidates:
       for candidate in candidates:
@@ -908,6 +981,7 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
           "appliedCount": len(user_applied),
           "actionRequiredCount": len(user_action_required),
           "sourceResults": source_results,
+          "globalFilter": global_filter_summary,
           "error": failed_note,
         })
         if not args.dry_run:
@@ -936,6 +1010,7 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
       "actionRequiredCount": len(user_action_required),
       "status": status,
       "sourceResults": source_results,
+      "globalFilter": global_filter_summary,
       "candidates": candidates,
     }
     artifact_path = None if args.dry_run else dispatch_store.write_candidate_artifact(args.dispatch_root, run_id, user_id, artifact)
@@ -947,6 +1022,7 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
       "actionRequiredCount": len(user_action_required),
       "artifactPath": artifact_path,
       "sourceResults": source_results,
+      "globalFilter": global_filter_summary,
       "error": failed_note,
     })
     if not args.dry_run:
@@ -988,6 +1064,7 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
     "physicalCount": 0,
     "failedCount": failed_count,
     "noMatchesCount": no_matches_count,
+    "globalFilter": global_filter_summary,
     "groupFeedCache": group_feed_cache,
     "users": users,
   }

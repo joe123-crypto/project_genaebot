@@ -220,6 +220,243 @@ def application_key(value: dict) -> tuple[str, str]:
   )
 
 
+def duplicate_key(candidate: dict) -> tuple[str, str]:
+  company, role = application_key(candidate)
+  if company and role:
+    return ("company-role", f"{company}\n{role}")
+  return ("candidate", candidate_key(candidate))
+
+
+def candidate_source(candidate: dict) -> str:
+  return str(candidate.get("source") or "unknown")
+
+
+def candidate_application_url(candidate: dict) -> str | None:
+  links = candidate.get("applyLinks")
+  if isinstance(links, list):
+    for value in links:
+      link = str(value or "").strip()
+      if link.startswith(("https://", "http://")):
+        return link
+  if candidate_source(candidate) in WHATSAPP_CHANNEL_SOURCES or (
+    candidate.get("sourceChannelJid") and candidate.get("sourcePostId")
+  ):
+    return None
+  source = str(candidate.get("sourceUrl") or "").strip()
+  return source if source.startswith(("https://", "http://")) else None
+
+
+def has_application_email(candidate: dict) -> bool:
+  return bool(str(candidate.get("applicationEmail") or "").strip())
+
+
+def application_priority(candidate: dict) -> str:
+  if has_application_email(candidate):
+    return "email"
+  if candidate_application_url(candidate):
+    return "website"
+  return "manual"
+
+
+def duplicate_variant_rank(candidate: dict) -> tuple[int, int, int, int]:
+  return (
+    1 if has_application_email(candidate) else 0,
+    1 if candidate_application_url(candidate) else 0,
+    len(str(candidate.get("description") or "")),
+    len(str(candidate.get("sourceUrl") or "")),
+  )
+
+
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
+_PROFILE_STOPWORDS = {
+  "and", "the", "for", "with", "job", "jobs", "role", "roles", "any", "anything",
+  "work", "worker", "position", "positions", "level", "including",
+}
+
+
+def profile_tokens(preferences: dict) -> dict[str, set[str]]:
+  def tokens(values: list[str]) -> set[str]:
+    output: set[str] = set()
+    for value in values:
+      for token in _TOKEN_RE.findall(str(value or "").casefold()):
+        if len(token) >= 3 and token not in _PROFILE_STOPWORDS:
+          output.add(token)
+    return output
+
+  return {
+    "roles": tokens(clean_items(profile_values(preferences, "targetRoles") or profile_values(preferences, "roles"))),
+    "skills": tokens(clean_items(profile_values(preferences, "skills"))),
+    "qualifications": tokens(clean_items(profile_values(preferences, "qualifications"))),
+    "experience": tokens(clean_items(profile_values(preferences, "experience"))),
+    "locations": tokens(clean_items(profile_values(preferences, "locations"))),
+  }
+
+
+def candidate_tokens(candidate: dict) -> dict[str, set[str]]:
+  def tokens(*values: object) -> set[str]:
+    output: set[str] = set()
+    for value in values:
+      for token in _TOKEN_RE.findall(str(value or "").casefold()):
+        if len(token) >= 3 and token not in _PROFILE_STOPWORDS:
+          output.add(token)
+    return output
+
+  return {
+    "title": tokens(candidate.get("role")),
+    "body": tokens(candidate.get("company"), candidate.get("role"), candidate.get("description")),
+    "location": tokens(candidate.get("location")),
+  }
+
+
+def selection_metadata(preferences: dict, candidate: dict) -> dict:
+  profile = profile_tokens(preferences)
+  candidate_words = candidate_tokens(candidate)
+  reasons: list[str] = []
+  score = 0
+
+  role_hits = profile["roles"] & (candidate_words["title"] | candidate_words["body"])
+  if role_hits:
+    score += 40 + min(len(role_hits), 4) * 5
+    reasons.append("role")
+  skill_hits = profile["skills"] & candidate_words["body"]
+  if skill_hits:
+    score += min(len(skill_hits), 6) * 4
+    reasons.append("skills")
+  qualification_hits = profile["qualifications"] & candidate_words["body"]
+  if qualification_hits:
+    score += min(len(qualification_hits), 4) * 3
+    reasons.append("qualifications")
+  experience_hits = profile["experience"] & candidate_words["body"]
+  if experience_hits:
+    score += min(len(experience_hits), 4) * 3
+    reasons.append("experience")
+  location_hits = profile["locations"] & (candidate_words["location"] | candidate_words["body"])
+  if location_hits:
+    score += 15 + min(len(location_hits), 3) * 2
+    reasons.append("location")
+
+  priority = application_priority(candidate)
+  if priority == "email":
+    reasons.insert(0, "email-apply")
+  elif priority == "website":
+    reasons.insert(0, "website-apply")
+  else:
+    reasons.insert(0, "manual-apply")
+
+  return {
+    "applicationPriority": priority,
+    "selectionScore": score,
+    "selectionReasons": reasons,
+  }
+
+
+def source_filter_stats() -> dict[str, int]:
+  return {
+    "eligibleCount": 0,
+    "expiredCount": 0,
+    "duplicateCount": 0,
+    "excludedCount": 0,
+    "unknownDeadlineCount": 0,
+    "malformedDeadlineCount": 0,
+    "selectedCount": 0,
+  }
+
+
+def global_filter_candidates(candidates: list[dict]) -> tuple[list[dict], dict[str, dict[str, int]], dict[tuple[str, str], dict]]:
+  kept: dict[tuple[str, str], dict] = {}
+  stats: dict[str, dict[str, int]] = {}
+
+  for index, candidate in enumerate(candidates):
+    source = candidate_source(candidate)
+    source_stats = stats.setdefault(source, source_filter_stats())
+    deadline = closing_state(candidate.get("closing"))
+    if deadline == "expired":
+      source_stats["expiredCount"] += 1
+      continue
+    if deadline == "unknown":
+      source_stats["unknownDeadlineCount"] += 1
+    elif deadline == "malformed":
+      source_stats["malformedDeadlineCount"] += 1
+
+    key = duplicate_key(candidate)
+    candidate = {**candidate, "_globalOrder": index}
+    current = kept.get(key)
+    if current is None:
+      kept[key] = candidate
+      continue
+
+    if duplicate_variant_rank(candidate) > duplicate_variant_rank(current):
+      stats.setdefault(candidate_source(current), source_filter_stats())["duplicateCount"] += 1
+      kept[key] = candidate
+    else:
+      source_stats["duplicateCount"] += 1
+
+  cleaned = sorted(kept.values(), key=lambda item: int(item.get("_globalOrder") or 0))
+  return cleaned, stats, {duplicate_key(candidate): candidate for candidate in cleaned}
+
+
+def filter_candidates_for_user_with_stats(
+  candidates: list[dict],
+  preferences: dict,
+  applications: list[dict],
+  limit: int,
+) -> tuple[list[dict], dict[str, dict[str, int]]]:
+  exclusions = [item.casefold() for item in clean_items(profile_values(preferences, "exclusions"))]
+  existing: set[tuple[str, str]] = set()
+  for application in applications:
+    status = str(application.get("status") or "").strip().lower()
+    try:
+      attempts = int(application.get("attemptCount") or 0)
+    except (TypeError, ValueError):
+      attempts = 0
+    if not status or status in TERMINAL_APPLICATION_STATUSES:
+      existing.add(application_key(application))
+    elif status == "failed" and attempts >= MAX_APPLICATION_ATTEMPTS:
+      existing.add(application_key(application))
+
+  eligible: list[tuple[int, dict, dict]] = []
+  stats: dict[str, dict[str, int]] = {}
+  for index, candidate in enumerate(candidates):
+    source = candidate_source(candidate)
+    source_stats = stats.setdefault(source, source_filter_stats())
+    text = " ".join([
+      str(candidate.get("company") or ""),
+      str(candidate.get("role") or ""),
+      str(candidate.get("description") or ""),
+    ]).casefold()
+    if any(exclusion in text for exclusion in exclusions):
+      source_stats["excludedCount"] += 1
+      continue
+    if application_key(candidate) in existing:
+      source_stats["duplicateCount"] += 1
+      continue
+    metadata = selection_metadata(preferences, candidate)
+    source_stats["eligibleCount"] += 1
+    eligible.append((index, candidate, metadata))
+
+  priority_order = {"email": 0, "website": 1, "manual": 2}
+  eligible.sort(key=lambda item: (
+    priority_order.get(str(item[2].get("applicationPriority") or "manual"), 2),
+    -int(item[2].get("selectionScore") or 0),
+    item[0],
+  ))
+
+  output: list[dict] = []
+  for rank, (_index, candidate, metadata) in enumerate(eligible[:max(0, int(limit or 0))], 1):
+    source = candidate_source(candidate)
+    stats.setdefault(source, source_filter_stats())["selectedCount"] += 1
+    output.append({
+      key: value
+      for key, value in {
+        **candidate,
+        **metadata,
+        "selectionRank": rank,
+      }.items()
+      if key != "_globalOrder"
+    })
+  return output, stats
+
+
 def closing_state(value: object, now: datetime | None = None) -> str:
   text = str(value or "").strip()
   if not text:
@@ -248,66 +485,13 @@ def filter_candidates_with_stats(
   applications: list[dict],
   limit: int,
 ) -> tuple[list[dict], dict[str, dict[str, int]]]:
-  exclusions = [item.casefold() for item in clean_items(profile_values(preferences, "exclusions"))]
-  existing: set[tuple[str, str]] = set()
-  for application in applications:
-    status = str(application.get("status") or "").strip().lower()
-    try:
-      attempts = int(application.get("attemptCount") or 0)
-    except (TypeError, ValueError):
-      attempts = 0
-    # Historical records without a status and manual-submission records are
-    # deliberately terminal: users may already have applied after receiving the URL.
-    if not status or status in TERMINAL_APPLICATION_STATUSES:
-      existing.add(application_key(application))
-    elif status == "failed" and attempts >= MAX_APPLICATION_ATTEMPTS:
-      existing.add(application_key(application))
-  seen: set[str] = set()
-  output: list[dict] = []
-  stats: dict[str, dict[str, int]] = {}
-  for candidate in candidates:
-    source = str(candidate.get("source") or "unknown")
-    source_stats = stats.setdefault(source, {
-      "eligibleCount": 0,
-      "expiredCount": 0,
-      "duplicateCount": 0,
-      "excludedCount": 0,
-      "unknownDeadlineCount": 0,
-      "malformedDeadlineCount": 0,
-    })
-    deadline = closing_state(candidate.get("closing"))
-    if deadline == "expired":
-      source_stats["expiredCount"] += 1
-      continue
-    if deadline == "unknown":
-      source_stats["unknownDeadlineCount"] += 1
-    elif deadline == "malformed":
-      source_stats["malformedDeadlineCount"] += 1
-    text = " ".join([
-      str(candidate.get("company") or ""),
-      str(candidate.get("role") or ""),
-      str(candidate.get("description") or ""),
-    ]).casefold()
-    if any(exclusion in text for exclusion in exclusions):
-      source_stats["excludedCount"] += 1
-      continue
-    appkey = application_key(candidate)
-    # Skip jobs already applied to (prior runs) and collapse same company/role
-    # across sources within this run, so a JSearch + board duplicate is applied once.
-    if appkey in existing:
-      source_stats["duplicateCount"] += 1
-      continue
-    key = candidate_key(candidate)
-    if key in seen:
-      source_stats["duplicateCount"] += 1
-      continue
-    if len(output) >= limit:
-      continue
-    seen.add(key)
-    existing.add(appkey)
-    output.append(candidate)
-    source_stats["eligibleCount"] += 1
-  return output, stats
+  cleaned, global_stats, _ = global_filter_candidates(candidates)
+  output, user_stats = filter_candidates_for_user_with_stats(cleaned, preferences, applications, limit)
+  for source, stats in user_stats.items():
+    target = global_stats.setdefault(source, source_filter_stats())
+    for key, value in stats.items():
+      target[key] = int(target.get(key) or 0) + int(value or 0)
+  return output, global_stats
 
 
 def filter_candidates(candidates: list[dict], preferences: dict, applications: list[dict], limit: int) -> list[dict]:
@@ -331,6 +515,7 @@ def apply_source_filter_stats(source_results: dict[str, dict], filter_stats: dic
       "excludedCount",
       "unknownDeadlineCount",
       "malformedDeadlineCount",
+      "selectedCount",
     ):
       result.setdefault(key, 0)
 
@@ -528,5 +713,3 @@ def finalize_channel_candidate_dispatch(run_id: str) -> None:
     zimlinks.finalize_dispatch(run_id)
   except Exception as err:
     print(f"WhatsApp channel cleanup failed: {public_text(err)}", file=sys.stderr)
-
-
