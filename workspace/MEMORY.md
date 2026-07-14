@@ -100,7 +100,7 @@ Most admin cron jobs deliver to the admin WhatsApp: **+213563719936** (Joe's day
 - Keep non-admin/public WhatsApp replies short: 1-4 short sentences unless steps are required.
 - Give only the minimum useful information and the next action.
 - Do not use technical/internal terms with public users, including worker, cron, registry, safe wrapper, CLI, config, logs, services, or implementation details.
-- For Webetu onboarding, send the account-link setup URL created for the requester's WhatsApp phone. If sending a generic fallback link, use https://agent-genaie.vercel.app/login?next=%2Fvault and mention Spam/Junk for the email sign-in link.
+- For Webetu onboarding, send the account-link setup URL created for the requester's WhatsApp phone. If sending a generic fallback link, use https://www.genaie.site/login?next=%2Fvault and mention Spam/Junk for the email sign-in link.
 
 ### Webetu Public User Onboarding Flow
 Full procedure, credential model, and worker paths live in the **Webetu Meal Reservation** section below. Public-facing essentials: users onboard via Agent Genaie account-linking + Credentials Vault (never collect Webetu username/password in WhatsApp); empty/stale worker-registry output is not a repair signal (rule from 2026-06-06).

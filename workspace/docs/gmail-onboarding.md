@@ -1,6 +1,6 @@
 # Gmail Sender Onboarding
 
-> **URL note:** App links use `APP_BASE_URL` (`https://agent-genaie.vercel.app`) from `~/.openclaw/.env`, the same source the account-link helper resolves. Do not use the ngrok dev tunnel in `/home/joseph/projects/agent_genaie/.env`; it is a stale local-dev value and returns 404. If a link fails, verify `APP_BASE_URL` in `~/.openclaw/.env` first.
+> **URL note:** App links use `APP_BASE_URL` (`https://www.genaie.site`) from `~/.openclaw/.env`, the same source the account-link helper resolves. Do not use the ngrok dev tunnel in `/home/joseph/projects/agent_genaie/.env`; it is a stale local-dev value and returns 404. If a link fails, verify `APP_BASE_URL` in `~/.openclaw/.env` first.
 
 Purpose: onboard a user so OpenClaw/Agent Genaie can send job scout or application emails from that user's own Gmail account after the user explicitly connects Gmail in the web app.
 
@@ -14,7 +14,7 @@ The agent must not see, request, store, print, relay, or validate the user's Goo
 
 Allowed in chat:
 
-- Give the Gmail connection link: https://agent-genaie.vercel.app/login?next=%2Fconnect-gmail
+- Give the Gmail connection link: https://www.genaie.site/login?next=%2Fconnect-gmail
 - Ask the user which email address they want to use as the sender.
 - Explain that the user must sign in and approve Gmail access in the web app.
 - Tell the user to check Spam or Junk if the sign-in email does not arrive.
@@ -53,7 +53,7 @@ When a user asks to connect Gmail, reply:
 
 ```text
 Connect Gmail with the email you want to send from:
-https://agent-genaie.vercel.app/login?next=%2Fconnect-gmail
+https://www.genaie.site/login?next=%2Fconnect-gmail
 
 Don't send your password or Google codes here. Check Spam if the sign-in email doesn't arrive.
 ```
@@ -62,7 +62,7 @@ If the user asks why this is needed, reply:
 
 ```text
 This lets Job Scout send approved applications from your Gmail:
-https://agent-genaie.vercel.app/login?next=%2Fconnect-gmail
+https://www.genaie.site/login?next=%2Fconnect-gmail
 ```
 
 ## Agent Verification
@@ -83,7 +83,7 @@ If the user's email does not appear, reply:
 
 ```text
 Gmail isn't connected yet. Reopen the link with the same email and check that it says Connected:
-https://agent-genaie.vercel.app/login?next=%2Fconnect-gmail
+https://www.genaie.site/login?next=%2Fconnect-gmail
 ```
 
 ## Sending As A Connected User

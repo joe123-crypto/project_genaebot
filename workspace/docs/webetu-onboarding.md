@@ -1,6 +1,6 @@
 # Webetu Progress Meal Reservation Onboarding
 
-> **URL note:** App links use `APP_BASE_URL` (`https://agent-genaie.vercel.app`) from `~/.openclaw/.env`, the same source the account-link helper resolves. Do not use the ngrok dev tunnel in `/home/joseph/projects/agent_genaie/.env`; it is a stale local-dev value and returns 404. If a link fails, verify `APP_BASE_URL` in `~/.openclaw/.env` first.
+> **URL note:** App links use `APP_BASE_URL` (`https://www.genaie.site`) from `~/.openclaw/.env`, the same source the account-link helper resolves. Do not use the ngrok dev tunnel in `/home/joseph/projects/agent_genaie/.env`; it is a stale local-dev value and returns 404. If a link fails, verify `APP_BASE_URL` in `~/.openclaw/.env` first.
 
 Purpose: onboard a public WhatsApp user for Webetu Progress meal reservation through Agent Genaie without exposing the user's Webetu credentials to OpenClaw or the WhatsApp chat.
 
@@ -81,13 +81,13 @@ If the status result says `"linked": true`, send the vault link instead:
 
 ```text
 Save or update your Webetu details here:
-https://agent-genaie.vercel.app/<publicUserId>/vault
+https://www.genaie.site/<publicUserId>/vault
 ```
 
 If `publicUserId` is not available, use:
 
 ```text
-https://agent-genaie.vercel.app/login?next=%2Fvault
+https://www.genaie.site/login?next=%2Fvault
 ```
 
 ## Restaurant Preference
