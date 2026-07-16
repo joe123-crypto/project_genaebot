@@ -6,6 +6,8 @@ import argparse
 from datetime import datetime, timezone
 import os
 
+from dashboard_telemetry import next_daily_run_iso, publish_task_status
+
 from . import dispatch_store
 from .application import (
   action_instruction,
@@ -54,6 +56,60 @@ from .profile import clean_items, max_applications, preference_code, profile_val
 from .subscriber import subscriber_phone
 from .textutil import public_text
 from .util import normalize_phone, safe_run_id, utc_now
+
+# Matches the OpenClaw cron installed by deploy/install-job-scout.sh (0 9 * * *).
+JOB_SCOUT_SCHEDULE_LABEL = "Daily - 9:00 AM"
+JOB_SCOUT_TIMEZONE = "Africa/Harare"
+
+
+def publish_user_dashboard_telemetry(
+  user_id: str,
+  status: str,
+  applied_count: int,
+  action_required_count: int,
+  delivered: bool,
+  error_note: str | None,
+) -> None:
+  """Best-effort dashboard snapshots after one subscriber's dispatch."""
+  if status == "applied":
+    last_run_status = "success"
+    summary = f"{applied_count} application(s) sent"
+    if action_required_count:
+      summary += f", {action_required_count} need your action"
+  elif status == "action_required":
+    last_run_status = "action_required"
+    summary = f"{action_required_count} job(s) need your action"
+  elif status == "failed":
+    last_run_status = "failed"
+    summary = str(error_note or "")[:240] or "Job Scout run failed"
+  else:
+    last_run_status = "success"
+    summary = "No new matching jobs"
+
+  now = utc_now()
+  publish_task_status(
+    user_id=user_id,
+    task_id="search_apply_jobs",
+    service="job_scout",
+    status="active",
+    schedule_label=JOB_SCOUT_SCHEDULE_LABEL,
+    timezone_name=JOB_SCOUT_TIMEZONE,
+    next_run_at=next_daily_run_iso(9, 0, JOB_SCOUT_TIMEZONE),
+    last_run_at=now,
+    last_run_status=last_run_status,
+    last_run_summary=summary,
+  )
+  publish_task_status(
+    user_id=user_id,
+    task_id="deliver_results",
+    service="delivery",
+    status="active",
+    schedule_label="After each task run",
+    last_run_at=now,
+    last_run_status="success" if delivered else "failed",
+    last_run_summary="Job Scout summary delivered" if delivered else "WhatsApp delivery failed",
+  )
+
 
 def browser_apply_enabled(args: argparse.Namespace) -> bool:
   override = getattr(args, "browser_apply", None)
@@ -249,8 +305,10 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
         "error": failed_note,
       })
       if not args.dry_run:
+        delivered = False
         try:
           send_whatsapp_summary(subscriber_phone(subscriber), build_user_summary(date_label, [], [], failed_note))
+          delivered = True
         except Exception:
           pass
         cmd_record_dispatch_outcome(argparse.Namespace(
@@ -261,6 +319,7 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
           physical_count=0,
           dispatch_root=args.dispatch_root,
         ))
+        publish_user_dashboard_telemetry(user_id, "failed", 0, 0, delivered, failed_note)
       continue
 
     if prepared_status == "no_matches":
@@ -488,6 +547,7 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
             physical_count=0,
             dispatch_root=args.dispatch_root,
           ))
+          publish_user_dashboard_telemetry(user_id, status, 0, 0, False, failed_note)
         continue
 
     artifact = {
@@ -530,6 +590,14 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
         physical_count=0,
         dispatch_root=args.dispatch_root,
       ))
+      publish_user_dashboard_telemetry(
+        user_id,
+        status,
+        len(user_applied),
+        len(user_action_required),
+        True,
+        failed_note,
+      )
 
   if not args.dry_run:
     cmd_finish_dispatch(argparse.Namespace(

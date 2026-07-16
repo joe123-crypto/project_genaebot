@@ -102,6 +102,7 @@ class JSearchDispatchTests(unittest.TestCase):
       mock.patch.object(jobscout.dispatch_runner, "send_whatsapp_summary", return_value={"ok": True}) as whatsapp,
       mock.patch.object(jobscout.dispatch_runner, "cmd_record_application", return_value={"ok": True}) as record,
       mock.patch.object(jobscout.dispatch_runner, "gmail_sender_connected", return_value=gmail_connected) as gmail_check,
+      mock.patch.object(jobscout.dispatch_runner, "publish_task_status", return_value=True) as telemetry,
     ):
       if send_error is None:
         send_patch = mock.patch.object(jobscout.dispatch_runner, "send_application_email", return_value={"messageId": "msg-1"})
@@ -116,6 +117,7 @@ class JSearchDispatchTests(unittest.TestCase):
     result["_whatsapp_calls"] = whatsapp.call_args_list
     result["_web_calls"] = web_apply.call_args_list
     result["_gmail_check_calls"] = gmail_check.call_args_list
+    result["_telemetry_calls"] = {call.kwargs["task_id"]: call.kwargs for call in telemetry.call_args_list}
     return result
 
   def test_dispatch_applies_email_candidate_and_records_outcome(self) -> None:
@@ -321,6 +323,55 @@ class JSearchDispatchTests(unittest.TestCase):
       artifact = json.loads(Path(result["users"][0]["artifactPath"]).read_text(encoding="utf-8"))
       self.assertEqual(artifact["schemaVersion"], 2)
       self.assertIn("sourceResults", artifact)
+
+  def test_dispatch_publishes_dashboard_telemetry_after_applied_run(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      result = self.dispatch_with(Path(tmp), [self.candidate()])
+
+      jobs_task = result["_telemetry_calls"]["search_apply_jobs"]
+      self.assertEqual(jobs_task["user_id"], "user-1")
+      self.assertEqual(jobs_task["service"], "job_scout")
+      self.assertEqual(jobs_task["status"], "active")
+      self.assertEqual(jobs_task["last_run_status"], "success")
+      self.assertEqual(jobs_task["last_run_summary"], "1 application(s) sent")
+      self.assertEqual(jobs_task["timezone_name"], "Africa/Harare")
+      self.assertEqual(jobs_task["schedule_label"], "Daily - 9:00 AM")
+      self.assertTrue(jobs_task["next_run_at"].endswith("Z"))
+      delivery_task = result["_telemetry_calls"]["deliver_results"]
+      self.assertEqual(delivery_task["service"], "delivery")
+      self.assertEqual(delivery_task["last_run_status"], "success")
+      self.assertEqual(delivery_task["last_run_summary"], "Job Scout summary delivered")
+
+  def test_dispatch_publishes_dashboard_telemetry_for_no_matches(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      result = self.dispatch_with(Path(tmp), [])
+
+      jobs_task = result["_telemetry_calls"]["search_apply_jobs"]
+      self.assertEqual(jobs_task["last_run_status"], "success")
+      self.assertEqual(jobs_task["last_run_summary"], "No new matching jobs")
+
+  def test_dispatch_publishes_dashboard_telemetry_for_failed_run(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      result = self.dispatch_with(Path(tmp), [self.candidate()], send_error=RuntimeError("mail bridge down"))
+
+      jobs_task = result["_telemetry_calls"]["search_apply_jobs"]
+      self.assertEqual(jobs_task["last_run_status"], "failed")
+      self.assertTrue(jobs_task["last_run_summary"])
+      delivery_task = result["_telemetry_calls"]["deliver_results"]
+      self.assertEqual(delivery_task["last_run_status"], "success")
+
+  def test_dispatch_dry_run_publishes_no_dashboard_telemetry(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      args = self.args(Path(tmp), dry_run=True)
+      with mock.patch.object(jobscout.dispatch_runner, "cmd_list_ready", return_value={"subscribers": [self.subscriber()]}), \
+           mock.patch.object(jobscout.dispatch_runner, "cmd_list_applications", return_value={"applications": []}), \
+           mock.patch("jobscout.jsearch.fetch_jsearch_candidates_with_result", return_value=([], {"status": "ok", "rawCount": 0, "durationMs": 1})), \
+           mock.patch("jobscout.jsearch.fetch_scraped_candidates_with_results", return_value=([], {name: {"status": "skipped", "rawCount": 0, "durationMs": 0} for name in ("vacancymail", "iharare", "vacancybox", "applynow")})), \
+           mock.patch.object(jobscout.dispatch_runner, "jsearch_provider", return_value="test"), \
+           mock.patch.object(jobscout.dispatch_runner, "publish_task_status") as telemetry:
+        job_scout.cmd_dispatch_jsearch(args)
+
+    telemetry.assert_not_called()
 
   def test_dispatch_failed_send_records_failed_sanitized_note(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:

@@ -232,6 +232,16 @@ gateway and worker tokens match, at least one subscriber is ready, and every
 ready CV is accessible. It prints the failing readiness check and runs daily at
 `09:00 Africa/Harare` for up to 100 ready subscribers.
 
+### Dashboard task telemetry
+
+After each per-user run, the Job Scout dispatch and the Webetu meals notifier
+publish a live task snapshot to Agent Genaie's `POST /internal/dashboard/tasks`
+(rendered by the signed-in dashboard) through
+`workspace/lib/dashboard_telemetry.py`. Publishing is best-effort: failures log
+one stderr warning and never change the run outcome. It reuses `APP_BASE_URL`
+and `AGENT_GENAI_INTERNAL_API_KEY` via `genaie_env`, so no extra configuration
+is needed.
+
 ### WhatsApp Channel sources
 
 Job Scout can also consume job adverts from the ZimLinks,

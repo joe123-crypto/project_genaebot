@@ -13,6 +13,7 @@ SKIP_WINDOWS_FILE="${WEBETU_NOTIFY_SKIP_WINDOWS_FILE:-$STATE_DIR/skip-windows.ts
 LOCK_DIR="${WEBETU_NOTIFY_LOCK_DIR:-$STATE_DIR/notify.lock}"
 FAILED_DELIVERY_DIR="${WEBETU_FAILED_DELIVERY_DIR:-$STATE_DIR/failed-deliveries}"
 JOURNAL_TOOL="${WEBETU_DELIVERY_JOURNAL_TOOL:-$SCRIPT_DIR/delivery_journal.py}"
+TELEMETRY_TOOL="${WEBETU_DASHBOARD_TELEMETRY_TOOL:-$SCRIPT_DIR/../../lib/dashboard_telemetry.py}"
 WORKER="${WEBETU_WORKER_BIN:-/home/joseph/projects/webetu/webetu-worker/bin/webetu-worker}"
 WORKER_CONFIG="${WEBETU_WORKER_CONFIG:-/home/joseph/projects/webetu/webetu-worker/config/webetu-worker.example.json}"
 WORKER_MODE="${WEBETU_WORKER_MODE:-sudo}"
@@ -310,6 +311,14 @@ PY
 
 journal_command() {
   python3 "$JOURNAL_TOOL" "$@"
+}
+
+# Best-effort dashboard telemetry; never fails the run and never sees phone numbers.
+publish_task_telemetry() {
+  if [ "$DRY_RUN" = "1" ]; then
+    return 0
+  fi
+  python3 "$TELEMETRY_TOOL" publish "$@" >/dev/null || log "dashboard telemetry publish failed"
 }
 
 journal_prepare() {
@@ -908,6 +917,7 @@ main() {
 
     local date result_file rc status line
     local user_reservation_failed=0
+    local dates_ok=0 dates_failed=0
     for date in "${dates[@]}"; do
       result_file="$(mktemp)"
       log "reserve start user=$user_id phone_hash=$phone_hash source=$source date=$date"
@@ -927,6 +937,9 @@ main() {
       log "reserve done user=$user_id phone_hash=$phone_hash source=$source date=$date status=$status rc=$rc"
       if [ "$rc" -ne 0 ] || { [ "$status" != "success" ] && [ "$status" != "already_booked" ] && [ "$status" != "dry_run" ]; }; then
         user_reservation_failed=1
+        dates_failed=$((dates_failed + 1))
+      else
+        dates_ok=$((dates_ok + 1))
       fi
       rm -f "$result_file"
     done
@@ -941,9 +954,44 @@ main() {
     fi
 
     log "delivery start user=$user_id phone_hash=$phone_hash source=$source"
+    local delivery_status="success"
     if ! send_message "$phone" "$phone_hash" "$summary_file" "$user_id" "$source" "${dates[@]}"; then
       delivery_failures=$((delivery_failures + 1))
+      delivery_status="failed"
     fi
+
+    local reserve_status="success" reserve_summary delivery_summary
+    if [ "$dates_failed" -gt 0 ] && [ "$dates_ok" -gt 0 ]; then
+      reserve_status="partial"
+    elif [ "$dates_failed" -gt 0 ]; then
+      reserve_status="failed"
+    fi
+    if [ "$dates_failed" -gt 0 ]; then
+      reserve_summary="$dates_ok of $((dates_ok + dates_failed)) meal reservation(s) succeeded"
+    else
+      reserve_summary="$dates_ok meal reservation(s) confirmed"
+    fi
+    delivery_summary="Webetu summary delivered"
+    if [ "$delivery_status" != "success" ]; then
+      delivery_summary="WhatsApp delivery failed"
+    fi
+    publish_task_telemetry \
+      --user-id "$user_id" \
+      --task-id reserve_meals \
+      --service webetu \
+      --status paused \
+      --schedule-label "Automatic runs paused" \
+      --timezone "Africa/Algiers" \
+      --last-run-status "$reserve_status" \
+      --last-run-summary "$reserve_summary"
+    publish_task_telemetry \
+      --user-id "$user_id" \
+      --task-id deliver_results \
+      --service delivery \
+      --status active \
+      --schedule-label "After each task run" \
+      --last-run-status "$delivery_status" \
+      --last-run-summary "$delivery_summary"
     if [ "$user_reservation_failed" -ne 0 ]; then
       log "user done user=$user_id phone_hash=$phone_hash source=$source status=reservation_failure_summary_sent"
     else
