@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import io
 import json
 from pathlib import Path
@@ -24,6 +24,10 @@ import jobscout.commands_group_feed
 import jobscout.commands_setup
 import jobscout.dispatch_runner
 
+# Always in the future so the cache expiry filter never drops the fixture.
+FUTURE_CLOSING = (date.today() + timedelta(days=28)).strftime("%-d %B %Y")
+
+
 class GroupFeedTests(unittest.TestCase):
   def candidate(self, **overrides) -> dict:
     data = {
@@ -36,7 +40,7 @@ class GroupFeedTests(unittest.TestCase):
       "company": "Tiru Fresh",
       "role": "Poultry Supervisor",
       "location": "Lot 4 Pollockshields Estate, Selous",
-      "closing": "14 July 2026",
+      "closing": FUTURE_CLOSING,
       "description": (
         "About Us We are a leading commercial poultry farming company. "
         "Key Responsibilities • Supervise daily poultry house operations. "
@@ -55,7 +59,7 @@ class GroupFeedTests(unittest.TestCase):
     self.assertIn("About Us", message)
     self.assertIn("Key Responsibilities", message)
     self.assertIn("- Supervise daily poultry house operations.", message)
-    self.assertIn("Closing Date: 14 July 2026", message)
+    self.assertIn(f"Closing Date: {FUTURE_CLOSING}", message)
     self.assertIn("Email: learnmore@tirufresh.co.zw", message)
     self.assertIn("Apply: https://tirufresh.co.zw/apply/poultry-supervisor", message)
     self.assertNotIn("Source:", message)
