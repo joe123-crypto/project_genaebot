@@ -5,10 +5,7 @@ import { expandHome, getPluginConfig } from "../lib/config.js";
 const DEFAULT_GREETING_TEMPLATE_PATH = "~/.openclaw/workspace/docs/public-greeting.txt";
 const DEFAULT_GREETING = `Hi! I can help with:
 
-1. Webetu Progress meal reservation
-2. Personalized news delivery to your inbox
-3. Local event scouting around your location
-4. Job, scholarship, and internship scouting/application
+1. Job, scholarship, and internship scouting
 
 Which one do you need?`;
 

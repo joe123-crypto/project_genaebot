@@ -1,7 +1,7 @@
 {
   "id": "public-service-gate",
   "name": "Public Service Gate",
-  "description": "Handles WhatsApp public-user safety and invite access control before agent dispatch.",
+  "description": "Handles WhatsApp public-user safety and admin-managed member access control before agent dispatch.",
   "version": "0.1.0",
   "activation": {
     "onStartup": true
@@ -36,22 +36,16 @@
       "adminModeEnabled": {
         "type": "boolean"
       },
-      "invitesEnabled": {
+      "memberGateEnabled": {
         "type": "boolean"
       },
       "botWhatsappNumber": {
         "type": "string"
       },
-      "inviteRequiredText": {
+      "accessRequiredText": {
         "type": "string"
       },
-      "invitePendingText": {
-        "type": "string"
-      },
-      "inviteUnlockedText": {
-        "type": "string"
-      },
-      "inviteScript": {
+      "memberStoreScript": {
         "type": "string"
       },
       "publicUserScript": {
@@ -62,6 +56,15 @@
       },
       "webetuOnboardingStartText": {
         "type": "string"
+      },
+      "webetuEnabled": {
+        "type": "boolean"
+      },
+      "newsEnabled": {
+        "type": "boolean"
+      },
+      "eventScoutEnabled": {
+        "type": "boolean"
       },
       "jobScoutOnboardingEnabled": {
         "type": "boolean"

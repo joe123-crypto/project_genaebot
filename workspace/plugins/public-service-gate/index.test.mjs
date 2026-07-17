@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import plugin, { createLimiter, inviteLinkText, isQueueFullError, runJsonCommand } from "./index.js";
+import plugin, { createLimiter, isQueueFullError, runJsonCommand } from "./index.js";
 import { accountLinkRequiredText } from "./lib/account-link.js";
 import { busyReply } from "./lib/runtime.js";
 import { handleEventScoutRequest } from "./services/event-scout.js";
@@ -19,26 +19,26 @@ function registerHandler(config = {}, complete, relevanceConfig = {}) {
   const serviceStatePath =
     config.serviceStatePath ?? path.join(fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-state-")), "state.json");
   let effectiveConfig = config;
-  if (!effectiveConfig.inviteScript) {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-invite-"));
-    const inviteScript = path.join(dir, "whatsapp-invite");
+  if (!effectiveConfig.memberStoreScript) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-member-"));
+    const memberStoreScript = path.join(dir, "whatsapp-invite");
     writeExecutable(
-      inviteScript,
+      memberStoreScript,
       `#!/usr/bin/env bash
 set -eu
 case "$1" in
   status)
     if [ "$3" = "${MEMBER}" ]; then
-      printf '{"phone":"${MEMBER}","status":"unlocked","pending":false,"unlocked":true}\\n'
+      printf '{"phone":"${MEMBER}","status":"unlocked","unlocked":true}\\n'
     else
-      printf '{"phone":"%s","status":"unknown","pending":false,"unlocked":false}\\n' "$3"
+      printf '{"phone":"%s","status":"unknown","unlocked":false}\\n' "$3"
     fi
     ;;
   *) exit 2 ;;
 esac
 `,
     );
-    effectiveConfig = { ...effectiveConfig, inviteScript };
+    effectiveConfig = { ...effectiveConfig, memberStoreScript };
   }
   let toolFactory;
   const api = {
@@ -49,7 +49,7 @@ esac
             config: {
               enabled: true,
               publicUsers: [MEMBER],
-              invitesEnabled: true,
+              memberGateEnabled: true,
               jobScoutOnboardingEnabled: true,
               serviceStatePath,
               ...effectiveConfig,
@@ -66,7 +66,6 @@ esac
                 "news",
                 "job",
                 "event",
-                "invite",
               ],
               serviceExamples: [
                 "reserve a meal",
@@ -132,6 +131,58 @@ test("public service tool is exposed only to the public WhatsApp agent with a tr
   assert.equal(tool.name, "public_service");
   assert.equal(Object.hasOwn(tool.parameters.properties, "phone"), false);
   assert.deepEqual(tool.parameters.required, ["action"]);
+});
+
+test("disabled public services are omitted from the public service tool schema", async () => {
+  const handler = registerHandler({ webetuEnabled: false, newsEnabled: false, eventScoutEnabled: false });
+  const tool = handler.publicTool({ agentId: "public", requesterSenderId: MEMBER, messageChannel: "whatsapp" });
+
+  assert.deepEqual(tool.parameters.properties.action.enum, ["job_scout_start_or_status"]);
+
+  const result = await tool.execute("test", { action: "webetu_start" });
+  assert.match(result.content[0].text, /isn't available here right now/i);
+  assert.match(result.content[0].text, /Job Scout/);
+});
+
+test("disabled service requests return unavailable instead of access onboarding", async () => {
+  const handler = registerHandler({ webetuEnabled: false, newsEnabled: false, eventScoutEnabled: false });
+
+  for (const text of [
+    "webetu",
+    "start personalized news",
+    "setup event scouting",
+    "add this event to my calendar",
+  ]) {
+    const unknownReply = await handler(eventFor(text, UNKNOWN), {
+      channelId: "whatsapp",
+      senderId: UNKNOWN,
+    });
+    assert.equal(unknownReply.handled, true, `expected "${text}" to be handled`);
+    assert.match(unknownReply.text, /isn't available here right now/i, `expected "${text}" to be unavailable`);
+    assert.doesNotMatch(unknownReply.text, /isn't open for new users/i, `expected "${text}" not to get the access-required reply`);
+
+    const memberReply = await handler(eventFor(text, MEMBER), {
+      channelId: "whatsapp",
+      senderId: MEMBER,
+    });
+    assert.equal(memberReply.handled, true, `expected member "${text}" to be handled`);
+    assert.match(memberReply.text, /isn't available here right now/i, `expected member "${text}" to be unavailable`);
+  }
+});
+
+test("member Job Scout messages with stray disabled-service keywords reach the agent", async () => {
+  const handler = registerHandler({ webetuEnabled: false, newsEnabled: false, eventScoutEnabled: false });
+
+  for (const text of [
+    "any news on my job applications?",
+    "find me a job in a restaurant",
+  ]) {
+    const reply = await handler(eventFor(text, MEMBER), {
+      channelId: "whatsapp",
+      senderId: MEMBER,
+    });
+    assert.equal(reply, undefined, `expected "${text}" to defer to the agent`);
+  }
 });
 
 test("job scout onboarding has a generic disabled response", async () => {
@@ -402,7 +453,7 @@ test("failsafe stop command suppresses late WhatsApp outbound until next inbound
   assert.equal(allowed, undefined);
 });
 
-test("failsafe stop command claims unknown sender before invite or LLM checks", async () => {
+test("failsafe stop command claims unknown sender before member or LLM checks", async () => {
   let calls = 0;
   const handler = registerHandler({}, async () => {
     calls += 1;
@@ -439,7 +490,7 @@ test("failsafe stop command requires a one-word stop message", async () => {
   assert.equal(await handler(eventFor("unstoppable"), { channelId: "whatsapp", senderId: MEMBER }), undefined);
 });
 
-test("unknown sender greeting gets invite-required reply instead of silence", async () => {
+test("unknown sender greeting gets access-required reply instead of silence", async () => {
   let calls = 0;
   const handler = registerHandler({}, async () => {
     calls += 1;
@@ -448,12 +499,12 @@ test("unknown sender greeting gets invite-required reply instead of silence", as
   const reply = await handler(eventFor("hi", UNKNOWN), { channelId: "whatsapp", senderId: UNKNOWN });
 
   assert.equal(reply.handled, true);
-  assert.match(reply.text, /invite-only/);
-  assert.match(reply.text, /invite link/);
+  assert.match(reply.text, /isn't open for new users/);
+  assert.doesNotMatch(reply.text, /invite/i);
   assert.equal(calls, 0);
 });
 
-test("unknown sender service keyword gets invite-required reply", async () => {
+test("unknown sender service keyword gets access-required reply", async () => {
   let calls = 0;
   const handler = registerHandler({}, async () => {
     calls += 1;
@@ -462,7 +513,7 @@ test("unknown sender service keyword gets invite-required reply", async () => {
   const reply = await handler(eventFor("webetu", UNKNOWN), { channelId: "whatsapp", senderId: UNKNOWN });
 
   assert.equal(reply.handled, true);
-  assert.match(reply.text, /invite-only/);
+  assert.match(reply.text, /isn't open for new users/);
   assert.equal(calls, 0);
 });
 
@@ -482,166 +533,89 @@ test("unknown sender unrelated text remains a silent handled drop", async () => 
   assert.equal(calls, 1);
 });
 
-test("unknown sender valid join code redeems and returns the welcome message", async () => {
+test("join codes are no longer redeemed and get the access-required reply", async () => {
+  let statusCalls = 0;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
-  const inviteScript = path.join(dir, "whatsapp-invite");
-  const publicUserScript = path.join(dir, "whatsapp-public-user.py");
-  fs.writeFileSync(publicUserScript, "import sys\n");
+  const memberStoreScript = path.join(dir, "whatsapp-invite");
+  const argsLog = path.join(dir, "member-args.txt");
   writeExecutable(
-    inviteScript,
+    memberStoreScript,
     `#!/usr/bin/env bash
 set -eu
+printf '%s\\n' "$*" >> "${argsLog}"
 case "$1" in
-  redeem) printf '{"ok":true,"inviter":"${MEMBER}"}\\n' ;;
+  status) printf '{"phone":"%s","status":"unknown","unlocked":false}\\n' "$3" ;;
   *) exit 2 ;;
 esac
 `,
   );
 
-  const handler = registerHandler({ inviteScript, publicUserScript });
+  const handler = registerHandler({ memberStoreScript }, async () => "RELEVANT");
   const reply = await handler(eventFor("JOIN-ABC123", UNKNOWN), {
     channelId: "whatsapp",
     senderId: UNKNOWN,
   });
 
   assert.equal(reply.handled, true);
-  assert.match(reply.text, /welcome to Genaie/i);
-  assert.match(reply.text, /unlock your access/i);
-  assert.match(reply.text, /Type "invite link"/);
+  assert.match(reply.text ?? "", /isn't open for new users/);
+  assert.doesNotMatch(fs.readFileSync(argsLog, "utf-8"), /redeem/);
 });
 
-test("unknown sender invalid join code still returns invalid invite reply", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
-  const inviteScript = path.join(dir, "whatsapp-invite");
-  writeExecutable(
-    inviteScript,
-    `#!/usr/bin/env bash
-set -eu
-case "$1" in
-  redeem) printf '{"ok":false}\\n' ;;
-  *) exit 2 ;;
-esac
-`,
-  );
-
-  const handler = registerHandler({ inviteScript });
-  const reply = await handler(eventFor("JOIN-DEAD00", UNKNOWN), {
-    channelId: "whatsapp",
-    senderId: UNKNOWN,
-  });
-
-  assert.equal(reply.handled, true);
-  assert.match(reply.text, /invalid or was already used/);
-});
-
-test("pending invite member gets activation instructions instead of service menu", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
-  const inviteScript = path.join(dir, "whatsapp-invite");
-  const greetingTemplatePath = path.join(dir, "public-greeting.txt");
-  fs.writeFileSync(greetingTemplatePath, "Choose a service");
-  writeExecutable(
-    inviteScript,
-    `#!/usr/bin/env bash
-set -eu
-case "$1" in
-  status) printf '{"phone":"+19995550123","status":"pending","pending":true,"unlocked":false}\\n' ;;
-  *) exit 2 ;;
-esac
-`,
-  );
-
-  const handler = registerHandler({ inviteScript, greetingTemplatePath });
-  const reply = await handler(eventFor("hi", UNKNOWN), {
-    channelId: "whatsapp",
-    senderId: UNKNOWN,
-  });
-
-  assert.equal(reply.handled, true);
-  assert.match(reply.text, /unlock your access/);
-  assert.match(reply.text, /Type "invite link"/);
-  assert.doesNotMatch(reply.text, /Choose a service/);
-});
-
-test("pending invite member in publicUsers is still blocked from service options", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
-  const inviteScript = path.join(dir, "whatsapp-invite");
-  const accountLinkScript = path.join(dir, "account-link");
-  writeExecutable(
-    inviteScript,
-    `#!/usr/bin/env bash
-set -eu
-case "$1" in
-  status) printf '{"phone":"+19995550123","status":"pending","pending":true,"unlocked":false}\\n' ;;
-  *) exit 2 ;;
-esac
-`,
-  );
-  writeExecutable(
-    accountLinkScript,
-    `#!/usr/bin/env bash
-set -eu
-case "$1" in
-  status) printf '{"linked":false}\\n' ;;
-  create-invite) printf '{"setupUrl":"https://example.test/setup?token=abc"}\\n' ;;
-  *) exit 2 ;;
-esac
-`,
-  );
-
-  const handler = registerHandler({ inviteScript, accountLinkScript, publicUsers: [MEMBER, UNKNOWN] });
-  const reply = await handler(eventFor("1", UNKNOWN), {
-    channelId: "whatsapp",
-    senderId: UNKNOWN,
-  });
-
-  assert.equal(reply.handled, true);
-  assert.match(reply.text, /unlock your access/);
-  assert.doesNotMatch(reply.text, /https:\/\/example\.test\/setup/);
-});
-
-test("pending invite member can request an invite link", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
-  const inviteScript = path.join(dir, "whatsapp-invite");
-  writeExecutable(
-    inviteScript,
-    `#!/usr/bin/env bash
-set -eu
-case "$1" in
-  status) printf '{"phone":"+19995550123","status":"pending","pending":true,"unlocked":false}\\n' ;;
-  create) printf '{"code":"PEND1234","inviter":"+19995550123","status":"created"}\\n' ;;
-  *) exit 2 ;;
-esac
-`,
-  );
-
-  const handler = registerHandler({ inviteScript, botWhatsappNumber: "+263785632943" });
+test("invite link requests are no longer handled deterministically", async () => {
+  const handler = registerHandler({ botWhatsappNumber: "+263785632943" }, async () => "IRRELEVANT");
   const reply = await handler(eventFor("invite link", UNKNOWN), {
     channelId: "whatsapp",
     senderId: UNKNOWN,
   });
 
   assert.equal(reply.handled, true);
-  assert.match(reply.text, /https:\/\/wa\.me\/263785632943\?text=JOIN-PEND1234/);
-  assert.match(reply.text, /your own access unlocks/);
+  assert.doesNotMatch(reply.text ?? "", /wa\.me|JOIN-/);
 });
 
-test("unlocked invite member falls through to the agent without publicUsers entry", async () => {
+test("pending member from the invite era is treated as locked", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
-  const inviteScript = path.join(dir, "whatsapp-invite");
+  const memberStoreScript = path.join(dir, "whatsapp-invite");
   const greetingTemplatePath = path.join(dir, "public-greeting.txt");
   fs.writeFileSync(greetingTemplatePath, "Choose a service");
   writeExecutable(
-    inviteScript,
+    memberStoreScript,
     `#!/usr/bin/env bash
 set -eu
 case "$1" in
-  status) printf '{"phone":"+19995550123","status":"unlocked","pending":false,"unlocked":true}\\n' ;;
+  status) printf '{"phone":"+19995550123","status":"pending","pending":true,"unlocked":false}\\n' ;;
   *) exit 2 ;;
 esac
 `,
   );
 
-  const handler = registerHandler({ inviteScript, greetingTemplatePath });
+  const handler = registerHandler({ memberStoreScript, greetingTemplatePath, publicUsers: [MEMBER, UNKNOWN] });
+  const reply = await handler(eventFor("hi", UNKNOWN), {
+    channelId: "whatsapp",
+    senderId: UNKNOWN,
+  });
+
+  assert.equal(reply.handled, true);
+  assert.match(reply.text, /isn't open for new users/);
+  assert.doesNotMatch(reply.text, /Choose a service/);
+});
+
+test("unlocked store member falls through to the agent without publicUsers entry", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
+  const memberStoreScript = path.join(dir, "whatsapp-invite");
+  const greetingTemplatePath = path.join(dir, "public-greeting.txt");
+  fs.writeFileSync(greetingTemplatePath, "Choose a service");
+  writeExecutable(
+    memberStoreScript,
+    `#!/usr/bin/env bash
+set -eu
+case "$1" in
+  status) printf '{"phone":"+19995550123","status":"unlocked","unlocked":true}\\n' ;;
+  *) exit 2 ;;
+esac
+`,
+  );
+
+  const handler = registerHandler({ memberStoreScript, greetingTemplatePath });
   const reply = await handler(eventFor("hi", UNKNOWN), {
     channelId: "whatsapp",
     senderId: UNKNOWN,
@@ -817,24 +791,25 @@ test("admin sender still bypasses public-service gate", async () => {
   });
 });
 
-test("admin sender follows public invite gate when WhatsApp admin mode is disabled", async () => {
+test("admin sender follows public member gate when WhatsApp admin mode is disabled", async () => {
   await withAdminMode("false", async () => {
     const handler = registerHandler({ whatsappAdminUsers: [ADMIN] });
     const reply = await handler(eventFor("hi", ADMIN), { channelId: "whatsapp", senderId: ADMIN });
 
     assert.equal(reply.handled, true);
-    assert.match(reply.text, /invite-only/);
+    assert.match(reply.text, /isn't open for new users/);
   });
 });
 
-test("admin grandfather command unlocks the target and is claimed", async () => {
+test("admin allow command unlocks the target and is claimed", async () => {
   await withAdminMode("true", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
-    const inviteScript = path.join(dir, "whatsapp-invite");
-    const argsLog = path.join(dir, "grandfather-args.txt");
-    writeExecutable(
-      inviteScript,
-      `#!/usr/bin/env bash
+    for (const command of ["allow", "grandfather"]) {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
+      const memberStoreScript = path.join(dir, "whatsapp-invite");
+      const argsLog = path.join(dir, "allow-args.txt");
+      writeExecutable(
+        memberStoreScript,
+        `#!/usr/bin/env bash
 set -eu
 case "$1" in
   grandfather)
@@ -844,30 +819,32 @@ case "$1" in
   *) exit 2 ;;
 esac
 `,
-    );
+      );
 
-    const handler = registerHandler({ whatsappAdminUsers: [ADMIN], inviteScript });
-    const reply = await handler(eventFor("grandfather +263788390903", ADMIN), {
-      channelId: "whatsapp",
-      senderId: ADMIN,
-    });
+      const handler = registerHandler({ whatsappAdminUsers: [ADMIN], memberStoreScript });
+      const reply = await handler(eventFor(`${command} +263788390903`, ADMIN), {
+        channelId: "whatsapp",
+        senderId: ADMIN,
+      });
 
-    assert.equal(reply.handled, true);
-    assert.match(reply.text, /Grandfathered \+263788390903: unlocked/);
-    assert.equal(fs.readFileSync(argsLog, "utf-8").trim(), "grandfather --phone +263788390903");
+      assert.equal(reply.handled, true, `expected "${command}" to be claimed`);
+      assert.match(reply.text, /Allowed \+263788390903: unlocked/);
+      assert.equal(fs.readFileSync(argsLog, "utf-8").trim(), "grandfather --phone +263788390903");
+    }
   });
 });
 
-test("admin grandfather command is not honored when WhatsApp admin mode is disabled", async () => {
+test("admin allow command is not honored when WhatsApp admin mode is disabled", async () => {
   await withAdminMode("false", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
-    const inviteScript = path.join(dir, "whatsapp-invite");
-    const argsLog = path.join(dir, "grandfather-args.txt");
+    const memberStoreScript = path.join(dir, "whatsapp-invite");
+    const argsLog = path.join(dir, "allow-args.txt");
     writeExecutable(
-      inviteScript,
+      memberStoreScript,
       `#!/usr/bin/env bash
 set -eu
 case "$1" in
+  status) printf '{"phone":"%s","status":"unknown","unlocked":false}\\n' "$3" ;;
   grandfather)
     printf '%s\\n' "$*" > "${argsLog}"
     printf '{"ok":true,"phone":"$3","status":"unlocked","changed":true}\\n'
@@ -877,61 +854,31 @@ esac
 `,
     );
 
-    const handler = registerHandler({ whatsappAdminUsers: [ADMIN], inviteScript }, async () => "IRRELEVANT");
-    const reply = await handler(eventFor("grandfather +263788390903", ADMIN), {
+    const handler = registerHandler({ whatsappAdminUsers: [ADMIN], memberStoreScript }, async () => "IRRELEVANT");
+    const reply = await handler(eventFor("allow +263788390903", ADMIN), {
       channelId: "whatsapp",
       senderId: ADMIN,
     });
 
     assert.equal(reply.handled, true);
-    assert.doesNotMatch(reply.text ?? "", /Grandfathered/);
+    assert.doesNotMatch(reply.text ?? "", /Allowed/);
     assert.equal(fs.existsSync(argsLog), false);
   });
 });
 
-test("non-admin grandfather command does not unlock and gets gated", async () => {
+test("non-admin allow command does not unlock and gets gated", async () => {
   let calls = 0;
   const handler = registerHandler({ whatsappAdminUsers: [ADMIN] }, async () => {
     calls += 1;
     return "IRRELEVANT";
   });
-  const reply = await handler(eventFor("grandfather +263788390903", UNKNOWN), {
+  const reply = await handler(eventFor("allow +263788390903", UNKNOWN), {
     channelId: "whatsapp",
     senderId: UNKNOWN,
   });
 
   assert.equal(reply.handled, true);
-  assert.doesNotMatch(reply.text ?? "", /Grandfathered/);
-});
-
-test("inviteLinkText builds a one-tap wa.me invite link when bot number is configured", () => {
-  const api = {
-    pluginConfig: {
-      botWhatsappNumber: "+263 785 632 943",
-    },
-  };
-
-  const text = inviteLinkText(api, "4PG44766");
-
-  assert.match(text, /https:\/\/wa\.me\/263785632943\?text=JOIN-4PG44766/);
-  assert.match(text, /This invite works once\./);
-  // The whole message is forwardable to the invited person and describes the service.
-  assert.match(text, /I'm inviting you to Genaie/i);
-  assert.match(text, /meal reservation/i);
-});
-
-test("inviteLinkText falls back to the join code when bot number is blank", () => {
-  const api = {
-    pluginConfig: {
-      botWhatsappNumber: "",
-    },
-  };
-
-  const text = inviteLinkText(api, "L59DGQ54");
-
-  assert.match(text, /I'm inviting you to Genaie/i);
-  assert.match(text, /\n\nJOIN-L59DGQ54\n\n/);
-  assert.doesNotMatch(text, /wa\.me/);
+  assert.doesNotMatch(reply.text ?? "", /Allowed/);
 });
 
 test("runJsonCommand parses JSON stdout", async () => {
@@ -950,7 +897,7 @@ test("public canned replies use the concise style", () => {
   const files = [
     "lib/account-link.js",
     "lib/runtime.js",
-    "services/invite.js",
+    "services/membership.js",
     "services/greeting.js",
     "services/webetu.js",
     "services/news.js",

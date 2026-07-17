@@ -54,7 +54,6 @@ const DEFAULT_FIXTURE = [
   { text: "what jobs are available for students", label: "relevant" },
   { text: "any scholarships for engineering", label: "relevant" },
   { text: "help me apply for an internship", label: "relevant" },
-  { text: "send an invite link to my friend", label: "relevant" },
   { text: "what events are happening this weekend near me", label: "relevant" },
   { text: "how do I get started with this", label: "relevant" },
   { text: "i need to set up my account", label: "relevant" },

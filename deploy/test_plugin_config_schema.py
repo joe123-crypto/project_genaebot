@@ -43,6 +43,15 @@ class PluginConfigSchemaTests(unittest.TestCase):
         flag_schema = manifest["configSchema"]["properties"]["jobScoutOnboardingEnabled"]
         self.assertEqual(flag_schema, {"type": "boolean"})
 
+    def test_public_service_disable_flags_are_booleans(self) -> None:
+        manifest = json.loads(
+            (ROOT / "workspace/plugins/public-service-gate/openclaw.plugin.json").read_text(encoding="utf-8")
+        )
+
+        properties = manifest["configSchema"]["properties"]
+        for flag in ["webetuEnabled", "newsEnabled", "eventScoutEnabled"]:
+            self.assertEqual(properties[flag], {"type": "boolean"})
+
 
 if __name__ == "__main__":
     unittest.main()

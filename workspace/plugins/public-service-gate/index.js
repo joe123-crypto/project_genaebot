@@ -28,27 +28,17 @@ import {
   isGreetingOrServiceMenuRequest,
 } from "./services/greeting.js";
 import {
-  DEFAULT_INVITE_FAILED,
-  DEFAULT_INVITE_INVALID,
-  inviteLinkText,
-  inviteMembershipStatus,
-  invitesEnabled,
-  isInviteRequest,
-  isPendingInviteMembership,
-  isUnlockedInviteMembership,
+  DEFAULT_ALLOW_FAILED,
+  isUnlockedMember,
   isWhatsAppAdmin,
   isWhatsAppPublicUser,
-  loadInviteAwaitingText,
-  loadInvitePendingText,
-  loadInviteRequiredText,
-  loadInviteWelcomeText,
-  matchesSharedAck,
-  notifyAdminOfJoin,
-  notifyInviterUnlocked,
-  parseGrandfatherCommand,
-  parseJoinCode,
-  runInviteScript,
-} from "./services/invite.js";
+  loadAccessRequiredText,
+  memberGateEnabled,
+  memberStatus,
+  notifyMemberAllowed,
+  parseAllowCommand,
+  runMemberStoreScript,
+} from "./services/membership.js";
 import {
   handleReservationStatus,
   handleWebetuOnboardingStart,
@@ -69,15 +59,42 @@ import { handleJobScoutRequest, isJobScoutRequest } from "./services/job-scout.j
 import { handleEventScoutRequest, isEventScoutRequest } from "./services/event-scout.js";
 
 const PUBLIC_SERVICE_ACTIONS = [
-  "webetu_start",
-  "webetu_setup_done",
-  "webetu_restaurant_choice",
-  "webetu_reservation_status",
-  "news_start_or_update",
-  "news_topics",
-  "event_scout_start",
-  "job_scout_start_or_status",
+  { name: "webetu_start", service: "webetu" },
+  { name: "webetu_setup_done", service: "webetu" },
+  { name: "webetu_restaurant_choice", service: "webetu" },
+  { name: "webetu_reservation_status", service: "webetu" },
+  { name: "news_start_or_update", service: "news" },
+  { name: "news_topics", service: "news" },
+  { name: "event_scout_start", service: "eventScout" },
+  { name: "job_scout_start_or_status", service: "jobScout" },
 ];
+const SERVICE_DISABLED_REPLY = "That isn't available here right now. This chat can help with Job Scout.";
+
+function isServiceEnabled(api, service) {
+  const pluginCfg = getPluginConfig(api);
+  switch (service) {
+    case "webetu":
+      return pluginCfg.webetuEnabled !== false;
+    case "news":
+      return pluginCfg.newsEnabled !== false;
+    case "eventScout":
+      return pluginCfg.eventScoutEnabled !== false;
+    case "jobScout":
+      return pluginCfg.jobScoutOnboardingEnabled === true;
+    default:
+      return false;
+  }
+}
+
+function publicServiceActions(api) {
+  return PUBLIC_SERVICE_ACTIONS
+    .filter((action) => isServiceEnabled(api, action.service))
+    .map((action) => action.name);
+}
+
+function actionService(actionName) {
+  return PUBLIC_SERVICE_ACTIONS.find((action) => action.name === actionName)?.service ?? "";
+}
 
 function toolText(reply) {
   const text = typeof reply?.text === "string" ? reply.text.trim() : "";
@@ -85,6 +102,8 @@ function toolText(reply) {
 }
 
 async function runPublicServiceAction(api, sender, action, text) {
+  const service = actionService(action);
+  if (!service || !isServiceEnabled(api, service)) return toolText({ text: SERVICE_DISABLED_REPLY });
   switch (action) {
     case "webetu_start": return toolText(await handleWebetuOnboardingStart(api, sender));
     case "webetu_setup_done": return toolText(await handleWebetuSetupDone(api, sender));
@@ -103,26 +122,58 @@ function isEnabled(api) {
   return pluginCfg.enabled !== false;
 }
 
-function isKnownServiceRequestText(text) {
+function isKnownServiceRequestText(api, text) {
   return Boolean(
     getServiceMenuSelection(text) ||
       isGreetingOrServiceMenuRequest(text) ||
-      isInviteRequest(text) ||
+      (isServiceEnabled(api, "webetu") && (
+        isWebetuOnboardingStartRequest(text) ||
+        isWebetuGuideRequest(text) ||
+        isWebetuSetupDoneRequest(text) ||
+        isReservationStatusRequest(text)
+      )) ||
+      (isServiceEnabled(api, "news") && (isNewsStopRequest(text) || isNewsRequest(text))) ||
+      (isServiceEnabled(api, "jobScout") && isJobScoutRequest(text)) ||
+      (isServiceEnabled(api, "eventScout") && isEventScoutRequest(text)),
+  );
+}
+
+function isWebetuRequestText(text) {
+  const compact = String(text ?? "").trim().replace(/\s+/g, " ");
+  if (!compact || compact.length > 360) return false;
+  return /\b(?:webetu|meal|meals|reservation|reservations|restaurant)\b/i.test(compact);
+}
+
+function isCalendarSaveRequestText(text) {
+  const compact = String(text ?? "").trim().replace(/\s+/g, " ");
+  if (!compact || compact.length > 420) return false;
+  return /\b(?:calendar|google\s+calendar)\b/i.test(compact) &&
+    /\b(?:add|save|put|schedule|remind|reminder)\b/i.test(compact);
+}
+
+function isDisabledServiceRequestText(api, text) {
+  // A message that also matches an enabled signal (a Job Scout request, a
+  // greeting, or a menu digit) must reach the agent: "any news on my job
+  // applications?" is a Job Scout question, not a disabled-news request.
+  if (getServiceMenuSelection(text) || isGreetingOrServiceMenuRequest(text)) return false;
+  if (isServiceEnabled(api, "jobScout") && isJobScoutRequest(text)) return false;
+  return Boolean(
+    (!isServiceEnabled(api, "webetu") && (
+      isWebetuRequestText(text) ||
       isWebetuOnboardingStartRequest(text) ||
       isWebetuGuideRequest(text) ||
       isWebetuSetupDoneRequest(text) ||
-      isReservationStatusRequest(text) ||
-      isNewsStopRequest(text) ||
-      isNewsRequest(text) ||
-      isJobScoutRequest(text) ||
-      isEventScoutRequest(text),
+      isReservationStatusRequest(text)
+    )) ||
+      (!isServiceEnabled(api, "news") && (isNewsStopRequest(text) || isNewsRequest(text))) ||
+      (!isServiceEnabled(api, "eventScout") && (isEventScoutRequest(text) || isCalendarSaveRequestText(text))),
   );
 }
 
 export default {
   id: "public-service-gate",
   name: "Public Service Gate",
-  description: "Handles WhatsApp public-user safety and invite access control before agent dispatch.",
+  description: "Handles WhatsApp public-user safety and admin-managed member access control before agent dispatch.",
   version: "0.1.0",
   register(api) {
     api.registerTool(
@@ -139,7 +190,7 @@ export default {
             additionalProperties: false,
             required: ["action"],
             properties: {
-              action: { type: "string", enum: PUBLIC_SERVICE_ACTIONS },
+              action: { type: "string", enum: publicServiceActions(api) },
               text: {
                 type: "string",
                 maxLength: 2000,
@@ -216,96 +267,46 @@ export default {
       }
 
       const admin = isWhatsAppAdmin(api, sender);
-      const openInvites = invitesEnabled(api);
+      const gateOn = memberGateEnabled(api);
 
-      // Admin escape hatch: unlock a pre-invite user from chat. Claimed here so
-      // the command never reaches the agent or the relevance gate.
-      if (admin && openInvites) {
-        const grandfatherTarget = parseGrandfatherCommand(text);
-        if (grandfatherTarget) {
+      // Admin-only unlock from chat: "allow +263...". Claimed here so the
+      // command never reaches the agent or the relevance gate.
+      if (admin && gateOn) {
+        const allowTarget = parseAllowCommand(text);
+        if (allowTarget) {
           try {
-            const res = await runInviteScript(api, ["grandfather", "--phone", grandfatherTarget]);
-            api.logger?.info?.("public-service-gate: admin grandfather handled deterministically");
+            const res = await runMemberStoreScript(api, ["grandfather", "--phone", allowTarget]);
+            if (res.changed) await notifyMemberAllowed(api, allowTarget);
+            api.logger?.info?.("public-service-gate: admin allow handled deterministically");
             return {
               handled: true,
-              text: `Grandfathered ${grandfatherTarget}: ${res.changed ? "unlocked" : "already a member"}.`,
+              text: `Allowed ${allowTarget}: ${res.changed ? "unlocked" : "already a member"}.`,
             };
           } catch (err) {
             if (isQueueFullError(err)) return busyReply();
-            api.logger?.warn?.(`public-service-gate: failed to grandfather (${String(err)})`);
-            return { handled: true, text: DEFAULT_INVITE_FAILED };
+            api.logger?.warn?.(`public-service-gate: failed to allow member (${String(err)})`);
+            return { handled: true, text: DEFAULT_ALLOW_FAILED };
           }
         }
       }
 
-      const configuredMember = !openInvites && isWhatsAppPublicUser(api, event, ctx);
-      let inviteMembership;
-      async function getInviteMembership() {
-        if (inviteMembership !== undefined) return inviteMembership;
-        inviteMembership = openInvites && !admin
-          ? await inviteMembershipStatus(api, sender)
-          : { status: "unknown", pending: false, unlocked: false };
-        return inviteMembership;
-      }
-      const currentInviteMembership = openInvites && !admin
-        ? await getInviteMembership()
-        : { status: "unknown", pending: false, unlocked: false };
-      const pendingInviteMember = isPendingInviteMembership(currentInviteMembership);
-      const unlockedInviteMember = isUnlockedInviteMembership(currentInviteMembership);
-      const member = !pendingInviteMember && (configuredMember || unlockedInviteMember);
+      const configuredMember = !gateOn && isWhatsAppPublicUser(api, event, ctx);
+      const unlockedMember = gateOn && !admin && isUnlockedMember(await memberStatus(api, sender));
+      const member = configuredMember || unlockedMember;
 
-      // Invite issuance for existing users and pending activated users. Claimed
-      // here, ahead of the relevance gate, so an "invite link" request is never
-      // blocked as off-topic.
-      if (openInvites && (admin || member || pendingInviteMember) && isInviteRequest(text)) {
-        try {
-          const invite = await runInviteScript(api, ["create", "--inviter", sender]);
-          if (!invite.code) throw new Error("missing code");
-          api.logger?.info?.("public-service-gate: invite link handled deterministically");
-          return { handled: true, text: inviteLinkText(api, invite.code, { pending: pendingInviteMember }) };
-        } catch (err) {
-          if (isQueueFullError(err)) return busyReply();
-          api.logger?.warn?.(`public-service-gate: failed to create invite (${String(err)})`);
-          return { handled: true, text: DEFAULT_INVITE_FAILED };
-        }
-      }
-
-      if (pendingInviteMember) {
-        if (matchesSharedAck(text)) {
-          return { handled: true, text: loadInviteAwaitingText(api) };
-        }
-        return { handled: true, text: loadInvitePendingText(api) };
-      }
-
-      // Membership gate. Non-members can redeem JOIN codes; service-like messages
-      // get an invite-required reply; unrelated traffic stays silent. Admins fall
-      // through to the full agent.
+      // Membership gate. Only the admin can unlock a user; service-like messages
+      // from everyone else get a brief access-required reply and unrelated
+      // traffic stays silent. Admins fall through to the full agent.
       if (!member) {
         if (admin) return;
-        if (!openInvites) return; // classic allowlist mode: leave to core access control
-        const code = parseJoinCode(text);
-        if (code) {
-          try {
-            const res = await runInviteScript(api, ["redeem", "--code", code, "--phone", sender]);
-            if (res.ok) {
-              const inviter = normalizePhone(res.inviter || "");
-              const inviterWasAdmin = isWhatsAppAdmin(api, inviter);
-              await notifyAdminOfJoin(api, inviter, sender);
-              if (inviter && res.inviterUnlocked && !inviterWasAdmin) {
-                await notifyInviterUnlocked(api, inviter, sender);
-              }
-              api.logger?.info?.("public-service-gate: invite join handled deterministically");
-              return { handled: true, text: loadInviteWelcomeText(api) };
-            }
-            return { handled: true, text: DEFAULT_INVITE_INVALID };
-          } catch (err) {
-            if (isQueueFullError(err)) return busyReply();
-            api.logger?.warn?.(`public-service-gate: failed to redeem invite (${String(err)})`);
-            return { handled: true, text: DEFAULT_INVITE_INVALID };
-          }
+        if (!gateOn) return; // classic allowlist mode: leave to core access control
+        if (isDisabledServiceRequestText(api, text)) {
+          return { handled: true, text: SERVICE_DISABLED_REPLY };
         }
-        if (await isUnknownSenderRelevant(api, text, { isKnownServiceRequest: isKnownServiceRequestText })) {
-          return { handled: true, text: loadInviteRequiredText(api) };
+        if (await isUnknownSenderRelevant(api, text, {
+          isKnownServiceRequest: (candidate) => isKnownServiceRequestText(api, candidate),
+        })) {
+          return { handled: true, text: loadAccessRequiredText(api) };
         }
         return { handled: true }; // silent drop unrelated traffic; claim it, no reply, no agent
       }
@@ -313,6 +314,9 @@ export default {
       // From here on, sender is a member. Do not short-circuit service UX:
       // greetings, menu digits, setup continuations, and service requests all
       // fall through to the agent, which has the public-service docs and tools.
+      if (isDisabledServiceRequestText(api, text)) {
+        return { handled: true, text: SERVICE_DISABLED_REPLY };
+      }
       api.logger?.info?.(
         `public-service-gate: member WhatsApp text deferred to agent sender=${sender} textLen=${text.length}`,
       );
@@ -321,4 +325,4 @@ export default {
   },
 };
 
-export { QueueFullError, createLimiter, inviteLinkText, isQueueFullError, runJsonCommand };
+export { QueueFullError, createLimiter, isQueueFullError, runJsonCommand };

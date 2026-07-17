@@ -46,8 +46,7 @@ const DEFAULT_SERVICE_ANCHORS = [
   "help me apply for an internship",
   "cherche-moi un emploi ou une bourse",
   "ابحث لي عن وظيفة او منحة",
-  // invites / onboarding
-  "send me an invite link for my friend",
+  // onboarding
   "how do I get started",
   "help me set up my account",
 ];

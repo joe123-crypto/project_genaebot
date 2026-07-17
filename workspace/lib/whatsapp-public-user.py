@@ -170,7 +170,8 @@ def remove_member(store, phone):
 
 
 def open_dms_enabled(plugin_config):
-    return bool(plugin_config.get("invitesEnabled"))
+    # invitesEnabled is the pre-rename spelling still present in older live configs.
+    return bool(plugin_config.get("memberGateEnabled", plugin_config.get("invitesEnabled")))
 
 
 def get_plugin_config(cfg):
@@ -385,11 +386,11 @@ def check_config(cfg, prompt, store):
     errors = []
     if open_dms_enabled(plugin_config):
         if config_public_users:
-            errors.append("plugins.entries.public-service-gate.config.publicUsers must be migrated to the invite member store")
+            errors.append("plugins.entries.public-service-gate.config.publicUsers must be migrated to the member store")
         if whatsapp.get("dmPolicy") != "open":
-            errors.append('channels.whatsapp.dmPolicy must be "open" when invitesEnabled is set')
+            errors.append('channels.whatsapp.dmPolicy must be "open" when memberGateEnabled is set')
         if (whatsapp.get("allowFrom") or []) != ["*"]:
-            errors.append('channels.whatsapp.allowFrom must be ["*"] when invitesEnabled is set')
+            errors.append('channels.whatsapp.allowFrom must be ["*"] when memberGateEnabled is set')
     else:
         expected_allow = dedupe(admin_users + public_users)
         actual_allow = normalize_phone_list(

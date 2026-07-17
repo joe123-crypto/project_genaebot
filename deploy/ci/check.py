@@ -252,15 +252,25 @@ def check_document_links(files: dict[str, str], checks: Checks) -> None:
 
 
 def check_service_catalog(checks: Checks) -> None:
+    config = load_json(ROOT / "config/openclaw.template.json", checks)
+    if not isinstance(config, dict):
+        return
+    public_gate = config.get("plugins", {}).get("entries", {}).get("public-service-gate", {}).get("config", {})
+    if not isinstance(public_gate, dict):
+        public_gate = {}
     policy = (ROOT / "workspace/docs/public-services.md").read_text(encoding="utf-8").lower()
     prompt = (ROOT / "workspace/docs/public-whatsapp-system-prompt.txt").read_text(encoding="utf-8").lower()
     greeting = (ROOT / "workspace/docs/public-greeting.txt").read_text(encoding="utf-8").lower()
-    for label, terms in {
-        "Webetu": ("webetu",),
-        "personalized news": ("personalized news",),
-        "event scouting": ("event scout", "local event"),
-        "Job Scout": ("job scout", "job, scholarship"),
-    }.items():
+    services = {
+        "Webetu": (public_gate.get("webetuEnabled") is not False, ("webetu",)),
+        "personalized news": (public_gate.get("newsEnabled") is not False, ("personalized news",)),
+        "event scouting": (public_gate.get("eventScoutEnabled") is not False, ("event scout", "local event")),
+        "Job Scout": (public_gate.get("jobScoutOnboardingEnabled") is True, ("job scout", "job, scholarship")),
+    }
+    for label, (enabled, terms) in services.items():
+        if not enabled:
+            checks.require(not any(term in greeting for term in terms), f"greeting still advertises disabled {label} service")
+            continue
         for document_name, document in (("policy", policy), ("prompt", prompt), ("greeting", greeting)):
             checks.require(any(term in document for term in terms), f"{document_name} is missing the {label} service")
 

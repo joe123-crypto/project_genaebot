@@ -112,7 +112,10 @@
           "greetingTemplatePath": "/home/joseph/.openclaw/workspace/docs/public-greeting.txt",
           "webetuOnboardingStartText": "Sign in here and save your Webetu details in the Credentials Vault:\n{setupUrl}\n\nDon't send those details here. Check Spam if the sign-in email doesn't arrive.",
           "botWhatsappNumber": "+263785632943",
-          "invitesEnabled": true,
+          "memberGateEnabled": true,
+          "webetuEnabled": false,
+          "newsEnabled": false,
+          "eventScoutEnabled": false,
           "jobScoutOnboardingEnabled": true
         }
       },
@@ -120,17 +123,8 @@
         "enabled": true,
         "config": {
           "enabled": false,
-          "serviceSummary": "Webetu Progress meal reservations, personalized news delivery, local event scouting, and job/scholarship/internship scouting and application and inviting friends to the service",
+          "serviceSummary": "Job, scholarship, and internship scouting and applications",
           "serviceKeywords": [
-            "meal",
-            "reserve",
-            "reservation",
-            "webetu",
-            "restaurant",
-            "news",
-            "subscribe",
-            "subscription",
-            "event",
             "job",
             "jobs",
             "scholarship",
@@ -144,19 +138,12 @@
             "bonjour",
             "start",
             "setup",
-            "help",
-            "invite",
-            "invite link",
-            "join"
+            "help"
           ],
           "serviceExamples": [
-            "reserve a meal",
-            "book a meal at webetu",
-            "subscribe me to news",
-            "start personalized news",
             "find me a job",
             "any scholarships",
-            "what events are near me"
+            "help me apply for an internship"
           ],
           "relevanceMode": "off",
           "embeddingModel": "google/text-multilingual-embedding-002",
@@ -164,22 +151,10 @@
           "relevanceMargin": 0.05,
           "embeddingFailOpen": true,
           "serviceAnchors": [
-            "reserve a meal at the university restaurant",
-            "book my Webetu meal for tomorrow",
-            "réserver un repas au restaurant universitaire",
-            "احجز وجبة في المطعم الجامعي",
-            "subscribe me to personalized news",
-            "start sending me daily news updates",
-            "stop the news updates",
-            "abonne-moi aux actualités",
-            "what events are happening near me",
-            "find local events this weekend",
-            "y a-t-il des événements près de chez moi",
             "find me a job",
             "any scholarships I can apply to",
             "help me apply for an internship",
             "ابحث لي عن وظيفة او منحة",
-            "send me an invite link for my friend",
             "how do I get started",
             "help me set up my account"
           ],
@@ -197,7 +172,7 @@
           ],
           "useLlmFallback": false,
           "llmMaxTokens": 5,
-          "rejectionMessage": "I can help with Webetu meal reservations, personalized news, local events, and job/scholarship/internship scouting. Which one do you want?",
+          "rejectionMessage": "I can help with Job Scout. Do you want to set it up?",
           "failOpen": false,
           "maxTextLength": 400
         }

@@ -30,8 +30,8 @@ PRESERVE_PATHS: list[list[str]] = [
     ["meta"],                                                                  # runtime: lastTouchedAt timestamps
     ["wizard"],                                                                # runtime: setup-wizard timestamps
     # NOTE: public-service-gate.config.publicUsers is intentionally NOT preserved.
-    # It is stale: the invite member store (runtime/public-service-gate/invites.json)
-    # is the source of truth, and with invitesEnabled=true the plugin never reads
+    # It is stale: the member store (runtime/public-service-gate/invites.json)
+    # is the source of truth, and with memberGateEnabled=true the plugin never reads
     # publicUsers. Omitting it lets the authoritative apply prune it from live.
     ["plugins", "entries", "public-service-gate", "config", "whatsappAdminUsers"],  # PII: admin phones
     ["plugins", "entries", "public-service-gate", "config", "botWhatsappNumber"],   # operator: bot phone number

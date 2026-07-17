@@ -1,0 +1,114 @@
+import { expandHome, getPluginConfig, parseBoolean, readEnvValue } from "../lib/config.js";
+import { getEventChannel, getEventSender, isWhatsAppChannel, normalizePhone } from "../lib/events.js";
+import { HELPER_TIMEOUT_MS, helperLimiter, isQueueFullError, runJsonCommand, runTextCommand } from "../lib/runtime.js";
+import { loadGreeting } from "./greeting.js";
+
+// The member store CLI still lives at the historical whatsapp-invite path; the
+// invite-code commands are gone and only the phone-keyed member map remains.
+const DEFAULT_MEMBER_STORE_SCRIPT = "~/.openclaw/workspace/bin/whatsapp-invite";
+const DEFAULT_ALLOW_FAILED = `I couldn't unlock that number. Try again later.`;
+const DEFAULT_ACCESS_REQUIRED = `Genaie isn't open for new users right now.`;
+
+// Admin-only in-chat command to unlock a user, e.g. "allow +263788390903".
+// "grandfather" is kept as a legacy spelling. Returns the normalized phone or "".
+const ALLOW_COMMAND_PATTERN = /^(?:allow|grandfather)\s+(\+?[\d][\d\s-]{6,})$/i;
+
+export { DEFAULT_ALLOW_FAILED };
+
+export function getMemberStoreScript(api) {
+  const pluginCfg = getPluginConfig(api);
+  const configuredPath =
+    typeof pluginCfg.memberStoreScript === "string" && pluginCfg.memberStoreScript.trim()
+      ? pluginCfg.memberStoreScript.trim()
+      : DEFAULT_MEMBER_STORE_SCRIPT;
+  return expandHome(configuredPath);
+}
+
+export function runMemberStoreScript(api, args) {
+  const script = getMemberStoreScript(api);
+  return helperLimiter(() => runJsonCommand(script, args, { timeoutMs: HELPER_TIMEOUT_MS }));
+}
+
+export async function memberStatus(api, phone) {
+  try {
+    return await runMemberStoreScript(api, ["status", "--phone", phone]);
+  } catch (err) {
+    if (isQueueFullError(err)) throw err;
+    api.logger?.warn?.(`public-service-gate: failed to check member status (${String(err)})`);
+    return { status: "unknown", unlocked: false };
+  }
+}
+
+export function isUnlockedMember(status) {
+  return Boolean(status?.unlocked || status?.status === "unlocked");
+}
+
+export function getPublicUsers(api) {
+  const pluginCfg = getPluginConfig(api);
+  const explicit = Array.isArray(pluginCfg.publicUsers) ? pluginCfg.publicUsers : [];
+  return new Set(explicit.map(normalizePhone).filter(Boolean));
+}
+
+export function isWhatsAppPublicUser(api, event, ctx) {
+  if (!isWhatsAppChannel(getEventChannel(event, ctx))) return false;
+  const sender = getEventSender(event, ctx);
+  if (!sender) return false;
+  return getPublicUsers(api).has(sender);
+}
+
+export function getAdminUsers(api) {
+  const pluginCfg = getPluginConfig(api);
+  const explicit = Array.isArray(pluginCfg.whatsappAdminUsers) ? pluginCfg.whatsappAdminUsers : [];
+  return new Set(explicit.map(normalizePhone).filter(Boolean));
+}
+
+export function isAdminModeEnabled(api) {
+  const envValue = parseBoolean(readEnvValue("WHATSAPP_ADMIN_ENABLED"));
+  if (envValue !== undefined) return envValue;
+  const pluginCfg = getPluginConfig(api);
+  return pluginCfg.adminModeEnabled !== false;
+}
+
+export function isWhatsAppAdmin(api, sender) {
+  if (!sender) return false;
+  if (!isAdminModeEnabled(api)) return false;
+  return getAdminUsers(api).has(sender);
+}
+
+// Open-DM member mode is opt-in. When false, the gateway runs the classic
+// allowlist and this plugin keeps its original member-only behavior.
+export function memberGateEnabled(api) {
+  const pluginCfg = getPluginConfig(api);
+  return pluginCfg.memberGateEnabled === true;
+}
+
+export function parseAllowCommand(text) {
+  const compact = String(text ?? "").trim().replace(/\s+/g, " ");
+  if (!compact || compact.length > 60) return "";
+  const match = ALLOW_COMMAND_PATTERN.exec(compact);
+  return match ? normalizePhone(match[1]) : "";
+}
+
+// Best-effort greeting DM so a newly allowed user knows their access is open.
+export async function notifyMemberAllowed(api, phone) {
+  try {
+    const target = normalizePhone(phone || "");
+    if (!target) return;
+    await helperLimiter(() =>
+      runTextCommand(
+        "openclaw",
+        ["message", "send", "--channel", "whatsapp", "--target", target, "--message", loadGreeting(api)],
+        { timeoutMs: HELPER_TIMEOUT_MS },
+      ),
+    );
+  } catch (err) {
+    api.logger?.warn?.(`public-service-gate: failed to greet allowed member (${String(err)})`);
+  }
+}
+
+export function loadAccessRequiredText(api) {
+  const pluginCfg = getPluginConfig(api);
+  return typeof pluginCfg.accessRequiredText === "string" && pluginCfg.accessRequiredText.trim()
+    ? pluginCfg.accessRequiredText.trim()
+    : DEFAULT_ACCESS_REQUIRED;
+}

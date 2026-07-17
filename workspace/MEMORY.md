@@ -81,13 +81,13 @@ Most admin cron jobs deliver to the admin WhatsApp: **+213563719936** (Joe's day
 
 ### Public Service Gate Plugin
 - **Location:** `plugins/public-service-gate/index.js`
-- **What it does:** Intercepts WhatsApp messages from public users BEFORE LLM dispatch only for safety and access control: failsafe stop, invite membership, JOIN redemption, invite-link issuance, and nonmember blocking.
+- **What it does:** Intercepts WhatsApp messages from public users BEFORE LLM dispatch only for safety and access control: failsafe stop, member-store checks, the admin "allow" command, and nonmember blocking. Peer invites and JOIN codes are retired; only the admin can unlock a user.
 - **Service UX:** Allowlisted/member messages, including greetings, menu digits, "Done", onboarding starts, stop/update requests, and ambiguous continuations, now fall through to the LLM. Do not add deterministic phrase handlers for these flows.
 - **Public users:** Defined in `runtime/public-service-gate/invites.json` under unlocked `members`; `openclaw.json` only keeps stable admin/config fields.
 - **Config path:** `plugins.entries.public-service-gate.config`
 
 ### Agent-Handled vs Deterministic
-- **Deterministic (no LLM):** Failsafe stop and invite/access-control handling only.
+- **Deterministic (no LLM):** Failsafe stop and member access-control handling only.
 - **Agent-handled (LLM):** Greetings, menu requests, capability questions, continuations, and actual service requests about meal reservations, news delivery, event scouting, and Job Scout setup.
 
 ### Security Boundaries (CRITICAL)
