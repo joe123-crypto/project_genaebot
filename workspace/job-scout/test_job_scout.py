@@ -388,5 +388,78 @@ class PreferredLocationTests(unittest.TestCase):
     self.assertEqual(result["queries"], ["Driver in Harare, Zimbabwe"])
     self.assertEqual(base["locations"], ["Harare"])
 
+class CvConversionTests(unittest.TestCase):
+  def test_cv_html_document_builds_semantic_page(self) -> None:
+    text = "Jane Doe\nHarare, Zimbabwe\n\nEXPERIENCE\n\nDriver at Acme\n2019-2024\n\nSKILLS:\n\nDefensive driving\n"
+    html = jobscout.commands_setup.cv_html_document(text)
+    self.assertIn("<h1>Jane Doe</h1>", html)
+    self.assertIn("<h2>EXPERIENCE</h2>", html)
+    self.assertIn("<h2>SKILLS</h2>", html)
+    self.assertIn("Driver at Acme", html)
+    self.assertIn("<title>Jane Doe — CV</title>", html)
+
+  def test_cv_html_document_escapes_markup(self) -> None:
+    html = jobscout.commands_setup.cv_html_document("Jane <Doe>\n\nC# & <b>SQL</b> work\n")
+    self.assertIn("Jane &lt;Doe&gt;", html)
+    self.assertIn("C# &amp; &lt;b&gt;SQL&lt;/b&gt; work", html)
+    self.assertNotIn("<b>", html)
+
+  def test_cv_html_document_rejects_empty_text(self) -> None:
+    with self.assertRaises(RuntimeError):
+      jobscout.commands_setup.cv_html_document("  \n\n  ")
+
+  def test_pending_conversion_subscribers_ignores_ready_records(self) -> None:
+    payload = {"subscribers": [
+      {"userId": "user-ready", "cvConversionStatus": "ready"},
+      {"userId": "user-pending", "cvConversionStatus": "pending"},
+    ]}
+    with mock.patch.object(jobscout.api, "request_json", return_value=payload):
+      subscribers = jobscout.commands_setup.pending_conversion_subscribers(100)
+    self.assertEqual([s["userId"] for s in subscribers], ["user-pending"])
+
+  def test_convert_pending_cvs_converts_and_survives_one_failure(self) -> None:
+    payload = {"subscribers": [
+      {"userId": "user-good", "cvConversionStatus": "pending", "whatsappPhone": "+263700000001"},
+      {"userId": "user-bad", "cvConversionStatus": "pending", "whatsappPhone": "+263700000002"},
+    ]}
+
+    def fake_download(user_id, dest, format="html"):
+      if user_id == "user-bad":
+        raise RuntimeError("subscriber CV is unavailable; re-upload is required")
+      dest.write_bytes(b"%PDF-fake")
+      return dest
+
+    def fake_convert(pdf_path, html_path):
+      html_path.write_text("<!doctype html><html></html>", encoding="utf-8")
+      return html_path
+
+    args = argparse.Namespace(limit=100, user_id=None, dry_run=False)
+    with mock.patch.object(jobscout.api, "request_json", return_value=payload), \
+         mock.patch.object(jobscout.api, "download_cv", side_effect=fake_download), \
+         mock.patch.object(jobscout.commands_setup, "convert_pdf_to_cv_html", side_effect=fake_convert), \
+         mock.patch.object(jobscout.api, "upload_cv_html", return_value={"ok": True, "ready": True}) as upload:
+      result = jobscout.commands_setup.cmd_convert_pending_cvs(args)
+
+    self.assertFalse(result["ok"])
+    self.assertEqual(result["pendingCount"], 2)
+    self.assertEqual(result["convertedCount"], 1)
+    self.assertEqual(result["failedCount"], 1)
+    statuses = {entry["whatsappPhone"]: entry["status"] for entry in result["results"]}
+    self.assertEqual(statuses["+263700000001"], "converted")
+    self.assertEqual(statuses["+263700000002"], "failed")
+    upload.assert_called_once()
+
+  def test_convert_pending_cvs_dry_run_touches_nothing(self) -> None:
+    payload = {"subscribers": [{"userId": "user-pending", "cvConversionStatus": "pending"}]}
+    args = argparse.Namespace(limit=100, user_id=None, dry_run=True)
+    with mock.patch.object(jobscout.api, "request_json", return_value=payload), \
+         mock.patch.object(jobscout.api, "download_cv") as download, \
+         mock.patch.object(jobscout.api, "upload_cv_html") as upload:
+      result = jobscout.commands_setup.cmd_convert_pending_cvs(args)
+    self.assertEqual(result["results"][0]["status"], "dry_run")
+    download.assert_not_called()
+    upload.assert_not_called()
+
+
 if __name__ == "__main__":
   unittest.main()

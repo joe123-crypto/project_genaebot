@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import json
 import os
+from pathlib import Path
 
 from dashboard_telemetry import next_daily_run_iso, publish_task_status
 
@@ -26,7 +28,12 @@ from .commands_dispatch import (
   cmd_verify_dispatch,
 )
 from .commands_group_feed import maybe_write_group_feed_cache
-from .commands_setup import cmd_list_applications, cmd_list_ready, cmd_record_application
+from .commands_setup import (
+  cmd_list_applications,
+  cmd_list_ready,
+  cmd_record_application,
+  convert_pending_cvs_best_effort,
+)
 from .constants import (
   DEFAULT_JSEARCH_COUNTRY,
   DEFAULT_JSEARCH_LANGUAGE,
@@ -183,6 +190,64 @@ def subscriber_is_dispatch_ready(subscriber: dict) -> bool:
   )
 
 
+def latest_dispatch_marker(root: Path) -> dict | None:
+  """Newest run marker in the dispatch root, or None when no run has recorded one."""
+  markers: list[dict] = []
+  for path in Path(root).glob("*.json"):
+    if path.name == "active-agent-dispatch.json":
+      continue
+    try:
+      data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+      continue
+    if isinstance(data, dict) and data.get("runId"):
+      markers.append(data)
+  if not markers:
+    return None
+  return max(markers, key=lambda marker: str(marker.get("startedAt") or ""))
+
+
+def cmd_summary(args: argparse.Namespace) -> dict:
+  """One authoritative snapshot: live ready count plus the latest dispatch outcome.
+
+  The live query and the marker half fail independently so an unreachable
+  backend still yields last-run stats (and vice versa) instead of a guess.
+  """
+  ready_count: int | None = None
+  ready_user_keys: list[str] = []
+  ready_error: str | None = None
+  try:
+    ready_result = cmd_list_ready(argparse.Namespace(limit=args.limit))
+    subscribers = ready_result.get("subscribers") if isinstance(ready_result, dict) else []
+    if not isinstance(subscribers, list):
+      subscribers = []
+    subscribers = [subscriber for subscriber in subscribers if subscriber_is_dispatch_ready(subscriber)]
+    ready_count = len(subscribers)
+    ready_user_keys = sorted(user_key(subscriber_user_id(subscriber)) for subscriber in subscribers)
+  except (RuntimeError, SystemExit, OSError, ValueError) as err:
+    ready_error = str(err) or "ready-subscriber query failed"
+
+  marker = latest_dispatch_marker(args.dispatch_root)
+  last_run = None
+  if marker is not None:
+    last_run = {
+      "runId": marker.get("runId"),
+      "startedAt": marker.get("startedAt"),
+      "finishedAt": marker.get("finishedAt"),
+      "finalCounts": marker.get("finalCounts"),
+    }
+
+  result: dict = {
+    "ok": ready_error is None,
+    "readyCount": ready_count,
+    "readyUserKeys": ready_user_keys,
+    "lastRun": last_run,
+  }
+  if ready_error is not None:
+    result["readyCountError"] = ready_error
+  return result
+
+
 def cmd_dispatch_jsearch(args: argparse.Namespace) -> dict:
   agent_phase = str(getattr(args, "agent_phase", "") or "").strip()
   if agent_phase:
@@ -196,6 +261,10 @@ def cmd_dispatch_jsearch(args: argparse.Namespace) -> dict:
 
 
 def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
+  # Convert any pending PDF CVs first so those subscribers are ready for this
+  # very run instead of waiting a day; failures never block dispatch.
+  if not args.dry_run:
+    convert_pending_cvs_best_effort(args.limit_ready)
   ready_result = cmd_list_ready(argparse.Namespace(limit=args.limit_ready))
   subscribers = ready_result.get("subscribers") if isinstance(ready_result, dict) else []
   if not isinstance(subscribers, list):

@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import html as html_module
 import json
 import os
 from pathlib import Path
+import subprocess
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -26,6 +29,8 @@ from .profile import (
   resolve_preferred_locations,
   resolve_profile_locations,
   search_queries,
+  subscriber_user_id,
+  user_key,
 )
 from .subscriber import subscriber_cv_html_ready
 from .textutil import public_text
@@ -226,6 +231,163 @@ def cmd_save_profile(args: argparse.Namespace) -> dict:
 def cmd_list_ready(args: argparse.Namespace) -> dict:
   query = urllib.parse.urlencode({"limit": args.limit})
   return api.request_json("GET", endpoint(f"/internal/job-scout/subscribers?{query}"))
+
+
+# The canonical CV is the styled HTML document the dispatch agent personalizes
+# and renders back to PDF for employers, so conversion must produce a clean,
+# semantic, standalone page — not a positional dump of the source PDF.
+CV_HTML_STYLE = """\
+  body { margin: 0; padding: 2.2rem 2.6rem; color: #1c2733; font-family: Georgia, 'Times New Roman', serif; font-size: 11pt; line-height: 1.45; }
+  main.cv { max-width: 52rem; margin: 0 auto; }
+  h1 { margin: 0 0 0.35rem; font-size: 19pt; letter-spacing: 0.02em; }
+  h2 { margin: 1.3rem 0 0.4rem; padding-bottom: 0.15rem; font-size: 12pt; text-transform: uppercase; letter-spacing: 0.08em; border-bottom: 1px solid #9db1c4; }
+  p { margin: 0 0 0.55rem; }
+"""
+
+
+def _cv_text_blocks(text: str) -> list[list[str]]:
+  """Blank-line-separated blocks of whitespace-normalized text lines."""
+  blocks: list[list[str]] = []
+  current: list[str] = []
+  for raw_line in text.splitlines():
+    line = " ".join(raw_line.split())
+    if line:
+      current.append(line)
+    elif current:
+      blocks.append(current)
+      current = []
+  if current:
+    blocks.append(current)
+  return blocks
+
+
+def _looks_like_heading(block: list[str]) -> bool:
+  if len(block) != 1:
+    return False
+  line = block[0]
+  if len(line) > 60:
+    return False
+  letters = [character for character in line if character.isalpha()]
+  mostly_upper = bool(letters) and sum(character.isupper() for character in letters) / len(letters) > 0.8
+  return mostly_upper or line.endswith(":")
+
+
+def cv_html_document(text: str) -> str:
+  blocks = _cv_text_blocks(text)
+  if not blocks:
+    raise RuntimeError("no text could be extracted from the CV PDF")
+  title = blocks[0][0]
+  parts: list[str] = []
+  for index, block in enumerate(blocks):
+    if index == 0:
+      parts.append(f"    <h1>{html_module.escape(block[0])}</h1>")
+      block = block[1:]
+      if not block:
+        continue
+    if _looks_like_heading(block):
+      parts.append(f"    <h2>{html_module.escape(block[0].rstrip(':'))}</h2>")
+      continue
+    body = "<br>\n      ".join(html_module.escape(line) for line in block)
+    parts.append(f"    <p>{body}</p>")
+  content = "\n".join(parts)
+  return (
+    "<!doctype html>\n"
+    "<html lang=\"en\">\n"
+    "<head>\n"
+    "<meta charset=\"utf-8\">\n"
+    f"<title>{html_module.escape(title)} — CV</title>\n"
+    f"<style>\n{CV_HTML_STYLE}</style>\n"
+    "</head>\n"
+    "<body>\n"
+    "  <main class=\"cv\">\n"
+    f"{content}\n"
+    "  </main>\n"
+    "</body>\n"
+    "</html>\n"
+  )
+
+
+def convert_pdf_to_cv_html(pdf_path: Path, html_path: Path) -> Path:
+  try:
+    completed = subprocess.run(
+      ["pdftotext", "-enc", "UTF-8", str(pdf_path), "-"],
+      capture_output=True,
+      timeout=120,
+    )
+  except FileNotFoundError as err:
+    raise RuntimeError("pdftotext (poppler-utils) is required to convert pending CVs") from err
+  except subprocess.TimeoutExpired as err:
+    raise RuntimeError("pdftotext timed out converting the pending CV") from err
+  if completed.returncode != 0:
+    detail = completed.stderr.decode("utf-8", errors="replace").strip()[:200]
+    raise RuntimeError(f"pdftotext failed: {detail or 'unknown error'}")
+  text = completed.stdout.decode("utf-8", errors="replace")
+  html_path.write_text(cv_html_document(text), encoding="utf-8")
+  return html_path
+
+
+def pending_conversion_subscribers(limit: int) -> list[dict]:
+  query = urllib.parse.urlencode({"limit": limit, "status": "pending_conversion"})
+  result = api.request_json("GET", endpoint(f"/internal/job-scout/subscribers?{query}"))
+  subscribers = result.get("subscribers") if isinstance(result, dict) else []
+  if not isinstance(subscribers, list):
+    return []
+  # A backend without the status filter ignores it and returns ready
+  # subscribers; those carry no pending CV, so this guard keeps the pass a
+  # no-op there instead of re-converting finished CVs.
+  return [
+    subscriber for subscriber in subscribers
+    if str(subscriber.get("cvConversionStatus") or "").strip().casefold() == "pending"
+  ]
+
+
+def convert_pending_cvs_best_effort(limit: int = 100) -> dict:
+  """Pre-dispatch conversion pass; conversion problems never block dispatch."""
+  try:
+    return cmd_convert_pending_cvs(argparse.Namespace(limit=limit, user_id=None, dry_run=False))
+  except (RuntimeError, SystemExit, OSError, ValueError) as err:
+    return {"ok": False, "error": str(err) or "conversion pass failed"}
+
+
+def cmd_convert_pending_cvs(args: argparse.Namespace) -> dict:
+  subscribers = pending_conversion_subscribers(args.limit)
+  wanted = {str(value).strip() for value in (args.user_id or []) if str(value).strip()}
+  if wanted:
+    subscribers = [subscriber for subscriber in subscribers if subscriber_user_id(subscriber) in wanted]
+  results: list[dict] = []
+  converted_count = 0
+  failed_count = 0
+  for subscriber in subscribers:
+    user_id = subscriber_user_id(subscriber)
+    entry: dict = {
+      "userKey": user_key(user_id),
+      "whatsappPhone": subscriber.get("whatsappPhone"),
+    }
+    if args.dry_run:
+      entry["status"] = "dry_run"
+      results.append(entry)
+      continue
+    try:
+      with tempfile.TemporaryDirectory(prefix="job-scout-cv-convert-") as tmp:
+        pdf_path = api.download_cv(user_id, Path(tmp) / "cv.pdf", format="pending")
+        html_path = convert_pdf_to_cv_html(pdf_path, Path(tmp) / "cv.html")
+        upload = api.upload_cv_html(user_id, html_path)
+      entry["status"] = "converted"
+      entry["ready"] = bool(upload.get("ready"))
+      converted_count += 1
+    except (RuntimeError, SystemExit, OSError) as err:
+      # One bad CV must not block the rest of the pending queue.
+      entry["status"] = "failed"
+      entry["error"] = str(err) or "conversion failed"
+      failed_count += 1
+    results.append(entry)
+  return {
+    "ok": failed_count == 0,
+    "pendingCount": len(subscribers),
+    "convertedCount": converted_count,
+    "failedCount": failed_count,
+    "results": results,
+  }
 
 
 def cmd_status(args: argparse.Namespace) -> dict:

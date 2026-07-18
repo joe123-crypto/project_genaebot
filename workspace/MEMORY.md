@@ -78,6 +78,8 @@ Most admin cron jobs deliver to the admin WhatsApp: **+213563719936** (Joe's day
 2. **Personalized news delivery** — to user's inbox, based on their topics and schedule
 3. **Local event scouting** — events around user's location
 4. **Job/scholarship/internship scouting** — active with open onboarding; requires Agent Genaie login, linked WhatsApp chat, connected Gmail, profile/CV, and scam-warning acknowledgement. Scheduled dispatch covers all ready users. CV availability must be checked in Cloudflare R2 with `job-scout status --phone`; local runtime CV files are only disposable caches.
+   - **Never state Job Scout subscriber or application counts from memory.** They change daily. Query live: `job-scout summary` returns the current ready-subscriber count plus the latest dispatch run's final counts in one call; `job-scout status --phone` covers one person. Historical run stats live in `runtime/job-scout/dispatch-runs/<run-id>.json`. If the live query fails, say the query failed — do not substitute a remembered or guessed number, and flag any contradiction between sources instead of papering over it.
+   - Uploaded CVs are PDFs converted to a canonical HTML CV (`<uid>/cv/base/cv.html`). Users whose CV shows `cvConversionStatus: pending` are not ready yet; the daily dispatch converts pending CVs automatically at the start of each run (`job-scout convert-pending-cvs` runs the pass manually).
 
 ### Public Service Gate Plugin
 - **Location:** `plugins/public-service-gate/index.js`

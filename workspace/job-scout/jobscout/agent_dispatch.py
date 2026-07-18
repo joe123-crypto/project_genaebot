@@ -36,7 +36,7 @@ from .commands_dispatch import (
   cmd_verify_dispatch,
 )
 from .commands_group_feed import maybe_write_group_feed_cache
-from .commands_setup import cmd_list_applications, cmd_list_ready
+from .commands_setup import cmd_list_applications, cmd_list_ready, convert_pending_cvs_best_effort
 from .constants import UNKNOWN_EMPLOYER, UNKNOWN_ROLE, WHATSAPP_CHANNEL_SOURCES
 from .delivery import (
   MAX_RENDER_HTML_BYTES,
@@ -178,6 +178,10 @@ def cmd_agent_prepare(args: argparse.Namespace) -> dict:
     if resumed and marker.get("phase") in {"ready", "running", "finishing"}:
       return _resume_result(args.dispatch_root, run_id)
 
+    # Convert any pending PDF CVs first so those subscribers are ready for
+    # this very run instead of waiting a day; failures never block dispatch.
+    cv_conversion = convert_pending_cvs_best_effort(args.limit_ready)
+
     ready_result = cmd_list_ready(argparse.Namespace(limit=args.limit_ready))
     subscribers = ready_result.get("subscribers") if isinstance(ready_result, dict) else []
     subscribers = subscribers if isinstance(subscribers, list) else []
@@ -295,6 +299,7 @@ def cmd_agent_prepare(args: argparse.Namespace) -> dict:
     "claimCount": len(claim_ids),
     "terminalCount": 0,
     "claims": claim_summaries,
+    "cvConversion": cv_conversion,
   }
 
 

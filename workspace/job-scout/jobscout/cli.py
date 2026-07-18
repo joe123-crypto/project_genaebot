@@ -10,6 +10,7 @@ from .commands_dispatch import cmd_finish_dispatch, cmd_record_dispatch_outcome,
 from .commands_group_feed import cmd_deliver_group_feed
 from .commands_setup import (
   cmd_check_runtime,
+  cmd_convert_pending_cvs,
   cmd_fetch_candidates,
   cmd_list_applications,
   cmd_list_ready,
@@ -29,7 +30,7 @@ from .constants import (
   DEFAULT_STORAGE_ROOT,
   DISPATCH_STATUSES,
 )
-from .dispatch_runner import cmd_dispatch_jsearch
+from .dispatch_runner import cmd_dispatch_jsearch, cmd_summary
 
 def build_parser() -> argparse.ArgumentParser:
   parser = argparse.ArgumentParser(prog="job-scout")
@@ -82,6 +83,17 @@ def build_parser() -> argparse.ArgumentParser:
   ready = subparsers.add_parser("list-ready", help="list ready Job Scout subscribers")
   ready.add_argument("--limit", type=int, default=100)
   ready.set_defaults(func=cmd_list_ready)
+
+  summary = subparsers.add_parser("summary", help="report the current ready count and the latest dispatch outcome")
+  summary.add_argument("--limit", type=int, default=100)
+  summary.add_argument("--dispatch-root", type=Path, default=DEFAULT_DISPATCH_ROOT)
+  summary.set_defaults(func=cmd_summary)
+
+  convert = subparsers.add_parser("convert-pending-cvs", help="convert pending PDF CVs into canonical HTML CVs")
+  convert.add_argument("--limit", type=int, default=100)
+  convert.add_argument("--user-id", action="append", help="convert only these user ids")
+  convert.add_argument("--dry-run", action="store_true")
+  convert.set_defaults(func=cmd_convert_pending_cvs)
 
   apps = subparsers.add_parser("list-applications", help="list a user's recorded applications")
   apps.add_argument("--user-id", required=True)
