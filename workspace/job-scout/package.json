@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test web_apply.test.mjs"
+    "test": "node --test web_apply.test.mjs web_render.test.mjs"
   },
   "dependencies": {
     "playwright": "1.61.0"

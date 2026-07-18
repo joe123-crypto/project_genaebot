@@ -4,11 +4,12 @@ import net from "node:net";
 
 const BLOCKED_HOSTS = [/(^|\.)linkedin\.com$/i];
 const CAPTCHA_RE = /captcha|recaptcha|hcaptcha|verify you are human|cloudflare turnstile/i;
-const LOGIN_RE = /sign\s*in|log\s*in|create (?:an )?account|register/i;
 const PAYMENT_RE = /credit card|debit card|card number|payment|application fee/i;
 const LEGAL_RE = /certify|declare|under penalty|legally authorized|work authorization|criminal|disability|veteran|gender|race|salary|compensation/i;
 const SUCCESS_RE = /application (?:was |has been )?(?:submitted|received)|thank you for applying|submission (?:complete|received)|successfully applied/i;
 const APPLY_RE = /^(?:easy )?apply(?: now)?$|submit application|continue application/i;
+export const MAX_RENDER_HTML_BYTES = 512 * 1024;
+const MAX_RENDER_PDF_BYTES = 16 * 1024 * 1024;
 
 function privateIp(address) {
   if (net.isIPv4(address)) {
@@ -25,7 +26,7 @@ function privateIp(address) {
 
 export async function validateExternalUrl(rawUrl) {
   const url = new URL(String(rawUrl || ""));
-  if (!['http:', 'https:'].includes(url.protocol) || !url.hostname) throw new Error("invalid_application_url");
+  if (!["http:", "https:"].includes(url.protocol) || !url.hostname) throw new Error("invalid_application_url");
   if (BLOCKED_HOSTS.some((pattern) => pattern.test(url.hostname))) {
     return { url, blockerCode: "login_required" };
   }
@@ -80,19 +81,65 @@ export function classifyField(meta) {
   });
 }
 
+function checkedHtml(value) {
+  if (typeof value !== "string" || !value.trim()) throw new Error("html_required");
+  if (Buffer.byteLength(value, "utf8") > MAX_RENDER_HTML_BYTES) throw new Error("html_too_large");
+  if (/^\s*(?:https?|file|data):/i.test(value)) throw new Error("raw_html_required");
+  if (value.includes("\0")) throw new Error("invalid_html");
+  return value;
+}
+
+/**
+ * Render untrusted document content without navigation, JavaScript, service
+ * workers, or any browser request. Inline CSS and embedded data URLs remain
+ * available for a self-contained canonical CV.
+ */
+export async function renderHtmlToPdf(rawHtml, chromium) {
+  const html = checkedHtml(rawHtml);
+  const browser = await chromium.launch({ headless: true });
+  let context;
+  try {
+    context = await browser.newContext({ javaScriptEnabled: false, serviceWorkers: "block" });
+    await context.route("**/*", (route) => route.abort("blockedbyclient"));
+    const page = await context.newPage();
+    await page.setContent(html, { waitUntil: "load", timeout: 15_000 });
+    await page.emulateMedia({ media: "print" });
+    const pdf = await page.pdf({
+      format: "A4",
+      printBackground: true,
+      preferCSSPageSize: false,
+      timeout: 30_000,
+    });
+    if (!Buffer.isBuffer(pdf) || !pdf.subarray(0, 5).equals(Buffer.from("%PDF-"))) {
+      throw new Error("invalid_rendered_pdf");
+    }
+    if (pdf.length > MAX_RENDER_PDF_BYTES) throw new Error("rendered_pdf_too_large");
+    return pdf;
+  } finally {
+    await context?.close().catch(() => {});
+    await browser.close().catch(() => {});
+  }
+}
+
 export async function probeChromium(chromium) {
   const browser = await chromium.launch({ headless: true });
   let context;
   try {
     context = await browser.newContext();
     const page = await context.newPage();
-    await page.goto("data:text/html,<title>job-scout-ready</title><p>ready</p>", { waitUntil: "load", timeout: 10000 });
+    await page.goto("data:text/html,<title>job-scout-ready</title><p>ready</p>", { waitUntil: "load", timeout: 10_000 });
     if (await page.title() !== "job-scout-ready") throw new Error("chromium readiness page did not render");
     return true;
   } finally {
     await context?.close().catch(() => {});
     await browser.close().catch(() => {});
   }
+}
+
+export async function probePdfRendering(chromium) {
+  const pdf = await renderHtmlToPdf("<!doctype html><title>job-scout-ready</title><p>ready</p>", chromium);
+  if (!pdf.subarray(0, 5).equals(Buffer.from("%PDF-"))) throw new Error("chromium readiness PDF did not render");
+  return true;
 }
 
 async function visibleBody(page) {
@@ -108,7 +155,7 @@ async function detectBlocker(page) {
 }
 
 async function followApplyCta(page) {
-  if (await page.locator('form:visible input, form:visible textarea, form:visible select').count()) return;
+  if (await page.locator("form:visible input, form:visible textarea, form:visible select").count()) return;
   const candidates = page.getByRole("link").or(page.getByRole("button"));
   const count = Math.min(await candidates.count(), 80);
   for (let index = 0; index < count; index += 1) {
@@ -116,7 +163,7 @@ async function followApplyCta(page) {
     const text = compact(await candidate.innerText().catch(() => ""));
     if (APPLY_RE.test(text)) {
       await candidate.click();
-      await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
+      await page.waitForLoadState("domcontentloaded", { timeout: 15_000 }).catch(() => {});
       return;
     }
   }
@@ -141,7 +188,8 @@ async function fieldMetadata(locator) {
 }
 
 async function fillForm(page, payload) {
-  const coverLetter = await fs.readFile(payload.coverLetterPath, "utf8");
+  const coverLetterTextPath = payload.coverLetterTextPath || payload.coverLetterPath;
+  const coverLetter = await fs.readFile(coverLetterTextPath, "utf8");
   const values = { ...payload.applicant, coverLetter };
   const controls = page.locator('input:not([type="hidden"]), textarea, select');
   const count = await controls.count();
@@ -157,9 +205,16 @@ async function fillForm(page, payload) {
     if (kind === "unknownFile" && fileCount === 1) kind = "cv";
     if (kind === "payment") return { blockerCode: "payment_required", filledFields };
     if (kind === "legal") return { blockerCode: "legal_declaration", filledFields };
-    if (kind === "cv" || kind === "coverLetterFile") {
-      await control.setInputFiles(kind === "cv" ? payload.cvPath : payload.coverLetterPath);
+    if (kind === "cv") {
+      await control.setInputFiles(payload.cvPath);
       filledFields.push(kind);
+    } else if (kind === "coverLetterFile") {
+      if (payload.coverLetterFilePath) {
+        await control.setInputFiles(payload.coverLetterFilePath);
+        filledFields.push(kind);
+      } else if (meta.required) {
+        unknownRequired.push(compact(meta.label || meta.name || "cover letter file"));
+      }
     } else if (kind === "privacy") {
       await control.check();
       filledFields.push(kind);
@@ -178,7 +233,7 @@ async function submitAndConfirm(page) {
   const submit = page.locator('button[type="submit"], input[type="submit"]').first();
   if (!await submit.count()) return { outcome: "action_required", blockerCode: "unsupported_site" };
   await submit.click();
-  await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
+  await page.waitForLoadState("domcontentloaded", { timeout: 15_000 }).catch(() => {});
   await page.waitForTimeout(1500);
   const body = await visibleBody(page);
   const confirmation = body.match(SUCCESS_RE)?.[0] || "";
@@ -210,16 +265,14 @@ export async function applyToWebsite(payload, chromium) {
   });
   const page = await context.newPage();
   try {
-    await page.goto(checked.url.href, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await page.goto(checked.url.href, { waitUntil: "domcontentloaded", timeout: 30_000 });
     let blockerCode = await detectBlocker(page);
     if (blockerCode) return { outcome: "action_required", blockerCode, finalUrl: page.url() };
     await followApplyCta(page);
     blockerCode = await detectBlocker(page);
     if (blockerCode) return { outcome: "action_required", blockerCode, finalUrl: page.url() };
     const form = await fillForm(page, payload);
-    if (form.blockerCode) {
-      return { outcome: "action_required", ...form, finalUrl: page.url() };
-    }
+    if (form.blockerCode) return { outcome: "action_required", ...form, finalUrl: page.url() };
     if (!payload.autoSubmit) return { outcome: "action_required", blockerCode: "approval_required", ...form, finalUrl: page.url() };
     const result = await submitAndConfirm(page);
     return {

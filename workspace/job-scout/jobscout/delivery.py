@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import subprocess
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from genaie_env import env_default
@@ -64,12 +65,96 @@ def gmail_sender_connected(subscriber: dict) -> bool:
   return token_store_key_for_uid(subscriber_user_id(subscriber)) in senders
 
 
-def send_application_email(subscriber: dict, candidate: dict, cover_letter: Path) -> dict:
+# The worker rejects larger request bodies, so validation of untrusted child
+# output must apply the same cap before a document reaches dispatch.
+MAX_RENDER_HTML_BYTES = 512 * 1024
+
+
+def render_pdf_url() -> str:
+  configured = env_default("JOB_SCOUT_RENDER_PDF_URL", "").strip()
+  if configured:
+    return configured
+  apply_url = env_default("JOB_SCOUT_WEB_APPLY_URL", DEFAULT_WEB_APPLY_URL).strip()
+  if not apply_url:
+    return ""
+  return urllib.parse.urljoin(apply_url, "/render-pdf")
+
+
+def _html_source(value: str | Path) -> str:
+  if isinstance(value, Path):
+    return value.read_text(encoding="utf-8")
+  text = str(value or "")
+  if text and "<" not in text:
+    # A string without any markup can only be a file path; rendering it as
+    # HTML would produce a valid-looking PDF containing just the path text.
+    try:
+      candidate = Path(text).expanduser()
+      if candidate.is_file():
+        return candidate.read_text(encoding="utf-8")
+    except OSError:
+      pass
+    raise RuntimeError("HTML source is not a readable file and does not look like HTML")
+  return text
+
+
+def render_html_to_pdf(html_or_path: str | Path, output: str | Path, timeout: int = 90) -> Path:
+  """Render bounded raw HTML through the authenticated Playwright worker."""
+  url = render_pdf_url()
+  token = env_default("JOB_SCOUT_BROWSER_TOKEN", "").strip()
+  if not url:
+    raise RuntimeError("PDF rendering worker is not configured")
+  if not token:
+    raise RuntimeError("PDF rendering worker token is not configured")
+  html = _html_source(html_or_path)
+  body = html.encode("utf-8")
+  if not html.strip():
+    raise RuntimeError("HTML document is empty")
+  if len(body) > MAX_RENDER_HTML_BYTES:
+    raise RuntimeError("HTML document is too large")
+  request = urllib.request.Request(
+    url,
+    data=body,
+    method="POST",
+    headers={
+      "Content-Type": "text/html; charset=utf-8",
+      "Accept": "application/pdf",
+      "Authorization": f"Bearer {token}",
+    },
+  )
+  try:
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+      pdf = response.read()
+      content_type = str(response.headers.get("Content-Type") or "").split(";", 1)[0].strip().casefold()
+  except urllib.error.HTTPError as err:
+    raise RuntimeError(f"PDF rendering worker returned HTTP {err.code}") from err
+  except (urllib.error.URLError, TimeoutError, OSError) as err:
+    raise RuntimeError("PDF rendering worker is unavailable") from err
+  if content_type != "application/pdf" or not pdf.startswith(b"%PDF-"):
+    raise RuntimeError("PDF rendering worker returned an invalid PDF")
+  if len(pdf) > 16 * 1024 * 1024:
+    raise RuntimeError("rendered PDF is too large")
+  destination = Path(output).expanduser()
+  destination.parent.mkdir(parents=True, exist_ok=True)
+  temporary = destination.with_name(f".{destination.name}.tmp")
+  temporary.write_bytes(pdf)
+  temporary.replace(destination)
+  return destination
+
+
+def send_application_email(
+  subscriber: dict,
+  candidate: dict,
+  cover_letter: Path,
+  cv_pdf: Path | None = None,
+) -> dict:
   email = str(candidate.get("applicationEmail") or "").strip()
   if not email:
     raise RuntimeError("candidate is missing applicationEmail")
   role = clean_job_title(candidate.get("role")) or "advertised role"
   subject = natural_email_text(f"Application for {role} - {display_name(subscriber)}", 180)
+  attachment = Path(cv_pdf) if cv_pdf is not None else Path(subscriber_cv_file(subscriber))
+  if attachment.suffix.casefold() != ".pdf":
+    attachment = render_html_to_pdf(attachment, attachment.with_name("cv-base.pdf"))
   return run_json_command([
     str(GENAIE_MAIL_BIN),
     "send",
@@ -84,7 +169,7 @@ def send_application_email(subscriber: dict, candidate: dict, cover_letter: Path
     "--body-file",
     str(cover_letter),
     "--attach",
-    subscriber_cv_file(subscriber),
+    str(attachment),
     "--force",
   ])
 

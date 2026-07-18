@@ -203,6 +203,16 @@ from jobscout.dispatch_runner import (
   scoped_subscribers,
   subscriber_is_dispatch_ready,
 )
+from jobscout.agent_dispatch import (
+  cmd_agent_claim,
+  cmd_agent_complete,
+  cmd_agent_dispatch,
+  cmd_agent_fallback,
+  cmd_agent_finish,
+  cmd_agent_prepare,
+  cmd_agent_status,
+  validate_agent_result,
+)
 from jobscout.cli import build_parser, main
 
 

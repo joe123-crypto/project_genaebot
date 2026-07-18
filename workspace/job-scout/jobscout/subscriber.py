@@ -61,33 +61,79 @@ def subscriber_phone_hash(subscriber: dict) -> str:
   return phone_hash(subscriber_phone(subscriber))
 
 
-# cvFileRef is now an R2 object key, not a local path. Downloaded CVs are cached
-# per user for the duration of a dispatch run so multiple candidates reuse one
-# download.
-_cv_download_cache: dict[str, str] = {}
+# cvFileRef/cvHtmlRef are R2 object keys, not local paths. Downloaded CVs are
+# cached per user and object reference for the duration of a dispatch run so a
+# replacement upload cannot accidentally reuse the previous document.
+_cv_download_cache: dict[str, tuple[str, str]] = {}
 
 
 def cv_local_dest(subscriber: dict) -> Path:
-  return DEFAULT_STORAGE_ROOT / subscriber_phone_hash(subscriber) / "cv.pdf"
+  ref = str(subscriber.get("cvHtmlRef") or subscriber.get("cvFileRef") or "").strip()
+  suffix = ".html" if ref.lower().endswith((".html", ".htm")) else ".pdf"
+  return DEFAULT_STORAGE_ROOT / subscriber_phone_hash(subscriber) / f"cv{suffix}"
+
+
+def canonical_cv_ref(subscriber: dict) -> str:
+  return str(subscriber.get("cvHtmlRef") or subscriber.get("cvFileRef") or "").strip()
+
+
+def canonical_cv_cache_key(subscriber: dict) -> str:
+  return "|".join([
+    canonical_cv_ref(subscriber),
+    str(subscriber.get("cvSourceVersion") or "").strip(),
+    str(subscriber.get("cvConvertedAt") or "").strip(),
+  ])
+
+
+def subscriber_cv_html_ready(subscriber: dict) -> bool:
+  """Gate-side twin of subscriber_cv_html's preconditions.
+
+  Dispatch readiness must exclude pending/failed conversions and legacy
+  PDF-only records up front instead of failing them downstream every run.
+  """
+  status = str(subscriber.get("cvConversionStatus") or "").strip().casefold()
+  if status not in {"", "ready"}:
+    return False
+  return canonical_cv_ref(subscriber).lower().endswith((".html", ".htm"))
+
+
+def subscriber_cv_html(subscriber: dict) -> str:
+  """Return the locally cached ready canonical HTML CV.
+
+  Pending/failed conversions and legacy PDF-only records must never reach the
+  AI personalization or dispatch path.
+  """
+  status = str(subscriber.get("cvConversionStatus") or "").strip().casefold()
+  if status and status != "ready":
+    raise RuntimeError("subscriber CV conversion is not ready")
+  ref = canonical_cv_ref(subscriber)
+  if not ref:
+    raise RuntimeError("subscriber is missing canonical CV HTML")
+  if not ref.lower().endswith((".html", ".htm")):
+    raise RuntimeError("subscriber canonical CV is not HTML")
+  return subscriber_cv_file(subscriber)
 
 
 def subscriber_cv_file(subscriber: dict) -> str:
   user_id = subscriber_user_id(subscriber)
+  ref = canonical_cv_ref(subscriber)
+  cache_key = canonical_cv_cache_key(subscriber)
   cached = _cv_download_cache.get(user_id)
-  if cached and Path(cached).is_file():
-    return cached
-  if not str(subscriber.get("cvFileRef") or "").strip():
+  if cached and cached[0] == cache_key and Path(cached[1]).is_file():
+    return cached[1]
+  if not ref:
     raise RuntimeError("subscriber is missing cvFileRef")
   path = str(api.download_cv(user_id, cv_local_dest(subscriber)))
-  _cv_download_cache[user_id] = path
+  _cv_download_cache[user_id] = (cache_key, path)
   return path
 
 
-def application_artifact_dir(subscriber: dict, candidate: dict) -> Path:
-  return (
+def application_artifact_dir(subscriber: dict, candidate: dict, attempt: int | None = None) -> Path:
+  directory = (
     DEFAULT_STORAGE_ROOT.parent
     / "users"
     / subscriber_phone_hash(subscriber)
     / "applications"
     / slug_part(f"{candidate.get('company', '')}-{candidate.get('role', '')}")
   )
+  return directory / str(attempt) if attempt is not None else directory

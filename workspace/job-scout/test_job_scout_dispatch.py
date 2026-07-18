@@ -33,7 +33,9 @@ class JSearchDispatchTests(unittest.TestCase):
       "senderEmail": "applicant@example.com",
       "gmailConnected": True,
       "ready": True,
-      "cvFileRef": "/tmp/cv.pdf",
+      "cvFileRef": "user-1/cv/base/cv.html",
+      "cvHtmlRef": "user-1/cv/base/cv.html",
+      "cvConversionStatus": "ready",
       "profile": {"displayName": "Test Applicant"},
       "preferences": {
         "targetRoles": ["Driver"],
@@ -248,6 +250,23 @@ class JSearchDispatchTests(unittest.TestCase):
     self.assertEqual(result["processedCount"], 0)
     whatsapp.assert_not_called()
 
+  def test_dispatch_excludes_legacy_pdf_only_subscriber(self) -> None:
+    legacy = {**self.subscriber(), "cvFileRef": "user-1/cv/cv.pdf", "cvHtmlRef": None, "cvConversionStatus": ""}
+    self.assertTrue(jobscout.dispatch_runner.subscriber_is_dispatch_ready(self.subscriber()))
+    self.assertFalse(jobscout.dispatch_runner.subscriber_is_dispatch_ready(legacy))
+
+  def test_orphaned_active_agent_marker_no_longer_blocks_dispatch(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      jobscout.dispatch_store.set_active_agent_dispatch(root, {
+        "runId": "ghost-run",
+        "startedAt": jobscout.dispatch_store.utc_now(),
+        "mode": "openclaw-agent",
+      })
+      jobscout.dispatch_store.assert_no_active_agent_dispatch(root)
+
+      self.assertIsNone(jobscout.dispatch_store.active_agent_dispatch(root))
+
   def test_dispatch_lock_rejects_overlapping_run(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
       root = Path(tmp) / "dispatch-runs"
@@ -335,7 +354,7 @@ class JSearchDispatchTests(unittest.TestCase):
       self.assertEqual(jobs_task["last_run_status"], "success")
       self.assertEqual(jobs_task["last_run_summary"], "1 application(s) sent")
       self.assertEqual(jobs_task["timezone_name"], "Africa/Harare")
-      self.assertEqual(jobs_task["schedule_label"], "Daily - 9:00 AM")
+      self.assertEqual(jobs_task["schedule_label"], "Daily - 8:00 AM")
       self.assertTrue(jobs_task["next_run_at"].endswith("Z"))
       delivery_task = result["_telemetry_calls"]["deliver_results"]
       self.assertEqual(delivery_task["service"], "delivery")

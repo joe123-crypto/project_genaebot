@@ -154,12 +154,35 @@ def upload_cv(user_id: str, source: str | Path) -> dict:
   )
 
 
-def download_cv(user_id: str, dest: Path) -> Path:
-  """Fetch a presigned CV URL from agent-genaie and download it to dest."""
+def upload_cv_html(user_id: str, source: str | Path) -> dict:
+  """Upload a manually verified canonical HTML CV."""
+  src = Path(source).expanduser().resolve()
+  if not src.exists() or not src.is_file():
+    raise SystemExit(f"CV HTML file not found: {src}")
+  user = str(user_id or "").strip()
+  if not user:
+    raise SystemExit("user-id is required to upload CV HTML.")
+  return request_multipart(
+    endpoint("/internal/job-scout/cv"),
+    {"userId": user, "format": "html"},
+    "file",
+    src,
+    "cv.html",
+    "text/html",
+  )
+
+
+def download_cv(user_id: str, dest: Path, format: str = "html") -> Path:
+  """Fetch the subscriber's canonical CV object and download it to ``dest``.
+
+  Agent Genaie's CV route now resolves the ready HTML object by default. The
+  helper deliberately follows the route response rather than constructing an
+  R2 key so legacy profiles and migrated profiles keep using one seam.
+  """
   user = str(user_id or "").strip()
   if not user:
     raise SystemExit("user-id is required to download a CV.")
-  query = urllib.parse.urlencode({"userId": user})
+  query = urllib.parse.urlencode({"userId": user, "format": format})
   url = ""
   for attempt in range(CV_URL_LOOKUP_ATTEMPTS):
     result = request_json("GET", endpoint(f"/internal/job-scout/cv?{query}"))
@@ -181,6 +204,71 @@ def download_cv(user_id: str, dest: Path) -> Path:
   return dest
 
 
+_APPLICATION_ARTIFACTS = {
+  "cv": ("cv.pdf", "application/pdf"),
+  "cover_letter_text": ("cover-letter.txt", "text/plain; charset=utf-8"),
+  "cover_letter_pdf": ("cover-letter.pdf", "application/pdf"),
+}
+
+
+def upload_application_artifact(
+  user_id: str,
+  application_id: str,
+  attempt: int,
+  kind: str,
+  source: str | Path,
+) -> dict:
+  """Store an exact submitted application artifact in Agent Genaie's R2.
+
+  The API owns key construction and verifies that ``application_id`` belongs
+  to ``user_id``. Keeping clients away from arbitrary object keys prevents a
+  compromised agent output from crossing a user's storage prefix.
+  """
+  user = str(user_id or "").strip()
+  application = str(application_id or "").strip()
+  artifact_kind = str(kind or "").strip()
+  if not user:
+    raise RuntimeError("user id is required to upload an application artifact")
+  if not application or len(application) > 160:
+    raise RuntimeError("application id is required to upload an application artifact")
+  if artifact_kind not in _APPLICATION_ARTIFACTS:
+    raise RuntimeError("unsupported application artifact kind")
+  try:
+    attempt_number = int(attempt)
+  except (TypeError, ValueError) as err:
+    raise RuntimeError("application attempt must be a positive integer") from err
+  if attempt_number < 1 or attempt_number > 99:
+    raise RuntimeError("application attempt must be between 1 and 99")
+  path = Path(source).expanduser().resolve()
+  if not path.is_file():
+    raise RuntimeError("application artifact file is missing")
+  filename, content_type = _APPLICATION_ARTIFACTS[artifact_kind]
+  data = path.read_bytes()
+  if not data:
+    raise RuntimeError("application artifact file is empty")
+  if artifact_kind in {"cv", "cover_letter_pdf"} and not data.startswith(b"%PDF-"):
+    raise RuntimeError("application PDF artifact is invalid")
+  try:
+    return request_multipart(
+      endpoint("/internal/job-scout/application-artifact"),
+      {
+        "userId": user,
+        "applicationId": application,
+        "attempt": str(attempt_number),
+        "kind": artifact_kind,
+      },
+      "file",
+      path,
+      filename,
+      content_type,
+    )
+  except SystemExit as err:
+    # Artifact retention runs after the external application has succeeded.
+    # Surface a normal exception so the orchestrator can record/alert without
+    # terminating the whole parent run or retrying the submission.
+    raise RuntimeError("could not store the submitted application artifact") from err
+
+
 def cv_object_available(user_id: str) -> bool:
   """Non-fatal readiness probe: does the user's CV actually exist in R2?
 
@@ -191,7 +279,7 @@ def cv_object_available(user_id: str) -> bool:
   key = api_key()
   if not user or not key:
     return False
-  url = endpoint(f"/internal/job-scout/cv?{urllib.parse.urlencode({'userId': user})}")
+  url = endpoint(f"/internal/job-scout/cv?{urllib.parse.urlencode({'userId': user, 'format': 'html'})}")
   request = urllib.request.Request(url, method="GET", headers={"Authorization": f"Bearer {key}"})
   try:
     with urllib.request.urlopen(request, timeout=30) as response:

@@ -53,12 +53,12 @@ from .jsearch import (
   register_channel_candidate_eligibility,
 )
 from .profile import clean_items, max_applications, preference_code, profile_values, search_queries, subscriber_preferences, subscriber_user_id, user_key
-from .subscriber import subscriber_phone
+from .subscriber import subscriber_cv_html_ready, subscriber_phone
 from .textutil import public_text
 from .util import normalize_phone, safe_run_id, utc_now
 
-# Matches the OpenClaw cron installed by deploy/install-job-scout.sh (0 9 * * *).
-JOB_SCOUT_SCHEDULE_LABEL = "Daily - 9:00 AM"
+# Matches the OpenClaw agent-turn cron installed by deploy/install-job-scout.sh.
+JOB_SCOUT_SCHEDULE_LABEL = "Daily - 8:00 AM"
 JOB_SCOUT_TIMEZONE = "Africa/Harare"
 
 
@@ -94,7 +94,7 @@ def publish_user_dashboard_telemetry(
     status="active",
     schedule_label=JOB_SCOUT_SCHEDULE_LABEL,
     timezone_name=JOB_SCOUT_TIMEZONE,
-    next_run_at=next_daily_run_iso(9, 0, JOB_SCOUT_TIMEZONE),
+    next_run_at=next_daily_run_iso(8, 0, JOB_SCOUT_TIMEZONE),
     last_run_at=now,
     last_run_status=last_run_status,
     last_run_summary=summary,
@@ -176,7 +176,7 @@ def subscriber_is_dispatch_ready(subscriber: dict) -> bool:
     subscriber.get("ready") is True
     and subscriber.get("gmailConnected") is True
     and str(subscriber.get("senderEmail") or "").strip()
-    and str(subscriber.get("cvFileRef") or "").strip()
+    and subscriber_cv_html_ready(subscriber)
     and str(subscriber.get("whatsappPhone") or "").strip()
     and clean_items(profile_values(preferences, "targetRoles"))
     and clean_items(profile_values(preferences, "locations"))
@@ -184,8 +184,13 @@ def subscriber_is_dispatch_ready(subscriber: dict) -> bool:
 
 
 def cmd_dispatch_jsearch(args: argparse.Namespace) -> dict:
+  agent_phase = str(getattr(args, "agent_phase", "") or "").strip()
+  if agent_phase:
+    from .agent_dispatch import cmd_agent_dispatch
+    return cmd_agent_dispatch(args)
   run_id = args.run_id or f"job-scout-jsearch-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
   run_id = safe_run_id(run_id)
+  dispatch_store.assert_no_active_agent_dispatch(args.dispatch_root)
   with dispatch_store.exclusive_dispatch_lock(args.dispatch_root, run_id):
     return dispatch_jsearch_locked(args, run_id)
 
@@ -631,4 +636,3 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
     "groupFeedCache": group_feed_cache,
     "users": users,
   }
-

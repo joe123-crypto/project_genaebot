@@ -27,6 +27,7 @@ from .profile import (
   resolve_profile_locations,
   search_queries,
 )
+from .subscriber import subscriber_cv_html_ready
 from .textutil import public_text
 from .util import effective_user, normalize_phone, phone_hash, utc_now
 
@@ -89,6 +90,7 @@ def cmd_check_runtime(args: argparse.Namespace) -> dict:
       errors.append("website application worker health check failed")
 
   subscriber_count = None
+  html_ready_count = None
   accessible_cv_count = None
   if getattr(args, "check_subscribers", False) and has_api_key:
     try:
@@ -97,15 +99,19 @@ def cmd_check_runtime(args: argparse.Namespace) -> dict:
       subscriber_count = len(ready)
       # cvFileRef is an R2 object key now; verify each CV actually exists in the
       # bucket (the GET endpoint 404s on a missing or stale ref) rather than
-      # trusting a non-empty ref.
+      # trusting a non-empty ref. Only HTML-ready subscribers are probed:
+      # dispatch excludes legacy PDF-only records, so an un-migrated user must
+      # not abort the install.
+      html_ready = [subscriber for subscriber in ready if subscriber_cv_html_ready(subscriber)]
+      html_ready_count = len(html_ready)
       accessible_cv_count = sum(
         1
-        for subscriber in ready
+        for subscriber in html_ready
         if api.cv_object_available(str(subscriber.get("userId") or subscriber.get("uid") or subscriber.get("id") or ""))
       )
       if subscriber_count == 0:
         errors.append("no Job Scout subscribers are ready")
-      elif accessible_cv_count != subscriber_count:
+      elif accessible_cv_count != html_ready_count:
         errors.append("one or more Job Scout subscribers have no CV in storage; re-upload is required")
     except (SystemExit, RuntimeError) as err:
       errors.append(public_text(err, 240))
@@ -123,6 +129,7 @@ def cmd_check_runtime(args: argparse.Namespace) -> dict:
     "runtimeRoot": str(RUNTIME_ROOT),
     "browserHealthy": browser_ok,
     "subscriberCount": subscriber_count,
+    "htmlReadyCount": html_ready_count,
     "accessibleCvCount": accessible_cv_count,
     "errors": errors,
   }
@@ -137,11 +144,15 @@ def resolve_cv_ref(user_id: str, cv_arg: str, do_upload: bool) -> str:
   text = str(cv_arg or "").strip()
   if not text:
     raise SystemExit("--cv is required")
-  expected_key = f"{user_id}/cv/cv.pdf"
-  if text == expected_key:
+  expected_keys = {
+    f"{user_id}/cv/cv.pdf",
+    f"{user_id}/cv/pending/original.pdf",
+    f"{user_id}/cv/base/cv.html",
+  }
+  if text in expected_keys:
     return text  # already staged via stage-cv; value is this user's R2 object key
   if Path(text).expanduser().is_file():
-    return str(api.upload_cv(user_id, text).get("key") or "") if do_upload else expected_key
+    return str(api.upload_cv(user_id, text).get("key") or "") if do_upload else f"{user_id}/cv/pending/original.pdf"
   # Not a real local file and not the expected staged key: never persist a bogus ref.
   raise SystemExit(f"CV file not found (and not a staged CV reference): {text}")
 
@@ -291,4 +302,3 @@ def cmd_fetch_candidates(args: argparse.Namespace) -> dict:
 def cmd_resolve_location(args: argparse.Namespace) -> dict:
   resolved = resolve_preferred_locations(args.location)
   return {"ok": True, **resolved}
-

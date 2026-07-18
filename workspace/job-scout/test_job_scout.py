@@ -117,7 +117,7 @@ class CvStagingTests(unittest.TestCase):
       result = job_scout.cmd_save_profile(args)
 
       self.assertTrue(result["dryRun"])
-      self.assertEqual(result["cvFileRef"], "user-1/cv/cv.pdf")
+      self.assertEqual(result["cvFileRef"], "user-1/cv/pending/original.pdf")
       self.assertTrue(result["uploadEndpoint"].endswith("/internal/job-scout/cv"))
     self.assertEqual(result["preferences"]["targetRoles"], ["General worker"])
     self.assertEqual(result["preferences"]["country"], "zw")
@@ -138,6 +138,27 @@ class CvStagingTests(unittest.TestCase):
   def test_resolve_cv_ref_rejects_foreign_key(self) -> None:
     with self.assertRaises(SystemExit):
       job_scout.resolve_cv_ref("user-1", "other-user/cv/cv.pdf", do_upload=False)
+
+
+class CheckRuntimeTests(unittest.TestCase):
+  def test_check_runtime_probes_only_html_ready_subscribers(self) -> None:
+    migrated = {"userId": "user-html", "cvHtmlRef": "user-html/cv/cv.html", "cvConversionStatus": "ready"}
+    legacy = {"userId": "user-pdf", "cvFileRef": "user-pdf/cv/cv.pdf", "cvConversionStatus": ""}
+    with tempfile.TemporaryDirectory() as tmp:
+      with mock.patch.object(jobscout.commands_setup.api, "pending_links_path", return_value=Path(tmp) / "pending.json"), \
+           mock.patch.object(jobscout.commands_setup, "api_key", return_value="k"), \
+           mock.patch.object(jobscout.commands_setup, "RUNTIME_ROOT", Path(tmp) / "runtime"), \
+           mock.patch.object(jobscout.commands_setup, "cmd_list_ready", return_value={"subscribers": [migrated, legacy]}), \
+           mock.patch.object(jobscout.commands_setup.api, "cv_object_available", return_value=True) as probe:
+        result = jobscout.commands_setup.cmd_check_runtime(
+          argparse.Namespace(check_browser=False, check_subscribers=True)
+        )
+
+    self.assertTrue(result["ok"])
+    self.assertEqual(result["subscriberCount"], 2)
+    self.assertEqual(result["htmlReadyCount"], 1)
+    self.assertEqual(result["accessibleCvCount"], 1)
+    probe.assert_called_once_with("user-html")
 
 
 class CvDownloadTests(unittest.TestCase):

@@ -35,6 +35,13 @@
         "idleMs": 1200
       },
       "timeoutSeconds": 1800,
+      "subagents": {
+        "allowAgents": ["main"],
+        "maxConcurrent": 4,
+        "maxSpawnDepth": 1,
+        "maxChildrenPerAgent": 4,
+        "runTimeoutSeconds": 2700
+      },
       "memorySearch": {
         "provider": "openai-compatible",
         "model": "google/text-embedding-005",
@@ -53,7 +60,13 @@
       {
         "id": "main",
         "default": true,
-        "workspace": "/home/joseph/.openclaw/agent-workspace-admin"
+        "workspace": "/home/joseph/.openclaw/agent-workspace-admin",
+        "subagents": {
+          "allowAgents": ["main"]
+        },
+        "tools": {
+          "alsoAllow": ["sessions_spawn", "sessions_yield", "subagents"]
+        }
       },
       {
         "id": "public",
@@ -361,6 +374,12 @@
     "dmScope": "per-account-channel-peer"
   },
   "tools": {
+    "subagents": {
+      "tools": {
+        "allow": ["exec", "process", "read", "write"],
+        "deny": ["message", "gateway", "cron", "sessions_spawn", "sessions_send", "sessions_list", "sessions_history", "subagents", "agents_list"]
+      }
+    },
     "elevated": {
       "enabled": false
     }

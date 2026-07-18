@@ -122,10 +122,20 @@ def build_parser() -> argparse.ArgumentParser:
   fetch_candidates.set_defaults(func=cmd_fetch_candidates)
 
   dispatch_jsearch = subparsers.add_parser("dispatch-jsearch", help="fetch JSearch candidates for ready subscribers")
+  dispatch_jsearch.add_argument(
+    "--agent-phase",
+    choices=["prepare", "claim", "complete", "fallback", "status", "finish"],
+    help="run one durable OpenClaw-agent orchestration phase",
+  )
   dispatch_jsearch.add_argument("--run-id")
+  dispatch_jsearch.add_argument("--claim-id", help="opaque claim returned by the agent prepare phase")
+  dispatch_jsearch.add_argument("--result", help="agent result JSON object, or @path, for the complete phase")
+  dispatch_jsearch.add_argument("--fallback-reason", help="sanitized reason for deterministic fallback")
   dispatch_jsearch.add_argument("--phone", help="limit this operator-triggered run to one ready WhatsApp subscriber")
   dispatch_jsearch.add_argument("--limit-ready", type=int, default=100)
   dispatch_jsearch.add_argument("--max-candidates-per-user", type=int, default=5)
+  dispatch_jsearch.add_argument("--shortlist-limit", type=int, default=20, help="agent shortlist size, capped at 20")
+  dispatch_jsearch.add_argument("--match-threshold", type=int, default=70, help="minimum agent fit score for selection")
   dispatch_jsearch.add_argument("--dispatch-root", type=Path, default=DEFAULT_DISPATCH_ROOT)
   dispatch_jsearch.add_argument("--dry-run", action="store_true")
   dispatch_jsearch.add_argument("--write-group-feed-cache", action="store_true")
@@ -193,4 +203,3 @@ def main() -> int:
   result = args.func(args)
   print(json.dumps(result, indent=2, sort_keys=True))
   return 0
-

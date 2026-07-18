@@ -56,15 +56,33 @@ class JobScoutDeploymentTests(unittest.TestCase):
     self.assertIn("FROM node:24-bookworm-slim", dockerfile)
     self.assertIn('CMD ["node", "listener.mjs"]', dockerfile)
 
-  def test_scheduler_has_no_pilot_allowlist(self) -> None:
+  def test_scheduler_is_isolated_agent_turn_without_model_override(self) -> None:
     installer = (ROOT / "deploy/install-job-scout.sh").read_text(encoding="utf-8")
 
     self.assertIn('NAME="job-scout"', installer)
     self.assertIn('LEGACY_NAME="job-scout-pilot"', installer)
     self.assertNotIn("--pilot-only", installer)
     self.assertNotIn("JOB_SCOUT_PILOT_USER_IDS", installer)
-    self.assertIn('"--limit-ready","100"', installer)
-    self.assertIn('"--write-group-feed-cache"', installer)
+    self.assertIn('CRON_EXPR="0 8 * * *"', installer)
+    self.assertIn("--agent main", installer)
+    self.assertIn("--session isolated", installer)
+    self.assertIn("--message \"$AGENT_PROMPT\"", installer)
+    self.assertIn("--timeout-seconds 21600", installer)
+    self.assertIn("--agent-phase prepare", installer)
+    self.assertIn("sessions_spawn", installer)
+    self.assertIn("sessions_yield", installer)
+    self.assertNotIn("--command-argv", installer)
+    self.assertNotIn("--model", installer)
+
+  def test_main_agent_subagents_inherit_default_model_with_narrow_tools(self) -> None:
+    config = json.loads((ROOT / "config/openclaw.template.json").read_text(encoding="utf-8"))
+    subagents = config["agents"]["defaults"]["subagents"]
+    self.assertEqual(subagents["allowAgents"], ["main"])
+    self.assertEqual(subagents["maxConcurrent"], 4)
+    self.assertEqual(subagents["maxChildrenPerAgent"], 4)
+    self.assertEqual(subagents["runTimeoutSeconds"], 2700)
+    self.assertNotIn("model", subagents)
+    self.assertEqual(config["tools"]["subagents"]["tools"]["allow"], ["exec", "process", "read", "write"])
 
   def test_group_feed_scheduler_is_separate_delivery_only_cron(self) -> None:
     installer = (ROOT / "deploy/install-job-scout-group-feed.sh").read_text(encoding="utf-8")
@@ -78,12 +96,24 @@ class JobScoutDeploymentTests(unittest.TestCase):
     self.assertIn("@g.us", installer)
     self.assertNotIn("deliver-group-feed", main_installer)
 
-  def test_healthcheck_exercises_chromium_readiness(self) -> None:
+  def test_installer_adds_new_cron_before_removing_old_ones(self) -> None:
+    installer = (ROOT / "deploy/install-job-scout.sh").read_text(encoding="utf-8")
+
+    # A failed add must leave the previous schedule installed, so the old
+    # jobs are snapshotted first, the new job added, and only then removed.
+    self.assertLess(installer.index("cron list --all --json"), installer.index("cron add"))
+    self.assertLess(installer.index("cron add"), installer.index("cron remove"))
+    self.assertIn('[ "$old_id" != "$existing_id" ]', installer)
+
+  def test_healthcheck_exercises_chromium_and_pdf_readiness(self) -> None:
     compose = (ROOT / "deploy/docker-compose.override.yml").read_text(encoding="utf-8")
     server = (ROOT / "workspace/job-scout/web_apply_server.mjs").read_text(encoding="utf-8")
 
     self.assertIn("/ready", compose)
     self.assertIn("probeChromium(chromium)", server)
+    self.assertIn("probePdfRendering(chromium)", server)
+    self.assertIn('request.url === "/render-pdf"', server)
+    self.assertIn('"content-type": "application/pdf"', server)
 
   def test_optional_worker_starts_after_core_restart(self) -> None:
     deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")

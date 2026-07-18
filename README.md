@@ -229,8 +229,11 @@ sudo ./deploy/install-job-scout.sh
 
 The installer refuses to enable the cron unless the worker is healthy, the
 gateway and worker tokens match, at least one subscriber is ready, and every
-ready CV is accessible. It prints the failing readiness check and runs daily at
-`09:00 Africa/Harare` for up to 100 ready subscribers.
+ready CV is accessible. It installs an isolated `main` agent turn at
+`08:00 Africa/Harare` with a six-hour run budget. The parent prepares every
+ready subscriber and delegates four isolated same-model children at a time;
+children score the deterministic shortlist and personalize documents, while
+the validated dispatcher remains the only component allowed to submit or send.
 
 ### Dashboard task telemetry
 

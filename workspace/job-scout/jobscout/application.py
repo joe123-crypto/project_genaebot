@@ -7,6 +7,7 @@ shaping over subscriber/candidate/preference data; imported by dispatch.
 
 from __future__ import annotations
 
+import html
 from pathlib import Path
 
 from .constants import (
@@ -16,11 +17,14 @@ from .constants import (
   WHATSAPP_CHANNEL_SOURCES,
 )
 from .jsearch import application_key, candidate_key
-from .profile import clean_items, profile_values
+from . import api
+from .delivery import render_html_to_pdf
+from .profile import clean_items, profile_values, subscriber_user_id
 from .subscriber import (
   applicant_name,
   application_artifact_dir,
   display_name,
+  subscriber_cv_html,
   subscriber_cv_file,
   subscriber_phone,
   subscriber_sender_email,
@@ -97,12 +101,95 @@ def cover_letter_text(subscriber: dict, preferences: dict, candidate: dict) -> s
   ]) + "\n"
 
 
-def write_cover_letter(subscriber: dict, preferences: dict, candidate: dict) -> Path:
-  directory = application_artifact_dir(subscriber, candidate)
+def write_cover_letter(
+  subscriber: dict,
+  preferences: dict,
+  candidate: dict,
+  content: str | None = None,
+  attempt: int | None = None,
+) -> Path:
+  directory = application_artifact_dir(subscriber, candidate, attempt)
   directory.mkdir(parents=True, exist_ok=True)
   path = directory / "cover-letter.txt"
-  path.write_text(cover_letter_text(subscriber, preferences, candidate), encoding="utf-8")
+  path.write_text(content if content is not None else cover_letter_text(subscriber, preferences, candidate), encoding="utf-8")
   return path
+
+
+def _plain_text_document(text: str) -> str:
+  escaped = html.escape(text)
+  return (
+    "<!doctype html><html><head><meta charset=\"utf-8\"><style>"
+    "@page{size:A4;margin:22mm 20mm}body{font:11pt/1.5 Arial,sans-serif;color:#111}"
+    "pre{font:inherit;white-space:pre-wrap;margin:0}"
+    "</style></head><body><pre>"
+    f"{escaped}</pre></body></html>"
+  )
+
+
+def prepare_application_documents(
+  subscriber: dict,
+  candidate: dict,
+  cover_letter: str | Path,
+  personalized_cv_html: str | Path | None = None,
+  include_cover_letter_pdf: bool = False,
+  attempt: int = 1,
+) -> dict[str, Path]:
+  """Render transient application content into the exact submit-ready files."""
+  directory = application_artifact_dir(subscriber, candidate, attempt)
+  directory.mkdir(parents=True, exist_ok=True)
+  letter_path = Path(cover_letter).expanduser()
+  if not letter_path.is_file() or not letter_path.read_text(encoding="utf-8").strip():
+    raise RuntimeError("cover letter text is missing")
+  cv_source = personalized_cv_html if personalized_cv_html is not None else subscriber_cv_html(subscriber)
+  cv_pdf = render_html_to_pdf(cv_source, directory / "cv.pdf")
+  documents = {
+    "cvPdf": cv_pdf,
+    "coverLetterText": letter_path,
+  }
+  if include_cover_letter_pdf:
+    letter_html = _plain_text_document(letter_path.read_text(encoding="utf-8"))
+    documents["coverLetterPdf"] = render_html_to_pdf(letter_html, directory / "cover-letter.pdf")
+  return documents
+
+
+def _record_application_id(record_result: dict) -> str:
+  for value in (record_result.get("id"), record_result.get("applicationId")):
+    text = str(value or "").strip()
+    if text:
+      return text
+  application = record_result.get("application")
+  if isinstance(application, dict):
+    text = str(application.get("id") or application.get("applicationId") or "").strip()
+    if text:
+      return text
+  raise RuntimeError("recorded application response is missing its id")
+
+
+def store_application_artifacts(
+  subscriber: dict,
+  record_result: dict,
+  attempt: int,
+  cv_pdf: str | Path,
+  cover_letter_text: str | Path,
+  cover_letter_pdf: str | Path | None = None,
+) -> dict[str, str]:
+  """Upload only the exact files/text used by a successful submission."""
+  user_id = subscriber_user_id(subscriber)
+  application_id = _record_application_id(record_result)
+  artifacts: list[tuple[str, str, str | Path]] = [
+    ("cv", "cv", cv_pdf),
+    ("coverLetterText", "cover_letter_text", cover_letter_text),
+  ]
+  if cover_letter_pdf is not None:
+    artifacts.append(("coverLetterPdf", "cover_letter_pdf", cover_letter_pdf))
+  refs: dict[str, str] = {}
+  for result_key, kind, source in artifacts:
+    uploaded = api.upload_application_artifact(user_id, application_id, attempt, kind, source)
+    ref = str(uploaded.get("artifactRef") or uploaded.get("key") or "").strip()
+    if not ref:
+      raise RuntimeError("application artifact upload returned no reference")
+    refs[result_key] = ref
+  return refs
 
 
 def candidate_application_url(candidate: dict) -> str | None:
@@ -121,9 +208,35 @@ def candidate_application_url(candidate: dict) -> str | None:
   return source if source.startswith(("https://", "http://")) else None
 
 
-def web_apply_payload(subscriber: dict, preferences: dict, candidate: dict, cover_letter: Path) -> dict:
+def web_apply_payload(
+  subscriber: dict,
+  preferences: dict,
+  candidate: dict,
+  cover_letter: Path,
+  cv_pdf: Path | None = None,
+  cover_letter_pdf: Path | None = None,
+) -> dict:
   first_name, last_name = applicant_name(subscriber)
   locations = clean_items(profile_values(preferences, "locations"))
+  resolved_cv = cv_pdf
+  resolved_letter_pdf = cover_letter_pdf
+  if resolved_cv is None:
+    legacy_cv = Path(subscriber_cv_file(subscriber))
+    if legacy_cv.suffix.casefold() == ".pdf":
+      resolved_cv = legacy_cv
+    else:
+      documents = prepare_application_documents(
+        subscriber,
+        candidate,
+        cover_letter,
+        include_cover_letter_pdf=resolved_letter_pdf is None,
+      )
+      resolved_cv = documents["cvPdf"]
+      resolved_letter_pdf = resolved_letter_pdf or documents.get("coverLetterPdf")
+  if resolved_letter_pdf is None:
+    directory = application_artifact_dir(subscriber, candidate)
+    letter_html = _plain_text_document(Path(cover_letter).read_text(encoding="utf-8"))
+    resolved_letter_pdf = render_html_to_pdf(letter_html, directory / "cover-letter.pdf")
   return {
     "attemptId": candidate_key(candidate),
     "applicationUrl": candidate_application_url(candidate),
@@ -135,8 +248,9 @@ def web_apply_payload(subscriber: dict, preferences: dict, candidate: dict, cove
       "phone": subscriber_phone(subscriber),
       "location": locations[0] if locations else "",
     },
-    "cvPath": subscriber_cv_file(subscriber),
-    "coverLetterPath": str(cover_letter),
+    "cvPath": str(resolved_cv),
+    "coverLetterTextPath": str(cover_letter),
+    "coverLetterFilePath": str(resolved_letter_pdf),
     "autoSubmit": True,
   }
 
