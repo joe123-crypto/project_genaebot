@@ -276,6 +276,8 @@ The deploy script used by both paths:
 - runs syntax and JSON checks
 - stages curated source into `/home/joseph/openclaw-deploy/live-source` using
   the same helper and allowlist exercised by hosted CI
+- installs the source-controlled gateway Dockerfile, including the
+  `poppler-utils` dependency used for Job Scout CV conversion
 - preserves the `live-source` root inode so Docker's read-only bind mount cannot
   become detached from the newly staged files
 - stamps `live-source` with `.OPENCLAW_GENERATED` and a source manifest

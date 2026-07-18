@@ -115,6 +115,14 @@ class JobScoutDeploymentTests(unittest.TestCase):
     self.assertIn('request.url === "/render-pdf"', server)
     self.assertIn('"content-type": "application/pdf"', server)
 
+  def test_gateway_image_includes_cv_converter_and_is_deployed(self) -> None:
+    dockerfile = (ROOT / "deploy/container/Dockerfile").read_text(encoding="utf-8")
+    deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")
+
+    self.assertIn("poppler-utils", dockerfile)
+    self.assertIn('GATEWAY_DOCKERFILE_SRC="$OC_DIR/deploy/container/Dockerfile"', deploy)
+    self.assertIn('install -m 0644 "$GATEWAY_DOCKERFILE_SRC" "$GATEWAY_DOCKERFILE_DST"', deploy)
+
   def test_optional_worker_starts_after_core_restart(self) -> None:
     deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")
     restart = deploy.index("  restart_and_check\n", deploy.index("main()"))

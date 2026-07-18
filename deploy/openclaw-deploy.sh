@@ -8,6 +8,8 @@ COMPOSE_OVERRIDE_SRC="$OC_DIR/deploy/docker-compose.override.yml"
 COMPOSE_OVERRIDE_DST="$DEPLOY_DIR/docker-compose.override.yml"
 ENTRYPOINT_SRC="$OC_DIR/deploy/container/entrypoint.sh"
 ENTRYPOINT_DST="$DEPLOY_DIR/entrypoint.sh"
+GATEWAY_DOCKERFILE_SRC="$OC_DIR/deploy/container/Dockerfile"
+GATEWAY_DOCKERFILE_DST="$DEPLOY_DIR/Dockerfile"
 SERVICE_NAME="${OPENCLAW_CONTAINER_SERVICE:-openclaw-gateway-container.service}"
 SERVICE_UNIT_SRC="$OC_DIR/deploy/systemd/openclaw-gateway-container.service"
 SERVICE_UNIT_DST="/etc/systemd/system/$SERVICE_NAME"
@@ -311,6 +313,7 @@ syntax_checks() {
 stage_source() {
   require_file "$COMPOSE_OVERRIDE_SRC"
   require_file "$ENTRYPOINT_SRC"
+  require_file "$GATEWAY_DOCKERFILE_SRC"
   log "Stage curated source into $STAGE_DIR"
   bash "$OC_DIR/deploy/stage-openclaw-source.sh" "$OC_DIR" "$STAGE_DIR"
   if [ "$APPLY_CONTAINER_BOUNDARY" = "1" ] || boundary_active; then
@@ -320,6 +323,7 @@ stage_source() {
     log "Skip Docker Compose override; pass --apply-container-boundary when ready"
   fi
   install -m 0755 "$ENTRYPOINT_SRC" "$ENTRYPOINT_DST"
+  install -m 0644 "$GATEWAY_DOCKERFILE_SRC" "$GATEWAY_DOCKERFILE_DST"
 
   write_generated_marker
   reject_staged_runtime_files
