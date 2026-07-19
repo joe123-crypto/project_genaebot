@@ -668,6 +668,7 @@ main() {
   apply_config_template
   verify_live_workspace
   restart_and_check
+  bash "$OC_DIR/deploy/install-job-scout-cv-conversion.sh"
   start_optional_job_scout_browser
   start_optional_job_scout_channel_listener
   log "Deploy complete. Review Git diff and commit/push manually when ready."

@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+runtime_root="${JOB_SCOUT_RUNTIME_ROOT:-/home/joseph/.openclaw/runtime/job-scout}"
+mkdir -p "$runtime_root"
+
+# A large PDF can take longer than the scheduler interval. Skip overlapping
+# ticks quietly while the active converter finishes instead of processing the
+# same pending object twice.
+exec 9>"$runtime_root/cv-conversion.lock"
+if ! flock -n 9; then
+  exit 0
+fi
+
+exec /home/joseph/.openclaw/workspace/bin/job-scout convert-pending-cvs --limit 100

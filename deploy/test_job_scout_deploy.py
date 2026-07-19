@@ -123,6 +123,18 @@ class JobScoutDeploymentTests(unittest.TestCase):
     self.assertIn('GATEWAY_DOCKERFILE_SRC="$OC_DIR/deploy/container/Dockerfile"', deploy)
     self.assertIn('install -m 0644 "$GATEWAY_DOCKERFILE_SRC" "$GATEWAY_DOCKERFILE_DST"', deploy)
 
+  def test_pending_cv_converter_runs_frequently_without_overlap(self) -> None:
+    installer = (ROOT / "deploy/install-job-scout-cv-conversion.sh").read_text(encoding="utf-8")
+    wrapper = (ROOT / "workspace/bin/job-scout-convert-pending").read_text(encoding="utf-8")
+    deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")
+
+    self.assertIn('NAME="job-scout-cv-conversion"', installer)
+    self.assertIn('CRON_EXPR="*/10 * * * * *"', installer)
+    self.assertIn('"/home/joseph/.openclaw/workspace/bin/job-scout-convert-pending"', installer)
+    self.assertIn("flock -n 9", wrapper)
+    self.assertIn("convert-pending-cvs --limit 100", wrapper)
+    self.assertIn('bash "$OC_DIR/deploy/install-job-scout-cv-conversion.sh"', deploy)
+
   def test_optional_worker_starts_after_core_restart(self) -> None:
     deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")
     restart = deploy.index("  restart_and_check\n", deploy.index("main()"))
