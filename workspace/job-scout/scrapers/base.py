@@ -23,6 +23,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from jobscout.constants import CANDIDATE_DESCRIPTION_CHAR_LIMIT
+
 USER_AGENT = "Mozilla/5.0 (compatible; JobScout/1.0; +https://vacancymail.co.zw)"
 DEFAULT_TIMEOUT = 15
 DETAIL_TIMEOUT = 10
@@ -174,7 +176,7 @@ def build_candidate(
     "location": collapse_ws(location),
     "query": "",
     "closing": collapse_ws(closing) or None,
-    "description": description[:2000],
+    "description": description[:CANDIDATE_DESCRIPTION_CHAR_LIMIT],
   }
 
 

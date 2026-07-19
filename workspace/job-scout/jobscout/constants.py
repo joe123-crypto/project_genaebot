@@ -18,6 +18,7 @@ DEFAULT_GROUP_FEED_ROOT = RUNTIME_ROOT / "group-feed"
 DISPATCH_STATUSES = {"applied", "action_required", "physical_submission", "no_matches", "failed"}
 TERMINAL_APPLICATION_STATUSES = {"applied", "skipped", "action_required", "physical_submission"}
 MAX_APPLICATION_ATTEMPTS = 3
+CANDIDATE_DESCRIPTION_CHAR_LIMIT = 4000
 UNKNOWN_EMPLOYER = "Unknown employer"
 UNKNOWN_ROLE = "Unknown role"
 WHATSAPP_CHANNEL_SOURCES = ("zimlinks-whatsapp", "zim-job-vacancies-whatsapp", "everyday-vacancies-whatsapp")

@@ -19,6 +19,7 @@ import urllib.error
 import urllib.request
 
 from . import base
+from jobscout.constants import CANDIDATE_DESCRIPTION_CHAR_LIMIT
 
 
 SOURCE = "zimlinks-whatsapp"
@@ -182,7 +183,10 @@ def candidate_from(row: sqlite3.Row, fields: dict, channel: dict | None = None) 
   apply_links, contact_links = original_urls(text)
   role = clean_line(fields.get("role"), 120) or "Unknown role"
   company = clean_line(fields.get("company"), 120) or "Unknown employer"
-  description = clean_line(fields.get("description"), 2000) or base.collapse_ws(text)[:2000]
+  description = (
+    clean_line(fields.get("description"), CANDIDATE_DESCRIPTION_CHAR_LIMIT)
+    or base.collapse_ws(text)[:CANDIDATE_DESCRIPTION_CHAR_LIMIT]
+  )
   identity = hashlib.sha256(f"{row['channel_jid']}\n{row['post_id']}".encode("utf-8")).hexdigest()[:24]
   emails = base.extract_emails(text)
   channel = channel if isinstance(channel, dict) else {}

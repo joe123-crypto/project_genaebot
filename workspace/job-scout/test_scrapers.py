@@ -72,6 +72,20 @@ class ScraperBaseTests(unittest.TestCase):
     self.assertEqual(candidate["applicationEmail"], "hr@acme.co.zw")
     self.assertIn("https://x/job", candidate["applyLinks"])
 
+  def test_build_candidate_keeps_four_thousand_description_chars(self) -> None:
+    from scrapers import base
+
+    candidate = base.build_candidate(
+      "vacancymail",
+      role="Driver",
+      company="Acme",
+      url="https://x/job",
+      description="R" * 4500,
+    )
+
+    self.assertEqual(len(candidate["description"]), 4000)
+    self.assertEqual(candidate["description"], "R" * 4000)
+
   def test_role_matcher_requires_all_significant_words(self) -> None:
     from scrapers import base
 

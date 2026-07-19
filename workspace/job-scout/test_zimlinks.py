@@ -117,6 +117,25 @@ class ZimLinksSourceTests(unittest.TestCase):
       self.assertEqual(candidate["applicationEmails"], [])
       self.assertEqual(candidate["role"], "Graduate Trainee")
 
+  def test_channel_candidate_keeps_four_thousand_description_chars(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      database = self.create_db(Path(tmp))
+      self.insert_post(database, "long-description", "Graduate opportunity. Details below.")
+      result = {
+        "isJob": True,
+        "role": "Graduate Trainee",
+        "company": "Example Ltd",
+        "location": "Harare",
+        "closing": None,
+        "description": "R" * 4500,
+      }
+      with mock.patch.dict(os.environ, {"JOB_SCOUT_CHANNEL_DB": str(database)}, clear=False), \
+           mock.patch.object(post_classifier, "classify_with_model", return_value=(result, "test/model")):
+        candidate = zimlinks.fetch(limit=5)[0]
+
+      self.assertEqual(len(candidate["description"]), 4000)
+      self.assertEqual(candidate["description"], "R" * 4000)
+
   def test_model_call_does_not_block_listener_write(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
       database = self.create_db(Path(tmp))

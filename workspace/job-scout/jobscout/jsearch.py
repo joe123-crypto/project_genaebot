@@ -20,6 +20,7 @@ import urllib.request
 from genaie_env import env_default
 
 from .constants import (
+  CANDIDATE_DESCRIPTION_CHAR_LIMIT,
   DEFAULT_JSEARCH_COUNTRY,
   DEFAULT_JSEARCH_DATE_POSTED,
   DEFAULT_JSEARCH_LANGUAGE,
@@ -198,7 +199,7 @@ def normalized_candidate(item: dict, query: str) -> dict:
     "location": location,
     "query": query,
     "closing": closing,
-    "description": description[:2000],
+    "description": description[:CANDIDATE_DESCRIPTION_CHAR_LIMIT],
   }
 
 

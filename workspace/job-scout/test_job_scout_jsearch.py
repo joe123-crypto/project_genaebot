@@ -67,6 +67,21 @@ class JSearchTests(unittest.TestCase):
     self.assertEqual(candidate["applicationEmail"], "recrutement@example.dz")
     self.assertEqual(candidate["sourceUrl"], "https://example.com/apply")
 
+  def test_normalized_candidate_keeps_four_thousand_description_chars(self) -> None:
+    description = "R" * 4500
+    candidate = job_scout.normalized_candidate(
+      {
+        "job_id": "long-desc",
+        "employer_name": "Example SARL",
+        "job_title": "Technicien",
+        "job_description": description,
+      },
+      "Technicien",
+    )
+
+    self.assertEqual(len(candidate["description"]), 4000)
+    self.assertEqual(candidate["description"], "R" * 4000)
+
   def test_fetch_jsearch_candidates_uses_profile_country_and_language(self) -> None:
     # jsearch_request is called by fetch_jsearch_candidates within jobscout.jsearch,
     # so patch it at its defining module rather than the job_scout re-export.
