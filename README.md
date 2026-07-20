@@ -216,6 +216,10 @@ JOB_SCOUT_BROWSER_TOKEN=<at least 32 random bytes>
    `scripts/migrate-cvs-to-r2.ts` one-off; the genaebot `migrate-runtime-cvs`
    command has been removed. New CVs are uploaded to R2 by `stage-cv` /
    `save-profile`, and the worker downloads a presigned URL at dispatch time.
+   The gateway converts uploaded PDFs into a structured A4 HTML template using
+   Poppler and Tesseract OCR, with plain text extraction as a fallback. The
+   conversion removes browser print headers, local `file://` paths, timestamps,
+   and page counters before any personalized CV is rendered.
 
 4. Any ready user without a CV in R2 must upload it again through the normal Job
    Scout profile flow. Local files under `runtime/job-scout/users` are disposable
@@ -277,7 +281,8 @@ The deploy script used by both paths:
 - stages curated source into `/home/joseph/openclaw-deploy/live-source` using
   the same helper and allowlist exercised by hosted CI
 - installs the source-controlled gateway Dockerfile, including the
-  `poppler-utils` dependency used for Job Scout CV conversion
+  `poppler-utils` and `tesseract-ocr` dependencies used for structured Job
+  Scout CV conversion
 - preserves the `live-source` root inode so Docker's read-only bind mount cannot
   become detached from the newly staged files
 - stamps `live-source` with `.OPENCLAW_GENERATED` and a source manifest
