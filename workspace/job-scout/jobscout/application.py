@@ -7,7 +7,6 @@ shaping over subscriber/candidate/preference data; imported by dispatch.
 
 from __future__ import annotations
 
-import html
 from pathlib import Path
 
 from .constants import (
@@ -18,7 +17,7 @@ from .constants import (
 )
 from .jsearch import application_key, candidate_key
 from . import api
-from .delivery import render_html_to_pdf
+from .delivery import cover_letter_html, render_html_to_pdf
 from .profile import clean_items, profile_values, subscriber_user_id
 from .subscriber import (
   applicant_name,
@@ -115,17 +114,6 @@ def write_cover_letter(
   return path
 
 
-def _plain_text_document(text: str) -> str:
-  escaped = html.escape(text)
-  return (
-    "<!doctype html><html><head><meta charset=\"utf-8\"><style>"
-    "@page{size:A4;margin:22mm 20mm}body{font:11pt/1.5 Arial,sans-serif;color:#111}"
-    "pre{font:inherit;white-space:pre-wrap;margin:0}"
-    "</style></head><body><pre>"
-    f"{escaped}</pre></body></html>"
-  )
-
-
 def prepare_application_documents(
   subscriber: dict,
   candidate: dict,
@@ -147,7 +135,7 @@ def prepare_application_documents(
     "coverLetterText": letter_path,
   }
   if include_cover_letter_pdf:
-    letter_html = _plain_text_document(letter_path.read_text(encoding="utf-8"))
+    letter_html = cover_letter_html(letter_path.read_text(encoding="utf-8"))
     documents["coverLetterPdf"] = render_html_to_pdf(letter_html, directory / "cover-letter.pdf")
   return documents
 
@@ -235,7 +223,7 @@ def web_apply_payload(
       resolved_letter_pdf = resolved_letter_pdf or documents.get("coverLetterPdf")
   if resolved_letter_pdf is None:
     directory = application_artifact_dir(subscriber, candidate)
-    letter_html = _plain_text_document(Path(cover_letter).read_text(encoding="utf-8"))
+    letter_html = cover_letter_html(Path(cover_letter).read_text(encoding="utf-8"))
     resolved_letter_pdf = render_html_to_pdf(letter_html, directory / "cover-letter.pdf")
   return {
     "attemptId": candidate_key(candidate),

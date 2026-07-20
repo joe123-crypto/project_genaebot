@@ -7,6 +7,7 @@ import html as html_module
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import urllib.error
@@ -237,20 +238,85 @@ def cmd_list_ready(args: argparse.Namespace) -> dict:
 # and renders back to PDF for employers, so conversion must produce a clean,
 # semantic, standalone page — not a positional dump of the source PDF.
 CV_HTML_STYLE = """\
-  body { margin: 0; padding: 2.2rem 2.6rem; color: #1c2733; font-family: Georgia, 'Times New Roman', serif; font-size: 11pt; line-height: 1.45; }
-  main.cv { max-width: 52rem; margin: 0 auto; }
-  h1 { margin: 0 0 0.35rem; font-size: 19pt; letter-spacing: 0.02em; }
-  h2 { margin: 1.3rem 0 0.4rem; padding-bottom: 0.15rem; font-size: 12pt; text-transform: uppercase; letter-spacing: 0.08em; border-bottom: 1px solid #9db1c4; }
-  p { margin: 0 0 0.55rem; }
+  @page { size: A4; margin: 0; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #fff; color: #202b3c; font-family: Arial, Helvetica, sans-serif; font-size: 10.5pt; line-height: 1.45; }
+  main.cv { width: 210mm; min-height: 297mm; margin: 0 auto; padding: 16mm 17mm 15mm; }
+  .cv-header { margin: 0 0 11mm; }
+  h1 { margin: 0; color: #101826; font-size: 27pt; line-height: 1.08; font-weight: 700; }
+  .headline { margin: 2.5mm 0 0; color: #405a78; font-size: 11.5pt; text-transform: uppercase; }
+  .cv-grid { display: grid; grid-template-columns: 55mm minmax(0, 1fr); gap: 12mm; align-items: start; }
+  .sidebar { min-width: 0; padding-right: 9mm; border-right: 1px solid #d7e0ea; }
+  .main-column { min-width: 0; }
+  section { break-inside: avoid; margin: 0 0 8mm; }
+  h2 { margin: 0 0 4mm; padding: 0 0 2.5mm; color: #175ec8; font-size: 8.5pt; line-height: 1.2; font-weight: 700; text-transform: uppercase; border-bottom: 1px solid #cbdcf3; }
+  .sidebar h2 { border-bottom: 0; padding-bottom: 0; }
+  p { margin: 0 0 3mm; }
+  .entry { margin: 0 0 3.5mm; }
+  ul { margin: 0; padding: 0; list-style: none; }
+  li { position: relative; margin: 0 0 1.5mm; padding-left: 4mm; }
+  li::before { content: '\\2022'; position: absolute; left: 0; color: #175ec8; font-weight: 700; }
+  .skills { display: flex; flex-wrap: wrap; gap: 2mm; }
+  .skill { padding: 1.2mm 2.2mm; border: 1px solid #d7e0ea; border-radius: 2mm; font-size: 9pt; }
+  .sidebar p, .sidebar li { overflow-wrap: anywhere; }
+  @media print { main.cv { margin: 0; } }
 """
+
+
+SIDE_SECTION_TITLES = {"CONTACT", "SKILLS", "LANGUAGES", "REFERENCES"}
+IMMUTABLE_SECTION_TITLES = {"CONTACT", "EDUCATION", "CERTIFICATIONS", "REFERENCES"}
+KNOWN_SECTION_TITLES = SIDE_SECTION_TITLES | IMMUTABLE_SECTION_TITLES | {
+  "ACHIEVEMENTS",
+  "ADDITIONAL INFORMATION",
+  "EMPLOYMENT",
+  "EXPERIENCE",
+  "INTERESTS",
+  "PROFESSIONAL EXPERIENCE",
+  "PROFESSIONAL PROFILE",
+  "PROFESSIONAL SUMMARY",
+  "PROFILE",
+  "PROJECTS",
+  "SUMMARY",
+  "TRAINING",
+  "WORK EXPERIENCE",
+}
+_BROWSER_TIMESTAMP = re.compile(r"^\d{1,2}/\d{1,2}/\d{2,4},?\s+\d{1,2}:\d{2}\s+(?:AM|PM)$", re.IGNORECASE)
+_PAGE_COUNTER = re.compile(r"^\d+\s*/\s*\d+$")
+
+
+def _clean_cv_line(value: str) -> str:
+  line = " ".join(str(value or "").replace("\ufffd", "").split())
+  if not line or line.casefold().startswith(("file://", "about:blank")):
+    return ""
+  if _BROWSER_TIMESTAMP.fullmatch(line) or _PAGE_COUNTER.fullmatch(line):
+    return ""
+  phone = re.search(r"\+\d[\d\s()\-]{6,}", line)
+  if phone:
+    return phone.group(0).strip()
+  email = re.search(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]*", line)
+  if email:
+    return email.group(0).strip()
+  line = re.sub(r"^[\u00a2\u00a9@]+\s*", "", line)
+  return line
+
+
+def _sanitized_cv_text(text: str) -> str:
+  lines = [_clean_cv_line(line) for line in text.replace("\f", "\n").splitlines()]
+  return "\n".join(lines).strip()
 
 
 def _cv_text_blocks(text: str) -> list[list[str]]:
   """Blank-line-separated blocks of whitespace-normalized text lines."""
   blocks: list[list[str]] = []
   current: list[str] = []
-  for raw_line in text.splitlines():
-    line = " ".join(raw_line.split())
+  for raw_line in _sanitized_cv_text(text).splitlines():
+    line = _clean_cv_line(raw_line)
+    if line and line.rstrip(":").upper() in KNOWN_SECTION_TITLES:
+      if current:
+        blocks.append(current)
+        current = []
+      blocks.append([line])
+      continue
     if line:
       current.append(line)
     elif current:
@@ -272,56 +338,172 @@ def _looks_like_heading(block: list[str]) -> bool:
   return mostly_upper or line.endswith(":")
 
 
+def _section_title(block: list[str]) -> str:
+  return block[0].rstrip(":").upper()
+
+
+def _render_cv_block(block: list[str]) -> str:
+  cleaned = [re.sub(r"^[>\u00bb\u25b8\u2022\-]+\s*", "", line).strip() for line in block]
+  if all(re.match(r"^[>\u00bb\u25b8\u2022\-]", line) for line in block):
+    items = "\n".join(f"          <li>{html_module.escape(item)}</li>" for item in cleaned if item)
+    return f"        <ul>\n{items}\n        </ul>" if items else ""
+  body = "<br>\n          ".join(html_module.escape(line) for line in cleaned if line)
+  return f"        <p class=\"entry\">{body}</p>" if body else ""
+
+
+def _repair_contact_blocks(blocks: list[list[str]]) -> list[list[str]]:
+  repaired: list[list[str]] = []
+  for block in blocks:
+    lines: list[str] = []
+    for line in block:
+      if lines and "@" in lines[-1] and "@" not in line and re.fullmatch(r"[A-Za-z]{1,4}\.com", line):
+        lines[-1] += line
+      else:
+        lines.append(line)
+    lines = [re.sub(r"@gmai(?:i|l)+\.com$", "@gmail.com", line, flags=re.IGNORECASE) for line in lines]
+    repaired.append(lines)
+  return repaired
+
+
+def _render_cv_section(title: str, blocks: list[list[str]], sidebar: bool) -> str:
+  title_attr = html_module.escape(title.title(), quote=True)
+  immutable = f' data-cv-immutable="section-{title_attr}"' if title in IMMUTABLE_SECTION_TITLES else ""
+  lines: list[str] = []
+  if title == "CONTACT":
+    blocks = _repair_contact_blocks(blocks)
+  if title == "SKILLS":
+    skills = [html_module.escape(line) for block in blocks for line in block if line]
+    content = "\n".join(f'          <span class="skill">{skill}</span>' for skill in skills)
+    lines.append(f'        <div class="skills">\n{content}\n        </div>')
+  elif title in {"PROFESSIONAL PROFILE", "PROFILE", "SUMMARY", "PROFESSIONAL SUMMARY"}:
+    paragraph = " ".join(line for block in blocks for line in block)
+    lines.append(f"        <p>{html_module.escape(paragraph)}</p>")
+  else:
+    for block in blocks:
+      rendered = _render_cv_block(block)
+      if rendered:
+        lines.append(rendered)
+  if not lines:
+    return ""
+  section_class = " side-section" if sidebar else ""
+  return (
+    f'      <section class="cv-section{section_class}" data-cv-section="{title_attr}"{immutable}>\n'
+    f"        <h2>{html_module.escape(title.title())}</h2>\n"
+    + "\n".join(lines)
+    + "\n      </section>"
+  )
+
+
 def cv_html_document(text: str) -> str:
   blocks = _cv_text_blocks(text)
   if not blocks:
     raise RuntimeError("no text could be extracted from the CV PDF")
   title = blocks[0][0]
-  parts: list[str] = []
-  for index, block in enumerate(blocks):
-    if index == 0:
-      parts.append(f"    <h1>{html_module.escape(block[0])}</h1>")
-      block = block[1:]
-      if not block:
-        continue
+  introductory = blocks[0][1:]
+  remaining = blocks[1:]
+  headline = ""
+  if remaining and len(remaining[0]) == 1 and len(remaining[0][0]) <= 80:
+    possible_headline = _section_title(remaining[0])
+    if possible_headline not in KNOWN_SECTION_TITLES:
+      headline = remaining.pop(0)[0]
+
+  sections: list[tuple[str, list[list[str]]]] = []
+  current_title = "CONTACT" if introductory else ""
+  current_blocks: list[list[str]] = [introductory] if introductory else []
+  for block in remaining:
     if _looks_like_heading(block):
-      parts.append(f"    <h2>{html_module.escape(block[0].rstrip(':'))}</h2>")
-      continue
-    body = "<br>\n      ".join(html_module.escape(line) for line in block)
-    parts.append(f"    <p>{body}</p>")
-  content = "\n".join(parts)
+      if current_title and current_blocks:
+        sections.append((current_title, current_blocks))
+      current_title = _section_title(block)
+      current_blocks = []
+    else:
+      if not current_title:
+        current_title = "PROFESSIONAL PROFILE"
+      current_blocks.append(block)
+  if current_title and current_blocks:
+    sections.append((current_title, current_blocks))
+
+  sidebar_sections = [_render_cv_section(name, values, True) for name, values in sections if name in SIDE_SECTION_TITLES]
+  main_sections = [_render_cv_section(name, values, False) for name, values in sections if name not in SIDE_SECTION_TITLES]
+  if not main_sections and sidebar_sections:
+    main_sections, sidebar_sections = sidebar_sections, []
+  headline_html = f'\n      <p class="headline">{html_module.escape(headline)}</p>' if headline else ""
+  sidebar_html = "\n".join(section for section in sidebar_sections if section)
+  main_html = "\n".join(section for section in main_sections if section)
   return (
     "<!doctype html>\n"
     "<html lang=\"en\">\n"
     "<head>\n"
     "<meta charset=\"utf-8\">\n"
-    f"<title>{html_module.escape(title)} — CV</title>\n"
+    f"<title>{html_module.escape(title)} - CV</title>\n"
     f"<style>\n{CV_HTML_STYLE}</style>\n"
     "</head>\n"
     "<body>\n"
-    "  <main class=\"cv\">\n"
-    f"{content}\n"
+    "  <main class=\"cv\" data-cv-template=\"professional-v2\">\n"
+    "    <header class=\"cv-header\">\n"
+    f"      <h1 data-cv-field=\"identity\">{html_module.escape(title)}</h1>{headline_html}\n"
+    "    </header>\n"
+    "    <div class=\"cv-grid\">\n"
+    f"      <aside class=\"sidebar\">\n{sidebar_html}\n      </aside>\n"
+    f"      <div class=\"main-column\">\n{main_html}\n      </div>\n"
+    "    </div>\n"
     "  </main>\n"
     "</body>\n"
     "</html>\n"
   )
 
 
+def _ocr_cv_text(pdf_path: Path) -> str:
+  with tempfile.TemporaryDirectory() as tmp:
+    prefix = Path(tmp) / "page"
+    subprocess.run(
+      ["pdftoppm", "-png", "-r", "180", str(pdf_path), str(prefix)],
+      check=True,
+      capture_output=True,
+      timeout=180,
+    )
+    def page_number(path: Path) -> int:
+      match = re.search(r"(\d+)$", path.stem)
+      return int(match.group(1)) if match else 0
+
+    pages = sorted(Path(tmp).glob("page-*.png"), key=page_number) or sorted(Path(tmp).glob("page*.png"), key=page_number)
+    if not pages:
+      raise RuntimeError("CV OCR produced no pages")
+    extracted: list[str] = []
+    for page in pages:
+      completed = subprocess.run(
+        ["tesseract", str(page), "stdout"],
+        check=True,
+        capture_output=True,
+        timeout=120,
+      )
+      extracted.append(completed.stdout.decode("utf-8", errors="replace"))
+    return "\n\n".join(extracted)
+
+
+def _pdftotext_cv_text(pdf_path: Path) -> str:
+  completed = subprocess.run(
+    ["pdftotext", "-enc", "UTF-8", str(pdf_path), "-"],
+    check=True,
+    capture_output=True,
+    timeout=120,
+  )
+  return completed.stdout.decode("utf-8", errors="replace")
+
+
 def convert_pdf_to_cv_html(pdf_path: Path, html_path: Path) -> Path:
   try:
-    completed = subprocess.run(
-      ["pdftotext", "-enc", "UTF-8", str(pdf_path), "-"],
-      capture_output=True,
-      timeout=120,
-    )
+    text = _ocr_cv_text(pdf_path)
   except FileNotFoundError as err:
-    raise RuntimeError("pdftotext (poppler-utils) is required to convert pending CVs") from err
-  except subprocess.TimeoutExpired as err:
-    raise RuntimeError("pdftotext timed out converting the pending CV") from err
-  if completed.returncode != 0:
-    detail = completed.stderr.decode("utf-8", errors="replace").strip()[:200]
-    raise RuntimeError(f"pdftotext failed: {detail or 'unknown error'}")
-  text = completed.stdout.decode("utf-8", errors="replace")
+    try:
+      text = _pdftotext_cv_text(pdf_path)
+    except FileNotFoundError:
+      raise RuntimeError("tesseract or pdftotext is required to convert pending CVs") from err
+  except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+    try:
+      text = _pdftotext_cv_text(pdf_path)
+    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as err:
+      raise RuntimeError("could not extract readable text from the pending CV") from err
   html_path.write_text(cv_html_document(text), encoding="utf-8")
   return html_path
 

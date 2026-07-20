@@ -13,7 +13,7 @@ from jobscout.application import (
   store_application_artifacts,
   web_apply_payload,
 )
-from jobscout.delivery import render_html_to_pdf, send_application_email
+from jobscout.delivery import cover_letter_html, render_html_to_pdf, send_application_email
 import jobscout.subscriber
 
 
@@ -197,25 +197,46 @@ class ApplicationDocumentTests(unittest.TestCase):
         CANDIDATE,
         Path("/tmp/cover-letter.txt"),
         Path("/tmp/tailored-cv.pdf"),
+        Path("/tmp/cover-letter.pdf"),
       )
 
     command = run.call_args.args[0]
-    self.assertEqual(command[command.index("--attach") + 1], "/tmp/tailored-cv.pdf")
+    attachments = [command[index + 1] for index, value in enumerate(command) if value == "--attach"]
+    self.assertEqual(attachments, ["/tmp/tailored-cv.pdf", "/tmp/cover-letter.pdf"])
     fallback.assert_not_called()
 
-  def test_email_fallback_renders_canonical_html_before_attaching(self) -> None:
-    with mock.patch("jobscout.delivery.run_json_command", return_value={"messageId": "m1"}) as run, mock.patch(
-      "jobscout.delivery.subscriber_cv_file",
-      return_value="/tmp/cv.html",
-    ), mock.patch(
-      "jobscout.delivery.render_html_to_pdf",
-      return_value=Path("/tmp/cv-base.pdf"),
-    ) as render:
-      send_application_email(SUBSCRIBER, CANDIDATE, Path("/tmp/cover-letter.txt"))
+  def test_email_fallback_renders_cv_and_cover_letter_before_attaching(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      letter = root / "cover-letter.txt"
+      letter.write_text("Dear Hiring Team,\n\nA specific letter.\n\nKind regards,\nTest Applicant\n", encoding="utf-8")
 
-    render.assert_called_once_with(Path("/tmp/cv.html"), Path("/tmp/cv-base.pdf"))
-    command = run.call_args.args[0]
-    self.assertEqual(command[command.index("--attach") + 1], "/tmp/cv-base.pdf")
+      def render_file(_source, output):
+        return Path(output)
+
+      with mock.patch("jobscout.delivery.run_json_command", return_value={"messageId": "m1"}) as run, mock.patch(
+        "jobscout.delivery.subscriber_cv_file",
+        return_value=str(root / "cv.html"),
+      ), mock.patch(
+        "jobscout.delivery.render_html_to_pdf",
+        side_effect=render_file,
+      ) as render:
+        send_application_email(SUBSCRIBER, CANDIDATE, letter)
+
+      self.assertEqual(render.call_count, 2)
+      self.assertEqual(render.call_args_list[0].args, (root / "cv.html", root / "cv-base.pdf"))
+      letter_html = render.call_args_list[1].args[0]
+      self.assertIn("Application Letter", letter_html)
+      command = run.call_args.args[0]
+      attachments = [command[index + 1] for index, value in enumerate(command) if value == "--attach"]
+      self.assertEqual(attachments, [str(root / "cv-base.pdf"), str(root / "cover-letter.pdf")])
+
+  def test_cover_letter_pdf_html_is_structured_and_has_no_browser_leaks(self) -> None:
+    document = cover_letter_html("Dear Hiring Team,\n\nA specific letter.\n\nKind regards,\nTest Applicant\n")
+    self.assertIn("<h1>Test Applicant</h1>", document)
+    self.assertIn("Application Letter", document)
+    self.assertNotIn("file://", document)
+    self.assertNotIn("3:47 PM", document)
 
   def test_stores_exact_artifacts_after_record_and_only_optional_pdf(self) -> None:
     uploads = [

@@ -120,6 +120,7 @@ class JobScoutDeploymentTests(unittest.TestCase):
     deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")
 
     self.assertIn("poppler-utils", dockerfile)
+    self.assertIn("tesseract-ocr", dockerfile)
     self.assertIn('GATEWAY_DOCKERFILE_SRC="$OC_DIR/deploy/container/Dockerfile"', deploy)
     self.assertIn('install -m 0644 "$GATEWAY_DOCKERFILE_SRC" "$GATEWAY_DOCKERFILE_DST"', deploy)
 

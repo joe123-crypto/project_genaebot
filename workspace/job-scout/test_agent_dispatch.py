@@ -115,6 +115,44 @@ class AgentDispatchTests(unittest.TestCase):
       self.assertEqual(first["work"]["claimId"], second["work"]["claimId"])
       self.assertEqual(len(first["work"]["candidates"]), 1)
 
+  def test_claim_rebuilds_legacy_generated_cv_from_original_pdf(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      prepared = self.prepare(root)
+      claim_id = prepared["claims"][0]["claimId"]
+      args = self.args(root, "claim", claim_id=claim_id)
+      canonical = root / "canonical.html"
+      canonical.write_text(
+        "<style>body { font-family: Georgia, 'Times New Roman', serif; }</style><main>Old CV</main>",
+        encoding="utf-8",
+      )
+
+      def download(_user_id, destination, format="html"):
+        self.assertEqual(format, "pending")
+        destination.write_bytes(b"%PDF-original")
+        return destination
+
+      def convert(source, destination):
+        self.assertTrue(source.is_file())
+        destination.write_text(
+          '<main class="cv" data-cv-template="professional-v2"><p data-cv-field="identity">Applicant</p></main>',
+          encoding="utf-8",
+        )
+        return destination
+
+      with mock.patch.object(agent_dispatch, "subscriber_cv_html", return_value=str(canonical)), mock.patch.object(
+        agent_dispatch.api,
+        "download_cv",
+        side_effect=download,
+      ) as fetch, mock.patch.object(agent_dispatch, "convert_pdf_to_cv_html", side_effect=convert) as rebuild:
+        claimed = agent_dispatch.cmd_agent_claim(args)
+
+      base = Path(claimed["work"]["baseCvHtmlPath"])
+      self.assertIn('data-cv-template="professional-v2"', base.read_text(encoding="utf-8"))
+      self.assertFalse((base.parent / "base-source.pdf").exists())
+      fetch.assert_called_once()
+      rebuild.assert_called_once()
+
   def test_validator_accepts_strong_fit_and_preserved_html(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
       root = Path(tmp)

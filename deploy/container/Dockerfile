@@ -12,11 +12,12 @@ ENV DEBIAN_FRONTEND=noninteractive \
     OPENCLAW_NO_AUTO_UPDATE=1 \
     PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/joseph/.npm-global/bin
 
-# poppler-utils provides pdftotext for Job Scout PDF-to-HTML CV conversion.
+# Poppler renders CV pages and Tesseract recovers headings that embedded PDF
+# fonts do not reliably expose to plain text extraction.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       python3 python3-venv python3-pip \
-      poppler-utils \
+      poppler-utils tesseract-ocr \
       passwd sudo ca-certificates tini util-linux \
  && rm -rf /var/lib/apt/lists/*
 

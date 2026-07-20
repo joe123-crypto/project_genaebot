@@ -46,7 +46,8 @@ test("renders A4 PDF with scripts and every request disabled", async () => {
   assert.deepEqual(browser.calls.find(([name]) => name === "pdf")[1], {
     format: "A4",
     printBackground: true,
-    preferCSSPageSize: false,
+    displayHeaderFooter: false,
+    preferCSSPageSize: true,
     timeout: 30_000,
   });
 });

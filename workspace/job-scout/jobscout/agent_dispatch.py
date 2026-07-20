@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import html as html_module
 from html.parser import HTMLParser
 import json
 import os
@@ -18,7 +19,7 @@ import re
 import secrets
 from typing import Iterable
 
-from . import application, dispatch_store
+from . import api, application, dispatch_store
 from .application import (
   action_instruction,
   applications_from_response,
@@ -36,7 +37,7 @@ from .commands_dispatch import (
   cmd_verify_dispatch,
 )
 from .commands_group_feed import maybe_write_group_feed_cache
-from .commands_setup import cmd_list_applications, cmd_list_ready, convert_pending_cvs_best_effort
+from .commands_setup import cv_html_document, cmd_list_applications, cmd_list_ready, convert_pdf_to_cv_html, convert_pending_cvs_best_effort
 from .constants import UNKNOWN_EMPLOYER, UNKNOWN_ROLE, WHATSAPP_CHANNEL_SOURCES
 from .delivery import (
   MAX_RENDER_HTML_BYTES,
@@ -327,7 +328,36 @@ def cmd_agent_claim(args: argparse.Namespace) -> dict:
   base_cv = output_dir / "base-cv.html"
   if not base_cv.is_file():
     canonical_path = Path(subscriber_cv_html(work["subscriber"]))
-    base_cv.write_text(canonical_path.read_text(encoding="utf-8"), encoding="utf-8")
+    canonical_html = canonical_path.read_text(encoding="utf-8")
+    legacy_generated = "font-family: Georgia, 'Times New Roman', serif" in canonical_html
+    if legacy_generated:
+      source_pdf = output_dir / "base-source.pdf"
+      try:
+        api.download_cv(work["userId"], source_pdf, format="pending")
+        convert_pdf_to_cv_html(source_pdf, base_cv)
+      except (RuntimeError, SystemExit, OSError, ValueError):
+        sanitized = re.sub(r"file://[^<\s]+", "", canonical_html, flags=re.IGNORECASE)
+        sanitized = re.sub(
+          r"\b\d{1,2}/\d{1,2}/\d{2,4},?\s+\d{1,2}:\d{2}\s+(?:AM|PM)\b",
+          "",
+          sanitized,
+          flags=re.IGNORECASE,
+        )
+        body_match = re.search(r"<body\b[^>]*>(.*?)</body>", sanitized, flags=re.IGNORECASE | re.DOTALL)
+        body = body_match.group(1) if body_match else sanitized
+        body = re.sub(r"<(?:br|/p|/h[1-6]|/li)\b[^>]*>", "\n\n", body, flags=re.IGNORECASE)
+        plain_text = html_module.unescape(re.sub(r"<[^>]+>", "", body))
+        try:
+          base_cv.write_text(cv_html_document(plain_text), encoding="utf-8")
+        except RuntimeError:
+          base_cv.write_text(sanitized, encoding="utf-8")
+      finally:
+        try:
+          source_pdf.unlink()
+        except OSError:
+          pass
+    else:
+      base_cv.write_text(canonical_html, encoding="utf-8")
     os.chmod(base_cv, 0o600)
 
   public_work = {
@@ -662,9 +692,12 @@ def dispatch_agent_user(args: argparse.Namespace, work: dict, selected: list[dic
           Path(cover_letter),
           Path(personalized_html) if personalized_html else None,
           attempt_count,
-          include_cover_letter_pdf=False,
+          include_cover_letter_pdf=True,
         )
-        kwargs = {"cv_pdf": documents.get("cvPdf")} if documents.get("cvPdf") else {}
+        kwargs = {
+          "cv_pdf": documents.get("cvPdf"),
+          "cover_letter_pdf": documents.get("coverLetterPdf"),
+        } if documents.get("cvPdf") else {}
         sent = send_application_email(subscriber, candidate, Path(cover_letter), **kwargs)
         recorded = record_candidate_application(
           user_id, candidate, "applied", message_id=result_message_id(sent), match=reason,

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import html
 import json
 import os
 from pathlib import Path
@@ -141,11 +142,37 @@ def render_html_to_pdf(html_or_path: str | Path, output: str | Path, timeout: in
   return destination
 
 
+def cover_letter_html(text: str) -> str:
+  raw_text = str(text or "").strip()
+  paragraphs = [block.strip() for block in raw_text.split("\n\n") if block.strip()]
+  nonempty_lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+  if not paragraphs or not nonempty_lines:
+    raise RuntimeError("cover letter text is missing")
+  applicant = nonempty_lines[-1]
+  body = "\n".join(
+    f"      <p>{html.escape(paragraph).replace(chr(10), '<br>')}</p>"
+    for paragraph in paragraphs
+  )
+  return (
+    "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+    f"<title>{html.escape(applicant)} - Cover Letter</title><style>"
+    "@page{size:A4;margin:0}*{box-sizing:border-box}html,body{margin:0;padding:0;background:#fff;color:#202b3c;"
+    "font-family:Arial,Helvetica,sans-serif;font-size:11pt;line-height:1.6}main{width:210mm;min-height:297mm;"
+    "padding:20mm 21mm}header{padding-bottom:7mm;border-bottom:2px solid #175ec8;margin-bottom:16mm}"
+    "h1{margin:0;color:#101826;font-size:22pt;line-height:1.15}header p{margin:2mm 0 0;color:#405a78;"
+    "font-size:9pt;text-transform:uppercase}article{max-width:165mm}article p{margin:0 0 6mm;white-space:pre-line}"
+    "</style></head><body><main><header>"
+    f"<h1>{html.escape(applicant)}</h1><p>Application Letter</p></header><article>\n{body}\n"
+    "</article></main></body></html>"
+  )
+
+
 def send_application_email(
   subscriber: dict,
   candidate: dict,
   cover_letter: Path,
   cv_pdf: Path | None = None,
+  cover_letter_pdf: Path | None = None,
 ) -> dict:
   email = str(candidate.get("applicationEmail") or "").strip()
   if not email:
@@ -155,6 +182,10 @@ def send_application_email(
   attachment = Path(cv_pdf) if cv_pdf is not None else Path(subscriber_cv_file(subscriber))
   if attachment.suffix.casefold() != ".pdf":
     attachment = render_html_to_pdf(attachment, attachment.with_name("cv-base.pdf"))
+  letter_attachment = Path(cover_letter_pdf) if cover_letter_pdf is not None else Path(cover_letter).with_name("cover-letter.pdf")
+  if cover_letter_pdf is None:
+    letter_text = Path(cover_letter).read_text(encoding="utf-8")
+    letter_attachment = render_html_to_pdf(cover_letter_html(letter_text), letter_attachment)
   return run_json_command([
     str(GENAIE_MAIL_BIN),
     "send",
@@ -170,6 +201,8 @@ def send_application_email(
     str(cover_letter),
     "--attach",
     str(attachment),
+    "--attach",
+    str(letter_attachment),
     "--force",
   ])
 

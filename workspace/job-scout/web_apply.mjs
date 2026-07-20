@@ -107,7 +107,8 @@ export async function renderHtmlToPdf(rawHtml, chromium) {
     const pdf = await page.pdf({
       format: "A4",
       printBackground: true,
-      preferCSSPageSize: false,
+      displayHeaderFooter: false,
+      preferCSSPageSize: true,
       timeout: 30_000,
     });
     if (!Buffer.isBuffer(pdf) || !pdf.subarray(0, 5).equals(Buffer.from("%PDF-"))) {

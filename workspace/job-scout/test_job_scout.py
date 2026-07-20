@@ -392,11 +392,21 @@ class CvConversionTests(unittest.TestCase):
   def test_cv_html_document_builds_semantic_page(self) -> None:
     text = "Jane Doe\nHarare, Zimbabwe\n\nEXPERIENCE\n\nDriver at Acme\n2019-2024\n\nSKILLS:\n\nDefensive driving\n"
     html = jobscout.commands_setup.cv_html_document(text)
-    self.assertIn("<h1>Jane Doe</h1>", html)
-    self.assertIn("<h2>EXPERIENCE</h2>", html)
-    self.assertIn("<h2>SKILLS</h2>", html)
+    self.assertIn('<h1 data-cv-field="identity">Jane Doe</h1>', html)
+    self.assertIn("<h2>Experience</h2>", html)
+    self.assertIn("<h2>Skills</h2>", html)
     self.assertIn("Driver at Acme", html)
-    self.assertIn("<title>Jane Doe — CV</title>", html)
+    self.assertIn("<title>Jane Doe - CV</title>", html)
+    self.assertIn('class="cv-grid"', html)
+    self.assertIn('class="sidebar"', html)
+
+  def test_cv_html_document_drops_browser_print_headers_and_footers(self) -> None:
+    text = "5/19/26, 3:47 PM\nJane Doe\n\nPROFILE\n\nReliable worker.\nfile:///home/jane/cv.html\n1/2\n"
+    html = jobscout.commands_setup.cv_html_document(text)
+    self.assertIn("Jane Doe", html)
+    self.assertNotIn("5/19/26", html)
+    self.assertNotIn("file://", html)
+    self.assertNotIn(">1/2<", html)
 
   def test_cv_html_document_escapes_markup(self) -> None:
     html = jobscout.commands_setup.cv_html_document("Jane <Doe>\n\nC# & <b>SQL</b> work\n")
