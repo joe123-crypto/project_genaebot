@@ -24,6 +24,7 @@ from genaie_env import env_default
 from jobscout import api
 from .commands_setup import convert_pdf_to_cv_html, style_cv_html
 from .constants import DEFAULT_WEB_APPLY_URL, GENAIE_MAIL_BIN
+from .cv_safety import BROWSER_TIMESTAMP, PAGE_COUNTER, validate_cv_html_source
 from .profile import subscriber_user_id
 from .subscriber import display_name, document_filename, subscriber_cv_file, subscriber_sender_email
 from .textutil import clean_job_title, natural_email_text, public_text
@@ -146,23 +147,39 @@ def render_html_to_pdf(html_or_path: str | Path, output: str | Path, timeout: in
 
 
 def pdf_page_count(pdf_path: str | Path) -> int:
-  """Number of pages in a PDF.
-
-  Returns 1 when it cannot be determined (pdfinfo missing/failing) so a readable
-  render is never rejected merely because the page count is unknown.
-  """
+  """Return a verified positive PDF page count, failing closed on inspection errors."""
   try:
     completed = subprocess.run(
       ["pdfinfo", str(pdf_path)], check=True, capture_output=True, text=True, timeout=30,
     )
-  except (OSError, subprocess.SubprocessError):
-    return 1
+  except (OSError, subprocess.SubprocessError) as err:
+    raise RuntimeError("could not verify rendered CV page count") from err
   match = re.search(r"^Pages:\s*(\d+)", completed.stdout, re.MULTILINE)
-  return int(match.group(1)) if match else 1
+  if not match or int(match.group(1)) <= 0:
+    raise RuntimeError("could not verify rendered CV page count")
+  return int(match.group(1))
+
+
+def validate_rendered_cv_pdf(pdf_path: str | Path) -> Path:
+  path = Path(pdf_path)
+  if pdf_page_count(path) != 1:
+    raise RuntimeError("rendered CV must fit on exactly one page")
+  try:
+    completed = subprocess.run(
+      ["pdftotext", str(path), "-"], check=True, capture_output=True, text=True, timeout=30,
+    )
+  except (OSError, subprocess.SubprocessError) as err:
+    raise RuntimeError("could not inspect rendered CV text") from err
+  lines = [re.sub(r"\s+", " ", line).strip() for line in completed.stdout.replace("\f", "\n").splitlines() if line.strip()]
+  if any(line.casefold().startswith(("file://", "about:blank")) for line in lines):
+    raise RuntimeError("rendered CV contains browser print chrome")
+  if any(BROWSER_TIMESTAMP.fullmatch(line) or PAGE_COUNTER.fullmatch(line) for line in lines):
+    raise RuntimeError("rendered CV contains browser print chrome")
+  return path
 
 
 # Progressive scale-to-fit steps for the one-page guarantee. The floor keeps the
-# text readable; content that still overflows at the floor is sent as-is.
+# text readable; content that still overflows at the floor is rejected.
 _CV_ZOOM_STEPS = (1.0, 0.92, 0.85, 0.78, 0.7)
 
 
@@ -182,13 +199,13 @@ def render_one_page_cv(html_or_path: str | Path, output: str | Path) -> Path:
   is re-rendered at progressively smaller zoom, so a long CV shrinks to one page
   rather than spilling onto a second.
   """
-  styled = style_cv_html(_html_source(html_or_path))
+  styled = style_cv_html(validate_cv_html_source(_html_source(html_or_path)))
   pdf = render_html_to_pdf(styled, output)
   for zoom in _CV_ZOOM_STEPS[1:]:
     if pdf_page_count(pdf) <= 1:
       break
     pdf = render_html_to_pdf(_apply_print_zoom(styled, zoom), output)
-  return pdf
+  return validate_rendered_cv_pdf(pdf)
 
 
 def cover_letter_html(text: str) -> str:

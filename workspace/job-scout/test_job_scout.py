@@ -545,5 +545,88 @@ class CvConversionTests(unittest.TestCase):
     upload.assert_not_called()
 
 
+class CanonicalCvRepairTests(unittest.TestCase):
+  def subscriber(self) -> dict:
+    return {
+      "userId": "user-1",
+      "whatsappPhone": "+213563719936",
+      "profile": {"displayName": "Joseph Munemo"},
+    }
+
+  def test_repair_cv_backs_up_and_verifies_the_replacement(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      source = root / "source.html"
+      source.write_text(
+        "<!doctype html><html><body><h1>Joseph Munemo</h1>"
+        "<p>joseph@example.com +213 563 719 936</p><p>Work 2020 to 2024</p></body></html>",
+        encoding="utf-8",
+      )
+      canonical = (
+        "<!doctype html><html><body><h1>Joseph Munemo</h1>"
+        "<p>joseph@example.com +213 563 719 936</p><p>Work 2020 to 2024</p>"
+        "<p>file:///home/joseph/cv.html</p></body></html>"
+      )
+      uploaded = False
+
+      def download(_user_id, destination, format="html"):
+        Path(destination).write_text(source.read_text(encoding="utf-8") if uploaded else canonical, encoding="utf-8")
+        return Path(destination)
+
+      def upload(_user_id, upload_source):
+        nonlocal uploaded
+        self.assertEqual(Path(upload_source), source)
+        uploaded = True
+        return {"ok": True}
+
+      args = argparse.Namespace(
+        phone="+213563719936",
+        source_html=str(source),
+        backup_dir=str(root / "backup"),
+        apply=True,
+      )
+      with (
+        mock.patch.object(jobscout.commands_setup, "cmd_list_ready", return_value={"subscribers": [self.subscriber()]}),
+        mock.patch.object(jobscout.api, "download_cv", side_effect=download),
+        mock.patch.object(jobscout.api, "upload_cv_html", side_effect=upload) as upload_mock,
+      ):
+        result = jobscout.commands_setup.cmd_repair_cv(args)
+
+      backup_dir = Path(result["backupDirectory"])
+      self.assertFalse(result["dryRun"])
+      self.assertEqual(result["replacementSha256"], result["verifiedSha256"])
+      self.assertEqual((backup_dir / "canonical-before.html").stat().st_mode & 0o777, 0o600)
+      self.assertEqual((backup_dir / "manifest.json").stat().st_mode & 0o777, 0o600)
+      upload_mock.assert_called_once()
+
+  def test_repair_cv_rejects_a_replacement_that_drops_facts(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      source = root / "source.html"
+      source.write_text("<html><body><h1>Joseph Munemo</h1></body></html>", encoding="utf-8")
+
+      def download(_user_id, destination, format="html"):
+        Path(destination).write_text(
+          "<html><body>Joseph Munemo joseph@example.com +213563719936 2024</body></html>",
+          encoding="utf-8",
+        )
+        return Path(destination)
+
+      args = argparse.Namespace(
+        phone="+213563719936",
+        source_html=str(source),
+        backup_dir=str(root / "backup"),
+        apply=True,
+      )
+      with (
+        mock.patch.object(jobscout.commands_setup, "cmd_list_ready", return_value={"subscribers": [self.subscriber()]}),
+        mock.patch.object(jobscout.api, "download_cv", side_effect=download),
+        mock.patch.object(jobscout.api, "upload_cv_html") as upload,
+      ):
+        with self.assertRaisesRegex(SystemExit, "drops canonical facts"):
+          jobscout.commands_setup.cmd_repair_cv(args)
+      upload.assert_not_called()
+
+
 if __name__ == "__main__":
   unittest.main()

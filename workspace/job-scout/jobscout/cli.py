@@ -15,6 +15,7 @@ from .commands_setup import (
   cmd_list_applications,
   cmd_list_ready,
   cmd_record_application,
+  cmd_repair_cv,
   cmd_resolve_location,
   cmd_save_profile,
   cmd_stage_cv,
@@ -94,6 +95,13 @@ def build_parser() -> argparse.ArgumentParser:
   convert.add_argument("--user-id", action="append", help="convert only these user ids")
   convert.add_argument("--dry-run", action="store_true")
   convert.set_defaults(func=cmd_convert_pending_cvs)
+
+  repair = subparsers.add_parser("repair-cv", help="validate and replace one canonical HTML CV with a reversible backup")
+  repair.add_argument("--phone", required=True)
+  repair.add_argument("--source-html", required=True)
+  repair.add_argument("--backup-dir")
+  repair.add_argument("--apply", action="store_true", help="upload after validation; default is dry-run")
+  repair.set_defaults(func=cmd_repair_cv)
 
   apps = subparsers.add_parser("list-applications", help="list a user's recorded applications")
   apps.add_argument("--user-id", required=True)
@@ -212,6 +220,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
   parser = build_parser()
   args = parser.parse_args()
+  if args.command == "dispatch-jsearch" and not args.agent_phase and not args.dry_run:
+    raise SystemExit(
+      "direct live dispatch is disabled; use job-scout-agent --phone E164 --live "
+      "or an --agent-phase run"
+    )
   result = args.func(args)
   print(json.dumps(result, indent=2, sort_keys=True))
   return 0

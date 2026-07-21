@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html as html_module
 import json
 import os
@@ -21,6 +22,7 @@ from pending_cache import (
 
 from . import api
 from .constants import DEFAULT_JSEARCH_COUNTRY, DEFAULT_JSEARCH_LANGUAGE, DEFAULT_WEB_APPLY_URL, RUNTIME_ROOT
+from .cv_safety import validate_cv_html_source, visible_lines_from_html
 from .jsearch import fetch_jsearch_candidates, fetch_scraped_candidates, fetch_zimlinks_candidates, filter_candidates, jsearch_provider
 from .profile import (
   clean_items,
@@ -36,6 +38,83 @@ from .profile import (
 from .subscriber import subscriber_cv_html_ready
 from .textutil import public_text
 from .util import effective_user, normalize_phone, phone_hash, utc_now
+
+
+def _cv_facts(source: str) -> tuple[set[str], set[str], set[str]]:
+  visible = " ".join(visible_lines_from_html(source))
+  emails = {value.casefold() for value in re.findall(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}", visible)}
+  phones = {
+    digits[-9:]
+    for value in re.findall(r"\+?\d[\d\s()\-]{6,}\d", visible)
+    if len(digits := re.sub(r"\D", "", value)) >= 9
+  }
+  years = set(re.findall(r"\b(?:19|20)\d{2}\b", visible))
+  return emails, phones, years
+
+
+def cmd_repair_cv(args: argparse.Namespace) -> dict:
+  """Safely replace one ready canonical CV, with a private reversible backup."""
+  target = normalize_phone(args.phone)
+  source_path = Path(args.source_html).expanduser().resolve()
+  if not source_path.is_file():
+    raise SystemExit("source HTML file does not exist")
+  source_html = validate_cv_html_source(source_path.read_text(encoding="utf-8"))
+  ready = cmd_list_ready(argparse.Namespace(limit=1000)).get("subscribers", [])
+  matches = [
+    subscriber for subscriber in ready
+    if normalize_phone(str(subscriber.get("whatsappPhone") or "")) == target
+  ]
+  if len(matches) != 1:
+    raise SystemExit("expected exactly one ready Job Scout subscriber for that phone")
+  subscriber = matches[0]
+  user_id = subscriber_user_id(subscriber)
+  stamp = utc_now().replace(":", "").replace("-", "")
+  backup_root = Path(args.backup_dir).expanduser() if args.backup_dir else RUNTIME_ROOT / "cv-repair" / stamp
+  backup_dir = backup_root / phone_hash(target)
+  backup_dir.mkdir(parents=True, exist_ok=True)
+  os.chmod(backup_root, 0o700)
+  os.chmod(backup_dir, 0o700)
+  before_path = api.download_cv(user_id, backup_dir / "canonical-before.html")
+  os.chmod(before_path, 0o600)
+  before_html = before_path.read_text(encoding="utf-8")
+  before_facts = _cv_facts(before_html)
+  after_facts = _cv_facts(source_html)
+  labels = ("email", "phone", "year")
+  missing = {
+    label: sorted(existing - replacement)
+    for label, existing, replacement in zip(labels, before_facts, after_facts)
+    if existing - replacement
+  }
+  display = str((subscriber.get("profile") or {}).get("displayName") or subscriber.get("displayName") or "").strip()
+  source_text = " ".join(visible_lines_from_html(source_html)).casefold()
+  if display and not all(token.casefold() in source_text for token in re.findall(r"\w+", display) if len(token) > 1):
+    raise SystemExit("replacement CV does not preserve the subscriber display name")
+  if missing:
+    raise SystemExit(f"replacement CV drops canonical facts: {', '.join(sorted(missing))}")
+  before_sha = hashlib.sha256(before_path.read_bytes()).hexdigest()
+  source_sha = hashlib.sha256(source_path.read_bytes()).hexdigest()
+  manifest = {
+    "schemaVersion": 1,
+    "createdAt": utc_now(),
+    "userKey": user_key(user_id),
+    "beforeSha256": before_sha,
+    "replacementSha256": source_sha,
+    "applied": bool(args.apply),
+  }
+  manifest_path = backup_dir / "manifest.json"
+  manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+  os.chmod(manifest_path, 0o600)
+  if not args.apply:
+    return {"ok": True, "dryRun": True, "userKey": user_key(user_id), "backupDirectory": str(backup_dir), **manifest}
+  api.upload_cv_html(user_id, source_path)
+  after_path = api.download_cv(user_id, backup_dir / "canonical-after.html")
+  os.chmod(after_path, 0o600)
+  after_sha = hashlib.sha256(after_path.read_bytes()).hexdigest()
+  if after_sha != source_sha:
+    raise RuntimeError("canonical CV verification hash does not match the replacement")
+  manifest.update({"applied": True, "verifiedSha256": after_sha, "verifiedAt": utc_now()})
+  manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+  return {"ok": True, "dryRun": False, "userKey": user_key(user_id), "backupDirectory": str(backup_dir), **manifest}
 
 def cmd_check_runtime(args: argparse.Namespace) -> dict:
   cache_path = api.pending_links_path()

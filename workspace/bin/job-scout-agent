@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+scope=""
+phone=""
+mode=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --phone) phone="${2:-}"; scope="phone"; shift 2 ;;
+    --all) scope="all"; shift ;;
+    --preview) mode="preview"; shift ;;
+    --live) mode="live"; shift ;;
+    *) printf 'usage: %s (--phone E164|--all) (--preview|--live)\n' "$0" >&2; exit 2 ;;
+  esac
+done
+[ -n "$scope" ] && [ -n "$mode" ] || { printf 'scope and mode are required\n' >&2; exit 2; }
+if [ "$scope" = "phone" ]; then
+  phone="+$(printf '%s' "$phone" | tr -cd '0-9')"
+  [[ "$phone" =~ ^\+[0-9]{9,16}$ ]] || { printf 'phone must be an E.164 number\n' >&2; exit 2; }
+fi
+if [ "$scope" = "all" ] && [ "$mode" != "preview" ]; then
+  printf -- '--all is allowed only with --preview\n' >&2
+  exit 2
+fi
+
+run_id="manual-job-scout-$(date -u +%Y%m%dT%H%M%SZ)"
+prepare="/home/joseph/.openclaw/workspace/bin/job-scout dispatch-jsearch --agent-phase prepare --run-id \"$run_id\" --limit-ready 100 --shortlist-limit 20 --match-threshold 70"
+[ "$scope" = "phone" ] && prepare="$prepare --phone \"$phone\""
+[ "$mode" = "preview" ] && prepare="$prepare --dry-run"
+read -r -d '' prompt <<EOF || true
+Run one operator-authorized Job Scout ${mode} dispatch.
+
+Follow the Daily OpenClaw Agent Dispatch parent and child protocol in /home/joseph/.openclaw/workspace/skills/job-scout/SKILL.md exactly, with these overrides:
+- Prepare exactly once with: ${prepare}
+- Spawn isolated main children as documented, no more than four at once.
+- If a child fails or its claim does not complete, invoke that claim's --agent-phase fallback exactly once. This records failure and must not submit template documents.
+- Finish only after terminalCount equals claimCount.
+- Never invoke direct dispatch-jsearch mode and never retry a failed child.
+EOF
+
+if [ "$scope" = "phone" ]; then
+  /home/joseph/.openclaw/workspace/bin/job-scout status --phone "$phone" >/dev/null
+fi
+env -u OPENCLAW_HOME OPENCLAW_GATEWAY_TOKEN="${GATEWAY_AUTH_TOKEN:?missing gateway token}" \
+  openclaw agent --agent main --session-key "agent:main:job-scout-manual:$run_id" \
+  --message "$prompt" --timeout 21600 --json
+/home/joseph/.openclaw/workspace/bin/job-scout verify-dispatch --run-id "$run_id" >/dev/null

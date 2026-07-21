@@ -10,17 +10,15 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
-import html as html_module
 from html.parser import HTMLParser
 import json
 import os
 from pathlib import Path
 import re
 import secrets
-import sys
 from typing import Iterable
 
-from . import api, application, dispatch_store
+from . import application, dispatch_store
 from .application import (
   action_instruction,
   applications_from_response,
@@ -30,7 +28,6 @@ from .application import (
   cover_letter_text,
   match_reason,
   web_apply_payload,
-  write_cover_letter,
 )
 from .commands_dispatch import (
   cmd_finish_dispatch,
@@ -39,7 +36,7 @@ from .commands_dispatch import (
   cmd_verify_dispatch,
 )
 from .commands_group_feed import maybe_write_group_feed_cache
-from .commands_setup import cv_html_document, cmd_list_applications, cmd_list_ready, convert_pdf_to_cv_html, convert_pending_cvs_best_effort
+from .commands_setup import cmd_list_applications, cmd_list_ready, convert_pending_cvs_best_effort
 from .constants import UNKNOWN_EMPLOYER, UNKNOWN_ROLE, WHATSAPP_CHANNEL_SOURCES
 from .formality import employer_formality
 from .delivery import (
@@ -50,6 +47,7 @@ from .delivery import (
   send_application_email,
   send_whatsapp_summary,
 )
+from .cv_safety import validate_cv_html_source
 from .dispatch_runner import (
   browser_apply_enabled,
   publish_user_dashboard_telemetry,
@@ -75,7 +73,7 @@ from .profile import (
   subscriber_user_id,
   user_key,
 )
-from .subscriber import subscriber_cv_html, subscriber_phone
+from .subscriber import display_name, subscriber_cv_html, subscriber_phone
 from .textutil import public_text
 from .util import safe_run_id, utc_now
 
@@ -89,8 +87,7 @@ AGENT_COMPLETION_STALE_SECONDS = 45 * 60
 MAX_HTML_BYTES = MAX_RENDER_HTML_BYTES
 MAX_LETTER_BYTES = 128 * 1024
 # A tailored letter that clears validation must be at least this substantial; an
-# empty file or an unfilled one-line placeholder is rejected in favour of the
-# deterministic template fallback.
+# empty file or an unfilled one-line placeholder fails the claim closed.
 MIN_LETTER_CHARS = 200
 MIN_LETTER_LINES = 4
 # The agent's only in-repo contract for the letter: a small, declarative
@@ -123,7 +120,7 @@ CV_DESIGN_GUIDANCE = (
   "email and phone number, education, employers, and dates. Never invent contact "
   "details, qualifications, or dates that are not in the source."
 )
-TERMINAL_CLAIM_STATUSES = {"completed", "fallback_completed"}
+TERMINAL_CLAIM_STATUSES = {"completed", "failed", "fallback_completed"}
 # html.parser never emits an endtag for a bare void element, so these tags
 # must not affect immutable-region depth in either the <br> or <br/> form.
 VOID_ELEMENTS = frozenset({
@@ -176,6 +173,7 @@ def _resume_result(root: Path, run_id: str) -> dict:
     "agentPhase": "prepare",
     "resumed": True,
     "runId": run_id,
+    "dryRun": bool(marker.get("dryRun")),
     "readyCount": int(marker.get("readyCount") or len(claims)),
     "claimCount": len(claims),
     "terminalCount": sum(claim.get("status") in TERMINAL_CLAIM_STATUSES for claim in claims),
@@ -185,9 +183,18 @@ def _resume_result(root: Path, run_id: str) -> dict:
 
 def _reserve_agent_run(args: argparse.Namespace) -> tuple[str, bool]:
   requested = safe_run_id(args.run_id) if args.run_id else None
+  requested_preview = bool(getattr(args, "dry_run", False))
   with dispatch_store.agent_state_lock(args.dispatch_root):
     active_run = dispatch_store.resolve_active_agent_run(args.dispatch_root)
     if active_run:
+      active_marker = dispatch_store.load_dispatch(active_run, args.dispatch_root)
+      if bool(active_marker.get("dryRun")) != requested_preview:
+        active_mode = "preview" if active_marker.get("dryRun") else "live"
+        requested_mode = "preview" if requested_preview else "live"
+        raise SystemExit(
+          f"an unfinished {active_mode} Job Scout agent run is active; "
+          f"refusing to resume it as {requested_mode}"
+        )
       return active_run, True
 
     run_id = requested or f"job-scout-agent-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
@@ -197,6 +204,7 @@ def _reserve_agent_run(args: argparse.Namespace) -> tuple[str, bool]:
     marker.update({
       "schemaVersion": 3,
       "mode": "openclaw-agent",
+      "dryRun": requested_preview,
       "phase": "preparing",
       "claimIds": [],
       "updatedAt": utc_now(),
@@ -223,7 +231,11 @@ def cmd_agent_prepare(args: argparse.Namespace) -> dict:
 
     # Convert any pending PDF CVs first so those subscribers are ready for
     # this very run instead of waiting a day; failures never block dispatch.
-    cv_conversion = convert_pending_cvs_best_effort(args.limit_ready)
+    cv_conversion = (
+      {"ok": True, "skipped": True, "reason": "preview"}
+      if getattr(args, "dry_run", False)
+      else convert_pending_cvs_best_effort(args.limit_ready)
+    )
 
     ready_result = cmd_list_ready(argparse.Namespace(limit=args.limit_ready))
     subscribers = ready_result.get("subscribers") if isinstance(ready_result, dict) else []
@@ -231,7 +243,8 @@ def cmd_agent_prepare(args: argparse.Namespace) -> dict:
     subscribers = [subscriber for subscriber in subscribers if subscriber_is_dispatch_ready(subscriber)]
     subscribers = scoped_subscribers(subscribers, getattr(args, "phone", None))
     shortlist_limit = max(1, min(int(getattr(args, "shortlist_limit", AGENT_SHORTLIST_LIMIT)), AGENT_SHORTLIST_LIMIT))
-    maybe_write_group_feed_cache(args, run_id)
+    if not getattr(args, "dry_run", False):
+      maybe_write_group_feed_cache(args, run_id)
 
     prepared: list[dict] = []
     raw_pool: list[dict] = []
@@ -289,7 +302,7 @@ def cmd_agent_prepare(args: argparse.Namespace) -> dict:
       apply_source_filter_stats(item["sourceResults"], filter_stats)
       candidates = [_agent_candidate(candidate) for candidate in candidates]
       user_id = item["userId"]
-      if candidates:
+      if candidates and not getattr(args, "dry_run", False):
         register_channel_candidate_eligibility(run_id, user_id, candidates)
       claim_id = secrets.token_urlsafe(18)
       claim = {
@@ -317,6 +330,7 @@ def cmd_agent_prepare(args: argparse.Namespace) -> dict:
         "sourceResults": item["sourceResults"],
         "globalFilter": global_stats,
         "preparationError": item["preparationError"],
+        "dryRun": bool(getattr(args, "dry_run", False)),
       }
       dispatch_store.save_agent_work(args.dispatch_root, run_id, claim_id, work)
       dispatch_store.save_agent_claim(args.dispatch_root, run_id, claim_id, claim)
@@ -338,6 +352,7 @@ def cmd_agent_prepare(args: argparse.Namespace) -> dict:
     "agentPhase": "prepare",
     "resumed": False,
     "runId": run_id,
+    "dryRun": bool(getattr(args, "dry_run", False)),
     "readyCount": len(subscribers),
     "claimCount": len(claim_ids),
     "terminalCount": 0,
@@ -370,56 +385,8 @@ def cmd_agent_claim(args: argparse.Namespace) -> dict:
   base_cv = output_dir / "base-cv.html"
   if not base_cv.is_file():
     canonical_path = Path(subscriber_cv_html(work["subscriber"]))
-    canonical_html = canonical_path.read_text(encoding="utf-8")
-    # Re-convert stale/dirty canonical HTML from the original PDF: the old
-    # Georgia single-column template, anything missing the current template
-    # marker, or anything still carrying browser print chrome (file:// paths or
-    # a browser timestamp) must be rebuilt into clean semantic HTML.
-    has_browser_chrome = bool(
-      re.search(r"file://", canonical_html, flags=re.IGNORECASE)
-      or re.search(
-        r"\b\d{1,2}/\d{1,2}/\d{2,4},?\s+\d{1,2}:\d{2}\s+(?:AM|PM)\b",
-        canonical_html,
-        flags=re.IGNORECASE,
-      )
-    )
-    legacy_generated = (
-      "font-family: Georgia, 'Times New Roman', serif" in canonical_html
-      or 'data-cv-template="professional-v2"' not in canonical_html
-      or has_browser_chrome
-    )
-    if legacy_generated:
-      source_pdf = output_dir / "base-source.pdf"
-      try:
-        api.download_cv(work["userId"], source_pdf, format="pending")
-        convert_pdf_to_cv_html(source_pdf, base_cv)
-      except (RuntimeError, SystemExit, OSError, ValueError):
-        sanitized = re.sub(r"file://[^<\s]+", "", canonical_html, flags=re.IGNORECASE)
-        sanitized = re.sub(
-          r"\b\d{1,2}/\d{1,2}/\d{2,4},?\s+\d{1,2}:\d{2}\s+(?:AM|PM)\b",
-          "",
-          sanitized,
-          flags=re.IGNORECASE,
-        )
-        body_match = re.search(r"<body\b[^>]*>(.*?)</body>", sanitized, flags=re.IGNORECASE | re.DOTALL)
-        body = body_match.group(1) if body_match else sanitized
-        body = re.sub(r"<(?:br|/p|/h[1-6]|/li)\b[^>]*>", "\n\n", body, flags=re.IGNORECASE)
-        plain_text = html_module.unescape(re.sub(r"<[^>]+>", "", body))
-        try:
-          base_cv.write_text(cv_html_document(plain_text), encoding="utf-8")
-        except RuntimeError:
-          base_cv.write_text(sanitized, encoding="utf-8")
-      finally:
-        try:
-          source_pdf.unlink()
-        except OSError:
-          pass
-    else:
-      # The canonical HTML carries the current template marker and no browser
-      # chrome; store it unstyled so the modern stylesheet is applied on the fly
-      # at render time (and the personalized/base stylesheet check stays valid).
-      unstyled = re.sub(r"<style\b[^>]*>.*?</style>\s*", "", canonical_html, flags=re.IGNORECASE | re.DOTALL)
-      base_cv.write_text(unstyled, encoding="utf-8")
+    canonical_html = validate_cv_html_source(canonical_path.read_text(encoding="utf-8"))
+    base_cv.write_text(canonical_html, encoding="utf-8")
     os.chmod(base_cv, 0o600)
 
   # A neutral plain-text starting draft the agent refines per job. Per-candidate
@@ -451,6 +418,7 @@ def cmd_agent_claim(args: argparse.Namespace) -> dict:
     "coverLetterGuidance": COVER_LETTER_GUIDANCE,
     "personalizedOutputDirectory": str(personalized_dir),
     "resultPath": str(output_dir / "agent-result.json"),
+    "dryRun": bool(work.get("dryRun")),
   }
   return {"ok": True, "agentPhase": "claim", "work": public_work}
 
@@ -606,7 +574,7 @@ def _cv_atomic_facts(text: str) -> tuple[set[str], set[str], set[str]]:
   return emails, phones, years
 
 
-def _validate_personalized_html(base_path: Path, personalized_path: Path) -> None:
+def _validate_personalized_html(base_path: Path, personalized_path: Path, expected_name: str = "") -> None:
   """Validate an AI-redesigned CV.
 
   The agent now owns layout and CSS, so stylesheet/marker equality is no longer
@@ -617,6 +585,10 @@ def _validate_personalized_html(base_path: Path, personalized_path: Path) -> Non
   personalized = _inspect_html(personalized_path)
   if personalized.unsafe:
     raise AgentResultError("personalized CV contains unsafe or non-self-contained HTML")
+  try:
+    validate_cv_html_source(personalized_path.read_text(encoding="utf-8"))
+  except RuntimeError as err:
+    raise AgentResultError(str(err)) from err
   base_emails, base_phones, base_years = _cv_atomic_facts(base.text)
   new_emails, new_phones, new_years = _cv_atomic_facts(personalized.text)
   if base_emails - new_emails:
@@ -629,7 +601,9 @@ def _validate_personalized_html(base_path: Path, personalized_path: Path) -> Non
     raise AgentResultError("personalized CV introduced a phone number not in the source CV")
   if base_years - new_years:
     raise AgentResultError("personalized CV dropped a date")
-  identity = next((value for marker, value in base.immutable if marker.casefold() == "identity" and value), "")
+  identity = str(expected_name or "").strip() or next(
+    (value for marker, value in base.immutable if marker.casefold() == "identity" and value), "",
+  )
   if identity:
     tokens = [token.casefold() for token in re.findall(r"\w+", identity) if len(token) > 1]
     haystack = personalized.text.casefold()
@@ -640,10 +614,8 @@ def _validate_personalized_html(base_path: Path, personalized_path: Path) -> Non
 def _letter_is_tailored(letter_path: Path, candidate: dict) -> bool:
   """Whether the agent's letter is a genuine, tailored plain-text letter.
 
-  Returns False (rather than raising) so a lazy/empty/unfilled letter is treated
-  as absent and dispatch_agent_user falls back to write_cover_letter — a single
-  weak letter must not abort the whole validated result the way AgentResultError
-  would. Size/suffix/sandbox is already enforced by _safe_output_file upstream.
+  Size, suffix, and claim-directory containment are enforced by
+  _safe_output_file before this content check.
   """
   try:
     text = letter_path.read_text(encoding="utf-8")
@@ -710,26 +682,15 @@ def validate_agent_result(args: argparse.Namespace, work: dict, result: dict) ->
     if cv_path in used_paths or letter_path in used_paths:
       raise AgentResultError("each selected candidate needs its own artifact files")
     used_paths.update({cv_path, letter_path})
-    _validate_personalized_html(base_path, cv_path)
-    # A weak/empty/HTML/placeholder letter is dropped (not fatal) so dispatch
-    # falls back to the deterministic template for this candidate while still
-    # using the validated personalized CV. The rejection is logged so a silent
-    # degradation to the template is visible when auditing personalization.
-    if _letter_is_tailored(letter_path, candidates[candidate_id]):
-      tailored_letter = letter_path
-    else:
-      tailored_letter = None
-      print(
-        f"Job Scout: agent cover letter for candidate {candidate_id} failed the "
-        "tailored-letter check; using the deterministic template letter instead.",
-        file=sys.stderr,
-      )
+    _validate_personalized_html(base_path, cv_path, display_name(work["subscriber"]))
+    if not _letter_is_tailored(letter_path, candidates[candidate_id]):
+      raise AgentResultError("personalized cover letter failed the tailored-letter check")
     selected.append({
       "candidate": candidates[candidate_id],
       "reason": reason,
       "fitScore": score,
       "cvHtmlPath": cv_path,
-      "coverLetterPath": tailored_letter,
+      "coverLetterPath": letter_path,
     })
 
   if seen != set(candidates):
@@ -753,13 +714,19 @@ def _record_outcome(root: Path, run_id: str, work: dict, result: dict) -> None:
       dispatch_root=root,
     ))
     claim.update({
-      "status": "fallback_completed" if result.get("fallback") else "completed",
+      "status": "failed" if result.get("status") == "failed" else "completed",
       "completedAt": utc_now(),
       "outcome": {
         "status": result["status"],
         "appliedCount": result["appliedCount"],
         "actionRequiredCount": result["actionRequiredCount"],
-        "fallback": bool(result.get("fallback")),
+        "personalizedCvCount": int(result.get("personalizedCvCount") or 0),
+        "personalizedLetterCount": int(result.get("personalizedLetterCount") or 0),
+        "summaryDelivered": result.get("summaryDelivered"),
+        "summaryError": result.get("summaryError"),
+        "failureReason": result.get("failureReason") or result.get("fallbackReason"),
+        "previewArtifacts": result.get("previewArtifacts") or [],
+        "fallback": False,
       },
     })
     dispatch_store.save_agent_claim(root, run_id, work["claimId"], claim)
@@ -813,24 +780,50 @@ def _prepare_documents(
   include_cover_letter_pdf: bool,
 ) -> dict:
   prepare = getattr(application, "prepare_application_documents", None)
-  if callable(prepare):
-    return prepare(
-      subscriber,
-      candidate,
-      cover_letter,
-      personalized_cv_html=personalized_html,
-      include_cover_letter_pdf=include_cover_letter_pdf,
-      attempt=attempt,
-    )
-  # Backward compatibility during rolling deployment; delivery keeps using the
-  # legacy canonical attachment until the renderer module is present.
-  return {"coverLetterText": cover_letter, "cvPdf": None, "coverLetterPdf": None}
+  if not callable(prepare):
+    raise RuntimeError("personalized document renderer is unavailable")
+  return prepare(
+    subscriber,
+    candidate,
+    cover_letter,
+    personalized_cv_html=personalized_html,
+    include_cover_letter_pdf=include_cover_letter_pdf,
+    attempt=attempt,
+  )
 
 
 def dispatch_agent_user(args: argparse.Namespace, work: dict, selected: list[dict], fallback: bool, fallback_reason: str | None = None) -> dict:
   subscriber = work["subscriber"]
   user_id = work["userId"]
   preferences = work["preferences"]
+  if bool(work.get("dryRun")):
+    preview_artifacts: list[dict] = []
+    for item in selected:
+      candidate = item["candidate"]
+      personalized_html = Path(item["cvHtmlPath"])
+      preview_pdf = application.render_one_page_cv(personalized_html, personalized_html.with_name("preview-cv.pdf"))
+      preview_artifacts.append({
+        "candidateId": candidate.get("agentCandidateId") or candidate_key(candidate),
+        "cvPdfPath": str(preview_pdf),
+        "cvSource": "agent",
+        "coverLetterSource": "agent",
+      })
+    return {
+      "ok": True,
+      "runId": args.run_id,
+      "claimId": work["claimId"],
+      "status": "preview",
+      "appliedCount": 0,
+      "actionRequiredCount": 0,
+      "personalizedCvCount": len(preview_artifacts),
+      "personalizedLetterCount": len(preview_artifacts),
+      "templateLetterCount": 0,
+      "previewArtifacts": preview_artifacts,
+      "summaryDelivered": None,
+      "summaryError": None,
+      "fallback": False,
+      "fallbackReason": None,
+    }
   applications = applications_from_response(cmd_list_applications(argparse.Namespace(user_id=user_id)))
   auto_apply = preferences.get("autoApply", True) is not False
   allow_browser = browser_apply_enabled(args)
@@ -857,11 +850,11 @@ def dispatch_agent_user(args: argparse.Namespace, work: dict, selected: list[dic
     application_url = candidate_application_url(candidate)
     personalized_html = item.get("cvHtmlPath")
     tailored_letter = item.get("coverLetterPath")
-    cover_letter = tailored_letter or write_cover_letter(subscriber, preferences, candidate)
-    # Source provenance for personalization observability: "agent" means the
-    # agent's tailored artifact was used, otherwise the deterministic fallback.
-    cover_letter_source = "agent" if tailored_letter else "template"
-    cv_source = "agent" if personalized_html else "base"
+    if not personalized_html or not tailored_letter:
+      raise RuntimeError("validated personalized CV and cover letter are required")
+    cover_letter = Path(tailored_letter)
+    cover_letter_source = "agent"
+    cv_source = "agent"
 
     if email and auto_apply:
       if not gmail_sender_connected(subscriber):
@@ -878,8 +871,8 @@ def dispatch_agent_user(args: argparse.Namespace, work: dict, selected: list[dic
         documents = _prepare_documents(
           subscriber,
           candidate,
-          Path(cover_letter),
-          Path(personalized_html) if personalized_html else None,
+          cover_letter,
+          Path(personalized_html),
           attempt_count,
           include_cover_letter_pdf=True,
         )
@@ -1002,20 +995,19 @@ def dispatch_agent_user(args: argparse.Namespace, work: dict, selected: list[dic
   else:
     status = "no_matches"
   delivered = False
+  summary_error = None
   try:
     date_label = datetime.now(timezone.utc).date().isoformat()
     send_whatsapp_summary(subscriber_phone(subscriber), build_user_summary(date_label, user_applied, user_action_required, failed_note))
     delivered = True
   except Exception as err:
-    failed_note = public_text(err)
-    status = "failed"
+    summary_error = public_text(err)
   publish_user_dashboard_telemetry(
-    user_id, status, len(user_applied) if status != "failed" else 0,
-    len(user_action_required) if status != "failed" else 0, delivered, failed_note,
+    user_id, status, len(user_applied), len(user_action_required), delivered, summary_error or failed_note,
   )
-  applied = user_applied if status != "failed" else []
-  # Personalization health: how many delivered applications used the agent's
-  # tailored CV / letter versus the deterministic fallback this run.
+  applied = user_applied
+  # Personalization health: every delivered application must use both agent
+  # artifacts; these counts expose any future regression.
   personalized_cv_count = sum(1 for item in applied if item.get("cvSource") == "agent")
   personalized_letter_count = sum(1 for item in applied if item.get("coverLetterSource") == "agent")
   return {
@@ -1028,8 +1020,10 @@ def dispatch_agent_user(args: argparse.Namespace, work: dict, selected: list[dic
     "personalizedCvCount": personalized_cv_count,
     "personalizedLetterCount": personalized_letter_count,
     "templateLetterCount": len(applied) - personalized_letter_count,
-    "fallback": fallback,
-    "fallbackReason": public_text(fallback_reason, 240) if fallback_reason else None,
+    "summaryDelivered": delivered,
+    "summaryError": summary_error,
+    "fallback": False,
+    "fallbackReason": None,
   }
 
 
@@ -1064,24 +1058,6 @@ def cmd_agent_complete(args: argparse.Namespace) -> dict:
   try:
     selected = validate_agent_result(args, work, _read_result_arg(args.result))
     outcome = dispatch_agent_user(args, work, selected, fallback=False)
-  except (AgentResultError, OSError, UnicodeError) as err:
-    fallback_selected = [
-      {"candidate": candidate, "reason": match_reason(work["preferences"], candidate)}
-      for candidate in work["candidates"][: int(work.get("applicationLimit") or 0)]
-    ]
-    try:
-      outcome = dispatch_agent_user(args, work, fallback_selected, fallback=True, fallback_reason=str(err))
-    except (Exception, SystemExit) as fallback_err:
-      outcome = {
-        "ok": True,
-        "runId": args.run_id,
-        "claimId": work["claimId"],
-        "status": "failed",
-        "appliedCount": 0,
-        "actionRequiredCount": 0,
-        "fallback": True,
-        "fallbackReason": public_text(fallback_err, 240),
-      }
   except (Exception, SystemExit) as err:
     outcome = {
       "ok": True,
@@ -1090,38 +1066,42 @@ def cmd_agent_complete(args: argparse.Namespace) -> dict:
       "status": "failed",
       "appliedCount": 0,
       "actionRequiredCount": 0,
-      "fallback": True,
-      "fallbackReason": public_text(err, 240),
+      "personalizedCvCount": 0,
+      "personalizedLetterCount": 0,
+      "summaryDelivered": None,
+      "summaryError": None,
+      "fallback": False,
+      "fallbackReason": None,
+      "failureReason": public_text(err, 240),
     }
   _record_outcome(args.dispatch_root, args.run_id, work, outcome)
   return {"agentPhase": "complete", **outcome}
 
 
 def cmd_agent_fallback(args: argparse.Namespace) -> dict:
+  """Compatibility phase that now records a terminal failure without submitting."""
   work = dispatch_store.load_agent_work(args.dispatch_root, args.run_id, args.claim_id)
   claim, existing = _begin_completion(args)
   if existing is not None:
     return {"ok": True, "agentPhase": "fallback", "duplicate": True, **existing}
-  selected = [
-    {"candidate": candidate, "reason": match_reason(work["preferences"], candidate)}
-    for candidate in work["candidates"][: int(work.get("applicationLimit") or 0)]
-  ]
-  try:
-    outcome = dispatch_agent_user(
-      args, work, selected, fallback=True,
-      fallback_reason=getattr(args, "fallback_reason", None) or "OpenClaw child failed",
-    )
-  except (Exception, SystemExit) as err:
-    outcome = {
-      "ok": True,
-      "runId": args.run_id,
-      "claimId": work["claimId"],
-      "status": "failed",
-      "appliedCount": 0,
-      "actionRequiredCount": 0,
-      "fallback": True,
-      "fallbackReason": public_text(err, 240),
-    }
+  outcome = {
+    "ok": True,
+    "runId": args.run_id,
+    "claimId": work["claimId"],
+    "status": "failed",
+    "appliedCount": 0,
+    "actionRequiredCount": 0,
+    "personalizedCvCount": 0,
+    "personalizedLetterCount": 0,
+    "summaryDelivered": None,
+    "summaryError": None,
+    "fallback": False,
+    "fallbackReason": None,
+    "failureReason": public_text(
+      getattr(args, "fallback_reason", None) or "OpenClaw child failed; no application was sent",
+      240,
+    ),
+  }
   _record_outcome(args.dispatch_root, args.run_id, work, outcome)
   return {"agentPhase": "fallback", **outcome}
 
@@ -1150,6 +1130,7 @@ def cmd_agent_finish(args: argparse.Namespace) -> dict:
     if unfinished:
       raise SystemExit(f"Job Scout agent dispatch has {len(unfinished)} unfinished claim(s)")
     outcomes = [claim.get("outcome") if isinstance(claim.get("outcome"), dict) else {} for claim in claims]
+    preview_count = sum(outcome.get("status") == "preview" for outcome in outcomes)
     counts = {
       "ready_count": len(claims),
       "processed_count": len(claims),
@@ -1165,19 +1146,27 @@ def cmd_agent_finish(args: argparse.Namespace) -> dict:
       **counts,
     ))
     cmd_verify_dispatch(argparse.Namespace(run_id=run_id, dispatch_root=args.dispatch_root))
+    marker = dispatch_store.load_dispatch(run_id, args.dispatch_root)
+    marker["previewCount"] = preview_count
+    dispatch_store.save_dispatch(marker, args.dispatch_root)
     dispatch_store.clear_active_agent_dispatch(args.dispatch_root, run_id)
-  finalize_channel_candidate_dispatch(run_id)
+  if not bool(marker.get("dryRun")):
+    finalize_channel_candidate_dispatch(run_id)
   marker = dispatch_store.load_dispatch(run_id, args.dispatch_root)
-  return {"ok": True, "agentPhase": "finish", "runId": run_id, "finalCounts": marker.get("finalCounts")}
+  return {
+    "ok": True,
+    "agentPhase": "finish",
+    "runId": run_id,
+    "dryRun": bool(marker.get("dryRun")),
+    "previewCount": int(marker.get("previewCount") or 0),
+    "finalCounts": marker.get("finalCounts"),
+  }
 
 
 def cmd_agent_dispatch(args: argparse.Namespace) -> dict:
   phase = str(getattr(args, "agent_phase", "") or "")
-  if getattr(args, "dry_run", False):
-    # Agent phases persist durable run state (marker, active pointer, channel
-    # eligibility); there is no preview mode, so fail loudly instead of
-    # silently starting a real run.
-    raise SystemExit("--dry-run is not supported with --agent-phase; run dispatch-jsearch --dry-run without an agent phase")
+  if getattr(args, "dry_run", False) and phase != "prepare":
+    raise SystemExit("--dry-run is specified only on agent phase prepare and is inherited by the run")
   handlers = {
     "prepare": cmd_agent_prepare,
     "claim": cmd_agent_claim,

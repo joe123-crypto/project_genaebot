@@ -74,6 +74,15 @@ class JobScoutDeploymentTests(unittest.TestCase):
     self.assertNotIn("--command-argv", installer)
     self.assertNotIn("--model", installer)
 
+  def test_normal_deploy_reconciles_scheduler_without_reenabling_a_pause(self) -> None:
+    deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")
+    installer = (ROOT / "deploy/install-job-scout.sh").read_text(encoding="utf-8")
+
+    self.assertIn('bash "$OC_DIR/deploy/install-job-scout.sh"', deploy)
+    self.assertIn('INSTALL_STATE="preserve"', installer)
+    self.assertIn('add_state=(--disabled)', installer)
+    self.assertIn('.enabled == $expected_enabled', installer)
+
   def test_main_agent_subagents_inherit_default_model_with_narrow_tools(self) -> None:
     config = json.loads((ROOT / "config/openclaw.template.json").read_text(encoding="utf-8"))
     subagents = config["agents"]["defaults"]["subagents"]

@@ -86,12 +86,12 @@ class RenderClientTests(unittest.TestCase):
       with self.assertRaisesRegex(RuntimeError, "invalid PDF"):
         render_html_to_pdf("<p>CV</p>", Path(tmp) / "cv.pdf")
 
-  def test_pdf_page_count_is_graceful_when_unreadable(self) -> None:
+  def test_pdf_page_count_fails_closed_when_unreadable(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
       bad = Path(tmp) / "x.pdf"
       bad.write_bytes(b"not a real pdf")
-      # An unreadable/absent PDF must not force a one-page rejection.
-      self.assertEqual(pdf_page_count(bad), 1)
+      with self.assertRaisesRegex(RuntimeError, "could not verify"):
+        pdf_page_count(bad)
 
   def test_html_source_rejects_a_missing_file_path(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
@@ -199,7 +199,10 @@ class ApplicationDocumentTests(unittest.TestCase):
       # Two pages, still two, then one: it scales down until it fits.
       with mock.patch("jobscout.delivery.render_html_to_pdf", side_effect=render), mock.patch(
         "jobscout.delivery.pdf_page_count",
-        side_effect=[2, 2, 1],
+        side_effect=[2, 2, 1, 1],
+      ), mock.patch(
+        "jobscout.delivery.subprocess.run",
+        return_value=mock.Mock(stdout="Fits me@example.com\n"),
       ):
         delivery.render_one_page_cv("<html><head></head><body>Fits me@example.com</body></html>", out)
 
@@ -248,7 +251,7 @@ class ApplicationDocumentTests(unittest.TestCase):
       letter = root / "cover-letter.txt"
       letter.write_text("Dear Hiring Team,\n\nA specific letter.\n\nKind regards,\nTest Applicant\n", encoding="utf-8")
       cv_html = root / "cv.html"
-      cv_html.write_text("<!doctype html><head></head><body><p>Base CV</p></body>", encoding="utf-8")
+      cv_html.write_text("<!doctype html><html><head></head><body><p>Base CV</p></body></html>", encoding="utf-8")
 
       def render_file(_source, output):
         return Path(output)
@@ -259,7 +262,13 @@ class ApplicationDocumentTests(unittest.TestCase):
       ), mock.patch(
         "jobscout.delivery.render_html_to_pdf",
         side_effect=render_file,
-      ) as render:
+      ) as render, mock.patch(
+        "jobscout.delivery.pdf_page_count",
+        return_value=1,
+      ), mock.patch(
+        "jobscout.delivery.validate_rendered_cv_pdf",
+        side_effect=lambda path: Path(path),
+      ):
         send_application_email(SUBSCRIBER, CANDIDATE, letter)
 
       self.assertEqual(render.call_count, 2)
@@ -286,7 +295,7 @@ class ApplicationDocumentTests(unittest.TestCase):
       def convert(_pdf_path, html_path):
         # Extraction strips the chrome; return clean semantic HTML.
         Path(html_path).write_text(
-          '<!doctype html><head></head><body><main data-cv-template="professional-v2"><p>Clean CV</p></main></body>',
+          '<!doctype html><html><head></head><body><main data-cv-template="professional-v2"><p>Clean CV</p></main></body></html>',
           encoding="utf-8",
         )
         return Path(html_path)
@@ -303,7 +312,13 @@ class ApplicationDocumentTests(unittest.TestCase):
       ) as convert_mock, mock.patch(
         "jobscout.delivery.render_html_to_pdf",
         side_effect=render_file,
-      ) as render:
+      ) as render, mock.patch(
+        "jobscout.delivery.pdf_page_count",
+        return_value=1,
+      ), mock.patch(
+        "jobscout.delivery.validate_rendered_cv_pdf",
+        side_effect=lambda path: Path(path),
+      ):
         send_application_email(SUBSCRIBER, CANDIDATE, letter)
 
       # The legacy PDF is re-extracted and re-rendered, never attached verbatim.
