@@ -1031,6 +1031,35 @@ def _begin_completion(args: argparse.Namespace) -> tuple[dict, dict | None]:
   run_id = safe_run_id(args.run_id)
   with dispatch_store.agent_state_lock(args.dispatch_root):
     claim = dispatch_store.load_agent_claim(args.dispatch_root, run_id, args.claim_id)
+    marker = dispatch_store.load_dispatch(run_id, args.dispatch_root)
+    durable_outcomes = marker.get("outcomes") if isinstance(marker.get("outcomes"), dict) else {}
+    durable = durable_outcomes.get(str(claim.get("userKey") or ""))
+    if isinstance(durable, dict):
+      # The marker is a second durable record of terminal state. Restore a
+      # claim file that an over-eager agent edited after completion, and never
+      # permit a later completion to replace the first recorded outcome.
+      existing = claim.get("outcome") if isinstance(claim.get("outcome"), dict) else None
+      if existing is None or existing.get("status") != durable.get("status"):
+        status = str(durable.get("status") or "failed")
+        existing = {
+          "status": status,
+          "appliedCount": int(durable.get("appliedCount") or 0),
+          "actionRequiredCount": int(durable.get("actionRequiredCount") or 0),
+          "personalizedCvCount": 0,
+          "personalizedLetterCount": 0,
+          "summaryDelivered": None,
+          "summaryError": None,
+          "failureReason": "claim already has a durable terminal outcome" if status == "failed" else None,
+          "previewArtifacts": [],
+          "fallback": False,
+        }
+        claim.update({
+          "status": "failed" if status == "failed" else "completed",
+          "completedAt": claim.get("completedAt") or durable.get("recordedAt") or utc_now(),
+          "outcome": existing,
+        })
+        dispatch_store.save_agent_claim(args.dispatch_root, run_id, args.claim_id, claim)
+      return claim, existing
     if claim.get("status") in TERMINAL_CLAIM_STATUSES:
       return claim, claim.get("outcome") if isinstance(claim.get("outcome"), dict) else {}
     if claim.get("status") == "completing":

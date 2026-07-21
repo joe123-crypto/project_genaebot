@@ -28,11 +28,22 @@ def cmd_start_dispatch(args: argparse.Namespace) -> dict:
 
 def cmd_record_dispatch_outcome(args: argparse.Namespace) -> dict:
   data = dispatch_store.load_dispatch(args.run_id, args.dispatch_root)
+  if data.get("finishedAt"):
+    raise SystemExit("dispatch run is already finished")
   status = args.status
   if status not in DISPATCH_STATUSES:
     raise SystemExit(f"status must be one of: {', '.join(sorted(DISPATCH_STATUSES))}")
   outcomes = data.setdefault("outcomes", {})
   key = user_key(args.user_id)
+  existing = outcomes.get(key)
+  if isinstance(existing, dict):
+    return {
+      "ok": True,
+      "runId": safe_run_id(args.run_id),
+      "duplicate": True,
+      "outcomeCount": len(outcomes),
+      "outcome": existing,
+    }
   outcomes[key] = {
     "status": status,
     "appliedCount": count_arg(args.applied_count, "applied-count"),
@@ -44,6 +55,7 @@ def cmd_record_dispatch_outcome(args: argparse.Namespace) -> dict:
   }
   data["updatedAt"] = utc_now()
   result = dispatch_store.save_dispatch(data, args.dispatch_root)
+  result["duplicate"] = False
   result["outcomeCount"] = len(outcomes)
   return result
 
@@ -125,4 +137,3 @@ def cmd_verify_dispatch(args: argparse.Namespace) -> dict:
     print(json.dumps(result, indent=2, sort_keys=True))
     raise SystemExit(1)
   return result
-

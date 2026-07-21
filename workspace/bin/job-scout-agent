@@ -54,7 +54,7 @@ Run one operator-authorized Job Scout ${mode} dispatch.
 Follow the Daily OpenClaw Agent Dispatch parent and child protocol in /home/joseph/.openclaw/workspace/skills/job-scout/SKILL.md exactly, with these overrides:
 - The trusted wrapper has already completed preparation for runId ${run_id}. Do not run the prepare phase.
 - Start by running the status phase for runId ${run_id}; use its opaque pending or claimed claims.
-- Spawn isolated main children as documented, no more than four at once.
+- Spawn isolated main children as documented, no more than four at once. Use simple lowercase task names such as job_scout_1; never derive a task name from a claim ID.
 - If a child fails or its claim does not complete, invoke that claim's --agent-phase fallback exactly once. This records failure and must not submit template documents.
 - Finish only after terminalCount equals claimCount.
 - Never invoke direct dispatch-jsearch mode and never retry a failed child.
@@ -63,4 +63,15 @@ EOF
 env -u OPENCLAW_HOME OPENCLAW_GATEWAY_TOKEN="${GATEWAY_AUTH_TOKEN:?missing gateway token}" \
   openclaw agent --agent main --session-key "agent:main:job-scout-manual:$run_id" \
   --message "$prompt" --timeout 21600 --json
-"${job_scout[@]}" verify-dispatch --run-id "$run_id" >/dev/null
+
+# A parent turn intentionally returns after sessions_yield; completion events
+# resume it asynchronously. Keep the operator process attached to durable state
+# until finish makes the dispatch verifiable.
+deadline=$((SECONDS + 21600))
+until "${job_scout[@]}" verify-dispatch --run-id "$run_id" >/dev/null 2>&1; do
+  if [ "$SECONDS" -ge "$deadline" ]; then
+    printf 'Job Scout agent dispatch did not finish within 21600 seconds\n' >&2
+    exit 1
+  fi
+  sleep 10
+done

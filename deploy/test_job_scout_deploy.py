@@ -83,6 +83,8 @@ class JobScoutDeploymentTests(unittest.TestCase):
     self.assertNotIn("| jq", wrapper)
     self.assertIn("The trusted wrapper has already completed preparation", wrapper)
     self.assertIn("Do not run the prepare phase", wrapper)
+    self.assertIn("until \"${job_scout[@]}\" verify-dispatch", wrapper)
+    self.assertIn("sleep 10", wrapper)
     self.assertLess(wrapper.index('prepare_json='), wrapper.index("openclaw agent"))
 
   def test_normal_deploy_reconciles_scheduler_without_reenabling_a_pause(self) -> None:

@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from jobscout import agent_dispatch, dispatch_store
+from jobscout import agent_dispatch, commands_dispatch, dispatch_store
 
 
 class AgentDispatchTests(unittest.TestCase):
@@ -307,6 +307,66 @@ class AgentDispatchTests(unittest.TestCase):
       self.assertIn("does not belong to this claim", first["failureReason"])
       self.assertTrue(second["duplicate"])
       dispatch.assert_not_called()
+
+  def test_durable_outcome_restores_a_tampered_terminal_claim(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      prepared = self.prepare(root)
+      claim_id = prepared["claims"][0]["claimId"]
+      complete_args = self.args(root, "complete", claim_id=claim_id)
+      complete_args.result = json.dumps({
+        "schemaVersion": 1,
+        "runId": "wrong",
+        "claimId": claim_id,
+        "assessments": [],
+      })
+      first = agent_dispatch.cmd_agent_complete(complete_args)
+      self.assertEqual(first["status"], "failed")
+
+      # Simulate a model directly editing the claim after its first terminal
+      # outcome. The immutable dispatch outcome must restore terminal failure.
+      claim = dispatch_store.load_agent_claim(root, "agent-test", claim_id)
+      claim["status"] = "claimed"
+      claim.pop("outcome", None)
+      claim.pop("completionStartedAt", None)
+      dispatch_store.save_agent_claim(root, "agent-test", claim_id, claim)
+
+      duplicate = agent_dispatch.cmd_agent_complete(complete_args)
+      restored = dispatch_store.load_agent_claim(root, "agent-test", claim_id)
+      marker = dispatch_store.load_dispatch("agent-test", root)
+
+      self.assertTrue(duplicate["duplicate"])
+      self.assertEqual(duplicate["status"], "failed")
+      self.assertEqual(restored["status"], "failed")
+      self.assertEqual(restored["outcome"]["status"], "failed")
+      self.assertEqual(marker["outcomes"][restored["userKey"]]["status"], "failed")
+
+  def test_dispatch_outcome_cannot_be_overwritten_or_added_after_finish(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      self.prepare(root)
+      record = argparse.Namespace(
+        run_id="agent-test",
+        user_id="user-1",
+        status="failed",
+        applied_count=0,
+        action_required_count=0,
+        dispatch_root=root,
+      )
+      first = commands_dispatch.cmd_record_dispatch_outcome(record)
+      record.status = "preview"
+      duplicate = commands_dispatch.cmd_record_dispatch_outcome(record)
+      marker = dispatch_store.load_dispatch("agent-test", root)
+
+      self.assertFalse(first["duplicate"])
+      self.assertTrue(duplicate["duplicate"])
+      self.assertEqual(marker["outcomes"][agent_dispatch.user_key("user-1")]["status"], "failed")
+
+      marker["finishedAt"] = agent_dispatch.utc_now()
+      dispatch_store.save_dispatch(marker, root)
+      record.user_id = "user-2"
+      with self.assertRaisesRegex(SystemExit, "already finished"):
+        commands_dispatch.cmd_record_dispatch_outcome(record)
 
   def test_validator_rejects_oversized_personalized_html(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
