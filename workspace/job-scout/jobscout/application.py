@@ -15,14 +15,17 @@ from .constants import (
   UNKNOWN_EMPLOYER,
   WHATSAPP_CHANNEL_SOURCES,
 )
+from .formality import employer_formality
 from .jsearch import application_key, candidate_key
 from . import api
-from .delivery import cover_letter_html, render_html_to_pdf
+from .commands_setup import style_cv_html
+from .delivery import _html_source, cover_letter_html, render_html_to_pdf
 from .profile import clean_items, profile_values, subscriber_user_id
 from .subscriber import (
   applicant_name,
   application_artifact_dir,
   display_name,
+  document_filename,
   subscriber_cv_html,
   subscriber_cv_file,
   subscriber_phone,
@@ -81,6 +84,28 @@ def cover_letter_text(subscriber: dict, preferences: dict, candidate: dict) -> s
   skills = clean_items(profile_values(preferences, "skills"))
   experience = clean_items(profile_values(preferences, "experience"))
   strengths = ", ".join([*qualifications[:2], *skills[:3], *experience[:2]]) or "relevant experience and a strong work ethic"
+  # Government / public-sector employers expect a raised, formal register. The
+  # signal comes from the shared classifier so the fallback letter and the base
+  # draft handed to the agent stay in step. "Dear Sir/Madam" pairs with "Yours
+  # faithfully"; the standard branch keeps its established named-team greeting.
+  if employer_formality(candidate) == "formal":
+    greeting = "Dear Sir/Madam,"
+    opener = (
+      f"I wish to apply for the {role} position at {company}."
+      if company_known
+      else f"I wish to apply for the {role} position."
+    )
+    return "\n".join([
+      greeting,
+      "",
+      opener,
+      f"My background includes {strengths}, and I am prepared to contribute reliably from the outset.",
+      "I work meticulously, communicate clearly, and take full responsibility for completing the duties assigned to me.",
+      "I have attached my curriculum vitae for your consideration and would welcome the opportunity to discuss how I may serve your organisation.",
+      "",
+      "Yours faithfully,",
+      name,
+    ]) + "\n"
   greeting = f"Dear Hiring Team at {company}," if company_known else "Dear Hiring Team,"
   opener = (
     f"I am applying for the {role} position at {company}."
@@ -129,14 +154,17 @@ def prepare_application_documents(
   if not letter_path.is_file() or not letter_path.read_text(encoding="utf-8").strip():
     raise RuntimeError("cover letter text is missing")
   cv_source = personalized_cv_html if personalized_cv_html is not None else subscriber_cv_html(subscriber)
-  cv_pdf = render_html_to_pdf(cv_source, directory / "cv.pdf")
+  # The base/personalized CV is unstyled semantic HTML; apply the modern
+  # stylesheet on the fly before rendering to PDF.
+  styled_cv = style_cv_html(_html_source(cv_source))
+  cv_pdf = render_html_to_pdf(styled_cv, directory / document_filename(subscriber, "cv"))
   documents = {
     "cvPdf": cv_pdf,
     "coverLetterText": letter_path,
   }
   if include_cover_letter_pdf:
     letter_html = cover_letter_html(letter_path.read_text(encoding="utf-8"))
-    documents["coverLetterPdf"] = render_html_to_pdf(letter_html, directory / "cover-letter.pdf")
+    documents["coverLetterPdf"] = render_html_to_pdf(letter_html, directory / document_filename(subscriber, "cover_letter"))
   return documents
 
 
@@ -224,7 +252,7 @@ def web_apply_payload(
   if resolved_letter_pdf is None:
     directory = application_artifact_dir(subscriber, candidate)
     letter_html = cover_letter_html(Path(cover_letter).read_text(encoding="utf-8"))
-    resolved_letter_pdf = render_html_to_pdf(letter_html, directory / "cover-letter.pdf")
+    resolved_letter_pdf = render_html_to_pdf(letter_html, directory / document_filename(subscriber, "cover_letter"))
   return {
     "attemptId": candidate_key(candidate),
     "applicationUrl": candidate_application_url(candidate),

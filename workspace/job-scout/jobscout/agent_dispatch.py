@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import sys
 from typing import Iterable
 
 from . import api, application, dispatch_store
@@ -26,6 +27,7 @@ from .application import (
   build_user_summary,
   candidate_application_url,
   candidate_attempt,
+  cover_letter_text,
   match_reason,
   web_apply_payload,
   write_cover_letter,
@@ -39,6 +41,7 @@ from .commands_dispatch import (
 from .commands_group_feed import maybe_write_group_feed_cache
 from .commands_setup import cv_html_document, cmd_list_applications, cmd_list_ready, convert_pdf_to_cv_html, convert_pending_cvs_best_effort
 from .constants import UNKNOWN_EMPLOYER, UNKNOWN_ROLE, WHATSAPP_CHANNEL_SOURCES
+from .formality import employer_formality
 from .delivery import (
   MAX_RENDER_HTML_BYTES,
   gmail_sender_connected,
@@ -85,6 +88,26 @@ AGENT_COMPLETION_STALE_SECONDS = 45 * 60
 # delivery time for being too large.
 MAX_HTML_BYTES = MAX_RENDER_HTML_BYTES
 MAX_LETTER_BYTES = 128 * 1024
+# A tailored letter that clears validation must be at least this substantial; an
+# empty file or an unfilled one-line placeholder is rejected in favour of the
+# deterministic template fallback.
+MIN_LETTER_CHARS = 200
+MIN_LETTER_LINES = 4
+# The agent's only in-repo contract for the letter: a small, declarative
+# instruction it applies to the per-candidate baseCoverLetter draft.
+COVER_LETTER_GUIDANCE = (
+  "Rewrite baseCoverLetter into a letter tailored to this specific job. Name the "
+  "exact role and employer, and address the job's stated requirements/description "
+  "using only facts already present in the candidate's CV — never invent "
+  "qualifications or experience. Keep it plain text (no HTML or markdown), around "
+  "4 to 6 short paragraphs, professional and truthful. End with a signature line. "
+  "Match the register to each candidate's employerFormality: when it is \"formal\" "
+  "(government or public-sector employer), write more formally — avoid "
+  "contractions, use a measured, respectful tone, open with \"Dear Sir/Madam,\" and "
+  "close with \"Yours faithfully,\"; when it is \"standard\", keep the ordinary "
+  "professional tone. The baseCoverLetter draft already reflects the correct "
+  "register, so preserve it while tailoring."
+)
 TERMINAL_CLAIM_STATUSES = {"completed", "fallback_completed"}
 # html.parser never emits an endtag for a bare void element, so these tags
 # must not affect immutable-region depth in either the <br> or <br/> form.
@@ -108,6 +131,10 @@ def _source_results() -> dict[str, dict]:
 def _agent_candidate(candidate: dict) -> dict:
   output = dict(candidate)
   output["agentCandidateId"] = candidate_key(candidate)
+  # Surface the register per candidate so the agent's tailored letter/profile
+  # wording matches the employer's formality (government/public-sector jobs read
+  # more formally). Same classifier the deterministic fallback letter uses.
+  output["employerFormality"] = employer_formality(candidate)
   return output
 
 
@@ -329,7 +356,23 @@ def cmd_agent_claim(args: argparse.Namespace) -> dict:
   if not base_cv.is_file():
     canonical_path = Path(subscriber_cv_html(work["subscriber"]))
     canonical_html = canonical_path.read_text(encoding="utf-8")
-    legacy_generated = "font-family: Georgia, 'Times New Roman', serif" in canonical_html
+    # Re-convert stale/dirty canonical HTML from the original PDF: the old
+    # Georgia single-column template, anything missing the current template
+    # marker, or anything still carrying browser print chrome (file:// paths or
+    # a browser timestamp) must be rebuilt into clean semantic HTML.
+    has_browser_chrome = bool(
+      re.search(r"file://", canonical_html, flags=re.IGNORECASE)
+      or re.search(
+        r"\b\d{1,2}/\d{1,2}/\d{2,4},?\s+\d{1,2}:\d{2}\s+(?:AM|PM)\b",
+        canonical_html,
+        flags=re.IGNORECASE,
+      )
+    )
+    legacy_generated = (
+      "font-family: Georgia, 'Times New Roman', serif" in canonical_html
+      or 'data-cv-template="professional-v2"' not in canonical_html
+      or has_browser_chrome
+    )
     if legacy_generated:
       source_pdf = output_dir / "base-source.pdf"
       try:
@@ -357,8 +400,26 @@ def cmd_agent_claim(args: argparse.Namespace) -> dict:
         except OSError:
           pass
     else:
-      base_cv.write_text(canonical_html, encoding="utf-8")
+      # The canonical HTML carries the current template marker and no browser
+      # chrome; store it unstyled so the modern stylesheet is applied on the fly
+      # at render time (and the personalized/base stylesheet check stays valid).
+      unstyled = re.sub(r"<style\b[^>]*>.*?</style>\s*", "", canonical_html, flags=re.IGNORECASE | re.DOTALL)
+      base_cv.write_text(unstyled, encoding="utf-8")
     os.chmod(base_cv, 0o600)
+
+  # A neutral plain-text starting draft the agent refines per job. Per-candidate
+  # letters aren't available at claim time (one claim covers several jobs), so the
+  # draft is the deterministic template shape; the agent tailors it to each job's
+  # role/employer/requirements which travel with every candidate entry. Stored
+  # UNSTYLED (plain text) with 0o600 perms, mirroring base-cv.html.
+  base_letter = output_dir / "base-cover-letter.txt"
+  if not base_letter.is_file():
+    representative = work["candidates"][0] if work.get("candidates") else {}
+    base_letter.write_text(
+      cover_letter_text(work["subscriber"], work["preferences"], representative),
+      encoding="utf-8",
+    )
+    os.chmod(base_letter, 0o600)
 
   public_work = {
     "schemaVersion": work["schemaVersion"],
@@ -370,6 +431,8 @@ def cmd_agent_claim(args: argparse.Namespace) -> dict:
     "candidates": work["candidates"],
     "preparationError": work.get("preparationError"),
     "baseCvHtmlPath": str(base_cv),
+    "baseCoverLetterPath": str(base_letter),
+    "coverLetterGuidance": COVER_LETTER_GUIDANCE,
     "personalizedOutputDirectory": str(personalized_dir),
     "resultPath": str(output_dir / "agent-result.json"),
   }
@@ -497,6 +560,37 @@ def _validate_personalized_html(base_path: Path, personalized_path: Path) -> Non
     raise AgentResultError("personalized CV changed an immutable fact")
 
 
+def _letter_is_tailored(letter_path: Path, candidate: dict) -> bool:
+  """Whether the agent's letter is a genuine, tailored plain-text letter.
+
+  Returns False (rather than raising) so a lazy/empty/unfilled letter is treated
+  as absent and dispatch_agent_user falls back to write_cover_letter — a single
+  weak letter must not abort the whole validated result the way AgentResultError
+  would. Size/suffix/sandbox is already enforced by _safe_output_file upstream.
+  """
+  try:
+    text = letter_path.read_text(encoding="utf-8")
+  except (OSError, UnicodeDecodeError):
+    return False
+  stripped = text.strip()
+  if len(stripped) < MIN_LETTER_CHARS:
+    return False
+  if len([line for line in text.splitlines() if line.strip()]) < MIN_LETTER_LINES:
+    return False
+  # Plain text only: an HTML fragment means the agent ignored the contract.
+  if re.search(r"<[a-zA-Z/][^>]*>", text):
+    return False
+  # Reject an unfilled template by requiring the letter to name the actual job:
+  # its role or employer must appear so a generic placeholder is caught.
+  haystack = stripped.casefold()
+  role = str(candidate.get("role") or "").strip().casefold()
+  company = str(candidate.get("company") or "").strip().casefold()
+  company_known = bool(company) and company != UNKNOWN_EMPLOYER.casefold()
+  role_ok = bool(role) and role in haystack
+  company_ok = company_known and company in haystack
+  return role_ok or company_ok
+
+
 def validate_agent_result(args: argparse.Namespace, work: dict, result: dict) -> list[dict]:
   if result.get("schemaVersion") != AGENT_RESULT_SCHEMA_VERSION:
     raise AgentResultError(f"agent result schemaVersion must be {AGENT_RESULT_SCHEMA_VERSION}")
@@ -540,12 +634,25 @@ def validate_agent_result(args: argparse.Namespace, work: dict, result: dict) ->
       raise AgentResultError("each selected candidate needs its own artifact files")
     used_paths.update({cv_path, letter_path})
     _validate_personalized_html(base_path, cv_path)
+    # A weak/empty/HTML/placeholder letter is dropped (not fatal) so dispatch
+    # falls back to the deterministic template for this candidate while still
+    # using the validated personalized CV. The rejection is logged so a silent
+    # degradation to the template is visible when auditing personalization.
+    if _letter_is_tailored(letter_path, candidates[candidate_id]):
+      tailored_letter = letter_path
+    else:
+      tailored_letter = None
+      print(
+        f"Job Scout: agent cover letter for candidate {candidate_id} failed the "
+        "tailored-letter check; using the deterministic template letter instead.",
+        file=sys.stderr,
+      )
     selected.append({
       "candidate": candidates[candidate_id],
       "reason": reason,
       "fitScore": score,
       "cvHtmlPath": cv_path,
-      "coverLetterPath": letter_path,
+      "coverLetterPath": tailored_letter,
     })
 
   if seen != set(candidates):
@@ -672,7 +779,12 @@ def dispatch_agent_user(args: argparse.Namespace, work: dict, selected: list[dic
     email = str(candidate.get("applicationEmail") or "").strip()
     application_url = candidate_application_url(candidate)
     personalized_html = item.get("cvHtmlPath")
-    cover_letter = item.get("coverLetterPath") or write_cover_letter(subscriber, preferences, candidate)
+    tailored_letter = item.get("coverLetterPath")
+    cover_letter = tailored_letter or write_cover_letter(subscriber, preferences, candidate)
+    # Source provenance for personalization observability: "agent" means the
+    # agent's tailored artifact was used, otherwise the deterministic fallback.
+    cover_letter_source = "agent" if tailored_letter else "template"
+    cv_source = "agent" if personalized_html else "base"
 
     if email and auto_apply:
       if not gmail_sender_connected(subscriber):
@@ -706,7 +818,10 @@ def dispatch_agent_user(args: argparse.Namespace, work: dict, selected: list[dic
         artifact_refs = _stored_documents(subscriber, recorded, attempt_count, documents)
         _remove_retained_personalized_html(personalized_html, artifact_refs)
         _note_channel_outcome(candidate, "applied", attempt_count)
-        user_applied.append({"candidate": candidate, "reason": reason, "method": "email"})
+        user_applied.append({
+          "candidate": candidate, "reason": reason, "method": "email",
+          "coverLetterSource": cover_letter_source, "cvSource": cv_source,
+        })
         applications.append({**candidate, "status": "applied", "attemptCount": attempt_count})
       except Exception as err:
         failed_note = public_text(err)
@@ -745,7 +860,10 @@ def dispatch_agent_user(args: argparse.Namespace, work: dict, selected: list[dic
           artifact_refs = _stored_documents(subscriber, recorded, attempt_count, documents, web_result)
           _remove_retained_personalized_html(personalized_html, artifact_refs)
           _note_channel_outcome(candidate, "applied", attempt_count)
-          user_applied.append({"candidate": candidate, "reason": reason, "method": "website"})
+          user_applied.append({
+            "candidate": candidate, "reason": reason, "method": "website",
+            "coverLetterSource": cover_letter_source, "cvSource": cv_source,
+          })
           applications.append({**candidate, "status": "applied", "attemptCount": attempt_count})
         elif web_result["outcome"] == "action_required":
           blocker = str(web_result.get("blockerCode") or "unsupported_site")
@@ -818,13 +936,21 @@ def dispatch_agent_user(args: argparse.Namespace, work: dict, selected: list[dic
     user_id, status, len(user_applied) if status != "failed" else 0,
     len(user_action_required) if status != "failed" else 0, delivered, failed_note,
   )
+  applied = user_applied if status != "failed" else []
+  # Personalization health: how many delivered applications used the agent's
+  # tailored CV / letter versus the deterministic fallback this run.
+  personalized_cv_count = sum(1 for item in applied if item.get("cvSource") == "agent")
+  personalized_letter_count = sum(1 for item in applied if item.get("coverLetterSource") == "agent")
   return {
     "ok": True,
     "runId": args.run_id,
     "claimId": work["claimId"],
     "status": status,
-    "appliedCount": len(user_applied) if status != "failed" else 0,
+    "appliedCount": len(applied),
     "actionRequiredCount": len(user_action_required) if status != "failed" else 0,
+    "personalizedCvCount": personalized_cv_count,
+    "personalizedLetterCount": personalized_letter_count,
+    "templateLetterCount": len(applied) - personalized_letter_count,
     "fallback": fallback,
     "fallbackReason": public_text(fallback_reason, 240) if fallback_reason else None,
   }

@@ -20,9 +20,10 @@ import urllib.request
 from genaie_env import env_default
 
 from jobscout import api
+from .commands_setup import style_cv_html
 from .constants import DEFAULT_WEB_APPLY_URL, GENAIE_MAIL_BIN
 from .profile import subscriber_user_id
-from .subscriber import display_name, subscriber_cv_file, subscriber_sender_email
+from .subscriber import display_name, document_filename, subscriber_cv_file, subscriber_sender_email
 from .textutil import clean_job_title, natural_email_text, public_text
 
 
@@ -181,8 +182,11 @@ def send_application_email(
   subject = natural_email_text(f"Application for {role} - {display_name(subscriber)}", 180)
   attachment = Path(cv_pdf) if cv_pdf is not None else Path(subscriber_cv_file(subscriber))
   if attachment.suffix.casefold() != ".pdf":
-    attachment = render_html_to_pdf(attachment, attachment.with_name("cv-base.pdf"))
-  letter_attachment = Path(cover_letter_pdf) if cover_letter_pdf is not None else Path(cover_letter).with_name("cover-letter.pdf")
+    # The stored base CV is unstyled semantic HTML; apply the modern stylesheet
+    # on the fly before rendering to PDF for the employer.
+    styled_cv = style_cv_html(attachment.read_text(encoding="utf-8"))
+    attachment = render_html_to_pdf(styled_cv, attachment.with_name(document_filename(subscriber, "cv")))
+  letter_attachment = Path(cover_letter_pdf) if cover_letter_pdf is not None else Path(cover_letter).with_name(document_filename(subscriber, "cover_letter"))
   if cover_letter_pdf is None:
     letter_text = Path(cover_letter).read_text(encoding="utf-8")
     letter_attachment = render_html_to_pdf(cover_letter_html(letter_text), letter_attachment)

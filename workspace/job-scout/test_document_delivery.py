@@ -170,7 +170,11 @@ class ApplicationDocumentTests(unittest.TestCase):
       self.assertEqual(documents["coverLetterText"], letter)
       self.assertEqual(documents["cvPdf"].read_bytes(), b"%PDF-1.7 rendered")
       self.assertEqual(documents["coverLetterPdf"].read_bytes(), b"%PDF-1.7 rendered")
-      self.assertEqual(renderer.call_args_list[0].args[0], tailored)
+      # The unstyled base CV is styled on the fly before rendering.
+      cv_html = renderer.call_args_list[0].args[0]
+      self.assertIn("Tailored CV", cv_html)
+      self.assertIn("<style>", cv_html)
+      self.assertIn(".skill", cv_html)
       letter_html = renderer.call_args_list[1].args[0]
       self.assertIn("Tailored letter.", letter_html)
 
@@ -210,13 +214,15 @@ class ApplicationDocumentTests(unittest.TestCase):
       root = Path(tmp)
       letter = root / "cover-letter.txt"
       letter.write_text("Dear Hiring Team,\n\nA specific letter.\n\nKind regards,\nTest Applicant\n", encoding="utf-8")
+      cv_html = root / "cv.html"
+      cv_html.write_text("<!doctype html><head></head><body><p>Base CV</p></body>", encoding="utf-8")
 
       def render_file(_source, output):
         return Path(output)
 
       with mock.patch("jobscout.delivery.run_json_command", return_value={"messageId": "m1"}) as run, mock.patch(
         "jobscout.delivery.subscriber_cv_file",
-        return_value=str(root / "cv.html"),
+        return_value=str(cv_html),
       ), mock.patch(
         "jobscout.delivery.render_html_to_pdf",
         side_effect=render_file,
@@ -224,12 +230,16 @@ class ApplicationDocumentTests(unittest.TestCase):
         send_application_email(SUBSCRIBER, CANDIDATE, letter)
 
       self.assertEqual(render.call_count, 2)
-      self.assertEqual(render.call_args_list[0].args, (root / "cv.html", root / "cv-base.pdf"))
+      # The base HTML is styled on the fly, then rendered to the applicant-named CV.
+      styled_cv = render.call_args_list[0].args[0]
+      self.assertIn("Base CV", styled_cv)
+      self.assertIn("<style>", styled_cv)
+      self.assertEqual(render.call_args_list[0].args[1], root / "Test-Applicant-CV.pdf")
       letter_html = render.call_args_list[1].args[0]
       self.assertIn("Application Letter", letter_html)
       command = run.call_args.args[0]
       attachments = [command[index + 1] for index, value in enumerate(command) if value == "--attach"]
-      self.assertEqual(attachments, [str(root / "cv-base.pdf"), str(root / "cover-letter.pdf")])
+      self.assertEqual(attachments, [str(root / "Test-Applicant-CV.pdf"), str(root / "Test-Applicant-Cover-Letter.pdf")])
 
   def test_cover_letter_pdf_html_is_structured_and_has_no_browser_leaks(self) -> None:
     document = cover_letter_html("Dear Hiring Team,\n\nA specific letter.\n\nKind regards,\nTest Applicant\n")
@@ -291,6 +301,25 @@ class ArtifactApiTests(unittest.TestCase):
       with mock.patch("jobscout.api.request_multipart", side_effect=SystemExit(1)):
         with self.assertRaisesRegex(RuntimeError, "could not store"):
           api.upload_application_artifact("user-1", "app-1", 1, "cv", cv)
+
+
+class DocumentFilenameTests(unittest.TestCase):
+  def test_names_pdfs_after_the_applicant(self) -> None:
+    subscriber = {"profile": {"displayName": "Joseph Munemo"}}
+    self.assertEqual(
+      jobscout.subscriber.document_filename(subscriber, "cv"),
+      "Joseph-Munemo-CV.pdf",
+    )
+    self.assertEqual(
+      jobscout.subscriber.document_filename(subscriber, "cover_letter"),
+      "Joseph-Munemo-Cover-Letter.pdf",
+    )
+
+  def test_falls_back_to_applicant_for_a_nameless_subscriber(self) -> None:
+    self.assertEqual(
+      jobscout.subscriber.document_filename({}, "cv"),
+      "Applicant-CV.pdf",
+    )
 
 
 if __name__ == "__main__":

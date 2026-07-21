@@ -234,9 +234,34 @@ def cmd_list_ready(args: argparse.Namespace) -> dict:
   return api.request_json("GET", endpoint(f"/internal/job-scout/subscribers?{query}"))
 
 
-# The canonical CV is the styled HTML document the dispatch agent personalizes
-# and renders back to PDF for employers, so conversion must produce a clean,
-# semantic, standalone page — not a positional dump of the source PDF.
+# The canonical CV is stored as UNSTYLED semantic HTML (structure + data
+# attributes, no <style> block) so content and presentation stay decoupled and
+# the personalization agent can edit content freely. The modern stylesheet below
+# is injected on the fly at render time via style_cv_html(); conversion must
+# still produce a clean, semantic, standalone page — not a positional dump of
+# the source PDF.
+#
+# Small inline SVG data-URI icons for the CONTACT lines. Data-URI backgrounds
+# render reliably in headless Chromium PDF output, unlike webfont glyphs.
+_CV_ICON_LOCATION = (
+  "data:image/svg+xml;utf8,"
+  "%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23405a78'%3E"
+  "%3Cpath d='M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5"
+  "a2.5 2.5 0 110-5 2.5 2.5 0 010 5z'/%3E%3C/svg%3E"
+)
+_CV_ICON_PHONE = (
+  "data:image/svg+xml;utf8,"
+  "%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23405a78'%3E"
+  "%3Cpath d='M6.62 10.79a15.53 15.53 0 006.59 6.59l2.2-2.2a1 1 0 011.02-.24 11.36 11.36 0 003.56.57"
+  " 1 1 0 011 1V20a1 1 0 01-1 1A17 17 0 013 4a1 1 0 011-1h3.5a1 1 0 011 1 11.36 11.36 0 00.57 3.56"
+  " 1 1 0 01-.24 1.02l-2.21 2.21z'/%3E%3C/svg%3E"
+)
+_CV_ICON_EMAIL = (
+  "data:image/svg+xml;utf8,"
+  "%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23405a78'%3E"
+  "%3Cpath d='M20 4H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V6a2 2 0 00-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z'/%3E"
+  "%3C/svg%3E"
+)
 CV_HTML_STYLE = """\
   @page { size: A4; margin: 0; }
   * { box-sizing: border-box; }
@@ -244,23 +269,32 @@ CV_HTML_STYLE = """\
   main.cv { width: 210mm; min-height: 297mm; margin: 0 auto; padding: 16mm 17mm 15mm; }
   .cv-header { margin: 0 0 11mm; }
   h1 { margin: 0; color: #101826; font-size: 27pt; line-height: 1.08; font-weight: 700; }
-  .headline { margin: 2.5mm 0 0; color: #405a78; font-size: 11.5pt; text-transform: uppercase; }
+  .headline { margin: 2.5mm 0 0; color: #405a78; font-size: 11.5pt; text-transform: uppercase; letter-spacing: 0.6pt; }
   .cv-grid { display: grid; grid-template-columns: 55mm minmax(0, 1fr); gap: 12mm; align-items: start; }
   .sidebar { min-width: 0; padding-right: 9mm; border-right: 1px solid #d7e0ea; }
   .main-column { min-width: 0; }
   section { break-inside: avoid; margin: 0 0 8mm; }
-  h2 { margin: 0 0 4mm; padding: 0 0 2.5mm; color: #175ec8; font-size: 8.5pt; line-height: 1.2; font-weight: 700; text-transform: uppercase; border-bottom: 1px solid #cbdcf3; }
+  h2 { margin: 0 0 4mm; padding: 0 0 2.5mm; color: #175ec8; font-size: 8.5pt; line-height: 1.2; font-weight: 700; text-transform: uppercase; letter-spacing: 1pt; border-bottom: 1px solid #cbdcf3; }
   .sidebar h2 { border-bottom: 0; padding-bottom: 0; }
   p { margin: 0 0 3mm; }
   .entry { margin: 0 0 3.5mm; }
+  .entry-head { display: flex; justify-content: space-between; align-items: baseline; gap: 4mm; }
+  .entry-meta { flex: none; color: #6b7a8d; font-size: 9pt; }
   ul { margin: 0; padding: 0; list-style: none; }
   li { position: relative; margin: 0 0 1.5mm; padding-left: 4mm; }
-  li::before { content: '\\2022'; position: absolute; left: 0; color: #175ec8; font-weight: 700; }
+  li::before { content: '\\25b8'; position: absolute; left: 0; color: #175ec8; font-weight: 700; }
   .skills { display: flex; flex-wrap: wrap; gap: 2mm; }
   .skill { padding: 1.2mm 2.2mm; border: 1px solid #d7e0ea; border-radius: 2mm; font-size: 9pt; }
+  .contact-line { position: relative; margin: 0 0 3mm; padding-left: 6mm; overflow-wrap: anywhere; }
+  .contact-line::before { content: ''; position: absolute; left: 0; top: 0.3mm; width: 3.6mm; height: 3.6mm; background-repeat: no-repeat; background-position: center; background-size: contain; }
+  .contact-line.location::before { background-image: url("%s"); }
+  .contact-line.phone::before { background-image: url("%s"); }
+  .contact-line.email::before { background-image: url("%s"); }
+  .language { display: flex; justify-content: space-between; gap: 3mm; margin: 0 0 1.5mm; }
+  .language .level { flex: none; color: #6b7a8d; }
   .sidebar p, .sidebar li { overflow-wrap: anywhere; }
   @media print { main.cv { margin: 0; } }
-"""
+""" % (_CV_ICON_LOCATION, _CV_ICON_PHONE, _CV_ICON_EMAIL)
 
 
 SIDE_SECTION_TITLES = {"CONTACT", "SKILLS", "LANGUAGES", "REFERENCES"}
@@ -342,9 +376,37 @@ def _section_title(block: list[str]) -> str:
   return block[0].rstrip(":").upper()
 
 
+_BULLET_MARKER = re.compile(r"^[>\u00bb\u203a\u25b8\u2039\u2022\u2023\u2043\-]+\s*")
+
+
+def _is_lone_marker(line: str) -> bool:
+  """True when a line is nothing but a bullet marker (no following text)."""
+  return bool(line) and not _BULLET_MARKER.sub("", line).strip()
+
+
+def _join_orphaned_markers(block: list[str]) -> list[str]:
+  """Fold a lone-marker line onto the following text line so no orphan survives."""
+  joined: list[str] = []
+  pending_marker = False
+  for line in block:
+    if _is_lone_marker(line):
+      pending_marker = True
+      continue
+    if pending_marker and line:
+      # Re-attach the dropped marker so the block still reads as a bullet list.
+      line = f"\u25b8 {_BULLET_MARKER.sub('', line).strip()}"
+    pending_marker = False
+    if line:
+      joined.append(line)
+  return joined
+
+
 def _render_cv_block(block: list[str]) -> str:
-  cleaned = [re.sub(r"^[>\u00bb\u25b8\u2022\-]+\s*", "", line).strip() for line in block]
-  if all(re.match(r"^[>\u00bb\u25b8\u2022\-]", line) for line in block):
+  block = _join_orphaned_markers(block)
+  if not block:
+    return ""
+  cleaned = [_BULLET_MARKER.sub("", line).strip() for line in block]
+  if all(re.match(r"^[>\u00bb\u203a\u25b8\u2039\u2022\u2023\u2043\-]", line) for line in block):
     items = "\n".join(f"          <li>{html_module.escape(item)}</li>" for item in cleaned if item)
     return f"        <ul>\n{items}\n        </ul>" if items else ""
   body = "<br>\n          ".join(html_module.escape(line) for line in cleaned if line)
@@ -365,6 +427,45 @@ def _repair_contact_blocks(blocks: list[list[str]]) -> list[list[str]]:
   return repaired
 
 
+def _render_contact_line(line: str) -> str:
+  """Tag a CONTACT line with location/phone/email so the stylesheet can add an icon."""
+  text = _BULLET_MARKER.sub("", line).strip()
+  if not text:
+    return ""
+  if "@" in text:
+    kind = "email"
+  elif re.search(r"\+?\d[\d\s()\-]{5,}", text):
+    kind = "phone"
+  else:
+    kind = "location"
+  return f'        <p class="contact-line {kind}">{html_module.escape(text)}</p>'
+
+
+# A recognized fluency level trailing a LANGUAGES line, right-aligned in render.
+_LANGUAGE_LEVEL = re.compile(
+  r"[\s\-–—:]+(native|fluent|proficient|advanced|intermediate|conversational|basic|beginner|elementary|mother tongue)\.?$",
+  re.IGNORECASE,
+)
+
+
+def _render_language_line(line: str) -> str:
+  """Split a LANGUAGES entry into the name plus an optionally right-aligned level."""
+  text = _BULLET_MARKER.sub("", line).strip()
+  if not text:
+    return ""
+  match = _LANGUAGE_LEVEL.search(text)
+  if not match:
+    return f'        <p class="language"><span class="name">{html_module.escape(text)}</span></p>'
+  name = text[: match.start()].strip(" \t-–—:") or text
+  level = match.group(1)
+  return (
+    '        <p class="language">'
+    f'<span class="name">{html_module.escape(name)}</span>'
+    f'<span class="level">{html_module.escape(level.title())}</span>'
+    "</p>"
+  )
+
+
 def _render_cv_section(title: str, blocks: list[list[str]], sidebar: bool) -> str:
   title_attr = html_module.escape(title.title(), quote=True)
   immutable = f' data-cv-immutable="section-{title_attr}"' if title in IMMUTABLE_SECTION_TITLES else ""
@@ -375,6 +476,14 @@ def _render_cv_section(title: str, blocks: list[list[str]], sidebar: bool) -> st
     skills = [html_module.escape(line) for block in blocks for line in block if line]
     content = "\n".join(f'          <span class="skill">{skill}</span>' for skill in skills)
     lines.append(f'        <div class="skills">\n{content}\n        </div>')
+  elif title == "CONTACT":
+    for line in (line for block in blocks for line in block if line):
+      lines.append(_render_contact_line(line))
+  elif title == "LANGUAGES":
+    for line in (line for block in blocks for line in block if line):
+      rendered = _render_language_line(line)
+      if rendered:
+        lines.append(rendered)
   elif title in {"PROFESSIONAL PROFILE", "PROFILE", "SUMMARY", "PROFESSIONAL SUMMARY"}:
     paragraph = " ".join(line for block in blocks for line in block)
     lines.append(f"        <p>{html_module.escape(paragraph)}</p>")
@@ -394,7 +503,7 @@ def _render_cv_section(title: str, blocks: list[list[str]], sidebar: bool) -> st
   )
 
 
-def cv_html_document(text: str) -> str:
+def cv_html_document(text: str, styled: bool = False) -> str:
   blocks = _cv_text_blocks(text)
   if not blocks:
     raise RuntimeError("no text could be extracted from the CV PDF")
@@ -430,13 +539,17 @@ def cv_html_document(text: str) -> str:
   headline_html = f'\n      <p class="headline">{html_module.escape(headline)}</p>' if headline else ""
   sidebar_html = "\n".join(section for section in sidebar_sections if section)
   main_html = "\n".join(section for section in main_sections if section)
+  # The base CV is stored UNSTYLED (no <style> block); the modern stylesheet is
+  # injected at render time by style_cv_html(). A styled document is still
+  # available via styled=True for any caller that wants a standalone page.
+  style_html = f"<style>\n{CV_HTML_STYLE}</style>\n" if styled else ""
   return (
     "<!doctype html>\n"
     "<html lang=\"en\">\n"
     "<head>\n"
     "<meta charset=\"utf-8\">\n"
     f"<title>{html_module.escape(title)} - CV</title>\n"
-    f"<style>\n{CV_HTML_STYLE}</style>\n"
+    f"{style_html}"
     "</head>\n"
     "<body>\n"
     "  <main class=\"cv\" data-cv-template=\"professional-v2\">\n"
@@ -451,6 +564,26 @@ def cv_html_document(text: str) -> str:
     "</body>\n"
     "</html>\n"
   )
+
+
+def style_cv_html(html: str) -> str:
+  """Inject the modern stylesheet into a semantic (unstyled) CV document.
+
+  Idempotent-safe: if the document already carries a <style> block (a legacy or
+  already-styled document), it is returned unchanged rather than double-styled.
+  """
+  text = str(html or "")
+  if re.search(r"<style\b", text, flags=re.IGNORECASE):
+    return text
+  style_block = f"<style>\n{CV_HTML_STYLE}</style>\n"
+  head_close = re.search(r"</head\s*>", text, flags=re.IGNORECASE)
+  if head_close:
+    return text[: head_close.start()] + style_block + text[head_close.start() :]
+  head_open = re.search(r"<head\b[^>]*>", text, flags=re.IGNORECASE)
+  if head_open:
+    return text[: head_open.end()] + "\n" + style_block + text[head_open.end() :]
+  # No <head> at all: wrap the style before the first content so it still applies.
+  return style_block + text
 
 
 def _ocr_cv_text(pdf_path: Path) -> str:

@@ -418,6 +418,45 @@ class CvConversionTests(unittest.TestCase):
     with self.assertRaises(RuntimeError):
       jobscout.commands_setup.cv_html_document("  \n\n  ")
 
+  def test_base_cv_is_unstyled_and_style_helper_adds_one_stylesheet(self) -> None:
+    text = "Jane Doe\nHarare, Zimbabwe\n\nSKILLS\n\nDefensive driving\n"
+    base = jobscout.commands_setup.cv_html_document(text)
+    self.assertNotIn("<style>", base)
+    self.assertIn('data-cv-template="professional-v2"', base)
+    styled = jobscout.commands_setup.style_cv_html(base)
+    self.assertEqual(styled.count("<style>"), 1)
+    # style_cv_html is idempotent-safe: a second pass adds nothing.
+    self.assertEqual(jobscout.commands_setup.style_cv_html(styled).count("<style>"), 1)
+
+  def test_style_cv_html_injects_modern_markers(self) -> None:
+    base = jobscout.commands_setup.cv_html_document("Jane Doe\n\nSKILLS\n\nDriving\n")
+    styled = jobscout.commands_setup.style_cv_html(base)
+    self.assertIn(".skill", styled)
+    self.assertIn("\\25b8", styled)  # blue arrow bullet character in CSS
+    self.assertIn("</head>", styled.split("<body>", 1)[0])
+
+  def test_artifact_strippers_remove_browser_chrome_and_lone_arrows(self) -> None:
+    text = (
+      "5/19/26, 3:47 PM\n"
+      "Jane Doe\n"
+      "file:///home/joseph/snap/chromium/common/cv.html\n"
+      "1/2\n\n"
+      "ADDITIONAL INFORMATION\n\n"
+      "▸ Willing to relocate\n"
+      "▸\n"
+      "▸ Clean record\n"
+    )
+    html = jobscout.commands_setup.cv_html_document(text)
+    self.assertIn("Jane Doe", html)
+    self.assertNotIn("5/19/26", html)
+    self.assertNotIn("file://", html)
+    self.assertNotIn(">1/2<", html)
+    self.assertIn("<li>Willing to relocate</li>", html)
+    self.assertIn("<li>Clean record</li>", html)
+    # The lone arrow marker never survives as its own bullet.
+    self.assertNotIn("<li></li>", html)
+    self.assertNotIn("<li>▸</li>", html)
+
   def test_pending_conversion_subscribers_ignores_ready_records(self) -> None:
     payload = {"subscribers": [
       {"userId": "user-ready", "cvConversionStatus": "ready"},
