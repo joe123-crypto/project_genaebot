@@ -26,6 +26,7 @@ from .application import (
   build_user_summary,
   candidate_application_url,
   candidate_attempt,
+  cover_letter_text,
   match_reason,
   web_apply_payload,
   write_cover_letter,
@@ -85,6 +86,20 @@ AGENT_COMPLETION_STALE_SECONDS = 45 * 60
 # delivery time for being too large.
 MAX_HTML_BYTES = MAX_RENDER_HTML_BYTES
 MAX_LETTER_BYTES = 128 * 1024
+# A tailored letter that clears validation must be at least this substantial; an
+# empty file or an unfilled one-line placeholder is rejected in favour of the
+# deterministic template fallback.
+MIN_LETTER_CHARS = 200
+MIN_LETTER_LINES = 4
+# The agent's only in-repo contract for the letter: a small, declarative
+# instruction it applies to the per-candidate baseCoverLetter draft.
+COVER_LETTER_GUIDANCE = (
+  "Rewrite baseCoverLetter into a letter tailored to this specific job. Name the "
+  "exact role and employer, and address the job's stated requirements/description "
+  "using only facts already present in the candidate's CV — never invent "
+  "qualifications or experience. Keep it plain text (no HTML or markdown), around "
+  "4 to 6 short paragraphs, professional and truthful. End with a signature line."
+)
 TERMINAL_CLAIM_STATUSES = {"completed", "fallback_completed"}
 # html.parser never emits an endtag for a bare void element, so these tags
 # must not affect immutable-region depth in either the <br> or <br/> form.
@@ -380,6 +395,20 @@ def cmd_agent_claim(args: argparse.Namespace) -> dict:
       base_cv.write_text(unstyled, encoding="utf-8")
     os.chmod(base_cv, 0o600)
 
+  # A neutral plain-text starting draft the agent refines per job. Per-candidate
+  # letters aren't available at claim time (one claim covers several jobs), so the
+  # draft is the deterministic template shape; the agent tailors it to each job's
+  # role/employer/requirements which travel with every candidate entry. Stored
+  # UNSTYLED (plain text) with 0o600 perms, mirroring base-cv.html.
+  base_letter = output_dir / "base-cover-letter.txt"
+  if not base_letter.is_file():
+    representative = work["candidates"][0] if work.get("candidates") else {}
+    base_letter.write_text(
+      cover_letter_text(work["subscriber"], work["preferences"], representative),
+      encoding="utf-8",
+    )
+    os.chmod(base_letter, 0o600)
+
   public_work = {
     "schemaVersion": work["schemaVersion"],
     "runId": run_id,
@@ -390,6 +419,8 @@ def cmd_agent_claim(args: argparse.Namespace) -> dict:
     "candidates": work["candidates"],
     "preparationError": work.get("preparationError"),
     "baseCvHtmlPath": str(base_cv),
+    "baseCoverLetterPath": str(base_letter),
+    "coverLetterGuidance": COVER_LETTER_GUIDANCE,
     "personalizedOutputDirectory": str(personalized_dir),
     "resultPath": str(output_dir / "agent-result.json"),
   }
@@ -517,6 +548,37 @@ def _validate_personalized_html(base_path: Path, personalized_path: Path) -> Non
     raise AgentResultError("personalized CV changed an immutable fact")
 
 
+def _letter_is_tailored(letter_path: Path, candidate: dict) -> bool:
+  """Whether the agent's letter is a genuine, tailored plain-text letter.
+
+  Returns False (rather than raising) so a lazy/empty/unfilled letter is treated
+  as absent and dispatch_agent_user falls back to write_cover_letter — a single
+  weak letter must not abort the whole validated result the way AgentResultError
+  would. Size/suffix/sandbox is already enforced by _safe_output_file upstream.
+  """
+  try:
+    text = letter_path.read_text(encoding="utf-8")
+  except (OSError, UnicodeDecodeError):
+    return False
+  stripped = text.strip()
+  if len(stripped) < MIN_LETTER_CHARS:
+    return False
+  if len([line for line in text.splitlines() if line.strip()]) < MIN_LETTER_LINES:
+    return False
+  # Plain text only: an HTML fragment means the agent ignored the contract.
+  if re.search(r"<[a-zA-Z/][^>]*>", text):
+    return False
+  # Reject an unfilled template by requiring the letter to name the actual job:
+  # its role or employer must appear so a generic placeholder is caught.
+  haystack = stripped.casefold()
+  role = str(candidate.get("role") or "").strip().casefold()
+  company = str(candidate.get("company") or "").strip().casefold()
+  company_known = bool(company) and company != UNKNOWN_EMPLOYER.casefold()
+  role_ok = bool(role) and role in haystack
+  company_ok = company_known and company in haystack
+  return role_ok or company_ok
+
+
 def validate_agent_result(args: argparse.Namespace, work: dict, result: dict) -> list[dict]:
   if result.get("schemaVersion") != AGENT_RESULT_SCHEMA_VERSION:
     raise AgentResultError(f"agent result schemaVersion must be {AGENT_RESULT_SCHEMA_VERSION}")
@@ -560,12 +622,16 @@ def validate_agent_result(args: argparse.Namespace, work: dict, result: dict) ->
       raise AgentResultError("each selected candidate needs its own artifact files")
     used_paths.update({cv_path, letter_path})
     _validate_personalized_html(base_path, cv_path)
+    # A weak/empty/HTML/placeholder letter is dropped (not fatal) so dispatch
+    # falls back to the deterministic template for this candidate while still
+    # using the validated personalized CV.
+    tailored_letter = letter_path if _letter_is_tailored(letter_path, candidates[candidate_id]) else None
     selected.append({
       "candidate": candidates[candidate_id],
       "reason": reason,
       "fitScore": score,
       "cvHtmlPath": cv_path,
-      "coverLetterPath": letter_path,
+      "coverLetterPath": tailored_letter,
     })
 
   if seen != set(candidates):

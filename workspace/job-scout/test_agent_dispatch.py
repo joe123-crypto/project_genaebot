@@ -173,7 +173,14 @@ class AgentDispatchTests(unittest.TestCase):
       cv = artifact_dir / "cv.html"
       cv.write_text(html.replace("Summary", "Driver summary"), encoding="utf-8")
       letter = artifact_dir / "cover-letter.txt"
-      letter.write_text("A truthful tailored letter.\n", encoding="utf-8")
+      letter.write_text(
+        "Dear Hiring Team at Example Logistics,\n\n"
+        "I am applying for the Driver position at Example Logistics.\n"
+        "My background includes safe parcel delivery and a clean driving record,\n"
+        "and I am ready to contribute reliably from the first day.\n\n"
+        "Kind regards,\nTest Applicant\n",
+        encoding="utf-8",
+      )
       work = dispatch_store.load_agent_work(root, "agent-test", claim_id)
       complete_args = self.args(root, "complete", claim_id=claim_id)
       result = {
@@ -193,6 +200,105 @@ class AgentDispatchTests(unittest.TestCase):
 
       selected = agent_dispatch.validate_agent_result(complete_args, work, result)
       self.assertEqual(selected[0]["fitScore"], 84)
+      # A genuine tailored letter is retained (not dropped to the template).
+      self.assertEqual(selected[0]["coverLetterPath"], letter)
+
+  def test_claim_packet_includes_cover_letter_guidance_and_base_draft(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      prepared = self.prepare(root)
+      claim_id = prepared["claims"][0]["claimId"]
+      args = self.args(root, "claim", claim_id=claim_id)
+      html = '<!doctype html><main class="cv" data-cv-template="professional-v2"><p data-cv-immutable="name">Test Applicant</p></main>'
+      canonical = root / "canonical.html"
+      canonical.write_text(html, encoding="utf-8")
+      with mock.patch.object(agent_dispatch, "subscriber_cv_html", return_value=str(canonical)):
+        claimed = agent_dispatch.cmd_agent_claim(args)
+      work = claimed["work"]
+      self.assertIn("coverLetterGuidance", work)
+      self.assertTrue(work["coverLetterGuidance"])
+      base_letter = Path(work["baseCoverLetterPath"])
+      self.assertTrue(base_letter.is_file())
+      self.assertEqual(base_letter.stat().st_mode & 0o777, 0o600)
+      draft = base_letter.read_text(encoding="utf-8")
+      self.assertIn("Driver", draft)
+      # The base draft is plain text, never HTML.
+      self.assertNotRegex(draft, r"<[a-zA-Z/]")
+
+  def test_letter_quality_validator_accepts_and_rejects(self) -> None:
+    candidate = {"role": "Driver", "company": "Example Logistics"}
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      good = root / "good.txt"
+      good.write_text(
+        "Dear Hiring Team at Example Logistics,\n\n"
+        "I am applying for the Driver position at Example Logistics.\n"
+        "My background includes safe parcel delivery and a clean record,\n"
+        "and I am ready to contribute reliably from the first day.\n\n"
+        "Kind regards,\nTest Applicant\n",
+        encoding="utf-8",
+      )
+      self.assertTrue(agent_dispatch._letter_is_tailored(good, candidate))
+
+      empty = root / "empty.txt"
+      empty.write_text("   \n", encoding="utf-8")
+      self.assertFalse(agent_dispatch._letter_is_tailored(empty, candidate))
+
+      htmlish = root / "html.txt"
+      htmlish.write_text(good.read_text(encoding="utf-8") + "<p>oops</p>\n", encoding="utf-8")
+      self.assertFalse(agent_dispatch._letter_is_tailored(htmlish, candidate))
+
+      placeholder = root / "placeholder.txt"
+      placeholder.write_text(
+        "Dear Hiring Team at [COMPANY],\n\n"
+        "I am applying for the [ROLE] position at [COMPANY].\n"
+        "My background includes relevant experience and a strong work ethic,\n"
+        "and I am ready to contribute from the first day.\n\n"
+        "Kind regards,\nApplicant\n",
+        encoding="utf-8",
+      )
+      self.assertFalse(agent_dispatch._letter_is_tailored(placeholder, candidate))
+
+  def test_weak_letter_is_dropped_so_dispatch_uses_template(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      prepared = self.prepare(root)
+      claim_id = prepared["claims"][0]["claimId"]
+      args = self.args(root, "claim", claim_id=claim_id)
+      html = '<!doctype html><main class="cv" data-cv-template="professional-v2"><p data-cv-immutable="name">Test Applicant</p><p>Summary</p></main>'
+      canonical = root / "canonical.html"
+      canonical.write_text(html, encoding="utf-8")
+      with mock.patch.object(agent_dispatch, "subscriber_cv_html", return_value=str(canonical)):
+        claimed = agent_dispatch.cmd_agent_claim(args)
+      candidate_id = claimed["work"]["candidates"][0]["agentCandidateId"]
+      artifact_dir = Path(claimed["work"]["personalizedOutputDirectory"]) / "job"
+      artifact_dir.mkdir()
+      cv = artifact_dir / "cv.html"
+      cv.write_text(html.replace("Summary", "Driver summary"), encoding="utf-8")
+      letter = artifact_dir / "cover-letter.txt"
+      # Too short and does not name the role/company: a lazy/placeholder letter.
+      letter.write_text("Please consider me.\n", encoding="utf-8")
+      work = dispatch_store.load_agent_work(root, "agent-test", claim_id)
+      result = {
+        "schemaVersion": 1,
+        "runId": "agent-test",
+        "claimId": claim_id,
+        "assessments": [{
+          "candidateId": candidate_id,
+          "fitScore": 84,
+          "hardMismatch": False,
+          "selected": True,
+          "reason": "Driving experience and location align.",
+          "cvHtmlPath": str(cv),
+          "coverLetterPath": str(letter),
+        }],
+      }
+
+      selected = agent_dispatch.validate_agent_result(self.args(root, "complete", claim_id=claim_id), work, result)
+      # The CV survives, but the weak letter is dropped so dispatch falls back to
+      # write_cover_letter for this candidate.
+      self.assertEqual(selected[0]["cvHtmlPath"], cv)
+      self.assertIsNone(selected[0]["coverLetterPath"])
 
   def test_invalid_agent_result_immediately_uses_fallback_and_duplicate_is_safe(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
