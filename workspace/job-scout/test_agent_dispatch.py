@@ -248,6 +248,21 @@ class AgentDispatchTests(unittest.TestCase):
       )
       self.assertFalse(agent_dispatch._letter_is_tailored(placeholder, candidate))
 
+      feed_headline = root / "feed-headline.txt"
+      feed_headline.write_text(
+        "Dear Hiring Team,\n\n"
+        "I am applying for the catering opportunity at Midlands State University.\n"
+        "My hospitality experience aligns with the waiter and porter duties,\n"
+        "and I would welcome the chance to contribute to your team.\n\n"
+        "Kind regards,\nTest Applicant\n",
+        encoding="utf-8",
+      )
+      headline_candidate = {
+        "role": "Midlands State University Catering Jobs July 2026: Waiters/Waitresses and Porter Vacancies",
+        "company": "Unknown employer",
+      }
+      self.assertTrue(agent_dispatch._letter_is_tailored(feed_headline, headline_candidate))
+
   def test_weak_letter_fails_closed(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
       root = Path(tmp)

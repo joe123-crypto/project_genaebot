@@ -637,7 +637,29 @@ def _letter_is_tailored(letter_path: Path, candidate: dict) -> bool:
   company_known = bool(company) and company != UNKNOWN_EMPLOYER.casefold()
   role_ok = bool(role) and role in haystack
   company_ok = company_known and company in haystack
-  return role_ok or company_ok
+  if role_ok or company_ok:
+    return True
+
+  # Advert titles are often feed headlines rather than natural role names,
+  # e.g. "University Catering Jobs July 2026: Waiters and Porter Vacancies".
+  # A genuinely tailored letter may name the stable, distinctive words without
+  # copying the entire headline verbatim. Require meaningful token coverage so
+  # that wording changes are accepted but a generic template still fails.
+  stopwords = {
+    "about", "after", "again", "against", "available", "before", "being",
+    "from", "jobs", "january", "february", "march", "april", "june", "july",
+    "august", "september", "october", "november", "december", "position",
+    "role", "their", "there", "these", "this", "vacancies", "vacancy", "with",
+  }
+  role_tokens = {
+    token for token in re.findall(r"[a-z0-9]+", role)
+    if len(token) >= 4 and not token.isdigit() and token not in stopwords
+  }
+  if not role_tokens:
+    return False
+  hits = sum(token in haystack for token in role_tokens)
+  required = 1 if len(role_tokens) <= 2 else max(2, (len(role_tokens) + 1) // 2)
+  return hits >= required
 
 
 def validate_agent_result(args: argparse.Namespace, work: dict, result: dict) -> list[dict]:
