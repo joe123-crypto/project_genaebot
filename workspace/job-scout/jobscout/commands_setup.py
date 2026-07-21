@@ -265,15 +265,15 @@ _CV_ICON_EMAIL = (
 CV_HTML_STYLE = """\
   @page { size: A4; margin: 0; }
   * { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; background: #fff; color: #202b3c; font-family: Arial, Helvetica, sans-serif; font-size: 10.5pt; line-height: 1.45; }
-  main.cv { width: 210mm; min-height: 297mm; margin: 0 auto; padding: 16mm 17mm 15mm; }
-  .cv-header { margin: 0 0 11mm; }
-  h1 { margin: 0; color: #101826; font-size: 27pt; line-height: 1.08; font-weight: 700; }
-  .headline { margin: 2.5mm 0 0; color: #405a78; font-size: 11.5pt; text-transform: uppercase; letter-spacing: 0.6pt; }
-  .cv-grid { display: grid; grid-template-columns: 55mm minmax(0, 1fr); gap: 12mm; align-items: start; }
-  .sidebar { min-width: 0; padding-right: 9mm; border-right: 1px solid #d7e0ea; }
+  html, body { margin: 0; padding: 0; background: #fff; color: #202b3c; font-family: Arial, Helvetica, sans-serif; font-size: 10pt; line-height: 1.4; }
+  main.cv { width: 210mm; min-height: 297mm; margin: 0 auto; padding: 12mm 14mm 11mm; }
+  .cv-header { margin: 0 0 7mm; }
+  h1 { margin: 0; color: #101826; font-size: 23pt; line-height: 1.08; font-weight: 700; }
+  .headline { margin: 2mm 0 0; color: #405a78; font-size: 11pt; text-transform: uppercase; letter-spacing: 0.6pt; }
+  .cv-grid { display: grid; grid-template-columns: 55mm minmax(0, 1fr); gap: 9mm; align-items: start; }
+  .sidebar { min-width: 0; padding-right: 7mm; border-right: 1px solid #d7e0ea; }
   .main-column { min-width: 0; }
-  section { break-inside: avoid; margin: 0 0 8mm; }
+  section { break-inside: avoid; margin: 0 0 5.5mm; }
   h2 { margin: 0 0 4mm; padding: 0 0 2.5mm; color: #175ec8; font-size: 8.5pt; line-height: 1.2; font-weight: 700; text-transform: uppercase; letter-spacing: 1pt; border-bottom: 1px solid #cbdcf3; }
   .sidebar h2 { border-bottom: 0; padding-bottom: 0; }
   p { margin: 0 0 3mm; }

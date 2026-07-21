@@ -12,6 +12,7 @@ import html
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import urllib.error
@@ -144,6 +145,52 @@ def render_html_to_pdf(html_or_path: str | Path, output: str | Path, timeout: in
   return destination
 
 
+def pdf_page_count(pdf_path: str | Path) -> int:
+  """Number of pages in a PDF.
+
+  Returns 1 when it cannot be determined (pdfinfo missing/failing) so a readable
+  render is never rejected merely because the page count is unknown.
+  """
+  try:
+    completed = subprocess.run(
+      ["pdfinfo", str(pdf_path)], check=True, capture_output=True, text=True, timeout=30,
+    )
+  except (OSError, subprocess.SubprocessError):
+    return 1
+  match = re.search(r"^Pages:\s*(\d+)", completed.stdout, re.MULTILINE)
+  return int(match.group(1)) if match else 1
+
+
+# Progressive scale-to-fit steps for the one-page guarantee. The floor keeps the
+# text readable; content that still overflows at the floor is sent as-is.
+_CV_ZOOM_STEPS = (1.0, 0.92, 0.85, 0.78, 0.7)
+
+
+def _apply_print_zoom(html: str, zoom: float) -> str:
+  tag = f"<style>html {{ zoom: {zoom:.2f}; }}</style>"
+  head_close = re.search(r"</head\s*>", html, re.IGNORECASE)
+  if head_close:
+    return html[: head_close.start()] + tag + html[head_close.start() :]
+  return tag + html
+
+
+def render_one_page_cv(html_or_path: str | Path, output: str | Path) -> Path:
+  """Render a CV to PDF, scaling it down until it fits on a single page.
+
+  The modern stylesheet is applied when the source is unstyled (a no-op for an
+  AI-designed CV that carries its own <style>). If the CV overflows one page it
+  is re-rendered at progressively smaller zoom, so a long CV shrinks to one page
+  rather than spilling onto a second.
+  """
+  styled = style_cv_html(_html_source(html_or_path))
+  pdf = render_html_to_pdf(styled, output)
+  for zoom in _CV_ZOOM_STEPS[1:]:
+    if pdf_page_count(pdf) <= 1:
+      break
+    pdf = render_html_to_pdf(_apply_print_zoom(styled, zoom), output)
+  return pdf
+
+
 def cover_letter_html(text: str) -> str:
   raw_text = str(text or "").strip()
   paragraphs = [block.strip() for block in raw_text.split("\n\n") if block.strip()]
@@ -178,8 +225,7 @@ def _rebuild_stored_pdf_cv(pdf_path: Path, subscriber: dict) -> Path:
   """
   with tempfile.TemporaryDirectory() as tmp:
     semantic = convert_pdf_to_cv_html(pdf_path, Path(tmp) / "cv.html")
-    styled = style_cv_html(semantic.read_text(encoding="utf-8"))
-    return render_html_to_pdf(styled, pdf_path.with_name(document_filename(subscriber, "cv")))
+    return render_one_page_cv(semantic.read_text(encoding="utf-8"), pdf_path.with_name(document_filename(subscriber, "cv")))
 
 
 def send_application_email(
@@ -196,10 +242,9 @@ def send_application_email(
   subject = natural_email_text(f"Application for {role} - {display_name(subscriber)}", 180)
   attachment = Path(cv_pdf) if cv_pdf is not None else Path(subscriber_cv_file(subscriber))
   if attachment.suffix.casefold() != ".pdf":
-    # The stored base CV is unstyled semantic HTML; apply the modern stylesheet
-    # on the fly before rendering to PDF for the employer.
-    styled_cv = style_cv_html(attachment.read_text(encoding="utf-8"))
-    attachment = render_html_to_pdf(styled_cv, attachment.with_name(document_filename(subscriber, "cv")))
+    # The stored base CV is unstyled semantic HTML; style it and render to a
+    # single-page PDF for the employer.
+    attachment = render_one_page_cv(attachment.read_text(encoding="utf-8"), attachment.with_name(document_filename(subscriber, "cv")))
   elif cv_pdf is None:
     # A stored legacy PDF must never be emailed verbatim: it may be a browser
     # "print to PDF" artifact carrying print chrome (timestamps, page counters,

@@ -13,7 +13,7 @@ from jobscout.application import (
   store_application_artifacts,
   web_apply_payload,
 )
-from jobscout.delivery import cover_letter_html, render_html_to_pdf, send_application_email
+from jobscout.delivery import cover_letter_html, pdf_page_count, render_html_to_pdf, send_application_email
 import jobscout.subscriber
 
 
@@ -86,6 +86,13 @@ class RenderClientTests(unittest.TestCase):
       with self.assertRaisesRegex(RuntimeError, "invalid PDF"):
         render_html_to_pdf("<p>CV</p>", Path(tmp) / "cv.pdf")
 
+  def test_pdf_page_count_is_graceful_when_unreadable(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      bad = Path(tmp) / "x.pdf"
+      bad.write_bytes(b"not a real pdf")
+      # An unreadable/absent PDF must not force a one-page rejection.
+      self.assertEqual(pdf_page_count(bad), 1)
+
   def test_html_source_rejects_a_missing_file_path(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
       existing = Path(tmp) / "cv.html"
@@ -155,9 +162,12 @@ class ApplicationDocumentTests(unittest.TestCase):
         return output
 
       with mock.patch("jobscout.application.application_artifact_dir", return_value=root / "attempt"), mock.patch(
+        "jobscout.application.render_one_page_cv",
+        side_effect=render,
+      ) as cv_renderer, mock.patch(
         "jobscout.application.render_html_to_pdf",
         side_effect=render,
-      ) as renderer:
+      ) as letter_renderer:
         documents = prepare_application_documents(
           SUBSCRIBER,
           CANDIDATE,
@@ -170,13 +180,36 @@ class ApplicationDocumentTests(unittest.TestCase):
       self.assertEqual(documents["coverLetterText"], letter)
       self.assertEqual(documents["cvPdf"].read_bytes(), b"%PDF-1.7 rendered")
       self.assertEqual(documents["coverLetterPdf"].read_bytes(), b"%PDF-1.7 rendered")
-      # The unstyled base CV is styled on the fly before rendering.
-      cv_html = renderer.call_args_list[0].args[0]
-      self.assertIn("Tailored CV", cv_html)
-      self.assertIn("<style>", cv_html)
-      self.assertIn(".skill", cv_html)
-      letter_html = renderer.call_args_list[1].args[0]
+      # The CV goes through the single-page render helper with the tailored source.
+      self.assertEqual(Path(cv_renderer.call_args.args[0]), tailored)
+      letter_html = letter_renderer.call_args.args[0]
       self.assertIn("Tailored letter.", letter_html)
+
+  def test_render_one_page_cv_styles_and_scales_until_it_fits(self) -> None:
+    from jobscout import delivery
+    with tempfile.TemporaryDirectory() as tmp:
+      out = Path(tmp) / "cv.pdf"
+      rendered: list[str] = []
+
+      def render(source, output):
+        rendered.append(source)
+        Path(output).write_bytes(b"%PDF-1.7")
+        return Path(output)
+
+      # Two pages, still two, then one: it scales down until it fits.
+      with mock.patch("jobscout.delivery.render_html_to_pdf", side_effect=render), mock.patch(
+        "jobscout.delivery.pdf_page_count",
+        side_effect=[2, 2, 1],
+      ):
+        delivery.render_one_page_cv("<html><head></head><body>Fits me@example.com</body></html>", out)
+
+      self.assertEqual(len(rendered), 3)
+      # The unstyled source is styled on the first render, then zoomed down.
+      self.assertIn("<style>", rendered[0])
+      self.assertIn(".skill", rendered[0])
+      self.assertNotIn("zoom", rendered[0])
+      self.assertIn("zoom: 0.92", rendered[1])
+      self.assertIn("zoom: 0.85", rendered[2])
 
   def test_web_payload_separates_text_and_file_cover_letters(self) -> None:
     payload = web_apply_payload(

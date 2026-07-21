@@ -526,17 +526,86 @@ class AgentDispatchTests(unittest.TestCase):
         ("employer", "Acme"),
       ])
 
-  def test_validator_treats_bare_and_self_closed_void_elements_alike(self) -> None:
+  def test_claim_packet_includes_cv_design_guidance(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      prepared = self.prepare(root)
+      claim_id = prepared["claims"][0]["claimId"]
+      html = '<!doctype html><main class="cv" data-cv-template="professional-v2"><p data-cv-immutable="name">Test Applicant</p></main>'
+      canonical = root / "canonical.html"
+      canonical.write_text(html, encoding="utf-8")
+      with mock.patch.object(agent_dispatch, "subscriber_cv_html", return_value=str(canonical)):
+        claimed = agent_dispatch.cmd_agent_claim(self.args(root, "claim", claim_id=claim_id))
+      guidance = claimed["work"]["cvDesignGuidance"]
+      self.assertIn("single A4 page", guidance)
+      self.assertIn("self-contained", guidance)
+      self.assertIn("never by dropping facts", guidance.lower())
+
+  def test_validator_accepts_full_redesign_and_guards_facts(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      base = root / "base.html"
+      base.write_text(
+        '<main data-cv-template="professional-v2"><h1 data-cv-field="identity">Joseph Munemo</h1>'
+        '<p data-cv-field="contact">+263 78 563 2943<br>me@example.com</p>'
+        '<p data-cv-field="employer">Acme 2019 - 2024</p></main>',
+        encoding="utf-8",
+      )
+      # A completely different design + CSS that keeps every fact: accepted.
+      good = root / "good.html"
+      good.write_text(
+        '<html><head><style>*{font-family:Georgia}</style></head><body>'
+        '<header><h1>Joseph Munemo</h1></header>'
+        '<aside>Call +263 78 563 2943 or email me@example.com</aside>'
+        '<div>Acme, 2019 to 2024</div></body></html>',
+        encoding="utf-8",
+      )
+      agent_dispatch._validate_personalized_html(base, good)
+
+      def variant(name: str, body: str) -> Path:
+        path = root / name
+        path.write_text(f"<html><body>{body}</body></html>", encoding="utf-8")
+        return path
+
+      keep = "Joseph Munemo +263 78 563 2943 me@example.com Acme 2019 to 2024"
+      with self.assertRaisesRegex(agent_dispatch.AgentResultError, "email"):
+        agent_dispatch._validate_personalized_html(base, variant("drop_email.html", keep.replace("me@example.com", "")))
+      with self.assertRaisesRegex(agent_dispatch.AgentResultError, "phone number not in"):
+        agent_dispatch._validate_personalized_html(base, variant("add_phone.html", keep + " +263 71 111 2222"))
+      with self.assertRaisesRegex(agent_dispatch.AgentResultError, "date"):
+        agent_dispatch._validate_personalized_html(base, variant("drop_date.html", keep.replace(" to 2024", "")))
+      with self.assertRaisesRegex(agent_dispatch.AgentResultError, "name"):
+        agent_dispatch._validate_personalized_html(base, variant("rename.html", keep.replace("Joseph Munemo", "Someone Else")))
+
+  def test_validator_rejects_non_self_contained_html(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      base = root / "base.html"
+      base.write_text('<h1 data-cv-field="identity">Jane Doe</h1><p>me@example.com</p>', encoding="utf-8")
+      for name, body in [
+        ("script.html", "<script>x()</script>Jane Doe me@example.com"),
+        ("img.html", "<img src='https://tracker.example/p.gif'>Jane Doe me@example.com"),
+        ("link.html", "<link rel='stylesheet' href='https://cdn.example/x.css'>Jane Doe me@example.com"),
+        ("import.html", "<style>@import url(https://cdn.example/x.css);</style>Jane Doe me@example.com"),
+      ]:
+        path = root / name
+        path.write_text(f"<html><head></head><body>{body}</body></html>", encoding="utf-8")
+        with self.assertRaisesRegex(agent_dispatch.AgentResultError, "unsafe or non-self-contained"):
+          agent_dispatch._validate_personalized_html(base, path)
+
+  def test_validator_preserves_facts_across_void_elements_and_restyling(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
       base = Path(tmp) / "base.html"
       faithful = Path(tmp) / "faithful.html"
       tampered = Path(tmp) / "tampered.html"
-      base.write_text("<style>.cv{}</style><p data-cv-field='contact'>+263 700<br>a@b.c</p>", encoding="utf-8")
-      faithful.write_text("<style>.cv{}</style><p data-cv-field='contact'>+263 700<br/>a@b.c</p>", encoding="utf-8")
-      tampered.write_text("<style>.cv{}</style><p data-cv-field='contact'>+263 999<br>a@b.c</p>", encoding="utf-8")
+      base.write_text("<style>.cv{}</style><p data-cv-field='contact'>+263 771 234<br>a@example.com</p>", encoding="utf-8")
+      # A full redesign (different markup/CSS, <br> vs <br/>) is fine as long as
+      # the facts survive.
+      faithful.write_text("<style>.new{color:red}</style><section><b>+263 771 234</b><br/> a@example.com</section>", encoding="utf-8")
+      tampered.write_text("<style>.cv{}</style><p>+263 999 999<br>a@example.com</p>", encoding="utf-8")
 
       agent_dispatch._validate_personalized_html(base, faithful)
-      with self.assertRaisesRegex(agent_dispatch.AgentResultError, "immutable fact"):
+      with self.assertRaisesRegex(agent_dispatch.AgentResultError, "phone number"):
         agent_dispatch._validate_personalized_html(base, tampered)
 
   def test_stale_completing_claim_can_be_recovered(self) -> None:

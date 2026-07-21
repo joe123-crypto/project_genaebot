@@ -18,8 +18,7 @@ from .constants import (
 from .formality import employer_formality
 from .jsearch import application_key, candidate_key
 from . import api
-from .commands_setup import style_cv_html
-from .delivery import _html_source, cover_letter_html, render_html_to_pdf
+from .delivery import cover_letter_html, render_html_to_pdf, render_one_page_cv
 from .profile import clean_items, profile_values, subscriber_user_id
 from .subscriber import (
   applicant_name,
@@ -154,10 +153,9 @@ def prepare_application_documents(
   if not letter_path.is_file() or not letter_path.read_text(encoding="utf-8").strip():
     raise RuntimeError("cover letter text is missing")
   cv_source = personalized_cv_html if personalized_cv_html is not None else subscriber_cv_html(subscriber)
-  # The base/personalized CV is unstyled semantic HTML; apply the modern
-  # stylesheet on the fly before rendering to PDF.
-  styled_cv = style_cv_html(_html_source(cv_source))
-  cv_pdf = render_html_to_pdf(styled_cv, directory / document_filename(subscriber, "cv"))
+  # One-page guardrail: the (AI-designed or base) CV is styled and scaled down as
+  # needed so it always fits on a single page.
+  cv_pdf = render_one_page_cv(cv_source, directory / document_filename(subscriber, "cv"))
   documents = {
     "cvPdf": cv_pdf,
     "coverLetterText": letter_path,
