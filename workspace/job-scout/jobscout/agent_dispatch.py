@@ -108,6 +108,21 @@ COVER_LETTER_GUIDANCE = (
   "professional tone. The baseCoverLetter draft already reflects the correct "
   "register, so preserve it while tailoring."
 )
+# The agent's in-repo contract for the CV: it owns the whole design. Its output is
+# validated for safe, self-contained HTML, fact preservation, and one-page fit
+# (see _validate_personalized_html and the page-count guard at render time).
+CV_DESIGN_GUIDANCE = (
+  "Redesign baseCvHtml into a complete, self-contained, professional CV as a single "
+  "standalone HTML document. You own the layout, structure, and CSS: put all styling in "
+  "an inline <style>, and use no scripts and no external resources (no remote fonts, "
+  "images, or stylesheets; inline SVG/data: URIs are fine). Reorganise the content into "
+  "clear, sensibly-ordered sections even if the source text is jumbled, and make it "
+  "visually polished (for example a clean two-column layout). The entire CV MUST fit on "
+  "a single A4 page — achieve this through layout density and concise wording, NEVER by "
+  "dropping facts. Preserve every factual detail exactly: the applicant's name, every "
+  "email and phone number, education, employers, and dates. Never invent contact "
+  "details, qualifications, or dates that are not in the source."
+)
 TERMINAL_CLAIM_STATUSES = {"completed", "fallback_completed"}
 # html.parser never emits an endtag for a bare void element, so these tags
 # must not affect immutable-region depth in either the <br> or <br/> form.
@@ -431,6 +446,7 @@ def cmd_agent_claim(args: argparse.Namespace) -> dict:
     "candidates": work["candidates"],
     "preparationError": work.get("preparationError"),
     "baseCvHtmlPath": str(base_cv),
+    "cvDesignGuidance": CV_DESIGN_GUIDANCE,
     "baseCoverLetterPath": str(base_letter),
     "coverLetterGuidance": COVER_LETTER_GUIDANCE,
     "personalizedOutputDirectory": str(personalized_dir),
@@ -478,6 +494,11 @@ def _safe_output_file(root: Path, value: object, max_bytes: int, suffix: str) ->
   return resolved
 
 
+def _is_external_url(value: str) -> bool:
+  """A resource URL that would load from the network (not a self-contained CV)."""
+  return str(value or "").strip().casefold().startswith(("http://", "https://", "//"))
+
+
 class _CvHtmlInspector(HTMLParser):
   def __init__(self) -> None:
     super().__init__(convert_charrefs=True)
@@ -485,19 +506,29 @@ class _CvHtmlInspector(HTMLParser):
     self.styles: list[str] = []
     self.stylesheets: list[tuple[tuple[str, str], ...]] = []
     self.immutable: list[tuple[str, str]] = []
+    self.text_parts: list[str] = []
     self._style_parts: list[str] | None = None
     self._immutable_name: str | None = None
     self._immutable_parts: list[str] | None = None
     self._immutable_depth = 0
+
+  @property
+  def text(self) -> str:
+    return " ".join(self.text_parts)
 
   def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
     name = tag.casefold()
     attributes = {str(key).casefold(): str(value or "") for key, value in attrs}
     if name in {"script", "iframe", "object", "embed"} or any(key.startswith("on") for key in attributes):
       self.unsafe = True
+    # Self-contained only: no resource may load from the network.
+    if _is_external_url(attributes.get("src", "")):
+      self.unsafe = True
     if name == "style":
       self._style_parts = []
     if name == "link" and "stylesheet" in attributes.get("rel", "").casefold().split():
+      if _is_external_url(attributes.get("href", "")):
+        self.unsafe = True
       self.stylesheets.append(tuple(sorted(attributes.items())))
     immutable_name = attributes.get("data-cv-immutable")
     field_name = attributes.get("data-cv-field", "").casefold()
@@ -518,7 +549,11 @@ class _CvHtmlInspector(HTMLParser):
   def handle_endtag(self, tag: str) -> None:
     name = tag.casefold()
     if name == "style" and self._style_parts is not None:
-      self.styles.append("".join(self._style_parts).strip())
+      style_text = "".join(self._style_parts)
+      # An @import or url() that reaches the network is not self-contained.
+      if re.search(r"@import|url\(\s*['\"]?(?:https?:)?//", style_text, re.IGNORECASE):
+        self.unsafe = True
+      self.styles.append(style_text.strip())
       self._style_parts = None
     if name in VOID_ELEMENTS:
       return
@@ -533,6 +568,8 @@ class _CvHtmlInspector(HTMLParser):
   def handle_data(self, data: str) -> None:
     if self._style_parts is not None:
       self._style_parts.append(data)
+      return
+    self.text_parts.append(data)
     if self._immutable_parts is not None:
       self._immutable_parts.append(data)
 
@@ -547,17 +584,57 @@ def _inspect_html(path: Path) -> _CvHtmlInspector:
   return inspector
 
 
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+_PHONE_RE = re.compile(r"\+?\d[\d\s()\-]{6,}\d")
+_YEAR_RE = re.compile(r"\b(?:19|20)\d{2}\b")
+
+
+def _cv_atomic_facts(text: str) -> tuple[set[str], set[str], set[str]]:
+  """The atomic facts a redesign must preserve: emails, phone numbers, years.
+
+  Phones are normalized to their trailing 9 digits so formatting differences
+  compare equal; a match must have at least 9 digits so a date range like
+  "2019 - 2024" is not mistaken for a phone number.
+  """
+  emails = {match.group(0).casefold() for match in _EMAIL_RE.finditer(text)}
+  phones = {
+    digits[-9:]
+    for match in _PHONE_RE.finditer(text)
+    if len(digits := re.sub(r"\D", "", match.group(0))) >= 9
+  }
+  years = {match.group(0) for match in _YEAR_RE.finditer(text)}
+  return emails, phones, years
+
+
 def _validate_personalized_html(base_path: Path, personalized_path: Path) -> None:
+  """Validate an AI-redesigned CV.
+
+  The agent now owns layout and CSS, so stylesheet/marker equality is no longer
+  required. Instead the output must be safe and self-contained, and must preserve
+  every atomic fact (name, emails, phones, dates) without fabricating new ones.
+  """
   base = _inspect_html(base_path)
   personalized = _inspect_html(personalized_path)
-  if not base.immutable:
-    raise AgentResultError("canonical CV has no immutable fact markers")
   if personalized.unsafe:
-    raise AgentResultError("personalized CV contains unsafe active HTML")
-  if base.styles != personalized.styles or base.stylesheets != personalized.stylesheets:
-    raise AgentResultError("personalized CV changed the canonical stylesheet or layout links")
-  if base.immutable != personalized.immutable:
-    raise AgentResultError("personalized CV changed an immutable fact")
+    raise AgentResultError("personalized CV contains unsafe or non-self-contained HTML")
+  base_emails, base_phones, base_years = _cv_atomic_facts(base.text)
+  new_emails, new_phones, new_years = _cv_atomic_facts(personalized.text)
+  if base_emails - new_emails:
+    raise AgentResultError("personalized CV dropped a contact email")
+  if new_emails - base_emails:
+    raise AgentResultError("personalized CV introduced an email not in the source CV")
+  if base_phones - new_phones:
+    raise AgentResultError("personalized CV dropped a phone number")
+  if new_phones - base_phones:
+    raise AgentResultError("personalized CV introduced a phone number not in the source CV")
+  if base_years - new_years:
+    raise AgentResultError("personalized CV dropped a date")
+  identity = next((value for marker, value in base.immutable if marker.casefold() == "identity" and value), "")
+  if identity:
+    tokens = [token.casefold() for token in re.findall(r"\w+", identity) if len(token) > 1]
+    haystack = personalized.text.casefold()
+    if tokens and not all(token in haystack for token in tokens):
+      raise AgentResultError("personalized CV altered or dropped the applicant's name")
 
 
 def _letter_is_tailored(letter_path: Path, candidate: dict) -> bool:
