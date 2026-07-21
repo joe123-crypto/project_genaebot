@@ -329,7 +329,23 @@ def cmd_agent_claim(args: argparse.Namespace) -> dict:
   if not base_cv.is_file():
     canonical_path = Path(subscriber_cv_html(work["subscriber"]))
     canonical_html = canonical_path.read_text(encoding="utf-8")
-    legacy_generated = "font-family: Georgia, 'Times New Roman', serif" in canonical_html
+    # Re-convert stale/dirty canonical HTML from the original PDF: the old
+    # Georgia single-column template, anything missing the current template
+    # marker, or anything still carrying browser print chrome (file:// paths or
+    # a browser timestamp) must be rebuilt into clean semantic HTML.
+    has_browser_chrome = bool(
+      re.search(r"file://", canonical_html, flags=re.IGNORECASE)
+      or re.search(
+        r"\b\d{1,2}/\d{1,2}/\d{2,4},?\s+\d{1,2}:\d{2}\s+(?:AM|PM)\b",
+        canonical_html,
+        flags=re.IGNORECASE,
+      )
+    )
+    legacy_generated = (
+      "font-family: Georgia, 'Times New Roman', serif" in canonical_html
+      or 'data-cv-template="professional-v2"' not in canonical_html
+      or has_browser_chrome
+    )
     if legacy_generated:
       source_pdf = output_dir / "base-source.pdf"
       try:
@@ -357,7 +373,11 @@ def cmd_agent_claim(args: argparse.Namespace) -> dict:
         except OSError:
           pass
     else:
-      base_cv.write_text(canonical_html, encoding="utf-8")
+      # The canonical HTML carries the current template marker and no browser
+      # chrome; store it unstyled so the modern stylesheet is applied on the fly
+      # at render time (and the personalized/base stylesheet check stays valid).
+      unstyled = re.sub(r"<style\b[^>]*>.*?</style>\s*", "", canonical_html, flags=re.IGNORECASE | re.DOTALL)
+      base_cv.write_text(unstyled, encoding="utf-8")
     os.chmod(base_cv, 0o600)
 
   public_work = {

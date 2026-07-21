@@ -170,7 +170,11 @@ class ApplicationDocumentTests(unittest.TestCase):
       self.assertEqual(documents["coverLetterText"], letter)
       self.assertEqual(documents["cvPdf"].read_bytes(), b"%PDF-1.7 rendered")
       self.assertEqual(documents["coverLetterPdf"].read_bytes(), b"%PDF-1.7 rendered")
-      self.assertEqual(renderer.call_args_list[0].args[0], tailored)
+      # The unstyled base CV is styled on the fly before rendering.
+      cv_html = renderer.call_args_list[0].args[0]
+      self.assertIn("Tailored CV", cv_html)
+      self.assertIn("<style>", cv_html)
+      self.assertIn(".skill", cv_html)
       letter_html = renderer.call_args_list[1].args[0]
       self.assertIn("Tailored letter.", letter_html)
 
@@ -210,13 +214,15 @@ class ApplicationDocumentTests(unittest.TestCase):
       root = Path(tmp)
       letter = root / "cover-letter.txt"
       letter.write_text("Dear Hiring Team,\n\nA specific letter.\n\nKind regards,\nTest Applicant\n", encoding="utf-8")
+      cv_html = root / "cv.html"
+      cv_html.write_text("<!doctype html><head></head><body><p>Base CV</p></body>", encoding="utf-8")
 
       def render_file(_source, output):
         return Path(output)
 
       with mock.patch("jobscout.delivery.run_json_command", return_value={"messageId": "m1"}) as run, mock.patch(
         "jobscout.delivery.subscriber_cv_file",
-        return_value=str(root / "cv.html"),
+        return_value=str(cv_html),
       ), mock.patch(
         "jobscout.delivery.render_html_to_pdf",
         side_effect=render_file,
@@ -224,7 +230,11 @@ class ApplicationDocumentTests(unittest.TestCase):
         send_application_email(SUBSCRIBER, CANDIDATE, letter)
 
       self.assertEqual(render.call_count, 2)
-      self.assertEqual(render.call_args_list[0].args, (root / "cv.html", root / "cv-base.pdf"))
+      # The base HTML is styled on the fly, then rendered to cv-base.pdf.
+      styled_cv = render.call_args_list[0].args[0]
+      self.assertIn("Base CV", styled_cv)
+      self.assertIn("<style>", styled_cv)
+      self.assertEqual(render.call_args_list[0].args[1], root / "cv-base.pdf")
       letter_html = render.call_args_list[1].args[0]
       self.assertIn("Application Letter", letter_html)
       command = run.call_args.args[0]

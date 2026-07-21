@@ -103,7 +103,9 @@ class AgentDispatchTests(unittest.TestCase):
       prepared = self.prepare(root)
       claim_id = prepared["claims"][0]["claimId"]
       args = self.args(root, "claim", claim_id=claim_id)
-      html = "<!doctype html><style>.cv{color:black}</style><p data-cv-immutable='name'>Test Applicant</p>"
+      # A current, unstyled semantic base CV (carries the template marker and no
+      # inline stylesheet) is materialized verbatim.
+      html = '<!doctype html><main class="cv" data-cv-template="professional-v2"><p data-cv-immutable="name">Test Applicant</p></main>'
       canonical = root / "canonical.html"
       canonical.write_text(html, encoding="utf-8")
       with mock.patch.object(agent_dispatch, "subscriber_cv_html", return_value=str(canonical)):
@@ -159,7 +161,8 @@ class AgentDispatchTests(unittest.TestCase):
       prepared = self.prepare(root)
       claim_id = prepared["claims"][0]["claimId"]
       args = self.args(root, "claim", claim_id=claim_id)
-      html = "<!doctype html><style>.cv{color:black}</style><p data-cv-immutable='name'>Test Applicant</p><p>Summary</p>"
+      # Unstyled semantic base CV; the agent edits only mutable content.
+      html = '<!doctype html><main class="cv" data-cv-template="professional-v2"><p data-cv-immutable="name">Test Applicant</p><p>Summary</p></main>'
       canonical = root / "canonical.html"
       canonical.write_text(html, encoding="utf-8")
       with mock.patch.object(agent_dispatch, "subscriber_cv_html", return_value=str(canonical)):
@@ -227,7 +230,7 @@ class AgentDispatchTests(unittest.TestCase):
       prepared = self.prepare(root)
       claim_id = prepared["claims"][0]["claimId"]
       args = self.args(root, "claim", claim_id=claim_id)
-      html = "<!doctype html><style>.cv{color:black}</style><p data-cv-immutable='name'>Test Applicant</p>"
+      html = '<!doctype html><main class="cv" data-cv-template="professional-v2"><p data-cv-immutable="name">Test Applicant</p></main>'
       canonical = root / "canonical.html"
       canonical.write_text(html, encoding="utf-8")
       with mock.patch.object(agent_dispatch, "subscriber_cv_html", return_value=str(canonical)):
@@ -275,7 +278,7 @@ class AgentDispatchTests(unittest.TestCase):
         prepared = agent_dispatch.cmd_agent_prepare(self.args(root, "prepare"))
       claim_id = prepared["claims"][0]["claimId"]
       args = self.args(root, "claim", claim_id=claim_id)
-      html = "<!doctype html><style>.cv{color:black}</style><p data-cv-immutable='name'>Test Applicant</p>"
+      html = '<!doctype html><main class="cv" data-cv-template="professional-v2"><p data-cv-immutable="name">Test Applicant</p></main>'
       canonical = root / "canonical.html"
       canonical.write_text(html, encoding="utf-8")
       with mock.patch.object(agent_dispatch, "subscriber_cv_html", return_value=str(canonical)):
