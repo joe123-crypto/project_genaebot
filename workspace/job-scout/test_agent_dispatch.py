@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import redirect_stderr
+import io
 import json
 from pathlib import Path
 import tempfile
@@ -294,11 +296,16 @@ class AgentDispatchTests(unittest.TestCase):
         }],
       }
 
-      selected = agent_dispatch.validate_agent_result(self.args(root, "complete", claim_id=claim_id), work, result)
+      stderr = io.StringIO()
+      with redirect_stderr(stderr):
+        selected = agent_dispatch.validate_agent_result(self.args(root, "complete", claim_id=claim_id), work, result)
       # The CV survives, but the weak letter is dropped so dispatch falls back to
       # write_cover_letter for this candidate.
       self.assertEqual(selected[0]["cvHtmlPath"], cv)
       self.assertIsNone(selected[0]["coverLetterPath"])
+      # The silent fallback is logged so degraded personalization is auditable.
+      self.assertIn("failed the tailored-letter check", stderr.getvalue())
+      self.assertIn(candidate_id, stderr.getvalue())
 
   def test_invalid_agent_result_immediately_uses_fallback_and_duplicate_is_safe(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
@@ -455,6 +462,52 @@ class AgentDispatchTests(unittest.TestCase):
 
       self.assertEqual(outcome["status"], "no_matches")
       outcomes.assert_called_once_with("agent-test", "user-1", mock.ANY, "skipped", 0)
+
+  def test_dispatch_reports_personalization_source_counts(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      subscriber = self.subscriber()
+      agent_candidate = agent_dispatch._agent_candidate({**self.candidate(), "role": "Driver", "company": "Alpha Freight"})
+      template_candidate = agent_dispatch._agent_candidate({**self.candidate(), "role": "Courier", "company": "Beta Couriers"})
+      work = {
+        "runId": "agent-test",
+        "claimId": "claim-1",
+        "userId": "user-1",
+        "subscriber": subscriber,
+        "preferences": subscriber["preferences"],
+        "candidates": [agent_candidate, template_candidate],
+        "applicationLimit": 2,
+      }
+      # One application uses the agent's tailored CV + letter; the other has no
+      # tailored artifacts, so it reports the deterministic template fallback.
+      selected = [
+        {"candidate": agent_candidate, "reason": "fit", "cvHtmlPath": root / "cv.html", "coverLetterPath": root / "letter.txt"},
+        {"candidate": template_candidate, "reason": "fit", "cvHtmlPath": None, "coverLetterPath": None},
+      ]
+      template_letter = root / "template-letter.txt"
+      template_letter.write_text("Dear Hiring Team,\n", encoding="utf-8")
+      documents = {"cvPdf": root / "cv.pdf", "coverLetterPdf": root / "letter.pdf", "coverLetterText": template_letter}
+      with (
+        mock.patch.object(agent_dispatch, "cmd_list_applications", return_value={"applications": []}),
+        mock.patch.object(agent_dispatch, "filter_candidates_for_user_with_stats", side_effect=lambda cands, *a, **k: (cands, {})),
+        mock.patch.object(agent_dispatch, "candidate_attempt", return_value=(1, False)),
+        mock.patch.object(agent_dispatch, "gmail_sender_connected", return_value=True),
+        mock.patch.object(agent_dispatch, "write_cover_letter", return_value=template_letter),
+        mock.patch.object(agent_dispatch, "_prepare_documents", return_value=documents),
+        mock.patch.object(agent_dispatch, "send_application_email", return_value={"messageId": "m1"}),
+        mock.patch.object(agent_dispatch, "record_candidate_application", return_value={}),
+        mock.patch.object(agent_dispatch, "_stored_documents", return_value={}),
+        mock.patch.object(agent_dispatch, "record_channel_candidate_outcome"),
+        mock.patch.object(agent_dispatch, "send_whatsapp_summary", return_value={"ok": True}),
+        mock.patch.object(agent_dispatch, "publish_user_dashboard_telemetry"),
+      ):
+        outcome = agent_dispatch.dispatch_agent_user(self.args(root, "complete", claim_id="claim-1"), work, selected, fallback=False)
+
+      self.assertEqual(outcome["status"], "applied")
+      self.assertEqual(outcome["appliedCount"], 2)
+      self.assertEqual(outcome["personalizedCvCount"], 1)
+      self.assertEqual(outcome["personalizedLetterCount"], 1)
+      self.assertEqual(outcome["templateLetterCount"], 1)
 
   def test_inspector_captures_immutable_facts_across_void_elements(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:

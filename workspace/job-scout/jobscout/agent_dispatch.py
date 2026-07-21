@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import sys
 from typing import Iterable
 
 from . import api, application, dispatch_store
@@ -635,8 +636,17 @@ def validate_agent_result(args: argparse.Namespace, work: dict, result: dict) ->
     _validate_personalized_html(base_path, cv_path)
     # A weak/empty/HTML/placeholder letter is dropped (not fatal) so dispatch
     # falls back to the deterministic template for this candidate while still
-    # using the validated personalized CV.
-    tailored_letter = letter_path if _letter_is_tailored(letter_path, candidates[candidate_id]) else None
+    # using the validated personalized CV. The rejection is logged so a silent
+    # degradation to the template is visible when auditing personalization.
+    if _letter_is_tailored(letter_path, candidates[candidate_id]):
+      tailored_letter = letter_path
+    else:
+      tailored_letter = None
+      print(
+        f"Job Scout: agent cover letter for candidate {candidate_id} failed the "
+        "tailored-letter check; using the deterministic template letter instead.",
+        file=sys.stderr,
+      )
     selected.append({
       "candidate": candidates[candidate_id],
       "reason": reason,
@@ -769,7 +779,12 @@ def dispatch_agent_user(args: argparse.Namespace, work: dict, selected: list[dic
     email = str(candidate.get("applicationEmail") or "").strip()
     application_url = candidate_application_url(candidate)
     personalized_html = item.get("cvHtmlPath")
-    cover_letter = item.get("coverLetterPath") or write_cover_letter(subscriber, preferences, candidate)
+    tailored_letter = item.get("coverLetterPath")
+    cover_letter = tailored_letter or write_cover_letter(subscriber, preferences, candidate)
+    # Source provenance for personalization observability: "agent" means the
+    # agent's tailored artifact was used, otherwise the deterministic fallback.
+    cover_letter_source = "agent" if tailored_letter else "template"
+    cv_source = "agent" if personalized_html else "base"
 
     if email and auto_apply:
       if not gmail_sender_connected(subscriber):
@@ -803,7 +818,10 @@ def dispatch_agent_user(args: argparse.Namespace, work: dict, selected: list[dic
         artifact_refs = _stored_documents(subscriber, recorded, attempt_count, documents)
         _remove_retained_personalized_html(personalized_html, artifact_refs)
         _note_channel_outcome(candidate, "applied", attempt_count)
-        user_applied.append({"candidate": candidate, "reason": reason, "method": "email"})
+        user_applied.append({
+          "candidate": candidate, "reason": reason, "method": "email",
+          "coverLetterSource": cover_letter_source, "cvSource": cv_source,
+        })
         applications.append({**candidate, "status": "applied", "attemptCount": attempt_count})
       except Exception as err:
         failed_note = public_text(err)
@@ -842,7 +860,10 @@ def dispatch_agent_user(args: argparse.Namespace, work: dict, selected: list[dic
           artifact_refs = _stored_documents(subscriber, recorded, attempt_count, documents, web_result)
           _remove_retained_personalized_html(personalized_html, artifact_refs)
           _note_channel_outcome(candidate, "applied", attempt_count)
-          user_applied.append({"candidate": candidate, "reason": reason, "method": "website"})
+          user_applied.append({
+            "candidate": candidate, "reason": reason, "method": "website",
+            "coverLetterSource": cover_letter_source, "cvSource": cv_source,
+          })
           applications.append({**candidate, "status": "applied", "attemptCount": attempt_count})
         elif web_result["outcome"] == "action_required":
           blocker = str(web_result.get("blockerCode") or "unsupported_site")
@@ -915,13 +936,21 @@ def dispatch_agent_user(args: argparse.Namespace, work: dict, selected: list[dic
     user_id, status, len(user_applied) if status != "failed" else 0,
     len(user_action_required) if status != "failed" else 0, delivered, failed_note,
   )
+  applied = user_applied if status != "failed" else []
+  # Personalization health: how many delivered applications used the agent's
+  # tailored CV / letter versus the deterministic fallback this run.
+  personalized_cv_count = sum(1 for item in applied if item.get("cvSource") == "agent")
+  personalized_letter_count = sum(1 for item in applied if item.get("coverLetterSource") == "agent")
   return {
     "ok": True,
     "runId": args.run_id,
     "claimId": work["claimId"],
     "status": status,
-    "appliedCount": len(user_applied) if status != "failed" else 0,
+    "appliedCount": len(applied),
     "actionRequiredCount": len(user_action_required) if status != "failed" else 0,
+    "personalizedCvCount": personalized_cv_count,
+    "personalizedLetterCount": personalized_letter_count,
+    "templateLetterCount": len(applied) - personalized_letter_count,
     "fallback": fallback,
     "fallbackReason": public_text(fallback_reason, 240) if fallback_reason else None,
   }
