@@ -5,6 +5,7 @@ from __future__ import annotations
 import unittest
 
 from jobscout.application import build_user_summary, clean_role, cover_letter_text
+from jobscout.formality import employer_formality
 
 SUBSCRIBER = {"profile": {"displayName": "Joseph Munemo"}}
 # The real messy role from a WhatsApp post: a "looking for ..." blurb truncated
@@ -113,6 +114,70 @@ class CoverLetterTests(unittest.TestCase):
   def test_signed_with_display_name(self) -> None:
     text = letter({"role": "Personal Assistant", "company": "Acme Ltd"})
     self.assertTrue(text.rstrip().endswith("Joseph Munemo"))
+
+
+class FormalityTests(unittest.TestCase):
+  def test_government_employers_are_formal(self) -> None:
+    for company in (
+      "Zimbabwe Mining Development Corporation",
+      "Ministry of Finance",
+      "Public Service Commission",
+      "Zimbabwe Revenue Authority",
+      "Reserve Bank of Zimbabwe",
+      "Bulawayo City Council",
+    ):
+      self.assertEqual(employer_formality({"company": company}), "formal", company)
+
+  def test_ordinary_employers_are_standard(self) -> None:
+    for company in ("Bright Cafe", "Acme Retail", "Acme Ltd", "Nimble Software"):
+      self.assertEqual(employer_formality({"company": company}), "standard", company)
+
+  def test_bare_corporation_is_not_formal(self) -> None:
+    # A plain "Corporation" suffix is a common private-company shape.
+    self.assertEqual(employer_formality({"company": "Delta Beverages Corporation"}), "standard")
+
+  def test_signal_from_role_or_description(self) -> None:
+    self.assertEqual(employer_formality({"company": "", "role": "Accountant, Ministry of Health"}), "formal")
+    self.assertEqual(
+      employer_formality({"company": "Acme", "description": "A role within the Public Service Commission."}),
+      "formal",
+    )
+
+  def test_empty_candidate_is_standard(self) -> None:
+    self.assertEqual(employer_formality({}), "standard")
+
+
+class FormalCoverLetterTests(unittest.TestCase):
+  def test_formal_greeting_and_closing(self) -> None:
+    text = letter({"role": "Accounts Clerk", "company": "Ministry of Finance"})
+    self.assertIn("Dear Sir/Madam,", text)
+    self.assertIn("Yours faithfully,", text)
+    self.assertNotIn("Dear Hiring Team", text)
+    self.assertNotIn("Kind regards,", text)
+    self.assertIn("Accounts Clerk position at Ministry of Finance", text)
+
+  def test_formal_greeting_without_known_employer(self) -> None:
+    text = letter({"role": "Accounts Clerk", "company": "Public Service Commission is recruiting"})
+    self.assertIn("Dear Sir/Madam,", text)
+    self.assertIn("Yours faithfully,", text)
+
+  def test_standard_employer_keeps_existing_register(self) -> None:
+    text = letter({"role": "Barista", "company": "Bright Cafe"})
+    self.assertIn("Dear Hiring Team at Bright Cafe,", text)
+    self.assertIn("Kind regards,", text)
+    self.assertNotIn("Yours faithfully,", text)
+
+  def test_formal_letter_passes_tailored_check(self) -> None:
+    from jobscout.agent_dispatch import _letter_is_tailored
+    import tempfile
+    from pathlib import Path
+
+    candidate = {"role": "Internal Auditor", "company": "Zimbabwe Revenue Authority"}
+    text = letter(candidate)
+    with tempfile.TemporaryDirectory() as tmp:
+      path = Path(tmp) / "cover-letter.txt"
+      path.write_text(text, encoding="utf-8")
+      self.assertTrue(_letter_is_tailored(path, candidate))
 
 
 class UserSummaryTests(unittest.TestCase):

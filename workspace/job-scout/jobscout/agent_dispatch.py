@@ -40,6 +40,7 @@ from .commands_dispatch import (
 from .commands_group_feed import maybe_write_group_feed_cache
 from .commands_setup import cv_html_document, cmd_list_applications, cmd_list_ready, convert_pdf_to_cv_html, convert_pending_cvs_best_effort
 from .constants import UNKNOWN_EMPLOYER, UNKNOWN_ROLE, WHATSAPP_CHANNEL_SOURCES
+from .formality import employer_formality
 from .delivery import (
   MAX_RENDER_HTML_BYTES,
   gmail_sender_connected,
@@ -98,7 +99,13 @@ COVER_LETTER_GUIDANCE = (
   "exact role and employer, and address the job's stated requirements/description "
   "using only facts already present in the candidate's CV — never invent "
   "qualifications or experience. Keep it plain text (no HTML or markdown), around "
-  "4 to 6 short paragraphs, professional and truthful. End with a signature line."
+  "4 to 6 short paragraphs, professional and truthful. End with a signature line. "
+  "Match the register to each candidate's employerFormality: when it is \"formal\" "
+  "(government or public-sector employer), write more formally — avoid "
+  "contractions, use a measured, respectful tone, open with \"Dear Sir/Madam,\" and "
+  "close with \"Yours faithfully,\"; when it is \"standard\", keep the ordinary "
+  "professional tone. The baseCoverLetter draft already reflects the correct "
+  "register, so preserve it while tailoring."
 )
 TERMINAL_CLAIM_STATUSES = {"completed", "fallback_completed"}
 # html.parser never emits an endtag for a bare void element, so these tags
@@ -123,6 +130,10 @@ def _source_results() -> dict[str, dict]:
 def _agent_candidate(candidate: dict) -> dict:
   output = dict(candidate)
   output["agentCandidateId"] = candidate_key(candidate)
+  # Surface the register per candidate so the agent's tailored letter/profile
+  # wording matches the employer's formality (government/public-sector jobs read
+  # more formally). Same classifier the deterministic fallback letter uses.
+  output["employerFormality"] = employer_formality(candidate)
   return output
 
 

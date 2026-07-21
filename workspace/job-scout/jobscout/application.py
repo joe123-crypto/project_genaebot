@@ -15,6 +15,7 @@ from .constants import (
   UNKNOWN_EMPLOYER,
   WHATSAPP_CHANNEL_SOURCES,
 )
+from .formality import employer_formality
 from .jsearch import application_key, candidate_key
 from . import api
 from .commands_setup import style_cv_html
@@ -83,6 +84,28 @@ def cover_letter_text(subscriber: dict, preferences: dict, candidate: dict) -> s
   skills = clean_items(profile_values(preferences, "skills"))
   experience = clean_items(profile_values(preferences, "experience"))
   strengths = ", ".join([*qualifications[:2], *skills[:3], *experience[:2]]) or "relevant experience and a strong work ethic"
+  # Government / public-sector employers expect a raised, formal register. The
+  # signal comes from the shared classifier so the fallback letter and the base
+  # draft handed to the agent stay in step. "Dear Sir/Madam" pairs with "Yours
+  # faithfully"; the standard branch keeps its established named-team greeting.
+  if employer_formality(candidate) == "formal":
+    greeting = "Dear Sir/Madam,"
+    opener = (
+      f"I wish to apply for the {role} position at {company}."
+      if company_known
+      else f"I wish to apply for the {role} position."
+    )
+    return "\n".join([
+      greeting,
+      "",
+      opener,
+      f"My background includes {strengths}, and I am prepared to contribute reliably from the outset.",
+      "I work meticulously, communicate clearly, and take full responsibility for completing the duties assigned to me.",
+      "I have attached my curriculum vitae for your consideration and would welcome the opportunity to discuss how I may serve your organisation.",
+      "",
+      "Yours faithfully,",
+      name,
+    ]) + "\n"
   greeting = f"Dear Hiring Team at {company}," if company_known else "Dear Hiring Team,"
   opener = (
     f"I am applying for the {role} position at {company}."
