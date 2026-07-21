@@ -241,6 +241,48 @@ class ApplicationDocumentTests(unittest.TestCase):
       attachments = [command[index + 1] for index, value in enumerate(command) if value == "--attach"]
       self.assertEqual(attachments, [str(root / "Test-Applicant-CV.pdf"), str(root / "Test-Applicant-Cover-Letter.pdf")])
 
+  def test_email_rebuilds_legacy_pdf_cv_instead_of_attaching_verbatim(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      letter = root / "cover-letter.txt"
+      letter.write_text("Dear Hiring Team,\n\nA specific letter.\n\nKind regards,\nTest Applicant\n", encoding="utf-8")
+      # A stale browser print-to-PDF stored as the canonical CV.
+      legacy_pdf = root / "cv.pdf"
+      legacy_pdf.write_bytes(b"%PDF-1.7 stale")
+
+      def convert(_pdf_path, html_path):
+        # Extraction strips the chrome; return clean semantic HTML.
+        Path(html_path).write_text(
+          '<!doctype html><head></head><body><main data-cv-template="professional-v2"><p>Clean CV</p></main></body>',
+          encoding="utf-8",
+        )
+        return Path(html_path)
+
+      def render_file(_source, output):
+        return Path(output)
+
+      with mock.patch("jobscout.delivery.run_json_command", return_value={"messageId": "m1"}) as run, mock.patch(
+        "jobscout.delivery.subscriber_cv_file",
+        return_value=str(legacy_pdf),
+      ), mock.patch(
+        "jobscout.delivery.convert_pdf_to_cv_html",
+        side_effect=convert,
+      ) as convert_mock, mock.patch(
+        "jobscout.delivery.render_html_to_pdf",
+        side_effect=render_file,
+      ) as render:
+        send_application_email(SUBSCRIBER, CANDIDATE, letter)
+
+      # The legacy PDF is re-extracted and re-rendered, never attached verbatim.
+      convert_mock.assert_called_once()
+      self.assertEqual(Path(convert_mock.call_args.args[0]), legacy_pdf)
+      styled_cv = render.call_args_list[0].args[0]
+      self.assertIn("<style>", styled_cv)
+      self.assertNotIn("file://", styled_cv)
+      command = run.call_args.args[0]
+      attachments = [command[index + 1] for index, value in enumerate(command) if value == "--attach"]
+      self.assertEqual(attachments[0], str(root / "Test-Applicant-CV.pdf"))
+
   def test_cover_letter_pdf_html_is_structured_and_has_no_browser_leaks(self) -> None:
     document = cover_letter_html("Dear Hiring Team,\n\nA specific letter.\n\nKind regards,\nTest Applicant\n")
     self.assertIn("<h1>Test Applicant</h1>", document)

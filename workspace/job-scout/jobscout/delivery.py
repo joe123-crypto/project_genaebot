@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -20,7 +21,7 @@ import urllib.request
 from genaie_env import env_default
 
 from jobscout import api
-from .commands_setup import style_cv_html
+from .commands_setup import convert_pdf_to_cv_html, style_cv_html
 from .constants import DEFAULT_WEB_APPLY_URL, GENAIE_MAIL_BIN
 from .profile import subscriber_user_id
 from .subscriber import display_name, document_filename, subscriber_cv_file, subscriber_sender_email
@@ -168,6 +169,19 @@ def cover_letter_html(text: str) -> str:
   )
 
 
+def _rebuild_stored_pdf_cv(pdf_path: Path, subscriber: dict) -> Path:
+  """Re-extract and re-render a legacy stored PDF CV into a clean, styled PDF.
+
+  Strips any browser print chrome (the `file://` leak, timestamps, page counters
+  are dropped during extraction) and applies the current template, so a stale
+  print-to-PDF artifact never reaches an employer verbatim.
+  """
+  with tempfile.TemporaryDirectory() as tmp:
+    semantic = convert_pdf_to_cv_html(pdf_path, Path(tmp) / "cv.html")
+    styled = style_cv_html(semantic.read_text(encoding="utf-8"))
+    return render_html_to_pdf(styled, pdf_path.with_name(document_filename(subscriber, "cv")))
+
+
 def send_application_email(
   subscriber: dict,
   candidate: dict,
@@ -186,6 +200,13 @@ def send_application_email(
     # on the fly before rendering to PDF for the employer.
     styled_cv = style_cv_html(attachment.read_text(encoding="utf-8"))
     attachment = render_html_to_pdf(styled_cv, attachment.with_name(document_filename(subscriber, "cv")))
+  elif cv_pdf is None:
+    # A stored legacy PDF must never be emailed verbatim: it may be a browser
+    # "print to PDF" artifact carrying print chrome (timestamps, page counters,
+    # and a file:// path that leaks the applicant's local filesystem). Rebuild it
+    # into clean, styled HTML first. cv_pdf supplied by the caller is already a
+    # rendered artifact from our pipeline, so it is trusted as-is.
+    attachment = _rebuild_stored_pdf_cv(attachment, subscriber)
   letter_attachment = Path(cover_letter_pdf) if cover_letter_pdf is not None else Path(cover_letter).with_name(document_filename(subscriber, "cover_letter"))
   if cover_letter_pdf is None:
     letter_text = Path(cover_letter).read_text(encoding="utf-8")

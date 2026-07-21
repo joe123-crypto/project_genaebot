@@ -414,12 +414,12 @@ class JSearchDispatchTests(unittest.TestCase):
     subscriber = self.subscriber()
     candidate = self.candidate()
     candidate["role"] = "Cimas Health Group is hiring: Internal Auditor — Risk | Closing Date: 10 July 2026"
-    with mock.patch("jobscout.delivery.subscriber_cv_file", return_value="/tmp/cv.pdf"), \
-         mock.patch("jobscout.delivery.run_json_command", return_value={"messageId": "msg-1"}) as run:
+    with mock.patch("jobscout.delivery.run_json_command", return_value={"messageId": "msg-1"}) as run:
       result = job_scout.send_application_email(
         subscriber,
         candidate,
         Path("/tmp/cover-letter.txt"),
+        cv_pdf=Path("/tmp/cv.pdf"),
         cover_letter_pdf=Path("/tmp/cover-letter.pdf"),
       )
 
