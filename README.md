@@ -299,6 +299,9 @@ The deploy script used by both paths:
   with bounded retries while the recreated container stabilizes
 - restarts `openclaw-gateway-container.service`
 - runs the deployment health check
+- reconciles the daily Job Scout schedule to the source-controlled isolated
+  agent turn at 08:00 `Africa/Harare`; an existing deliberate pause is preserved
+  as disabled, so deployment cannot silently re-enable applications
 - best-effort builds and readiness-checks the optional Job Scout browser after
   the core gateway is healthy; failure is reported without failing the gateway
   deployment
