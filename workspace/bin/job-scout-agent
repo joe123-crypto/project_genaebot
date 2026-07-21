@@ -38,8 +38,16 @@ fi
 # or waste source credits by starting it again. If an unfinished run is being
 # resumed, its canonical runId replaces the newly requested one here.
 prepare_json="$("${job_scout[@]}" "${prepare_args[@]}")"
-run_id="$(printf '%s' "$prepare_json" | jq -er '.runId | select(type == "string" and length > 0)')"
-printf '%s' "$prepare_json" | jq -e '.ok == true and .agentPhase == "prepare"' >/dev/null
+run_id="$(printf '%s' "$prepare_json" | python3 -c '
+import json
+import sys
+
+result = json.load(sys.stdin)
+run_id = result.get("runId")
+if result.get("ok") is not True or result.get("agentPhase") != "prepare" or not isinstance(run_id, str) or not run_id:
+  raise SystemExit("Job Scout preparation returned an invalid result")
+print(run_id)
+')"
 read -r -d '' prompt <<EOF || true
 Run one operator-authorized Job Scout ${mode} dispatch.
 

@@ -79,6 +79,8 @@ class JobScoutDeploymentTests(unittest.TestCase):
 
     self.assertIn('prepare_json="$("${job_scout[@]}" "${prepare_args[@]}")"', wrapper)
     self.assertIn('run_id="$(printf', wrapper)
+    self.assertIn("json.load(sys.stdin)", wrapper)
+    self.assertNotIn("| jq", wrapper)
     self.assertIn("The trusted wrapper has already completed preparation", wrapper)
     self.assertIn("Do not run the prepare phase", wrapper)
     self.assertLess(wrapper.index('prepare_json='), wrapper.index("openclaw agent"))
