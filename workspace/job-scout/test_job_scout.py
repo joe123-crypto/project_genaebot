@@ -435,6 +435,41 @@ class CvConversionTests(unittest.TestCase):
     self.assertIn("\\25b8", styled)  # blue arrow bullet character in CSS
     self.assertIn("</head>", styled.split("<body>", 1)[0])
 
+  def test_decolumn_reorders_two_column_layout_into_per_column_reading_order(self) -> None:
+    rows = [
+      ("CONTACT", "PROFESSIONAL PROFILE"),
+      ("Address", "Highly driven and adaptable"),
+      ("449 Village", "individual with a strong"),
+      ("Phone", "academic foundation in maths."),
+      ("+263 78 000", ""),
+      ("Email", "EDUCATION"),
+      ("me@example.com", "Advanced Level"),
+      ("SKILLS", "Chipadze High School"),
+      ("Computer Literacy", "8 subjects incl maths"),
+      ("Mathematics", ""),
+    ]
+    layout = "\n".join(f"{left:<31}{right}".rstrip() for left, right in rows)
+    out = jobscout.commands_setup._decolumn_layout_text(layout)
+    self.assertIsNotNone(out)
+    # The whole left column (sidebar) precedes the whole right column (main),
+    # so interleaved lines are restored to per-column reading order.
+    self.assertLess(out.index("Computer Literacy"), out.index("PROFESSIONAL PROFILE"))
+    self.assertLess(out.index("me@example.com"), out.index("Highly driven"))
+    self.assertLess(out.index("Mathematics"), out.index("EDUCATION"))
+
+  def test_decolumn_leaves_single_column_text_untouched(self) -> None:
+    single = "\n".join([
+      "Jane Alexandra Doe the applicant for this role",
+      "PROFESSIONAL PROFILE SECTION HEADING LINE HERE",
+      "A short summary describing the candidate broadly",
+      "EXPERIENCE AND EMPLOYMENT HISTORY SECTION TITLE",
+      "Did many useful things at several different places",
+      "Built and maintained assorted internal software",
+      "SKILLS AND COMPETENCIES LISTED IN THIS SECTION",
+      "Python and SQL and a range of other technologies",
+    ])
+    self.assertIsNone(jobscout.commands_setup._decolumn_layout_text(single))
+
   def test_artifact_strippers_remove_browser_chrome_and_lone_arrows(self) -> None:
     text = (
       "5/19/26, 3:47 PM\n"

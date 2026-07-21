@@ -614,30 +614,113 @@ def _ocr_cv_text(pdf_path: Path) -> str:
     return "\n\n".join(extracted)
 
 
-def _pdftotext_cv_text(pdf_path: Path) -> str:
-  completed = subprocess.run(
-    ["pdftotext", "-enc", "UTF-8", str(pdf_path), "-"],
-    check=True,
-    capture_output=True,
-    timeout=120,
-  )
+def _pdftotext_cv_text(pdf_path: Path, layout: bool = False) -> str:
+  command = ["pdftotext", "-enc", "UTF-8"]
+  if layout:
+    # -layout keeps text at its physical x-position so side-by-side columns stay
+    # spatially separated instead of being read across the page row by row.
+    command.append("-layout")
+  command += [str(pdf_path), "-"]
+  completed = subprocess.run(command, check=True, capture_output=True, timeout=120)
   return completed.stdout.decode("utf-8", errors="replace")
 
 
-def convert_pdf_to_cv_html(pdf_path: Path, html_path: Path) -> Path:
+def _decolumn_layout_text(text: str) -> str | None:
+  """De-interleave a two-column CV from layout-preserving pdftotext output.
+
+  A two-column CV (a narrow sidebar beside a wide main column) is read across
+  the page by plain extraction, interleaving unrelated lines (a contact address
+  landing inside the profile paragraph). Layout-preserving output keeps each
+  column at its physical x, so a vertical band of whitespace separates them. We
+  detect that gutter and emit the left column top-to-bottom, then the right,
+  restoring per-column reading order. Returns None when no confident two-column
+  structure is found so single-column CVs fall through unchanged.
+  """
+  lines = [line.rstrip() for line in text.replace("\f", "\n").split("\n")]
+  content = [line for line in lines if line.strip()]
+  if len(content) < 8:
+    return None
+  width = max(len(line) for line in content)
+  if width < 40:
+    return None
+  total = len(content)
+
+  def space_fraction(column: int) -> float:
+    return sum(1 for line in content if column >= len(line) or line[column] == " ") / total
+
+  low, high = int(width * 0.15), int(width * 0.75)
+  gutter_columns = [column for column in range(low, high + 1) if space_fraction(column) >= 0.95]
+  if not gutter_columns:
+    return None
+  # Collapse the always-space columns into contiguous bands and take the widest;
+  # a real gutter is several characters wide, not an incidental aligned space.
+  bands: list[tuple[int, int]] = []
+  start = previous = gutter_columns[0]
+  for column in gutter_columns[1:]:
+    if column == previous + 1:
+      previous = column
+    else:
+      bands.append((start, previous))
+      start = previous = column
+  bands.append((start, previous))
+  bands = [band for band in bands if band[1] - band[0] + 1 >= 2]
+  if not bands:
+    return None
+  band = max(bands, key=lambda item: item[1] - item[0])
+  split = (band[0] + band[1]) // 2
+
+  left: list[str] = []
+  right: list[str] = []
+
+  def append(column: list[str], value: str) -> None:
+    if value:
+      column.append(value)
+    elif column and column[-1] != "":
+      column.append("")
+
+  for line in lines:
+    if not line.strip():
+      append(left, "")
+      append(right, "")
+      continue
+    append(left, line[:split].rstrip())
+    append(right, line[split:].strip())
+
+  left_rows = sum(1 for value in left if value)
+  right_rows = sum(1 for value in right if value)
+  # Both sides must be substantially populated; otherwise this is a
+  # single-column document that merely has ragged right-hand whitespace.
+  if left_rows < total * 0.25 or right_rows < total * 0.25:
+    return None
+  return "\n".join(left).strip() + "\n\n" + "\n".join(right).strip()
+
+
+def _extract_cv_text(pdf_path: Path) -> str:
+  # Prefer layout-preserving extraction so a two-column CV is de-interleaved
+  # into per-column reading order before parsing; only genuinely two-column
+  # documents take this path, everything else falls through unchanged.
   try:
-    text = _ocr_cv_text(pdf_path)
+    decolumned = _decolumn_layout_text(_pdftotext_cv_text(pdf_path, layout=True))
+    if decolumned:
+      return decolumned
+  except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+    pass
+  try:
+    return _ocr_cv_text(pdf_path)
   except FileNotFoundError as err:
     try:
-      text = _pdftotext_cv_text(pdf_path)
+      return _pdftotext_cv_text(pdf_path)
     except FileNotFoundError:
       raise RuntimeError("tesseract or pdftotext is required to convert pending CVs") from err
   except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
     try:
-      text = _pdftotext_cv_text(pdf_path)
+      return _pdftotext_cv_text(pdf_path)
     except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as err:
       raise RuntimeError("could not extract readable text from the pending CV") from err
-  html_path.write_text(cv_html_document(text), encoding="utf-8")
+
+
+def convert_pdf_to_cv_html(pdf_path: Path, html_path: Path) -> Path:
+  html_path.write_text(cv_html_document(_extract_cv_text(pdf_path)), encoding="utf-8")
   return html_path
 
 
