@@ -24,6 +24,7 @@ from .subscriber import (
   applicant_name,
   application_artifact_dir,
   display_name,
+  document_filename,
   subscriber_cv_html,
   subscriber_cv_file,
   subscriber_phone,
@@ -133,14 +134,14 @@ def prepare_application_documents(
   # The base/personalized CV is unstyled semantic HTML; apply the modern
   # stylesheet on the fly before rendering to PDF.
   styled_cv = style_cv_html(_html_source(cv_source))
-  cv_pdf = render_html_to_pdf(styled_cv, directory / "cv.pdf")
+  cv_pdf = render_html_to_pdf(styled_cv, directory / document_filename(subscriber, "cv"))
   documents = {
     "cvPdf": cv_pdf,
     "coverLetterText": letter_path,
   }
   if include_cover_letter_pdf:
     letter_html = cover_letter_html(letter_path.read_text(encoding="utf-8"))
-    documents["coverLetterPdf"] = render_html_to_pdf(letter_html, directory / "cover-letter.pdf")
+    documents["coverLetterPdf"] = render_html_to_pdf(letter_html, directory / document_filename(subscriber, "cover_letter"))
   return documents
 
 
@@ -228,7 +229,7 @@ def web_apply_payload(
   if resolved_letter_pdf is None:
     directory = application_artifact_dir(subscriber, candidate)
     letter_html = cover_letter_html(Path(cover_letter).read_text(encoding="utf-8"))
-    resolved_letter_pdf = render_html_to_pdf(letter_html, directory / "cover-letter.pdf")
+    resolved_letter_pdf = render_html_to_pdf(letter_html, directory / document_filename(subscriber, "cover_letter"))
   return {
     "attemptId": candidate_key(candidate),
     "applicationUrl": candidate_application_url(candidate),

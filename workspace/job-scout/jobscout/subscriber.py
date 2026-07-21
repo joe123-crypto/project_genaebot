@@ -33,6 +33,18 @@ def display_name(subscriber: dict) -> str:
   return "Applicant"
 
 
+def document_filename(subscriber: dict, kind: str) -> str:
+  """Applicant-named PDF filename, e.g. 'Joseph-Munemo-CV.pdf'.
+
+  slug_part lowercases and hyphenates; applicant-facing filenames must keep the
+  original case, so build a filesystem/email-safe slug inline here.
+  """
+  raw = re.sub(r"[^A-Za-z0-9._-]+", "-", display_name(subscriber).strip())
+  slug = re.sub(r"-{2,}", "-", raw).strip("-.")[:80] or "Applicant"
+  label = {"cv": "CV", "cover_letter": "Cover-Letter"}[kind]
+  return f"{slug}-{label}.pdf"
+
+
 def applicant_name(subscriber: dict) -> tuple[str, str]:
   parts = display_name(subscriber).split()
   if len(parts) <= 1:
