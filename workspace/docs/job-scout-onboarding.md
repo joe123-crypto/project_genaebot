@@ -137,6 +137,11 @@ Agent Genaie Cloudflare R2 bucket (the phone must already be linked):
 not a local path. Use it for later extraction and saving. The CV must be a PDF.
 Do not mention internal storage keys to the user.
 
+The uploaded CV is only the source of the applicant's facts. At application time
+the agent redesigns it into a polished, self-contained, single-page CV tailored
+to each job, so a plain or roughly formatted upload is fine; its exact styling
+is not sent to employers.
+
 Before confirming or saving the profile, validate every preferred location:
 
 ```bash
