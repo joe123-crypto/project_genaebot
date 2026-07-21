@@ -30,7 +30,7 @@ Never add a model override to the cron or a child spawn.
 
 Parent protocol:
 
-1. Run `/home/joseph/.openclaw/workspace/bin/job-scout dispatch-jsearch --agent-phase prepare --limit-ready 100 --shortlist-limit 20 --match-threshold 70 --write-group-feed-cache` once. Save the returned `runId` and claim list. This command resumes an unfinished active agent run instead of starting overlapping work.
+1. Run `/home/joseph/.openclaw/workspace/bin/job-scout dispatch-jsearch --agent-phase prepare --limit-ready 100 --shortlist-limit 20 --match-threshold 70 --write-group-feed-cache` exactly once. Set the exec tool timeout to 21600 seconds and use a short yield. If exec returns a process session, poll that same session until it exits; several minutes without output is normal. Never kill or rerun preparation because it is quiet. Save the returned `runId` and claim list. This command resumes an unfinished active agent run instead of starting overlapping work.
 2. Spawn one isolated `main` child for each non-terminal claim, no more than four at once. Use `sessions_spawn` with `agentId: "main"`, `mode: "run"`, `context: "isolated"`, `cleanup: "keep"`, and `cwd: "/home/joseph/.openclaw/workspace"`. Pass only the run ID, opaque claim ID, and the child protocol below. Do not pass user data in the spawn task and do not set `model` or `thinking`.
 3. After filling the four slots, call `sessions_yield`. Do not poll sessions in a wait loop. Completion events resume this cron session.
 4. For each completion event, run the status phase. If that child's claim is not `completed`, immediately run `/home/joseph/.openclaw/workspace/bin/job-scout dispatch-jsearch --agent-phase fallback --run-id "<runId>" --claim-id "<claimId>" --fallback-reason "OpenClaw child failed"` exactly once. This records a fail-closed terminal outcome and never submits deterministic documents. Do not retry the child.
@@ -74,6 +74,7 @@ Admin manual runs:
 
 - A request made after checking one person is scoped to that person. Run `/home/joseph/.openclaw/workspace/bin/job-scout-agent --phone "<whatsapp phone>" --live` exactly once. Use `--preview` instead of `--live` when verifying model behavior without side effects.
 - An all-user safety preview uses `/home/joseph/.openclaw/workspace/bin/job-scout-agent --all --preview`; `--all --live` is rejected.
+- The manual wrapper owns the long preparation phase before it starts the model turn. The model starts from durable status and must not prepare or discover jobs again.
 - A running process with no new output is not a failure. Job discovery and website checks normally take several minutes. Poll the same process for up to 20 minutes.
 - Never start a direct or dry run while another dispatch is running. The command lock will reject overlaps.
 - Never use `--pilot-only`; it is obsolete. Do not infer current arguments from historical run diagnostics.

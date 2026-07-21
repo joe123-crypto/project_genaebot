@@ -271,7 +271,7 @@ When Joe asks for a manual run after checking one person's status, scope the age
   --live
 ```
 
-Use `--preview` instead of `--live` to exercise the same model workflow without external side effects. Start the command once, then poll that same process for up to six hours. Several minutes without stdout is normal. Do not launch a second dispatch and do not kill a run only because it is quiet. `--pilot-only` and direct operator dispatches are obsolete. If the tool session disappears, verify the named dispatch marker and application records before deciding whether a retry is safe.
+Use `--preview` instead of `--live` to exercise the same model workflow without external side effects. The manual wrapper now completes quiet job discovery before it opens the model turn, so the model begins from durable status and cannot time out or repeat preparation. Start the command once with a 21600-second outer timeout and poll that same process for up to six hours. Several minutes without stdout is normal. Do not launch a second dispatch and do not kill a run only because it is quiet. `--pilot-only` and direct operator dispatches are obsolete. If the tool session disappears, verify the named dispatch marker and application records before deciding whether a retry is safe.
 
 ## Failure Handling
 

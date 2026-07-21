@@ -74,6 +74,15 @@ class JobScoutDeploymentTests(unittest.TestCase):
     self.assertNotIn("--command-argv", installer)
     self.assertNotIn("--model", installer)
 
+  def test_manual_agent_wrapper_prepares_before_starting_the_model(self) -> None:
+    wrapper = (ROOT / "workspace/bin/job-scout-agent").read_text(encoding="utf-8")
+
+    self.assertIn('prepare_json="$("${job_scout[@]}" "${prepare_args[@]}")"', wrapper)
+    self.assertIn('run_id="$(printf', wrapper)
+    self.assertIn("The trusted wrapper has already completed preparation", wrapper)
+    self.assertIn("Do not run the prepare phase", wrapper)
+    self.assertLess(wrapper.index('prepare_json='), wrapper.index("openclaw agent"))
+
   def test_normal_deploy_reconciles_scheduler_without_reenabling_a_pause(self) -> None:
     deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")
     installer = (ROOT / "deploy/install-job-scout.sh").read_text(encoding="utf-8")
