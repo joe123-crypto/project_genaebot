@@ -738,7 +738,18 @@ def validate_agent_result(args: argparse.Namespace, work: dict, result: dict) ->
   assessments = result.get("assessments")
   if not isinstance(assessments, list):
     raise AgentResultError("agent result assessments must be an array")
-  candidates = {candidate["agentCandidateId"]: candidate for candidate in work["candidates"]}
+  candidate_list = work["candidates"]
+  candidates = {candidate["agentCandidateId"]: candidate for candidate in candidate_list}
+  numbered_flags = [isinstance(assessment, dict) and "assessmentNumber" in assessment for assessment in assessments]
+  numbered_result = any(numbered_flags)
+  if numbered_result:
+    if not all(numbered_flags):
+      raise AgentResultError("every assessment must keep its pre-populated assessmentNumber")
+    numbers = [assessment.get("assessmentNumber") for assessment in assessments]
+    if any(isinstance(number, bool) or not isinstance(number, int) for number in numbers):
+      raise AgentResultError("assessmentNumber must be an integer")
+    if set(numbers) != set(range(1, len(candidate_list) + 1)) or len(numbers) != len(set(numbers)):
+      raise AgentResultError("assessmentNumber values must cover every candidate exactly once")
   seen: set[str] = set()
   used_paths: set[Path] = set()
   selected: list[dict] = []
@@ -749,8 +760,16 @@ def validate_agent_result(args: argparse.Namespace, work: dict, result: dict) ->
   for assessment in assessments:
     if not isinstance(assessment, dict):
       raise AgentResultError("each assessment must be an object")
-    candidate_id = str(assessment.get("candidateId") or "")
-    if candidate_id not in candidates or candidate_id in seen:
+    if numbered_result:
+      # assessmentNumber is short and deterministic. It is authoritative so a
+      # language model can never fail a claim by retyping an opaque hash.
+      candidate_id = candidate_list[assessment["assessmentNumber"] - 1]["agentCandidateId"]
+    else:
+      # Backward compatibility for claims created before numbered templates.
+      candidate_id = str(assessment.get("candidateId") or "")
+      if candidate_id not in candidates:
+        raise AgentResultError("agent result contains an unknown or duplicate candidate")
+    if candidate_id in seen:
       raise AgentResultError("agent result contains an unknown or duplicate candidate")
     seen.add(candidate_id)
     score = assessment.get("fitScore")

@@ -255,7 +255,8 @@ a time. Each child inherits the default model, assesses a deterministic
 shortlist of at most 20 jobs, selects only scores of 70 or higher without a hard
 mismatch, and personalizes truthful application documents. Each claim creates a
 private result template with every opaque candidate ID populated deterministically;
-the child edits only numbered assessment values and personalized artifact paths.
+the child edits only numbered assessment values and personalized artifact paths,
+and the dispatcher maps each short number back to the canonical stored ID.
 The dispatcher validates the child packet and remains the only process allowed
 to send or submit. A child failure records a fail-closed outcome and sends no
 template documents. Candidate artifacts and agent diagnostics are operator-only;

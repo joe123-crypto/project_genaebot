@@ -169,7 +169,7 @@ class AgentDispatchTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "browser print chrome"):
           agent_dispatch.cmd_agent_claim(args)
 
-  def test_validator_rejects_an_edited_prepopulated_candidate_id(self) -> None:
+  def test_validator_maps_numbered_assessment_when_candidate_id_is_edited(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
       root = Path(tmp)
       prepared = self.prepare(root)
@@ -194,7 +194,17 @@ class AgentDispatchTests(unittest.TestCase):
       assessment["candidateId"] += "3"
       work = dispatch_store.load_agent_work(root, "agent-test", claim_id)
 
-      with self.assertRaisesRegex(agent_dispatch.AgentResultError, "unknown or duplicate candidate"):
+      self.assertEqual(
+        agent_dispatch.validate_agent_result(
+          self.args(root, "complete", claim_id=claim_id),
+          work,
+          result,
+        ),
+        [],
+      )
+
+      assessment["assessmentNumber"] = 2
+      with self.assertRaisesRegex(agent_dispatch.AgentResultError, "assessmentNumber values"):
         agent_dispatch.validate_agent_result(
           self.args(root, "complete", claim_id=claim_id),
           work,
