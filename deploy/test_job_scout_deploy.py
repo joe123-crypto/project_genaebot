@@ -104,7 +104,15 @@ class JobScoutDeploymentTests(unittest.TestCase):
     self.assertEqual(subagents["maxChildrenPerAgent"], 4)
     self.assertEqual(subagents["runTimeoutSeconds"], 2700)
     self.assertNotIn("model", subagents)
-    self.assertEqual(config["tools"]["subagents"]["tools"]["allow"], ["exec", "process", "read", "write"])
+    self.assertEqual(config["tools"]["subagents"]["tools"]["allow"], ["exec", "process", "read", "edit", "write"])
+
+  def test_job_scout_child_edits_prepopulated_candidate_ids(self) -> None:
+    skill = (ROOT / "workspace/skills/job-scout/SKILL.md").read_text(encoding="utf-8")
+
+    self.assertIn("already contains a private `agent-result.json` template", skill)
+    self.assertIn("Never type, copy, reconstruct, or edit an opaque candidate ID", skill)
+    self.assertIn("Use the `edit` tool", skill)
+    self.assertIn("never add, remove, duplicate, or reorder assessments", skill)
 
   def test_group_feed_scheduler_is_separate_delivery_only_cron(self) -> None:
     installer = (ROOT / "deploy/install-job-scout-group-feed.sh").read_text(encoding="utf-8")

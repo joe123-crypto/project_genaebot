@@ -376,7 +376,7 @@
   "tools": {
     "subagents": {
       "tools": {
-        "allow": ["exec", "process", "read", "write"],
+        "allow": ["exec", "process", "read", "edit", "write"],
         "deny": ["message", "gateway", "cron", "sessions_spawn", "sessions_send", "sessions_list", "sessions_history", "subagents", "agents_list"]
       }
     },

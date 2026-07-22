@@ -253,11 +253,13 @@ already recorded as applied, skipped, action needed, or physically submitted.
 The parent processes every ready user through at most four isolated children at
 a time. Each child inherits the default model, assesses a deterministic
 shortlist of at most 20 jobs, selects only scores of 70 or higher without a hard
-mismatch, and personalizes truthful application documents. The dispatcher
-validates the child packet and remains the only process allowed to send or
-submit. A child failure immediately uses the legacy deterministic documents and
-ranking for that claim. Candidate artifacts and agent diagnostics are
-operator-only; do not expose them in public chat.
+mismatch, and personalizes truthful application documents. Each claim creates a
+private result template with every opaque candidate ID populated deterministically;
+the child edits only numbered assessment values and personalized artifact paths.
+The dispatcher validates the child packet and remains the only process allowed
+to send or submit. A child failure records a fail-closed outcome and sends no
+template documents. Candidate artifacts and agent diagnostics are operator-only;
+do not expose them in public chat.
 
 ## Admin Manual Dispatch
 

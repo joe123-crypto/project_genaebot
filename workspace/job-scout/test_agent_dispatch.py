@@ -126,6 +126,31 @@ class AgentDispatchTests(unittest.TestCase):
       self.assertEqual(base.read_text(encoding="utf-8"), html)
       self.assertEqual(first["work"]["claimId"], second["work"]["claimId"])
       self.assertEqual(len(first["work"]["candidates"]), 1)
+      self.assertEqual(first["work"]["candidates"][0]["assessmentNumber"], 1)
+      self.assertIn("Never use write on resultPath", first["work"]["resultEditingGuidance"])
+
+      result_path = Path(first["work"]["resultPath"])
+      template = json.loads(result_path.read_text(encoding="utf-8"))
+      expected_id = first["work"]["candidates"][0]["agentCandidateId"]
+      self.assertEqual(template["assessments"], [{
+        "assessmentNumber": 1,
+        "candidateId": expected_id,
+        "fitScore": "__FILL_FIT_SCORE_01__",
+        "hardMismatch": "__FILL_HARD_MISMATCH_01__",
+        "selected": "__FILL_SELECTED_01__",
+        "reason": "__FILL_REASON_01__",
+        "cvHtmlPath": None,
+        "coverLetterPath": None,
+      }])
+      self.assertEqual(result_path.stat().st_mode & 0o777, 0o600)
+
+      # An accidental idempotent claim cannot replace assessments already edited.
+      template["assessments"][0]["reason"] = "Assessment work in progress"
+      result_path.write_text(json.dumps(template), encoding="utf-8")
+      with mock.patch.object(agent_dispatch, "subscriber_cv_html", return_value=str(canonical)):
+        agent_dispatch.cmd_agent_claim(args)
+      preserved = json.loads(result_path.read_text(encoding="utf-8"))
+      self.assertEqual(preserved["assessments"][0]["reason"], "Assessment work in progress")
 
   def test_claim_rejects_unsafe_legacy_canonical_cv(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
@@ -143,6 +168,38 @@ class AgentDispatchTests(unittest.TestCase):
       with mock.patch.object(agent_dispatch, "subscriber_cv_html", return_value=str(canonical)):
         with self.assertRaisesRegex(RuntimeError, "browser print chrome"):
           agent_dispatch.cmd_agent_claim(args)
+
+  def test_validator_rejects_an_edited_prepopulated_candidate_id(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      prepared = self.prepare(root)
+      claim_id = prepared["claims"][0]["claimId"]
+      canonical = root / "canonical.html"
+      canonical.write_text(
+        '<!doctype html><html><body><p data-cv-immutable="name">Test Applicant</p></body></html>',
+        encoding="utf-8",
+      )
+      with mock.patch.object(agent_dispatch, "subscriber_cv_html", return_value=str(canonical)):
+        claimed = agent_dispatch.cmd_agent_claim(self.args(root, "claim", claim_id=claim_id))
+
+      result_path = Path(claimed["work"]["resultPath"])
+      result = json.loads(result_path.read_text(encoding="utf-8"))
+      assessment = result["assessments"][0]
+      assessment.update({
+        "fitScore": 10,
+        "hardMismatch": True,
+        "selected": False,
+        "reason": "Required driving experience is missing.",
+      })
+      assessment["candidateId"] += "3"
+      work = dispatch_store.load_agent_work(root, "agent-test", claim_id)
+
+      with self.assertRaisesRegex(agent_dispatch.AgentResultError, "unknown or duplicate candidate"):
+        agent_dispatch.validate_agent_result(
+          self.args(root, "complete", claim_id=claim_id),
+          work,
+          result,
+        )
 
   def test_validator_accepts_strong_fit_and_preserved_html(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:

@@ -150,6 +150,62 @@ def _agent_candidate(candidate: dict) -> dict:
   return output
 
 
+def _numbered_agent_candidates(candidates: list[dict]) -> list[dict]:
+  """Give the model short stable references without replacing canonical IDs."""
+  numbered: list[dict] = []
+  for assessment_number, candidate in enumerate(candidates, start=1):
+    output = dict(candidate)
+    output["assessmentNumber"] = assessment_number
+    numbered.append(output)
+  return numbered
+
+
+def _agent_result_template(run_id: str, claim_id: str, candidates: list[dict]) -> dict:
+  """Pre-populate opaque IDs so the model never needs to type or copy them."""
+  assessments = []
+  for assessment_number, candidate in enumerate(candidates, start=1):
+    suffix = f"{assessment_number:02d}"
+    assessments.append({
+      "assessmentNumber": assessment_number,
+      "candidateId": candidate["agentCandidateId"],
+      "fitScore": f"__FILL_FIT_SCORE_{suffix}__",
+      "hardMismatch": f"__FILL_HARD_MISMATCH_{suffix}__",
+      "selected": f"__FILL_SELECTED_{suffix}__",
+      "reason": f"__FILL_REASON_{suffix}__",
+      "cvHtmlPath": None,
+      "coverLetterPath": None,
+    })
+  return {
+    "schemaVersion": AGENT_RESULT_SCHEMA_VERSION,
+    "runId": run_id,
+    "claimId": claim_id,
+    "assessments": assessments,
+  }
+
+
+def _initialize_agent_result(path: Path, data: dict) -> None:
+  """Atomically create a private result template without overwriting model work."""
+  if path.exists():
+    return
+  path.parent.mkdir(parents=True, exist_ok=True)
+  temporary = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
+  try:
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+      json.dump(data, stream, indent=2)
+      stream.write("\n")
+      stream.flush()
+      os.fsync(stream.fileno())
+    try:
+      os.link(temporary, path)
+    except FileExistsError:
+      # A repeated claim must preserve any assessment work already recorded.
+      return
+    os.chmod(path, 0o600)
+  finally:
+    temporary.unlink(missing_ok=True)
+
+
 def _claim_summary(claim: dict) -> dict:
   return {
     "claimId": claim["claimId"],
@@ -403,6 +459,12 @@ def cmd_agent_claim(args: argparse.Namespace) -> dict:
     )
     os.chmod(base_letter, 0o600)
 
+  result_path = output_dir / "agent-result.json"
+  _initialize_agent_result(
+    result_path,
+    _agent_result_template(run_id, args.claim_id, work["candidates"]),
+  )
+
   public_work = {
     "schemaVersion": work["schemaVersion"],
     "runId": run_id,
@@ -410,14 +472,20 @@ def cmd_agent_claim(args: argparse.Namespace) -> dict:
     "preferences": work["preferences"],
     "applicationLimit": work["applicationLimit"],
     "matchThreshold": work["matchThreshold"],
-    "candidates": work["candidates"],
+    "candidates": _numbered_agent_candidates(work["candidates"]),
     "preparationError": work.get("preparationError"),
     "baseCvHtmlPath": str(base_cv),
     "cvDesignGuidance": CV_DESIGN_GUIDANCE,
     "baseCoverLetterPath": str(base_letter),
     "coverLetterGuidance": COVER_LETTER_GUIDANCE,
     "personalizedOutputDirectory": str(personalized_dir),
-    "resultPath": str(output_dir / "agent-result.json"),
+    "resultPath": str(result_path),
+    "resultEditingGuidance": (
+      "agent-result.json is already populated with every exact candidateId and unique "
+      "placeholders. Use the edit tool to replace only the placeholder assessment values "
+      "and, for selected jobs, the null artifact paths. Never use write on resultPath, "
+      "never edit candidateId or assessmentNumber, and never reorder assessments."
+    ),
     "dryRun": bool(work.get("dryRun")),
   }
   return {"ok": True, "agentPhase": "claim", "work": public_work}
