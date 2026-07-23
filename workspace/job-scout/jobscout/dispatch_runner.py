@@ -60,7 +60,7 @@ from .jsearch import (
   register_channel_candidate_eligibility,
 )
 from .profile import clean_items, max_applications, preference_code, profile_values, search_queries, subscriber_preferences, subscriber_user_id, user_key
-from .subscriber import subscriber_cv_html_ready, subscriber_phone
+from .subscriber import subscriber_cv_html_ready, subscriber_has_whatsapp, subscriber_phone
 from .textutil import public_text
 from .util import normalize_phone, safe_run_id, utc_now
 
@@ -74,7 +74,7 @@ def publish_user_dashboard_telemetry(
   status: str,
   applied_count: int,
   action_required_count: int,
-  delivered: bool,
+  delivered: bool | None,
   error_note: str | None,
 ) -> None:
   """Best-effort dashboard snapshots after one subscriber's dispatch."""
@@ -106,16 +106,17 @@ def publish_user_dashboard_telemetry(
     last_run_status=last_run_status,
     last_run_summary=summary,
   )
-  publish_task_status(
-    user_id=user_id,
-    task_id="deliver_results",
-    service="delivery",
-    status="active",
-    schedule_label="After each task run",
-    last_run_at=now,
-    last_run_status="success" if delivered else "failed",
-    last_run_summary="Job Scout summary delivered" if delivered else "WhatsApp delivery failed",
-  )
+  if delivered is not None:
+    publish_task_status(
+      user_id=user_id,
+      task_id="deliver_results",
+      service="delivery",
+      status="active",
+      schedule_label="After each task run",
+      last_run_at=now,
+      last_run_status="success" if delivered else "failed",
+      last_run_summary="Job Scout summary delivered" if delivered else "WhatsApp delivery failed",
+    )
 
 
 def browser_apply_enabled(args: argparse.Namespace) -> bool:
@@ -161,7 +162,23 @@ def record_candidate_application(
   ))
 
 
-def scoped_subscribers(subscribers: list[dict], phone: str | None) -> list[dict]:
+def scoped_subscribers(
+  subscribers: list[dict],
+  phone: str | None = None,
+  user_id: str | None = None,
+) -> list[dict]:
+  if phone and user_id:
+    raise SystemExit("--phone and --user-id cannot be combined")
+  if user_id:
+    target_user_id = str(user_id).strip()
+    selected = [
+      subscriber
+      for subscriber in subscribers
+      if subscriber_user_id(subscriber) == target_user_id
+    ]
+    if not selected:
+      raise SystemExit("no ready Job Scout subscriber matches that user-id")
+    return selected
   if not phone:
     return subscribers
   target = normalize_phone(phone)
@@ -184,10 +201,19 @@ def subscriber_is_dispatch_ready(subscriber: dict) -> bool:
     and subscriber.get("gmailConnected") is True
     and str(subscriber.get("senderEmail") or "").strip()
     and subscriber_cv_html_ready(subscriber)
-    and str(subscriber.get("whatsappPhone") or "").strip()
     and clean_items(profile_values(preferences, "targetRoles"))
     and clean_items(profile_values(preferences, "locations"))
   )
+
+
+def candidates_for_subscriber_channels(subscriber: dict, candidates: list[dict]) -> list[dict]:
+  if subscriber_has_whatsapp(subscriber):
+    return candidates
+  return [
+    candidate
+    for candidate in candidates
+    if str(candidate.get("applicationEmail") or "").strip()
+  ]
 
 
 def latest_dispatch_marker(root: Path) -> dict | None:
@@ -270,7 +296,11 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
   if not isinstance(subscribers, list):
     subscribers = []
   subscribers = [subscriber for subscriber in subscribers if subscriber_is_dispatch_ready(subscriber)]
-  subscribers = scoped_subscribers(subscribers, getattr(args, "phone", None))
+  subscribers = scoped_subscribers(
+    subscribers,
+    getattr(args, "phone", None),
+    getattr(args, "user_id", None),
+  )
   ready_count = len(subscribers)
   if not args.dry_run:
     cmd_start_dispatch(argparse.Namespace(run_id=run_id, ready_count=ready_count, dispatch_root=args.dispatch_root))
@@ -379,12 +409,14 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
         "error": failed_note,
       })
       if not args.dry_run:
-        delivered = False
-        try:
-          send_whatsapp_summary(subscriber_phone(subscriber), build_user_summary(date_label, [], [], failed_note))
-          delivered = True
-        except Exception:
-          pass
+        delivered = None
+        if subscriber_has_whatsapp(subscriber):
+          delivered = False
+          try:
+            send_whatsapp_summary(subscriber_phone(subscriber), build_user_summary(date_label, [], [], failed_note))
+            delivered = True
+          except Exception:
+            pass
         cmd_record_dispatch_outcome(argparse.Namespace(
           run_id=run_id,
           user_id=user_id,
@@ -414,6 +446,7 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
         applications,
         per_user_limit,
       )
+      candidates = candidates_for_subscriber_channels(subscriber, candidates)
       apply_source_filter_stats(source_results, filter_stats)
       if not args.dry_run:
         register_channel_candidate_eligibility(run_id, user_id, candidates)
@@ -588,7 +621,7 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
       status = "no_matches"
       no_matches_count += 1
 
-    if not args.dry_run:
+    if not args.dry_run and subscriber_has_whatsapp(subscriber):
       try:
         send_whatsapp_summary(subscriber_phone(subscriber), build_user_summary(date_label, user_applied, user_action_required, failed_note))
       except Exception as err:
@@ -669,7 +702,7 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
         status,
         len(user_applied),
         len(user_action_required),
-        True,
+        True if subscriber_has_whatsapp(subscriber) else None,
         failed_note,
       )
 

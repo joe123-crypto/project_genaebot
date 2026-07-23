@@ -53,7 +53,10 @@ class AgentDispatchTests(unittest.TestCase):
       claim_id=claim_id,
       result=None,
       fallback_reason=None,
+      after_terminal_count=None,
+      wait_timeout_seconds=2760,
       phone=None,
+      user_id=None,
       limit_ready=100,
       max_candidates_per_user=5,
       shortlist_limit=20,
@@ -390,6 +393,86 @@ class AgentDispatchTests(unittest.TestCase):
       self.assertTrue(second["duplicate"])
       dispatch.assert_not_called()
 
+  def test_validate_is_side_effect_free_and_reports_selected_count(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      prepared = self.prepare(root)
+      claim_id = prepared["claims"][0]["claimId"]
+      before_claim = dispatch_store.load_agent_claim(root, "agent-test", claim_id)
+      before_marker = dispatch_store.load_dispatch("agent-test", root)
+      validate_args = self.args(root, "validate", claim_id=claim_id)
+      validate_args.result = json.dumps({
+        "schemaVersion": 1,
+        "runId": "agent-test",
+        "claimId": claim_id,
+        "assessments": [{
+          "assessmentNumber": 1,
+          "candidateId": "pre-populated-id-is-not-authoritative",
+          "fitScore": 10,
+          "hardMismatch": True,
+          "selected": False,
+          "reason": "Required driving experience is missing.",
+          "cvHtmlPath": None,
+          "coverLetterPath": None,
+        }],
+      })
+
+      with mock.patch.object(agent_dispatch, "_begin_completion") as begin:
+        result = agent_dispatch.cmd_agent_validate(validate_args)
+
+      self.assertEqual(result["selectedCount"], 0)
+      begin.assert_not_called()
+      self.assertEqual(dispatch_store.load_agent_claim(root, "agent-test", claim_id), before_claim)
+      self.assertEqual(dispatch_store.load_dispatch("agent-test", root), before_marker)
+
+  def test_validate_rejects_a_personalized_cv_with_an_invented_phone(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      prepared = self.prepare(root)
+      claim_id = prepared["claims"][0]["claimId"]
+      canonical = root / "canonical.html"
+      canonical.write_text(
+        "<html><body><p data-cv-field='identity'>Test Applicant</p>"
+        "<p data-cv-field='contact'>+263 700 000001 applicant@example.com</p></body></html>",
+        encoding="utf-8",
+      )
+      with mock.patch.object(agent_dispatch, "subscriber_cv_html", return_value=str(canonical)):
+        claimed = agent_dispatch.cmd_agent_claim(self.args(root, "claim", claim_id=claim_id))
+      output = Path(claimed["work"]["personalizedOutputDirectory"]) / "job"
+      output.mkdir()
+      cv = output / "cv.html"
+      cv.write_text(
+        "<html><body>Test Applicant +263 700 000001 applicant@example.com "
+        "+263 711 111111</body></html>",
+        encoding="utf-8",
+      )
+      letter = output / "cover-letter.txt"
+      letter.write_text(
+        "Dear Hiring Team at Example Logistics,\n\nI am applying for the Driver position.\n"
+        "My safe parcel delivery experience suits this role and I can contribute reliably.\n\n"
+        "Kind regards,\nTest Applicant\n",
+        encoding="utf-8",
+      )
+      validate_args = self.args(root, "validate", claim_id=claim_id)
+      validate_args.result = json.dumps({
+        "schemaVersion": 1,
+        "runId": "agent-test",
+        "claimId": claim_id,
+        "assessments": [{
+          "assessmentNumber": 1,
+          "candidateId": claimed["work"]["candidates"][0]["agentCandidateId"],
+          "fitScore": 90,
+          "hardMismatch": False,
+          "selected": True,
+          "reason": "Strong fit.",
+          "cvHtmlPath": str(cv),
+          "coverLetterPath": str(letter),
+        }],
+      })
+
+      with self.assertRaisesRegex(agent_dispatch.AgentResultError, "phone number not in"):
+        agent_dispatch.cmd_agent_validate(validate_args)
+
   def test_durable_outcome_restores_a_tampered_terminal_claim(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
       root = Path(tmp)
@@ -635,6 +718,112 @@ class AgentDispatchTests(unittest.TestCase):
       self.assertFalse(outcome["summaryDelivered"])
       self.assertEqual(outcome["summaryError"], "gateway unavailable")
 
+  def test_web_only_subscriber_sends_email_and_skips_whatsapp_summary(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      subscriber = {
+        **self.subscriber(),
+        "whatsappPhone": None,
+        "whatsappPhoneHash": None,
+      }
+      candidate = agent_dispatch._agent_candidate(self.candidate())
+      work = {
+        "runId": "agent-test",
+        "claimId": "claim-1",
+        "userId": "user-1",
+        "subscriber": subscriber,
+        "preferences": subscriber["preferences"],
+        "candidates": [candidate],
+        "applicationLimit": 1,
+      }
+      selected = [{
+        "candidate": candidate,
+        "reason": "strong fit",
+        "cvHtmlPath": root / "cv.html",
+        "coverLetterPath": root / "letter.txt",
+      }]
+      documents = {
+        "cvPdf": root / "cv.pdf",
+        "coverLetterPdf": root / "letter.pdf",
+        "coverLetterText": root / "letter.txt",
+      }
+      with (
+        mock.patch.object(agent_dispatch, "cmd_list_applications", return_value={"applications": []}),
+        mock.patch.object(agent_dispatch, "filter_candidates_for_user_with_stats", side_effect=lambda cands, *a, **k: (cands, {})),
+        mock.patch.object(agent_dispatch, "gmail_sender_connected", return_value=True),
+        mock.patch.object(agent_dispatch, "_prepare_documents", return_value=documents),
+        mock.patch.object(agent_dispatch, "send_application_email", return_value={"messageId": "gmail-1"}) as send,
+        mock.patch.object(agent_dispatch, "record_candidate_application", return_value={}) as record,
+        mock.patch.object(agent_dispatch, "_stored_documents", return_value={}),
+        mock.patch.object(agent_dispatch, "record_channel_candidate_outcome"),
+        mock.patch.object(agent_dispatch, "send_whatsapp_summary") as whatsapp,
+        mock.patch.object(agent_dispatch, "publish_user_dashboard_telemetry") as telemetry,
+      ):
+        outcome = agent_dispatch.dispatch_agent_user(
+          self.args(root, "complete", claim_id="claim-1"),
+          work,
+          selected,
+          fallback=False,
+        )
+
+      self.assertEqual(outcome["status"], "applied")
+      self.assertEqual(outcome["appliedCount"], 1)
+      self.assertIsNone(outcome["summaryDelivered"])
+      self.assertIsNone(outcome["summaryError"])
+      send.assert_called_once()
+      whatsapp.assert_not_called()
+      self.assertEqual(record.call_args.kwargs["message_id"], "gmail-1")
+      self.assertIsNone(telemetry.call_args.args[4])
+
+  def test_expired_gmail_token_becomes_action_required_without_retry(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      subscriber = self.subscriber()
+      candidate = agent_dispatch._agent_candidate(self.candidate())
+      work = {
+        "runId": "agent-test",
+        "claimId": "claim-1",
+        "userId": "user-1",
+        "subscriber": subscriber,
+        "preferences": subscriber["preferences"],
+        "candidates": [candidate],
+        "applicationLimit": 1,
+      }
+      selected = [{
+        "candidate": candidate,
+        "reason": "fit",
+        "cvHtmlPath": root / "cv.html",
+        "coverLetterPath": root / "letter.txt",
+      }]
+      documents = {
+        "cvPdf": root / "cv.pdf",
+        "coverLetterPdf": root / "letter.pdf",
+        "coverLetterText": root / "letter.txt",
+      }
+      with (
+        mock.patch.object(agent_dispatch, "cmd_list_applications", return_value={"applications": [{**candidate, "status": "failed", "attemptCount": 2}]}),
+        mock.patch.object(agent_dispatch, "filter_candidates_for_user_with_stats", side_effect=lambda cands, *a, **k: (cands, {})),
+        mock.patch.object(agent_dispatch, "gmail_sender_connected", return_value=True),
+        mock.patch.object(agent_dispatch, "_prepare_documents", return_value=documents),
+        mock.patch.object(agent_dispatch, "send_application_email", side_effect=RuntimeError('HTTP 400: "Token has been expired or revoked."')) as send,
+        mock.patch.object(agent_dispatch, "record_candidate_application", return_value={}) as record,
+        mock.patch.object(agent_dispatch, "record_channel_candidate_outcome"),
+        mock.patch.object(agent_dispatch, "send_whatsapp_summary", return_value={"ok": True}),
+        mock.patch.object(agent_dispatch, "publish_user_dashboard_telemetry"),
+      ):
+        outcome = agent_dispatch.dispatch_agent_user(
+          self.args(root, "complete", claim_id="claim-1"), work, selected, fallback=False,
+        )
+
+      self.assertEqual(outcome["status"], "action_required")
+      self.assertEqual(outcome["actionRequiredCount"], 1)
+      self.assertIsNone(outcome["failureReason"])
+      send.assert_called_once()
+      record_args, record_kwargs = record.call_args
+      self.assertEqual(record_args[2], "action_required")
+      self.assertEqual(record_kwargs["blocker_code"], "gmail_reconnect_required")
+      self.assertTrue(record_kwargs["replace"])
+
   def test_dispatch_rejects_missing_personalized_artifacts(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
       root = Path(tmp)
@@ -793,6 +982,37 @@ class AgentDispatchTests(unittest.TestCase):
       with mock.patch.object(agent_dispatch, "finalize_channel_candidate_dispatch"):
         finished = agent_dispatch.cmd_agent_finish(self.args(root, "finish"))
       self.assertEqual(finished["finalCounts"]["processedCount"], 1)
+      strict = argparse.Namespace(
+        run_id="agent-test",
+        dispatch_root=root,
+        require_no_failures=True,
+      )
+      with self.assertRaises(SystemExit):
+        commands_dispatch.cmd_verify_dispatch(strict)
+
+  def test_strict_verify_rejects_requested_summary_failure(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      prepared = self.prepare(root)
+      claim_id = prepared["claims"][0]["claimId"]
+      work = dispatch_store.load_agent_work(root, "agent-test", claim_id)
+      agent_dispatch._record_outcome(root, "agent-test", work, {
+        "status": "no_matches",
+        "appliedCount": 0,
+        "actionRequiredCount": 0,
+        "summaryDelivered": False,
+        "summaryError": "gateway unavailable",
+      })
+      with mock.patch.object(agent_dispatch, "finalize_channel_candidate_dispatch"):
+        agent_dispatch.cmd_agent_finish(self.args(root, "finish"))
+
+      strict = argparse.Namespace(
+        run_id="agent-test",
+        dispatch_root=root,
+        require_no_failures=True,
+      )
+      with self.assertRaises(SystemExit):
+        commands_dispatch.cmd_verify_dispatch(strict)
 
   def test_orphaned_active_marker_starts_a_fresh_run(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
@@ -826,6 +1046,78 @@ class AgentDispatchTests(unittest.TestCase):
 
       self.assertEqual(result["finalCounts"]["processedCount"], 1)
       self.assertIsNone(dispatch_store.active_agent_dispatch(root))
+      strict = commands_dispatch.cmd_verify_dispatch(argparse.Namespace(
+        run_id="agent-test",
+        dispatch_root=root,
+        require_no_failures=True,
+      ))
+      self.assertTrue(strict["ok"])
+
+  def test_wait_returns_immediately_when_all_claims_are_terminal(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      prepared = self.prepare(root)
+      claim_id = prepared["claims"][0]["claimId"]
+      work = dispatch_store.load_agent_work(root, "agent-test", claim_id)
+      agent_dispatch._record_outcome(root, "agent-test", work, {
+        "status": "no_matches", "appliedCount": 0, "actionRequiredCount": 0,
+      })
+      wait_args = self.args(root, "wait")
+      wait_args.after_terminal_count = 1
+      wait_args.wait_timeout_seconds = 10
+
+      with mock.patch.object(agent_dispatch.time, "sleep") as sleep:
+        result = agent_dispatch.cmd_agent_wait(wait_args)
+
+      self.assertFalse(result["timedOut"])
+      self.assertEqual(result["terminalCount"], 1)
+      sleep.assert_not_called()
+
+  def test_wait_returns_when_terminal_count_advances(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      prepared = self.prepare(root)
+      claim_id = prepared["claims"][0]["claimId"]
+      work = dispatch_store.load_agent_work(root, "agent-test", claim_id)
+      wait_args = self.args(root, "wait")
+      wait_args.after_terminal_count = 0
+      wait_args.wait_timeout_seconds = 10
+
+      def finish_claim(_seconds: float) -> None:
+        agent_dispatch._record_outcome(root, "agent-test", work, {
+          "status": "no_matches", "appliedCount": 0, "actionRequiredCount": 0,
+        })
+
+      with (
+        mock.patch.object(agent_dispatch.time, "monotonic", return_value=0),
+        mock.patch.object(agent_dispatch.time, "sleep", side_effect=finish_claim) as sleep,
+      ):
+        result = agent_dispatch.cmd_agent_wait(wait_args)
+
+      self.assertFalse(result["timedOut"])
+      self.assertEqual(result["terminalCount"], 1)
+      sleep.assert_called_once()
+
+  def test_wait_timeout_is_bounded_and_read_only(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      prepared = self.prepare(root)
+      claim_id = prepared["claims"][0]["claimId"]
+      before = dispatch_store.load_agent_claim(root, "agent-test", claim_id)
+      wait_args = self.args(root, "wait")
+      wait_args.after_terminal_count = 0
+      wait_args.wait_timeout_seconds = 1
+
+      with (
+        mock.patch.object(agent_dispatch.time, "monotonic", side_effect=[0, 2]),
+        mock.patch.object(agent_dispatch.time, "sleep") as sleep,
+      ):
+        result = agent_dispatch.cmd_agent_wait(wait_args)
+
+      self.assertTrue(result["timedOut"])
+      self.assertEqual(result["terminalCount"], 0)
+      sleep.assert_not_called()
+      self.assertEqual(dispatch_store.load_agent_claim(root, "agent-test", claim_id), before)
 
 
 if __name__ == "__main__":

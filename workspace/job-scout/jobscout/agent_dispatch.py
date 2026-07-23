@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import time
 from typing import Iterable
 
 from . import application, dispatch_store
@@ -50,6 +51,7 @@ from .delivery import (
 from .cv_safety import validate_cv_html_source
 from .dispatch_runner import (
   browser_apply_enabled,
+  candidates_for_subscriber_channels,
   publish_user_dashboard_telemetry,
   record_candidate_application,
   scoped_subscribers,
@@ -73,7 +75,7 @@ from .profile import (
   subscriber_user_id,
   user_key,
 )
-from .subscriber import display_name, subscriber_cv_html, subscriber_phone
+from .subscriber import display_name, subscriber_cv_html, subscriber_has_whatsapp, subscriber_phone
 from .textutil import public_text
 from .util import safe_run_id, utc_now
 
@@ -131,6 +133,15 @@ VOID_ELEMENTS = frozenset({
 
 class AgentResultError(ValueError):
   """The child response is unsafe or inconsistent with its claimed packet."""
+
+
+def _gmail_token_needs_reconnect(error: object) -> bool:
+  """Recognise the mail bridge's non-retryable OAuth credential failure."""
+  message = public_text(error, 500).casefold()
+  return (
+    "token" in message
+    and ("expired" in message or "revoked" in message)
+  )
 
 
 def _source_results() -> dict[str, dict]:
@@ -297,7 +308,11 @@ def cmd_agent_prepare(args: argparse.Namespace) -> dict:
     subscribers = ready_result.get("subscribers") if isinstance(ready_result, dict) else []
     subscribers = subscribers if isinstance(subscribers, list) else []
     subscribers = [subscriber for subscriber in subscribers if subscriber_is_dispatch_ready(subscriber)]
-    subscribers = scoped_subscribers(subscribers, getattr(args, "phone", None))
+    subscribers = scoped_subscribers(
+      subscribers,
+      getattr(args, "phone", None),
+      getattr(args, "user_id", None),
+    )
     shortlist_limit = max(1, min(int(getattr(args, "shortlist_limit", AGENT_SHORTLIST_LIMIT)), AGENT_SHORTLIST_LIMIT))
     if not getattr(args, "dry_run", False):
       maybe_write_group_feed_cache(args, run_id)
@@ -355,6 +370,7 @@ def cmd_agent_prepare(args: argparse.Namespace) -> dict:
         item["applications"],
         shortlist_limit,
       )
+      candidates = candidates_for_subscriber_channels(item["subscriber"], candidates)
       apply_source_filter_stats(item["sourceResults"], filter_stats)
       candidates = [_agent_candidate(candidate) for candidate in candidates]
       user_id = item["userId"]
@@ -1004,6 +1020,17 @@ def dispatch_agent_user(args: argparse.Namespace, work: dict, selected: list[dic
         applications.append({**candidate, "status": "applied", "attemptCount": attempt_count})
       except Exception as err:
         failed_note = public_text(err)
+        if _gmail_token_needs_reconnect(err):
+          blocker = "gmail_reconnect_required"
+          record_candidate_application(
+            user_id, candidate, "action_required", notes=action_instruction(candidate, blocker), match=reason,
+            submission_method="manual", application_url=application_url, blocker_code=blocker,
+            attempt_count=attempt_count, replace=True,
+          )
+          _note_channel_outcome(candidate, "action_required", attempt_count)
+          user_action_required.append({"candidate": candidate, "blockerCode": blocker})
+          failed_note = None
+          continue
         try:
           record_candidate_application(
             user_id, candidate, "failed", notes=failed_note, match=reason,
@@ -1103,14 +1130,16 @@ def dispatch_agent_user(args: argparse.Namespace, work: dict, selected: list[dic
     status = "failed"
   else:
     status = "no_matches"
-  delivered = False
+  delivered = None
   summary_error = None
-  try:
-    date_label = datetime.now(timezone.utc).date().isoformat()
-    send_whatsapp_summary(subscriber_phone(subscriber), build_user_summary(date_label, user_applied, user_action_required, failed_note))
-    delivered = True
-  except Exception as err:
-    summary_error = public_text(err)
+  if subscriber_has_whatsapp(subscriber):
+    delivered = False
+    try:
+      date_label = datetime.now(timezone.utc).date().isoformat()
+      send_whatsapp_summary(subscriber_phone(subscriber), build_user_summary(date_label, user_applied, user_action_required, failed_note))
+      delivered = True
+    except Exception as err:
+      summary_error = public_text(err)
   publish_user_dashboard_telemetry(
     user_id, status, len(user_applied), len(user_action_required), delivered, summary_error or failed_note,
   )
@@ -1131,6 +1160,7 @@ def dispatch_agent_user(args: argparse.Namespace, work: dict, selected: list[dic
     "templateLetterCount": len(applied) - personalized_letter_count,
     "summaryDelivered": delivered,
     "summaryError": summary_error,
+    "failureReason": failed_note if status == "failed" else None,
     "fallback": False,
     "fallbackReason": None,
   }
@@ -1216,6 +1246,20 @@ def cmd_agent_complete(args: argparse.Namespace) -> dict:
   return {"agentPhase": "complete", **outcome}
 
 
+def cmd_agent_validate(args: argparse.Namespace) -> dict:
+  """Validate the child result and artifacts without claiming side effects."""
+  run_id = safe_run_id(args.run_id)
+  work = dispatch_store.load_agent_work(args.dispatch_root, run_id, args.claim_id)
+  selected = validate_agent_result(args, work, _read_result_arg(args.result))
+  return {
+    "ok": True,
+    "agentPhase": "validate",
+    "runId": run_id,
+    "claimId": args.claim_id,
+    "selectedCount": len(selected),
+  }
+
+
 def cmd_agent_fallback(args: argparse.Namespace) -> dict:
   """Compatibility phase that now records a terminal failure without submitting."""
   work = dispatch_store.load_agent_work(args.dispatch_root, args.run_id, args.claim_id)
@@ -1253,6 +1297,34 @@ def cmd_agent_status(args: argparse.Namespace) -> dict:
     "runId": run_id,
     "claimCount": len(claims),
     "terminalCount": sum(claim.get("status") in TERMINAL_CLAIM_STATUSES for claim in claims),
+    "claims": [_claim_summary(claim) for claim in claims],
+  }
+
+
+def cmd_agent_wait(args: argparse.Namespace) -> dict:
+  """Wait read-only for durable terminal progress or a bounded timeout."""
+  run_id = safe_run_id(args.run_id)
+  baseline = int(args.after_terminal_count)
+  timeout_seconds = int(args.wait_timeout_seconds)
+  deadline = time.monotonic() + timeout_seconds
+  timed_out = False
+  while True:
+    claims = _load_claims(args.dispatch_root, run_id)
+    terminal_count = sum(claim.get("status") in TERMINAL_CLAIM_STATUSES for claim in claims)
+    if terminal_count > baseline or terminal_count == len(claims):
+      break
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+      timed_out = True
+      break
+    time.sleep(min(3.0, remaining))
+  return {
+    "ok": True,
+    "agentPhase": "wait",
+    "runId": run_id,
+    "timedOut": timed_out,
+    "claimCount": len(claims),
+    "terminalCount": terminal_count,
     "claims": [_claim_summary(claim) for claim in claims],
   }
 
@@ -1308,9 +1380,11 @@ def cmd_agent_dispatch(args: argparse.Namespace) -> dict:
   handlers = {
     "prepare": cmd_agent_prepare,
     "claim": cmd_agent_claim,
+    "validate": cmd_agent_validate,
     "complete": cmd_agent_complete,
     "fallback": cmd_agent_fallback,
     "status": cmd_agent_status,
+    "wait": cmd_agent_wait,
     "finish": cmd_agent_finish,
   }
   handler = handlers.get(phase)
@@ -1318,8 +1392,13 @@ def cmd_agent_dispatch(args: argparse.Namespace) -> dict:
     raise SystemExit("invalid Job Scout agent phase")
   if phase != "prepare" and not getattr(args, "run_id", None):
     raise SystemExit(f"--run-id is required for agent phase {phase}")
-  if phase in {"claim", "complete", "fallback"} and not getattr(args, "claim_id", None):
+  if phase in {"claim", "validate", "complete", "fallback"} and not getattr(args, "claim_id", None):
     raise SystemExit(f"--claim-id is required for agent phase {phase}")
-  if phase == "complete" and not getattr(args, "result", None):
-    raise SystemExit("--result is required for agent phase complete")
+  if phase in {"validate", "complete"} and not getattr(args, "result", None):
+    raise SystemExit(f"--result is required for agent phase {phase}")
+  if phase == "wait":
+    if getattr(args, "after_terminal_count", None) is None or args.after_terminal_count < 0:
+      raise SystemExit("--after-terminal-count must be a non-negative integer for agent phase wait")
+    if not 1 <= int(args.wait_timeout_seconds) <= 21600:
+      raise SystemExit("--wait-timeout-seconds must be from 1 to 21600")
   return handler(args)

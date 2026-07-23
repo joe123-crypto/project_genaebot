@@ -283,6 +283,7 @@ def action_instruction(candidate: dict, blocker_code: str | None = None) -> str:
     "auto_apply_disabled": "Apply manually here.",
     "channel_post_manual": "The channel post has no application form or email. Review the original advert and apply manually.",
     "gmail_not_connected": "Reconnect Gmail before I can email this application for you.",
+    "gmail_reconnect_required": "Reconnect Gmail before I can email this application for you.",
   }
   prefix = reasons.get(str(blocker_code or ""), "This application needs your input.")
   if link:

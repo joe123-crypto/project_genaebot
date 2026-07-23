@@ -85,6 +85,7 @@ def cmd_finish_dispatch(args: argparse.Namespace) -> dict:
 def cmd_verify_dispatch(args: argparse.Namespace) -> dict:
   data = dispatch_store.load_dispatch(args.run_id, args.dispatch_root)
   errors: list[str] = []
+  require_no_failures = bool(getattr(args, "require_no_failures", False))
   ready_count = int(data.get("readyCount", -1))
   outcomes = data.get("outcomes") if isinstance(data.get("outcomes"), dict) else {}
   final_counts = data.get("finalCounts") if isinstance(data.get("finalCounts"), dict) else None
@@ -125,12 +126,31 @@ def cmd_verify_dispatch(args: argparse.Namespace) -> dict:
       errors.append("failedCount does not match recorded outcomes")
     if int(final_counts.get("noMatchesCount", -1)) != outcome_status_counts["no_matches"]:
       errors.append("noMatchesCount does not match recorded outcomes")
+    if require_no_failures and int(final_counts.get("failedCount", 0)) > 0:
+      errors.append("dispatch contains one or more failed subscriber outcomes")
+
+  if require_no_failures:
+    summary_failure_count = 0
+    claim_ids = data.get("claimIds") if isinstance(data.get("claimIds"), list) else []
+    for claim_id in claim_ids:
+      try:
+        claim = dispatch_store.load_agent_claim(args.dispatch_root, args.run_id, str(claim_id))
+      except (OSError, RuntimeError, SystemExit, ValueError):
+        errors.append("dispatch is missing a claim required for strict verification")
+        continue
+      outcome = claim.get("outcome") if isinstance(claim.get("outcome"), dict) else {}
+      if str(outcome.get("summaryError") or "").strip():
+        summary_failure_count += 1
+    if summary_failure_count:
+      errors.append("one or more requested WhatsApp summaries failed")
 
   result = {
     "ok": not errors,
     "runId": safe_run_id(args.run_id),
     "readyCount": ready_count,
     "outcomeCount": len(outcomes),
+    "finalCounts": final_counts,
+    "strict": require_no_failures,
     "errors": errors,
   }
   if errors:

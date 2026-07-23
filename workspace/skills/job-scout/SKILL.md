@@ -23,19 +23,21 @@ Commands:
 
 ## Daily OpenClaw Agent Dispatch
 
-The installed 08:00 `Africa/Harare` cron is an isolated `main` agent turn. It
-must use the durable phases below; it must not invoke the legacy direct mode.
+The installed 08:00 `Africa/Harare` cron is a command that invokes the trusted
+`job-scout-agent --daily-live` wrapper. The wrapper prepares durable work,
+starts one isolated `main` parent turn, and verifies the finished dispatch
+before it can exit successfully. It must not invoke the legacy direct mode.
 The configured OpenClaw default model performs matching and personalization.
-Never add a model override to the cron or a child spawn.
+Never add a model override to the parent or a child spawn.
 
 Parent protocol:
 
-1. Run `/home/joseph/.openclaw/workspace/bin/job-scout dispatch-jsearch --agent-phase prepare --limit-ready 100 --shortlist-limit 20 --match-threshold 70 --write-group-feed-cache` exactly once. Set the exec tool timeout to 21600 seconds and use a short yield. If exec returns a process session, poll that same session until it exits; several minutes without output is normal. Never kill or rerun preparation because it is quiet. Save the returned `runId` and claim list. This command resumes an unfinished active agent run instead of starting overlapping work.
+1. The trusted wrapper has already run preparation exactly once. Start with `/home/joseph/.openclaw/workspace/bin/job-scout dispatch-jsearch --agent-phase status --run-id "<runId>"`; do not prepare or discover jobs again.
 2. Spawn one isolated `main` child for each non-terminal claim, no more than four at once. Use `sessions_spawn` with `agentId: "main"`, `mode: "run"`, `context: "isolated"`, `cleanup: "keep"`, and `cwd: "/home/joseph/.openclaw/workspace"`. Use simple lowercase task names such as `job_scout_1`; never derive a task name from a claim ID. Pass only the run ID, opaque claim ID, and the child protocol below. Do not pass user data in the spawn task and do not set `model` or `thinking`.
-3. After filling the four slots, call `sessions_yield`. Do not poll sessions in a wait loop. Completion events resume this cron session.
-4. For each completion event, run the status phase. If that child's claim is not `completed`, immediately run `/home/joseph/.openclaw/workspace/bin/job-scout dispatch-jsearch --agent-phase fallback --run-id "<runId>" --claim-id "<claimId>" --fallback-reason "OpenClaw child failed"` exactly once. This records a fail-closed terminal outcome and never submits deterministic documents. Do not retry the child.
-5. Fill each newly available slot and yield again until every claim is terminal. All registered ready users must be processed; four is the concurrency limit, not a user limit.
-6. Prove `terminalCount == claimCount` using `/home/joseph/.openclaw/workspace/bin/job-scout dispatch-jsearch --agent-phase status --run-id "<runId>"`, then run `/home/joseph/.openclaw/workspace/bin/job-scout dispatch-jsearch --agent-phase finish --run-id "<runId>"`. Finish verifies the dispatch marker and is the only successful terminal state.
+3. After filling the slots, run `/home/joseph/.openclaw/workspace/bin/job-scout dispatch-jsearch --agent-phase wait --run-id "<runId>" --after-terminal-count <currentTerminalCount> --wait-timeout-seconds 2760` with the exec timeout set to 3000 seconds and a short yield. If exec returns a process session, poll that same process session until it exits. This wait reads durable state and does not depend on subagent announcement delivery.
+4. When terminal count rises, run status, fill each newly available slot, and wait again. If a wait times out, run `/home/joseph/.openclaw/workspace/bin/job-scout dispatch-jsearch --agent-phase fallback --run-id "<runId>" --claim-id "<claimId>" --fallback-reason "OpenClaw child timed out"` exactly once for each still non-terminal claim in that current batch. This records a fail-closed terminal outcome and never submits deterministic documents. Do not retry a child.
+5. Continue until every claim is terminal. All registered ready users must be processed; four is the concurrency limit, not a user limit. Do not call `sessions_yield` and do not wait for child announce messages.
+6. Prove `terminalCount == claimCount` using the status phase, then run `/home/joseph/.openclaw/workspace/bin/job-scout dispatch-jsearch --agent-phase finish --run-id "<runId>"`. Finish verifies the dispatch marker and is the only successful terminal state.
 
 Exact child protocol (include this whole protocol in each spawn task):
 
@@ -70,17 +72,19 @@ For rejected candidates keep `cvHtmlPath` and `coverLetterPath` as null. Complet
 every pre-populated assessment, even when none is selected. An empty shortlist
 has an already-empty assessments array.
 
-7. Before completion, verify locally that every email from the base CV still appears as one uninterrupted email address in each personalized HTML file and that no `__FILL_` placeholder remains in `resultPath`. Invoke `/home/joseph/.openclaw/workspace/bin/job-scout dispatch-jsearch --agent-phase complete --run-id "<runId>" --claim-id "<claimId>" --result "@<resultPath>"` exactly once. The dispatcher validates ownership, candidate IDs, scores, limits, safe self-contained CV HTML, preservation of every factual detail (the applicant's name, every email and phone number, and all dates), and file paths, then renders every CV down to exactly one page before it stores, sends, submits, records, and summarizes. Invalid output records a terminal failed claim and sends nothing. Never retry claim or complete, even after a validation error. Never inspect or edit source code, claim JSON, work-packet JSON, dispatch markers, statuses, or outcomes. Write only inside the returned `personalizedOutputDirectory`; use `edit` only for the pre-populated `resultPath`; base CV and cover-letter files are read-only inputs. The child must never call Gmail, WhatsApp, Agent Genaie artifact APIs, the browser worker, cron, gateway, or another subagent directly.
+7. Before completion, verify locally that every email from the base CV still appears as one uninterrupted email address in each personalized HTML file and that no `__FILL_` placeholder remains in `resultPath`. Invoke `/home/joseph/.openclaw/workspace/bin/job-scout dispatch-jsearch --agent-phase validate --run-id "<runId>" --claim-id "<claimId>" --result "@<resultPath>"` exactly once. This preflight is side-effect-free. If it fails, correct the result or artifacts once and invoke validate one final time. Whether that final validation succeeds or fails, invoke `/home/joseph/.openclaw/workspace/bin/job-scout dispatch-jsearch --agent-phase complete --run-id "<runId>" --claim-id "<claimId>" --result "@<resultPath>"` exactly once so the dispatcher records a durable terminal outcome. Complete validates again, renders every accepted CV down to exactly one page, then exclusively owns storing, sending, submitting, recording, and summarizing. Never edit any file after complete returns. Never retry claim or complete. Never inspect or edit source code, claim JSON, work-packet JSON, dispatch markers, statuses, or outcomes. Write only inside the returned `personalizedOutputDirectory`; use `edit` only for the pre-populated `resultPath`; base CV and cover-letter files are read-only inputs. The child must never call Gmail, WhatsApp, Agent Genaie artifact APIs, the browser worker, cron, gateway, or another subagent directly. End the child turn with exactly `NO_REPLY`; the deterministic completion already sends the subscriber summary.
 
 Admin manual runs:
 
 - A request made after checking one person is scoped to that person. Run `/home/joseph/.openclaw/workspace/bin/job-scout-agent --phone "<whatsapp phone>" --live` exactly once. Use `--preview` instead of `--live` when verifying model behavior without side effects.
+- A web-only subscriber with no linked WhatsApp phone is scoped by Firebase UID: `/home/joseph/.openclaw/workspace/bin/job-scout-agent --user-id "<firebase uid>" --live`. This operator-only scope sends eligible email applications but excludes website applications and skips the WhatsApp summary.
 - An all-user safety preview uses `/home/joseph/.openclaw/workspace/bin/job-scout-agent --all --preview`; `--all --live` is rejected.
 - The manual wrapper owns the long preparation phase before it starts the model turn. The model starts from durable status and must not prepare or discover jobs again.
 - A running process with no new output is not a failure. Job discovery and website checks normally take several minutes. Poll the same process for up to 20 minutes.
 - Never start a direct or dry run while another dispatch is running. The command lock will reject overlaps.
 - Never use `--pilot-only`; it is obsolete. Do not infer current arguments from historical run diagnostics.
 - If the process connection is lost, inspect the named dispatch marker and application records before deciding whether another run is safe.
+- The wrapper exits nonzero when durable verification finds any failed subscriber outcome or requested WhatsApp summary failure; do not report a clean run from a zero-exit model turn alone.
 
 Rules:
 

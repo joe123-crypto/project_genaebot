@@ -56,7 +56,7 @@ class JobScoutDeploymentTests(unittest.TestCase):
     self.assertIn("FROM node:24-bookworm-slim", dockerfile)
     self.assertIn('CMD ["node", "listener.mjs"]', dockerfile)
 
-  def test_scheduler_is_isolated_agent_turn_without_model_override(self) -> None:
+  def test_scheduler_is_verified_command_wrapper(self) -> None:
     installer = (ROOT / "deploy/install-job-scout.sh").read_text(encoding="utf-8")
 
     self.assertIn('NAME="job-scout"', installer)
@@ -64,14 +64,13 @@ class JobScoutDeploymentTests(unittest.TestCase):
     self.assertNotIn("--pilot-only", installer)
     self.assertNotIn("JOB_SCOUT_PILOT_USER_IDS", installer)
     self.assertIn('CRON_EXPR="0 8 * * *"', installer)
-    self.assertIn("--agent main", installer)
     self.assertIn("--session isolated", installer)
-    self.assertIn("--message \"$AGENT_PROMPT\"", installer)
+    self.assertIn("--command-argv \"$COMMAND_ARGV\"", installer)
+    self.assertIn("--command-cwd /home/joseph/.openclaw/workspace", installer)
     self.assertIn("--timeout-seconds 21600", installer)
-    self.assertIn("--agent-phase prepare", installer)
-    self.assertIn("sessions_spawn", installer)
-    self.assertIn("sessions_yield", installer)
-    self.assertNotIn("--command-argv", installer)
+    self.assertIn("--daily-live", installer)
+    self.assertNotIn("sessions_yield", installer)
+    self.assertNotIn("--message", installer)
     self.assertNotIn("--model", installer)
 
   def test_manual_agent_wrapper_prepares_before_starting_the_model(self) -> None:
@@ -83,8 +82,13 @@ class JobScoutDeploymentTests(unittest.TestCase):
     self.assertNotIn("| jq", wrapper)
     self.assertIn("The trusted wrapper has already completed preparation", wrapper)
     self.assertIn("Do not run the prepare phase", wrapper)
-    self.assertIn("until \"${job_scout[@]}\" verify-dispatch", wrapper)
-    self.assertIn("sleep 10", wrapper)
+    self.assertIn("--daily-live", wrapper)
+    self.assertIn("--user-id", wrapper)
+    self.assertIn("prepare_args+=(--write-group-feed-cache)", wrapper)
+    self.assertIn('"${job_scout[@]}" verify-dispatch --run-id "$run_id" --require-no-failures', wrapper)
+    self.assertNotIn("sleep 10", wrapper)
+    self.assertNotIn("After filling the four slots, call sessions_yield", wrapper)
+    self.assertIn("--agent-phase wait", (ROOT / "workspace/skills/job-scout/SKILL.md").read_text(encoding="utf-8"))
     self.assertLess(wrapper.index('prepare_json='), wrapper.index("openclaw agent"))
 
   def test_normal_deploy_reconciles_scheduler_without_reenabling_a_pause(self) -> None:

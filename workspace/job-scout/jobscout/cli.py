@@ -144,14 +144,18 @@ def build_parser() -> argparse.ArgumentParser:
   dispatch_jsearch = subparsers.add_parser("dispatch-jsearch", help="fetch JSearch candidates for ready subscribers")
   dispatch_jsearch.add_argument(
     "--agent-phase",
-    choices=["prepare", "claim", "complete", "fallback", "status", "finish"],
+    choices=["prepare", "claim", "validate", "complete", "fallback", "status", "wait", "finish"],
     help="run one durable OpenClaw-agent orchestration phase",
   )
   dispatch_jsearch.add_argument("--run-id")
   dispatch_jsearch.add_argument("--claim-id", help="opaque claim returned by the agent prepare phase")
   dispatch_jsearch.add_argument("--result", help="agent result JSON object, or @path, for the complete phase")
   dispatch_jsearch.add_argument("--fallback-reason", help="sanitized reason for deterministic fallback")
-  dispatch_jsearch.add_argument("--phone", help="limit this operator-triggered run to one ready WhatsApp subscriber")
+  dispatch_jsearch.add_argument("--after-terminal-count", type=int, help="wait until terminal claims exceed this count")
+  dispatch_jsearch.add_argument("--wait-timeout-seconds", type=int, default=2760, help="bounded wait phase timeout")
+  dispatch_scope = dispatch_jsearch.add_mutually_exclusive_group()
+  dispatch_scope.add_argument("--phone", help="limit this operator-triggered run to one ready WhatsApp subscriber")
+  dispatch_scope.add_argument("--user-id", help="limit this operator-triggered run to one ready Firebase user")
   dispatch_jsearch.add_argument("--limit-ready", type=int, default=100)
   dispatch_jsearch.add_argument("--max-candidates-per-user", type=int, default=5)
   dispatch_jsearch.add_argument("--shortlist-limit", type=int, default=20, help="agent shortlist size, capped at 20")
@@ -212,6 +216,11 @@ def build_parser() -> argparse.ArgumentParser:
   verify_dispatch = subparsers.add_parser("verify-dispatch", help="verify a Job Scout dispatch marker is complete")
   verify_dispatch.add_argument("--run-id", required=True)
   verify_dispatch.add_argument("--dispatch-root", type=Path, default=DEFAULT_DISPATCH_ROOT)
+  verify_dispatch.add_argument(
+    "--require-no-failures",
+    action="store_true",
+    help="also fail when a subscriber outcome or requested WhatsApp summary failed",
+  )
   verify_dispatch.set_defaults(func=cmd_verify_dispatch)
 
   return parser

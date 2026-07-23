@@ -12,7 +12,7 @@ import re
 
 from jobscout import api
 from .constants import DEFAULT_STORAGE_ROOT
-from .profile import subscriber_user_id
+from .profile import subscriber_user_id, user_key
 from .util import phone_hash, slug_part
 
 
@@ -59,6 +59,10 @@ def subscriber_phone(subscriber: dict) -> str:
   return phone
 
 
+def subscriber_has_whatsapp(subscriber: dict) -> bool:
+  return bool(str(subscriber.get("whatsappPhone") or "").strip())
+
+
 def subscriber_sender_email(subscriber: dict) -> str:
   email = str(subscriber.get("senderEmail") or "").strip()
   if not email:
@@ -70,7 +74,9 @@ def subscriber_phone_hash(subscriber: dict) -> str:
   value = str(subscriber.get("whatsappPhoneHash") or "").strip()
   if value:
     return re.sub(r"[^A-Za-z0-9_.:-]", "-", value)[:80]
-  return phone_hash(subscriber_phone(subscriber))
+  if subscriber_has_whatsapp(subscriber):
+    return phone_hash(subscriber_phone(subscriber))
+  return user_key(subscriber_user_id(subscriber))
 
 
 # cvFileRef/cvHtmlRef are R2 object keys, not local paths. Downloaded CVs are

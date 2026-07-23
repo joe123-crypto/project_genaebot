@@ -51,6 +51,7 @@ class JSearchDispatchTests(unittest.TestCase):
     return argparse.Namespace(
       run_id="unit-dispatch",
       phone=None,
+      user_id=None,
       limit_ready=10,
       max_candidates_per_user=5,
       dispatch_root=root,
@@ -233,6 +234,43 @@ class JSearchDispatchTests(unittest.TestCase):
       with mock.patch.object(jobscout.dispatch_runner, "cmd_list_ready", return_value={"subscribers": [self.subscriber()]}):
         with self.assertRaisesRegex(SystemExit, "no ready Job Scout subscriber"):
           job_scout.cmd_dispatch_jsearch(args)
+
+  def test_dispatch_user_id_scope_selects_web_only_subscriber(self) -> None:
+    requested = {
+      **self.subscriber(),
+      "userId": "web-user-1",
+      "whatsappPhone": None,
+      "whatsappPhoneHash": None,
+    }
+    other = {**self.subscriber(), "userId": "user-2"}
+    selected = jobscout.dispatch_runner.scoped_subscribers(
+      [other, requested],
+      user_id="web-user-1",
+    )
+
+    self.assertEqual(selected, [requested])
+
+  def test_web_only_subscriber_is_ready_and_keeps_email_candidates_only(self) -> None:
+    subscriber = {
+      **self.subscriber(),
+      "whatsappPhone": None,
+      "whatsappPhoneHash": None,
+    }
+    email_candidate = self.candidate()
+    website_candidate = self.candidate(email=None)
+
+    self.assertTrue(jobscout.dispatch_runner.subscriber_is_dispatch_ready(subscriber))
+    self.assertEqual(
+      jobscout.dispatch_runner.candidates_for_subscriber_channels(
+        subscriber,
+        [website_candidate, email_candidate],
+      ),
+      [email_candidate],
+    )
+    self.assertEqual(
+      jobscout.subscriber.subscriber_phone_hash(subscriber),
+      job_scout.user_key("user-1"),
+    )
 
   def test_dispatch_filters_incomplete_subscribers_from_backend(self) -> None:
     incomplete = {

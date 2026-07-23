@@ -3,20 +3,46 @@ set -euo pipefail
 
 scope=""
 phone=""
+user_id=""
 mode=""
+daily_live=false
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --phone) phone="${2:-}"; scope="phone"; shift 2 ;;
-    --all) scope="all"; shift ;;
+    --phone)
+      [ -z "$scope" ] || { printf 'only one scope may be specified\n' >&2; exit 2; }
+      phone="${2:-}"; scope="phone"; shift 2
+      ;;
+    --user-id)
+      [ -z "$scope" ] || { printf 'only one scope may be specified\n' >&2; exit 2; }
+      user_id="${2:-}"; scope="user"; shift 2
+      ;;
+    --all)
+      [ -z "$scope" ] || { printf 'only one scope may be specified\n' >&2; exit 2; }
+      scope="all"; shift
+      ;;
     --preview) mode="preview"; shift ;;
     --live) mode="live"; shift ;;
-    *) printf 'usage: %s (--phone E164|--all) (--preview|--live)\n' "$0" >&2; exit 2 ;;
+    --daily-live)
+      [ -z "$scope" ] && [ -z "$mode" ] && [ "$#" -eq 1 ] || {
+        printf -- '--daily-live cannot be combined with another scope or mode\n' >&2
+        exit 2
+      }
+      daily_live=true; scope="daily"; mode="live"; shift
+      ;;
+    *) printf 'usage: %s ((--phone E164|--user-id UID|--all) (--preview|--live)|--daily-live)\n' "$0" >&2; exit 2 ;;
   esac
 done
 [ -n "$scope" ] && [ -n "$mode" ] || { printf 'scope and mode are required\n' >&2; exit 2; }
+if [ "$daily_live" = true ] && { [ "$scope" != "daily" ] || [ "$mode" != "live" ]; }; then
+  printf -- '--daily-live cannot be combined with another scope or mode\n' >&2
+  exit 2
+fi
 if [ "$scope" = "phone" ]; then
   phone="+$(printf '%s' "$phone" | tr -cd '0-9')"
   [[ "$phone" =~ ^\+[0-9]{9,16}$ ]] || { printf 'phone must be an E.164 number\n' >&2; exit 2; }
+fi
+if [ "$scope" = "user" ]; then
+  [[ "$user_id" =~ ^[A-Za-z0-9_-]{1,128}$ ]] || { printf 'user-id is invalid\n' >&2; exit 2; }
 fi
 if [ "$scope" = "all" ] && [ "$mode" != "preview" ]; then
   printf -- '--all is allowed only with --preview\n' >&2
@@ -24,10 +50,14 @@ if [ "$scope" = "all" ] && [ "$mode" != "preview" ]; then
 fi
 
 job_scout=(/home/joseph/.openclaw/workspace/bin/job-scout)
-run_id="manual-job-scout-$(date -u +%Y%m%dT%H%M%SZ)"
+run_prefix="manual-job-scout"
+[ "$scope" = "daily" ] && run_prefix="daily-job-scout"
+run_id="${run_prefix}-$(date -u +%Y%m%dT%H%M%SZ)"
 prepare_args=(dispatch-jsearch --agent-phase prepare --run-id "$run_id" --limit-ready 100 --shortlist-limit 20 --match-threshold 70)
 [ "$scope" = "phone" ] && prepare_args+=(--phone "$phone")
+[ "$scope" = "user" ] && prepare_args+=(--user-id "$user_id")
 [ "$mode" = "preview" ] && prepare_args+=(--dry-run)
+[ "$scope" = "daily" ] && prepare_args+=(--write-group-feed-cache)
 
 if [ "$scope" = "phone" ]; then
   "${job_scout[@]}" status --phone "$phone" >/dev/null
@@ -55,7 +85,8 @@ Follow the Daily OpenClaw Agent Dispatch parent and child protocol in /home/jose
 - The trusted wrapper has already completed preparation for runId ${run_id}. Do not run the prepare phase.
 - Start by running the status phase for runId ${run_id}; use its opaque pending or claimed claims.
 - Spawn isolated main children as documented, no more than four at once. Use simple lowercase task names such as job_scout_1; never derive a task name from a claim ID.
-- If a child fails or its claim does not complete, invoke that claim's --agent-phase fallback exactly once. This records failure and must not submit template documents.
+- After each batch is spawned, use the durable wait phase exactly as documented. Never call sessions_yield and never depend on child announce delivery.
+- If a wait times out, invoke --agent-phase fallback exactly once for each still non-terminal claim in that batch. This records failure and must not submit template documents.
 - Finish only after terminalCount equals claimCount.
 - Never invoke direct dispatch-jsearch mode and never retry a failed child.
 EOF
@@ -64,14 +95,6 @@ env -u OPENCLAW_HOME OPENCLAW_GATEWAY_TOKEN="${GATEWAY_AUTH_TOKEN:?missing gatew
   openclaw agent --agent main --session-key "agent:main:job-scout-manual:$run_id" \
   --message "$prompt" --timeout 21600 --json
 
-# A parent turn intentionally returns after sessions_yield; completion events
-# resume it asynchronously. Keep the operator process attached to durable state
-# until finish makes the dispatch verifiable.
-deadline=$((SECONDS + 21600))
-until "${job_scout[@]}" verify-dispatch --run-id "$run_id" >/dev/null 2>&1; do
-  if [ "$SECONDS" -ge "$deadline" ]; then
-    printf 'Job Scout agent dispatch did not finish within 21600 seconds\n' >&2
-    exit 1
-  fi
-  sleep 10
-done
+# A zero exit from the model turn is not sufficient. The command cron succeeds
+# only when durable finish has made the dispatch marker verifiable.
+"${job_scout[@]}" verify-dispatch --run-id "$run_id" --require-no-failures >/dev/null
