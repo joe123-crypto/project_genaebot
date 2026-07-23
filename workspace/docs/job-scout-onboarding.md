@@ -243,24 +243,40 @@ Your Job Scout profile is saved. Make sure Gmail shows Connected in the app. Whe
 /home/joseph/.openclaw/workspace/bin/job-scout status --phone "<whatsapp phone>"
 ```
 
-This returns only the requesting user's sanitized setup state. A user is dispatch-ready only when the WhatsApp chat is linked, Gmail is connected, target roles and a validated location are saved, the profile summary and safety warning are acknowledged, and the CV object is available in R2. The CV is fetched from R2 on demand at dispatch time. Files under `runtime/job-scout/users` are temporary download caches and must never be used to decide whether a CV exists.
+This returns only the requesting user's sanitized setup state. A WhatsApp
+onboarding user is dispatch-ready only when the chat is linked, Gmail is
+connected, target roles and a validated location are saved, the profile summary
+and safety warning are acknowledged, and the CV object is available in R2. A
+user who completed setup in the web app can be dispatch-ready without a linked
+WhatsApp phone when the same Gmail, profile, safety, subscription, and CV
+requirements are satisfied. For a web-only user, Job Scout considers only jobs
+with an application email, sends eligible email applications, and skips website
+applications and the WhatsApp summary. The CV is fetched from R2 on demand at
+dispatch time. Files under `runtime/job-scout/users` are temporary download
+caches and must never be used to decide whether a CV exists.
 
-The daily 08:00 `Africa/Harare` run is an isolated OpenClaw `main` agent turn.
-It searches JSearch over a rolling 30-day posting window, rejects jobs with
-explicit expired flags or parseable deadlines before today, keeps deadline-free
-jobs only while they remain in an active source feed, and suppresses jobs
-already recorded as applied, skipped, action needed, or physically submitted.
-The parent processes every ready user through at most four isolated children at
-a time. Each child inherits the default model, assesses a deterministic
-shortlist of at most 20 jobs, selects only scores of 70 or higher without a hard
-mismatch, and personalizes truthful application documents. Each claim creates a
-private result template with every opaque candidate ID populated deterministically;
-the child edits only numbered assessment values and personalized artifact paths,
-and the dispatcher maps each short number back to the canonical stored ID.
-The dispatcher validates the child packet and remains the only process allowed
-to send or submit. A child failure records a fail-closed outcome and sends no
-template documents. Candidate artifacts and agent diagnostics are operator-only;
-do not expose them in public chat.
+The daily 08:00 `Africa/Harare` cron invokes the trusted
+`job-scout-agent --daily-live` command wrapper. The wrapper prepares one durable
+run before opening an isolated OpenClaw `main` parent turn, waits on durable
+claim state instead of child announcement delivery, and verifies the finished
+run before it can exit successfully. It searches JSearch over a rolling 30-day
+posting window, rejects jobs with explicit expired flags or parseable deadlines
+before today, keeps deadline-free jobs only while they remain in an active
+source feed, and suppresses jobs already recorded as applied, skipped, action
+needed, or physically submitted. The parent processes every ready user through
+at most four isolated children at a time. Each child inherits the default model,
+assesses a deterministic shortlist of at most 20 jobs, selects only scores of 70
+or higher without a hard mismatch, and personalizes truthful application
+documents. Each claim creates a private result template with every opaque
+candidate ID populated deterministically; the child edits only numbered
+assessment values and personalized artifact paths, and the dispatcher maps each
+short number back to the canonical stored ID. The dispatcher validates the
+child packet and remains the only process allowed to send or submit. A child
+failure records a fail-closed outcome and sends no template documents. Strict
+final verification makes the cron fail when any subscriber outcome fails or
+when a requested WhatsApp summary fails, which activates the configured admin
+failure alert. Candidate artifacts and agent diagnostics are operator-only; do
+not expose them in public chat.
 
 ## Admin Manual Dispatch
 
@@ -274,12 +290,26 @@ When Joe asks for a manual run after checking one person's status, scope the age
   --live
 ```
 
+For a web-only subscriber without a linked WhatsApp number, scope the run to the
+Firebase user ID instead:
+
+```bash
+/home/joseph/.openclaw/workspace/bin/job-scout-agent \
+  --user-id "<firebase uid>" \
+  --live
+```
+
+The UID is an operator-only identifier and must never be requested from or
+shown to a public user. A UID-scoped web-only run keeps only email-application
+candidates and intentionally sends no WhatsApp summary.
+
 Use `--preview` instead of `--live` to exercise the same model workflow without external side effects. The manual wrapper now completes quiet job discovery before it opens the model turn, so the model begins from durable status and cannot time out or repeat preparation. Start the command once with a 21600-second outer timeout and poll that same process for up to six hours. Several minutes without stdout is normal. Do not launch a second dispatch and do not kill a run only because it is quiet. `--pilot-only` and direct operator dispatches are obsolete. If the tool session disappears, verify the named dispatch marker and application records before deciding whether a retry is safe.
 
 The first recorded outcome for each claim is immutable. A child must never edit a
 claim, work packet, dispatch marker, status, or outcome, and must never retry
-`claim` or `complete`. The wrapper remains attached after the parent yields and
-exits only after the durable dispatch marker passes verification.
+`claim` or `complete`. The wrapper remains attached while the parent waits on
+durable claim state and exits only after the dispatch marker passes strict
+verification.
 
 ## Failure Handling
 
