@@ -260,7 +260,7 @@ def cmd_save_profile(args: argparse.Namespace) -> dict:
   max_applications = (
     args.max_applications_per_run
     if args.max_applications_per_run is not None
-    else base.get("maxApplicationsPerRun", 2)
+    else base.get("maxApplicationsPerRun", 1)
   )
   resolved_locations = resolve_profile_locations(
     profile_values(base, "locations"),

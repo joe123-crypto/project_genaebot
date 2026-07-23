@@ -121,6 +121,7 @@ class CvStagingTests(unittest.TestCase):
       self.assertTrue(result["uploadEndpoint"].endswith("/internal/job-scout/cv"))
     self.assertEqual(result["preferences"]["targetRoles"], ["General worker"])
     self.assertEqual(result["preferences"]["country"], "zw")
+    self.assertEqual(result["preferences"]["maxApplicationsPerRun"], 1)
     self.assertTrue(result["profileConfirmed"])
     self.assertTrue(result["safetyAcknowledged"])
 
