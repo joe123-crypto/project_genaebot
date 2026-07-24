@@ -144,6 +144,54 @@ class GroupFeedTests(unittest.TestCase):
       self.assertEqual(cache["candidateCount"], 1)
       self.assertEqual(cache["candidates"][0]["role"], "Poultry Supervisor")
 
+  def test_group_feed_cache_skips_low_information_candidates(self) -> None:
+    low_info = self.candidate(
+      candidateId="low-info",
+      source="everyday-vacancies-whatsapp",
+      sourceUrl="https://whatsapp.com/channel/example/low-info",
+      sourcePostUrl="https://whatsapp.com/channel/example/low-info",
+      applyLinks=[],
+      contactLinks=[],
+      applicationEmails=[],
+      applicationEmail=None,
+      company="Unknown employer",
+      role="Sales and Commercial Officer",
+      location="",
+      closing=None,
+      description="Sales and Commercial Officer Wanted",
+    )
+    actionable_short = self.candidate(
+      candidateId="actionable-short",
+      source="everyday-vacancies-whatsapp",
+      sourceUrl="https://whatsapp.com/channel/example/actionable-short",
+      sourcePostUrl="https://whatsapp.com/channel/example/actionable-short",
+      applyLinks=[],
+      contactLinks=["https://wa.me/263700000001"],
+      applicationEmails=[],
+      applicationEmail=None,
+      company="Unknown employer",
+      role="Receptionist",
+      location="",
+      closing=None,
+      description="Receptionist Vacancy",
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      with mock.patch(
+        "jobscout.group_feed.fetch_whatsapp_channel_candidates_with_results",
+        return_value=([low_info, actionable_short], {"everyday-vacancies-whatsapp": {"status": "ok", "rawCount": 2, "durationMs": 1}}),
+      ), mock.patch(
+        "jobscout.group_feed.fetch_scraped_candidates_with_results",
+        return_value=([], {"vacancymail": {"status": "ok", "rawCount": 0, "durationMs": 1}}),
+      ):
+        result = jobscout.group_feed.build_group_feed_cache("run-low-info", root=root, limit=10)
+
+      cache = json.loads((root / "latest.json").read_text(encoding="utf-8"))
+      self.assertTrue(result["ok"])
+      self.assertEqual(cache["candidateCount"], 1)
+      self.assertEqual(cache["candidates"][0]["candidateId"], "actionable-short")
+      self.assertEqual(result["sourceResults"]["_filter"]["lowInfoCount"], 1)
+
   def test_deliver_group_feed_reads_cache_and_marks_success_only(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
       root = Path(tmp)

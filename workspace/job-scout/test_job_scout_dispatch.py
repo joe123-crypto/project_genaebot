@@ -75,6 +75,20 @@ class JSearchDispatchTests(unittest.TestCase):
       "description": "Delivery role.",
     }
 
+  def low_information_candidate(self) -> dict:
+    return {
+      **self.candidate(email=None, link=None),
+      "candidateId": "low-info",
+      "sourceUrl": None,
+      "applyLinks": [],
+      "applicationEmails": [],
+      "applicationEmail": None,
+      "company": "Unknown employer",
+      "location": "",
+      "closing": None,
+      "description": "Driver Wanted",
+    }
+
   def dispatch_with(
     self,
     root: Path,
@@ -136,6 +150,18 @@ class JSearchDispatchTests(unittest.TestCase):
       record_args = result["_record_calls"][0].args[0]
       self.assertEqual(record_args.status, "applied")
       self.assertEqual(record_args.source, "jsearch")
+
+  def test_low_information_candidate_is_not_dispatched(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      result = self.dispatch_with(Path(tmp), [self.low_information_candidate()])
+
+      self.assertEqual(result["candidateCount"], 0)
+      self.assertEqual(result["appliedCount"], 0)
+      self.assertEqual(result["actionRequiredCount"], 0)
+      self.assertEqual(result["noMatchesCount"], 1)
+      self.assertEqual(result["globalFilter"]["lowInfoCount"], 1)
+      self.assertEqual(result["_send_calls"], [])
+      self.assertEqual(result["_record_calls"], [])
 
   def test_dispatch_records_action_required_when_gmail_sender_missing(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
