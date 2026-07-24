@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 import io
 import json
 from pathlib import Path
+import re
 import tempfile
 import unittest
 from unittest import mock
@@ -134,6 +135,62 @@ class GroupFeedTests(unittest.TestCase):
 
     self.assertTrue(message.startswith("Job Title: Heavy-Duty Mechanic"))
     self.assertNotIn("Job Title: Unknown role", message)
+
+  def test_group_feed_message_collapses_repeated_skills_and_closing_date_sections(self) -> None:
+    message = jobscout.group_feed.format_group_feed_message(self.candidate(
+      role="Control Room Supervisor",
+      location="Harare",
+      company="Black Shark Protection Services",
+      closing="31 Jul 2026",
+      applicationEmails=["hrofficer@blackshark.co.zw"],
+      applicationEmail="hrofficer@blackshark.co.zw",
+      description=(
+        "Job Title: Control Room Supervisor\n\n"
+        "Location: Harare\n\n"
+        "Company: Black Shark Protection Services\n\n"
+        "Job Description The Control Room Supervisor supervises daily control room operations.\n\n"
+        "Qualifications and Experience\n\n"
+        "Educational\n\n"
+        "Requirements\n\n"
+        "Minimum of 5 O-Level passes. Professional Qualifications Certificate or Diploma in Security Management. "
+        "Experience At least three (3) to five (5) years' experience. Competencies and\n\n"
+        "Skills\n\n"
+        "Technology\n\n"
+        "Skills\n\n"
+        "Proficient in operating and monitoring CCTV systems.\n\n"
+        "Communication\n\n"
+        "Skills\n\n"
+        "Able to communicate effectively with security staff, employees, management, and the general public.\n\n"
+        "How to Apply\n\n"
+        "Submit CVs and certified copies by Email: hrofficer@blackshark.co.zw Or Hand Deliver To: "
+        "Black Shark Head Office 26 Five Avenue Harare.\n\n"
+        "Closing Date\n\n"
+        "31 July 2026 Please note: Only shortlisted candidates will be contacted.\n\n"
+        "Application\n\n"
+        "Closing Date: 31 Jul 2026\n\n"
+        "Join the group for more jobs: https://chat.whatsapp.com/JZvh9lwFOvc3N2sSs8F1QD"
+      ),
+    ), invite_url="https://chat.whatsapp.com/JZvh9lwFOvc3N2sSs8F1QD")
+
+    self.assertEqual(sum(1 for line in message.splitlines() if line.strip() == "Skills"), 1)
+    self.assertEqual(len(re.findall(r"(?im)^Closing Date\b", message)), 1)
+    self.assertEqual(len(re.findall(r"(?im)^Job Title:", message)), 1)
+    self.assertEqual(len(re.findall(r"(?im)^Location:", message)), 1)
+    self.assertIn("\nCompany: Black Shark Protection Services\n", message)
+    self.assertIn("\nTechnology\n", message)
+    self.assertIn("\nCommunication\n", message)
+    self.assertIn("hrofficer@blackshark.co.zw", message)
+    self.assertIn("Hand Deliver To: Black Shark Head Office 26 Five Avenue Harare", message)
+    self.assertEqual(message.count("Join the group for more jobs:"), 1)
+
+  def test_group_feed_message_treats_abbreviated_and_full_closing_dates_as_same_date(self) -> None:
+    message = jobscout.group_feed.format_group_feed_message(self.candidate(
+      closing="31 Jul 2026",
+      description="How to Apply\n\nEmail jobs@example.co.zw.\n\nClosing Date\n\n31 July 2026",
+    ))
+
+    self.assertEqual(len(re.findall(r"(?im)^Closing Date\b", message)), 1)
+    self.assertNotIn("Closing Date: 31 Jul 2026", message)
 
   def test_group_feed_cache_dedupes_and_writes_latest(self) -> None:
     candidate = self.candidate()

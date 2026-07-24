@@ -379,6 +379,11 @@ SECTION_HEADINGS = (
 )
 
 
+MONTH_DATE_RE = re.compile(r"\b([0-9]{1,2}\s+[A-Za-z]+,?\s+[0-9]{4})\b")
+ISO_DATE_RE = re.compile(r"\b([0-9]{4}-[0-9]{2}-[0-9]{2})\b")
+SKILLS_SUBSECTION_HEADINGS = {"technology", "communication"}
+
+
 def _job_title(candidate: dict) -> str:
   return display_job_title(candidate) or "Job opportunity"
 
@@ -419,6 +424,239 @@ def _description_has(description: str, value: object) -> bool:
   return bool(text) and text.casefold() in description.casefold()
 
 
+def _heading_key(line: str) -> str:
+  return re.sub(r"\s+", " ", line.strip().rstrip(":")).casefold()
+
+
+def _clean_compare_text(value: object) -> str:
+  return re.sub(r"\s+", " ", str(value or "").strip()).casefold()
+
+
+def _prefixed_line_value(line: str, label: str) -> str | None:
+  match = re.match(rf"^{re.escape(label)}\s*:\s*(.+)$", line, flags=re.I)
+  if not match:
+    return None
+  return match.group(1).strip()
+
+
+def _date_keys(value: object) -> set[str]:
+  text = str(value or "")
+  keys: set[str] = set()
+  for pattern in (ISO_DATE_RE, MONTH_DATE_RE):
+    for match in pattern.finditer(text):
+      raw = match.group(1).replace(",", "")
+      for fmt in ("%Y-%m-%d", "%d %B %Y", "%d %b %Y"):
+        try:
+          keys.add(datetime.strptime(raw, fmt).date().isoformat())
+          break
+        except ValueError:
+          continue
+  return keys
+
+
+def _next_nonblank_index(lines: list[str], start: int) -> int | None:
+  for index in range(start, len(lines)):
+    if lines[index].strip():
+      return index
+  return None
+
+
+def _last_nonblank_line(lines: list[str]) -> str:
+  for line in reversed(lines):
+    if line.strip():
+      return line.strip()
+  return ""
+
+
+def _remove_last_nonblank_line(lines: list[str]) -> None:
+  for index in range(len(lines) - 1, -1, -1):
+    if lines[index].strip():
+      del lines[index]
+      return
+
+
+def _append_description_line(lines: list[str], line: str) -> None:
+  if not line:
+    if lines and lines[-1] != "":
+      lines.append("")
+    return
+  lines.append(line)
+
+
+def _compact_description_lines(lines: list[str]) -> str:
+  compact: list[str] = []
+  for line in lines:
+    stripped = line.strip()
+    if not stripped:
+      if compact and compact[-1] != "":
+        compact.append("")
+      continue
+    compact.append(stripped)
+  while compact and compact[-1] == "":
+    compact.pop()
+  return "\n".join(compact).strip()
+
+
+def _is_closing_date_heading(line: str) -> bool:
+  return bool(re.match(r"^closing\s+date\b", line.strip(), flags=re.I))
+
+
+def _closing_date_keys_for_line(lines: list[str], index: int) -> set[str]:
+  line = lines[index].strip()
+  keys = _date_keys(line)
+  if keys or ":" in line:
+    return keys
+  next_index = _next_nonblank_index(lines, index + 1)
+  if next_index is None:
+    return set()
+  return _date_keys(lines[next_index])
+
+
+def _skip_closing_date_value(lines: list[str], index: int, keys: set[str]) -> int:
+  if ":" in lines[index]:
+    return index + 1
+  next_index = _next_nonblank_index(lines, index + 1)
+  if next_index is None:
+    return index + 1
+  next_keys = _date_keys(lines[next_index])
+  if keys and keys & next_keys:
+    return next_index + 1
+  return index + 1
+
+
+def _next_nonblank_is_closing_date(lines: list[str], start: int) -> bool:
+  index = _next_nonblank_index(lines, start)
+  return index is not None and _is_closing_date_heading(lines[index])
+
+
+def _trailing_fragmented_skills_heading(lines: list[str], index: int) -> tuple[str, str] | None:
+  next_index = _next_nonblank_index(lines, index + 1)
+  if next_index is None or _heading_key(lines[next_index]) != "skills":
+    return None
+  match = re.match(r"^(.+?)\s+(competencies and|technology|communication)$", lines[index].strip(), flags=re.I)
+  if not match:
+    return None
+  return match.group(1).strip(), match.group(2).casefold()
+
+
+def _description_has_closing_date(description: str, value: object) -> bool:
+  keys = _date_keys(value)
+  return bool(keys and keys & _date_keys(description))
+
+
+def _normalize_group_feed_description(
+  description: str,
+  *,
+  role: str,
+  location: str,
+  company: str,
+) -> str:
+  if not description:
+    return ""
+  lines = description.splitlines()
+  output: list[str] = []
+  seen_skills = False
+  seen_closing_date = False
+  seen_closing_keys: set[str] = set()
+  index = 0
+  while index < len(lines):
+    line = re.sub(r"[ \t]+", " ", lines[index]).strip()
+    if not line:
+      _append_description_line(output, "")
+      index += 1
+      continue
+
+    title_value = _prefixed_line_value(line, "Job Title")
+    location_value = _prefixed_line_value(line, "Location")
+    company_value = _prefixed_line_value(line, "Company")
+    if (
+      title_value is not None and _clean_compare_text(title_value) == _clean_compare_text(role)
+      or location_value is not None and _clean_compare_text(location_value) == _clean_compare_text(location)
+      or company_value is not None and _clean_compare_text(company_value) == _clean_compare_text(company)
+    ):
+      index += 1
+      continue
+
+    trailing_skills_heading = _trailing_fragmented_skills_heading(lines, index)
+    if trailing_skills_heading is not None:
+      prefix, heading = trailing_skills_heading
+      if prefix:
+        _append_description_line(output, prefix)
+      if heading in SKILLS_SUBSECTION_HEADINGS:
+        if not seen_skills:
+          _append_description_line(output, "")
+          _append_description_line(output, "Skills")
+          seen_skills = True
+        _append_description_line(output, "")
+        _append_description_line(output, heading.title())
+      index += 1
+      continue
+
+    key = _heading_key(line)
+    if key == "application" and seen_closing_date and _next_nonblank_is_closing_date(lines, index + 1):
+      index += 1
+      continue
+
+    if key in {"competencies and", "competencies and skills"}:
+      if not seen_skills:
+        next_index = _next_nonblank_index(lines, index + 1)
+        if next_index is not None and _heading_key(lines[next_index]) == "skills":
+          index += 1
+          continue
+        _append_description_line(output, "Skills")
+        seen_skills = True
+      index += 1
+      continue
+
+    subsection_match = re.match(r"^(technology|communication)\s+skills$", key)
+    if subsection_match:
+      if not seen_skills:
+        _append_description_line(output, "Skills")
+        _append_description_line(output, "")
+        seen_skills = True
+      _append_description_line(output, subsection_match.group(1).title())
+      index += 1
+      continue
+
+    if key == "skills":
+      previous_key = _heading_key(_last_nonblank_line(output))
+      if previous_key in {"competencies and", "competencies and skills"}:
+        _remove_last_nonblank_line(output)
+        previous_key = _heading_key(_last_nonblank_line(output))
+      if not seen_skills:
+        if previous_key in SKILLS_SUBSECTION_HEADINGS:
+          _remove_last_nonblank_line(output)
+          _append_description_line(output, "Skills")
+          _append_description_line(output, "")
+          _append_description_line(output, previous_key.title())
+        else:
+          _append_description_line(output, "Skills")
+        seen_skills = True
+      index += 1
+      continue
+
+    if _is_closing_date_heading(line):
+      keys = _closing_date_keys_for_line(lines, index)
+      if seen_closing_date:
+        index = _skip_closing_date_value(lines, index, keys)
+        continue
+      seen_closing_date = True
+      seen_closing_keys.update(keys)
+      _append_description_line(output, line)
+      index += 1
+      continue
+
+    if seen_closing_keys and _date_keys(line) & seen_closing_keys and _heading_key(_last_nonblank_line(output)) == "application":
+      _remove_last_nonblank_line(output)
+      index += 1
+      continue
+
+    _append_description_line(output, line)
+    index += 1
+
+  return _compact_description_lines(output)
+
+
 def _append_group_join_link(lines: list[str], invite_url: str) -> None:
   invite = _clean_line(invite_url, 240)
   if not invite:
@@ -435,7 +673,13 @@ def format_group_feed_message(candidate: dict, invite_url: str = DEFAULT_GROUP_F
   role = _job_title(candidate)
   location = _clean_line(candidate.get("location"), 180)
   company = _clean_line(candidate.get("company"), 180)
-  description = _description_text(candidate.get("description"))
+  closing = _clean_line(candidate.get("closing"), 120)
+  description = _normalize_group_feed_description(
+    _description_text(candidate.get("description")),
+    role=role,
+    location=location,
+    company=company,
+  )
   lines = [f"Job Title: {role}", ""]
   if location:
     lines.extend([f"Location: {location}", ""])
@@ -445,8 +689,7 @@ def format_group_feed_message(candidate: dict, invite_url: str = DEFAULT_GROUP_F
     lines.extend([description, ""])
 
   application_lines: list[str] = []
-  closing = _clean_line(candidate.get("closing"), 120)
-  if closing and not _description_has(description, closing):
+  if closing and not _description_has(description, closing) and not _description_has_closing_date(description, closing):
     application_lines.append(f"Closing Date: {closing}")
   emails = [str(item).strip() for item in candidate.get("applicationEmails") or [] if str(item).strip()]
   if candidate.get("applicationEmail") and str(candidate["applicationEmail"]).strip() not in emails:
