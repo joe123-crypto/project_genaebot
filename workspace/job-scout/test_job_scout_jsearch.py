@@ -286,6 +286,95 @@ class JSearchTests(unittest.TestCase):
     self.assertEqual(stats["jsearch"]["duplicateCount"], 1)
     self.assertIn(job_scout.duplicate_key(candidates[2]), by_key)
 
+  def test_global_filter_removes_low_information_candidates(self) -> None:
+    low_info = {
+      "company": "Unknown employer",
+      "role": "Sales and Commercial Officer",
+      "source": "everyday-vacancies-whatsapp",
+      "sourceUrl": "https://whatsapp.com/channel/example/low",
+      "candidateId": "low",
+      "description": "Sales and Commercial Officer Wanted",
+      "applicationEmail": None,
+      "applicationEmails": [],
+      "applyLinks": [],
+      "contactLinks": [],
+      "location": "",
+      "closing": None,
+    }
+    short_with_email = {
+      **low_info,
+      "candidateId": "email",
+      "source": "zimlinks-whatsapp",
+      "role": "Receptionist",
+      "description": "Receptionist Vacancy",
+      "applicationEmail": "jobs@example.com",
+      "applicationEmails": ["jobs@example.com"],
+    }
+    short_with_link = {
+      **low_info,
+      "candidateId": "link",
+      "source": "jsearch",
+      "sourceUrl": "https://jobs.example/driver",
+      "role": "Driver",
+      "description": "Driver Wanted",
+      "applyLinks": ["https://jobs.example/driver"],
+    }
+    short_with_details = {
+      **low_info,
+      "candidateId": "details",
+      "source": "vacancymail",
+      "sourceUrl": "https://board.example/clerk",
+      "company": "Beta",
+      "role": "Clerk",
+      "description": "Clerk Wanted",
+      "location": "Harare",
+    }
+    long_description = {
+      **low_info,
+      "candidateId": "long",
+      "source": "applynow",
+      "sourceUrl": "https://apply.example/admin",
+      "role": "Administrator",
+      "description": "Administrator wanted. " + "This advert includes enough duties and application context. " * 2,
+    }
+
+    cleaned, stats, by_key = job_scout.global_filter_candidates([
+      low_info,
+      short_with_email,
+      short_with_link,
+      short_with_details,
+      long_description,
+    ])
+
+    self.assertEqual([item["candidateId"] for item in cleaned], ["email", "link", "details", "long"])
+    self.assertEqual(stats["everyday-vacancies-whatsapp"]["lowInfoCount"], 1)
+    self.assertEqual(stats["everyday-vacancies-whatsapp"]["unknownDeadlineCount"], 0)
+    self.assertNotIn(job_scout.duplicate_key(low_info), by_key)
+    self.assertTrue(job_scout.is_low_information_candidate(low_info))
+    self.assertFalse(job_scout.is_low_information_candidate(short_with_email))
+
+  def test_user_filter_removes_low_information_candidates_from_stale_pools(self) -> None:
+    candidates = [{
+      "company": "Unknown employer",
+      "role": "Driver",
+      "source": "jsearch",
+      "sourceUrl": None,
+      "candidateId": "stale-low-info",
+      "description": "Driver Wanted",
+      "applicationEmail": None,
+      "applicationEmails": [],
+      "applyLinks": [],
+      "contactLinks": [],
+      "location": "",
+      "closing": None,
+    }]
+
+    selected, stats = job_scout.filter_candidates_for_user_with_stats(candidates, {}, [], 5)
+
+    self.assertEqual(selected, [])
+    self.assertEqual(stats["jsearch"]["lowInfoCount"], 1)
+    self.assertEqual(stats["jsearch"]["eligibleCount"], 0)
+
   def test_filter_ranks_email_candidates_before_earlier_manual_candidates(self) -> None:
     candidates = [
       {

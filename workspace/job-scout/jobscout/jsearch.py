@@ -247,6 +247,51 @@ def candidate_application_url(candidate: dict) -> str | None:
   return source if source.startswith(("https://", "http://")) else None
 
 
+LOW_INFORMATION_DESCRIPTION_CHAR_LIMIT = 80
+
+
+def _candidate_clean_text(value: object, limit: int = CANDIDATE_DESCRIPTION_CHAR_LIMIT) -> str:
+  text = re.sub(r"<[^>]+>", " ", str(value or ""))
+  text = re.sub(r"[\r\n\t]+", " ", text)
+  text = re.sub(r"\s+", " ", text).strip()
+  return text[:limit]
+
+
+def _has_non_empty_value(value: object) -> bool:
+  if isinstance(value, (list, tuple, set)):
+    return any(str(item or "").strip() for item in value)
+  return bool(str(value or "").strip())
+
+
+def is_low_information_candidate(candidate: dict) -> bool:
+  """True for title-only vacancies that do not provide enough data to act on."""
+  description = _candidate_clean_text(candidate.get("description"))
+  if len(description) >= LOW_INFORMATION_DESCRIPTION_CHAR_LIMIT:
+    return False
+
+  company = _candidate_clean_text(candidate.get("company"), 240).casefold()
+  known_company = bool(company) and company != UNKNOWN_EMPLOYER.casefold()
+  if known_company:
+    return False
+  if _has_non_empty_value(candidate.get("location")):
+    return False
+  if _has_non_empty_value(candidate.get("closing")):
+    return False
+  if (
+    _has_non_empty_value(candidate.get("applicationEmail"))
+    or _has_non_empty_value(candidate.get("applicationEmails"))
+  ):
+    return False
+  if (
+    _has_non_empty_value(candidate.get("applyLinks"))
+    or _has_non_empty_value(candidate.get("contactLinks"))
+  ):
+    return False
+  if candidate_application_url(candidate):
+    return False
+  return True
+
+
 def has_application_email(candidate: dict) -> bool:
   return bool(str(candidate.get("applicationEmail") or "").strip())
 
@@ -356,6 +401,7 @@ def source_filter_stats() -> dict[str, int]:
     "eligibleCount": 0,
     "expiredCount": 0,
     "duplicateCount": 0,
+    "lowInfoCount": 0,
     "excludedCount": 0,
     "unknownDeadlineCount": 0,
     "malformedDeadlineCount": 0,
@@ -370,6 +416,9 @@ def global_filter_candidates(candidates: list[dict]) -> tuple[list[dict], dict[s
   for index, candidate in enumerate(candidates):
     source = candidate_source(candidate)
     source_stats = stats.setdefault(source, source_filter_stats())
+    if is_low_information_candidate(candidate):
+      source_stats["lowInfoCount"] += 1
+      continue
     deadline = closing_state(candidate.get("closing"))
     if deadline == "expired":
       source_stats["expiredCount"] += 1
@@ -420,6 +469,9 @@ def filter_candidates_for_user_with_stats(
   for index, candidate in enumerate(candidates):
     source = candidate_source(candidate)
     source_stats = stats.setdefault(source, source_filter_stats())
+    if is_low_information_candidate(candidate):
+      source_stats["lowInfoCount"] += 1
+      continue
     text = " ".join([
       str(candidate.get("company") or ""),
       str(candidate.get("role") or ""),
@@ -513,6 +565,7 @@ def apply_source_filter_stats(source_results: dict[str, dict], filter_stats: dic
       "eligibleCount",
       "expiredCount",
       "duplicateCount",
+      "lowInfoCount",
       "excludedCount",
       "unknownDeadlineCount",
       "malformedDeadlineCount",

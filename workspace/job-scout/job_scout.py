@@ -160,6 +160,7 @@ from jobscout.jsearch import (
   jsearch_items,
   jsearch_provider,
   jsearch_request,
+  is_low_information_candidate,
   normalized_candidate,
   duplicate_key,
   record_channel_candidate_outcome,

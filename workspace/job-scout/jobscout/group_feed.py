@@ -27,6 +27,7 @@ from .jsearch import (
   closing_state,
   fetch_scraped_candidates_with_results,
   fetch_whatsapp_channel_candidates_with_results,
+  is_low_information_candidate,
 )
 from .textutil import clean_job_title, public_text
 from .util import safe_run_id, utc_now
@@ -94,10 +95,14 @@ def _dedupe_candidates(candidates: list[dict], limit: int) -> tuple[list[dict], 
     "eligibleCount": 0,
     "expiredCount": 0,
     "duplicateCount": 0,
+    "lowInfoCount": 0,
     "unknownDeadlineCount": 0,
     "malformedDeadlineCount": 0,
   }
   for candidate in candidates:
+    if is_low_information_candidate(candidate):
+      stats["lowInfoCount"] += 1
+      continue
     deadline = closing_state(candidate.get("closing"))
     if deadline == "expired":
       stats["expiredCount"] += 1
@@ -140,6 +145,7 @@ def fetch_group_feed_candidates(limit: int = DEFAULT_GROUP_FEED_LIMIT) -> tuple[
       "eligibleCount",
       "expiredCount",
       "duplicateCount",
+      "lowInfoCount",
       "unknownDeadlineCount",
       "malformedDeadlineCount",
     ):
