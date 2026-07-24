@@ -13,7 +13,7 @@ from jobscout.application import (
   store_application_artifacts,
   web_apply_payload,
 )
-from jobscout.delivery import cover_letter_html, pdf_page_count, render_html_to_pdf, send_application_email
+from jobscout.delivery import application_email_body, cover_letter_html, pdf_page_count, render_html_to_pdf, send_application_email
 import jobscout.subscriber
 
 
@@ -227,6 +227,52 @@ class ApplicationDocumentTests(unittest.TestCase):
     self.assertEqual(payload["coverLetterTextPath"], "/tmp/cover-letter.txt")
     self.assertEqual(payload["coverLetterFilePath"], "/tmp/cover-letter.pdf")
     self.assertNotIn("coverLetterPath", payload)
+
+  def test_email_body_introduces_attachments_instead_of_copying_cover_letter(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      letter = root / "cover-letter.txt"
+      letter_text = "Dear Hiring Team,\n\nA specific tailored letter.\n\nKind regards,\nTest Applicant\n"
+      letter.write_text(letter_text, encoding="utf-8")
+
+      with mock.patch("jobscout.delivery.run_json_command", return_value={"messageId": "m1"}) as run:
+        send_application_email(
+          SUBSCRIBER,
+          CANDIDATE,
+          letter,
+          Path("/tmp/tailored-cv.pdf"),
+          Path("/tmp/cover-letter.pdf"),
+        )
+
+      command = run.call_args.args[0]
+      self.assertIn("--body", command)
+      self.assertNotIn("--body-file", command)
+      body = command[command.index("--body") + 1]
+      self.assertNotEqual(body, letter_text)
+      self.assertIn("My name is Test Applicant.", body)
+      self.assertIn("I am applying for the Driver position at Example Ltd, which I saw on jobs.example.", body)
+      self.assertIn("Please find attached my CV and cover letter for your consideration.", body)
+      self.assertNotIn("A specific tailored letter.", body)
+
+  def test_email_body_uses_source_label_when_available(self) -> None:
+    body = application_email_body(
+      SUBSCRIBER,
+      {**CANDIDATE, "source": "vacancymail", "sourceUrl": "https://vacancymail.co.zw/jobs/driver"},
+    )
+    self.assertIn("which I saw on Vacancymail.", body)
+
+  def test_email_body_handles_whatsapp_advert_and_unknown_employer(self) -> None:
+    body = application_email_body(
+      SUBSCRIBER,
+      {"role": "Unknown role", "company": "Unknown employer", "source": "zimlinks-whatsapp"},
+    )
+    self.assertIn("I am applying for the advertised role, which I saw in a WhatsApp job advert.", body)
+    self.assertNotIn("Unknown employer", body)
+
+  def test_email_body_ignores_malformed_source_url(self) -> None:
+    body = application_email_body(SUBSCRIBER, {**CANDIDATE, "sourceUrl": "https://[bad"})
+    self.assertIn("I am applying for the Driver position at Example Ltd.", body)
+    self.assertNotIn("which I saw", body)
 
   def test_email_attaches_exact_tailored_pdf(self) -> None:
     with mock.patch("jobscout.delivery.run_json_command", return_value={"messageId": "m1"}) as run, mock.patch(

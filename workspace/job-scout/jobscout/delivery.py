@@ -23,7 +23,7 @@ from genaie_env import env_default
 
 from jobscout import api
 from .commands_setup import convert_pdf_to_cv_html, style_cv_html
-from .constants import DEFAULT_WEB_APPLY_URL, GENAIE_MAIL_BIN
+from .constants import DEFAULT_WEB_APPLY_URL, GENAIE_MAIL_BIN, UNKNOWN_EMPLOYER, WHATSAPP_CHANNEL_SOURCES
 from .cv_safety import BROWSER_TIMESTAMP, PAGE_COUNTER, validate_cv_html_source
 from .profile import subscriber_user_id
 from .subscriber import display_name, document_filename, subscriber_cv_file, subscriber_sender_email
@@ -245,6 +245,51 @@ def _rebuild_stored_pdf_cv(pdf_path: Path, subscriber: dict) -> Path:
     return render_one_page_cv(semantic.read_text(encoding="utf-8"), pdf_path.with_name(document_filename(subscriber, "cv")))
 
 
+_SOURCE_LABELS = {
+  "applynow": "on ApplyNow",
+  "iharare": "on iHarare Jobs",
+  "vacancybox": "on Vacancybox",
+  "vacancymail": "on Vacancymail",
+}
+
+
+def _application_source_phrase(candidate: dict) -> str:
+  source = str(candidate.get("source") or "").strip().casefold()
+  if source in WHATSAPP_CHANNEL_SOURCES or (candidate.get("sourceChannelJid") and candidate.get("sourcePostId")):
+    return "in a WhatsApp job advert"
+  if source in _SOURCE_LABELS:
+    return _SOURCE_LABELS[source]
+  raw_url = str(candidate.get("sourcePostUrl") or candidate.get("sourceUrl") or "").strip()
+  try:
+    parsed = urllib.parse.urlsplit(raw_url)
+    host = re.sub(r"^www\.", "", parsed.hostname or "", flags=re.IGNORECASE).strip()
+  except ValueError:
+    host = ""
+  return f"on {host}" if host else ""
+
+
+def application_email_body(subscriber: dict, candidate: dict) -> str:
+  name = display_name(subscriber)
+  role = clean_job_title(candidate.get("role")) or "advertised role"
+  role_phrase = "the advertised role" if role == "advertised role" else f"the {role} position"
+  company = natural_email_text(candidate.get("company"), 120)
+  company_phrase = f" at {company}" if company and company.casefold() != UNKNOWN_EMPLOYER.casefold() else ""
+  source_phrase = _application_source_phrase(candidate)
+  interest = f"I am applying for {role_phrase}{company_phrase}"
+  if source_phrase:
+    interest = f"{interest}, which I saw {source_phrase}"
+  return "\n".join([
+    "Dear Hiring Team,",
+    "",
+    f"My name is {name}. {interest}.",
+    "",
+    "Please find attached my CV and cover letter for your consideration.",
+    "",
+    "Kind regards,",
+    name,
+  ]) + "\n"
+
+
 def send_application_email(
   subscriber: dict,
   candidate: dict,
@@ -284,8 +329,8 @@ def send_application_email(
     email,
     "--subject",
     subject,
-    "--body-file",
-    str(cover_letter),
+    "--body",
+    application_email_body(subscriber, candidate),
     "--attach",
     str(attachment),
     "--attach",
