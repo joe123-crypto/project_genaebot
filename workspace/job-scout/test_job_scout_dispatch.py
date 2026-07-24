@@ -89,6 +89,19 @@ class JSearchDispatchTests(unittest.TestCase):
       "description": "Driver Wanted",
     }
 
+  def missing_title_candidate(self) -> dict:
+    return {
+      **self.candidate(email="hr@example.dz", link="https://jobs.example/survey"),
+      "candidateId": "missing-title",
+      "role": "just a paycheck. We spend nearly a third of our lives at work.",
+      "company": "Unknown employer",
+      "location": "",
+      "description": (
+        "Thank you to everyone who participated in my survey. I genuinely appreciate every single vote. "
+        "The topic was workplace wellbeing and employee betterment programmes."
+      ),
+    }
+
   def dispatch_with(
     self,
     root: Path,
@@ -160,6 +173,16 @@ class JSearchDispatchTests(unittest.TestCase):
       self.assertEqual(result["actionRequiredCount"], 0)
       self.assertEqual(result["noMatchesCount"], 1)
       self.assertEqual(result["globalFilter"]["lowInfoCount"], 1)
+      self.assertEqual(result["_send_calls"], [])
+      self.assertEqual(result["_record_calls"], [])
+
+  def test_missing_title_candidate_is_not_dispatched(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      result = self.dispatch_with(Path(tmp), [self.missing_title_candidate()])
+
+      self.assertEqual(result["candidateCount"], 0)
+      self.assertEqual(result["noMatchesCount"], 1)
+      self.assertEqual(result["globalFilter"]["missingTitleCount"], 1)
       self.assertEqual(result["_send_calls"], [])
       self.assertEqual(result["_record_calls"], [])
 

@@ -30,7 +30,7 @@ from .subscriber import (
   subscriber_phone,
   subscriber_sender_email,
 )
-from .textutil import clean_job_title, natural_email_text, public_text
+from .textutil import clean_job_title, display_job_title, natural_email_text, public_text
 
 
 def applications_from_response(result: dict) -> list[dict]:
@@ -73,9 +73,13 @@ def clean_role(value: object) -> str:
   return clean_job_title(value) or "advertised role"
 
 
+def candidate_role(candidate: dict) -> str:
+  return display_job_title(candidate) or clean_role(candidate.get("role"))
+
+
 def cover_letter_text(subscriber: dict, preferences: dict, candidate: dict) -> str:
   name = display_name(subscriber)
-  role = clean_role(candidate.get("role"))
+  role = candidate_role(candidate)
   company = natural_email_text(candidate.get("company"), 120)
   # When the employer is unknown, never reference them anywhere in the letter.
   company_known = bool(company) and company != UNKNOWN_EMPLOYER
@@ -297,7 +301,7 @@ def build_user_summary(date_label: str, applied: list[dict], action_required: li
     for index, item in enumerate(applied, 1):
       candidate = item["candidate"]
       lines.extend([
-        f"{index}. {clean_role(candidate.get('role'))} - APPLIED",
+        f"{index}. {candidate_role(candidate)} - APPLIED",
         f"Company: {public_text(candidate.get('company'), 100)}",
       ])
       location = public_text(candidate.get("location"), 100)
@@ -315,7 +319,7 @@ def build_user_summary(date_label: str, applied: list[dict], action_required: li
       candidate = item["candidate"] if isinstance(item, dict) and "candidate" in item else item
       blocker_code = item.get("blockerCode") if isinstance(item, dict) else None
       lines.extend([
-        f"- {clean_role(candidate.get('role'))} - ACTION NEEDED",
+        f"- {candidate_role(candidate)} - ACTION NEEDED",
         f"Company: {public_text(candidate.get('company'), 100)}",
         action_instruction(candidate, blocker_code),
         "",

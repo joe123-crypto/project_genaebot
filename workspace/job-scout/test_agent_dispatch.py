@@ -60,6 +60,19 @@ class AgentDispatchTests(unittest.TestCase):
       "description": "Driver Wanted",
     }
 
+  def missing_title_candidate(self) -> dict:
+    return {
+      **self.candidate(),
+      "candidateId": "missing-title",
+      "role": "just a paycheck. We spend nearly a third of our lives at work.",
+      "company": "Unknown employer",
+      "location": "",
+      "description": (
+        "Thank you to everyone who participated in my survey. I genuinely appreciate every single vote. "
+        "The topic was workplace wellbeing and employee betterment programmes."
+      ),
+    }
+
   def args(self, root: Path, phase: str, run_id: str | None = "agent-test", claim_id: str | None = None) -> argparse.Namespace:
     return argparse.Namespace(
       agent_phase=phase,
@@ -136,6 +149,30 @@ class AgentDispatchTests(unittest.TestCase):
       self.assertEqual(prepared["claims"][0]["candidateCount"], 0)
       self.assertEqual(work["candidates"], [])
       self.assertEqual(work["globalFilter"]["jsearch"]["lowInfoCount"], 1)
+      register.assert_not_called()
+
+  def test_prepare_excludes_missing_title_candidates_from_work_packet(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      with (
+        mock.patch.object(agent_dispatch, "cmd_list_ready", return_value={"subscribers": [self.subscriber()]}),
+        mock.patch.object(agent_dispatch, "cmd_list_applications", return_value={"applications": []}),
+        mock.patch.object(
+          agent_dispatch,
+          "fetch_candidate_sources",
+          return_value=([self.missing_title_candidate()], {
+            "jsearch": {"status": "ok", "rawCount": 1, "durationMs": 1},
+          }),
+        ),
+        mock.patch.object(agent_dispatch, "register_channel_candidate_eligibility") as register,
+      ):
+        prepared = agent_dispatch.cmd_agent_prepare(self.args(root, "prepare"))
+
+      claim_id = prepared["claims"][0]["claimId"]
+      work = dispatch_store.load_agent_work(root, "agent-test", claim_id)
+      self.assertEqual(prepared["claims"][0]["candidateCount"], 0)
+      self.assertEqual(work["candidates"], [])
+      self.assertEqual(work["globalFilter"]["jsearch"]["missingTitleCount"], 1)
       register.assert_not_called()
 
   def test_preview_never_resumes_an_active_live_run(self) -> None:
