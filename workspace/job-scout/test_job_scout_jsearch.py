@@ -375,6 +375,38 @@ class JSearchTests(unittest.TestCase):
     self.assertEqual(stats["jsearch"]["lowInfoCount"], 1)
     self.assertEqual(stats["jsearch"]["eligibleCount"], 0)
 
+  def test_global_filter_removes_candidates_with_no_credible_title(self) -> None:
+    missing_title = {
+      "company": "Unknown employer",
+      "role": "just a paycheck. We spend nearly a third of our lives at work.",
+      "source": "everyday-vacancies-whatsapp",
+      "sourceUrl": "https://whatsapp.com/channel/example/survey",
+      "candidateId": "survey",
+      "description": (
+        "Thank you to everyone who participated in my survey. I genuinely appreciate every single vote. "
+        "Looking at the results, people chose employee well-being and work-life balance."
+      ),
+      "applicationEmail": None,
+      "applicationEmails": [],
+      "applyLinks": ["https://example.com/survey"],
+      "contactLinks": [],
+      "location": "",
+      "closing": None,
+    }
+    recovered_title = {
+      **missing_title,
+      "candidateId": "mechanic",
+      "role": "Unknown role",
+      "sourceUrl": "https://whatsapp.com/channel/example/mechanic",
+      "description": "RE-ADVERTISEMENT – HEAVY-DUTY MECHANIC Applicants who applied previously are kindly requested not to reapply.",
+    }
+
+    cleaned, stats, by_key = job_scout.global_filter_candidates([missing_title, recovered_title])
+
+    self.assertEqual([item["candidateId"] for item in cleaned], ["mechanic"])
+    self.assertEqual(stats["everyday-vacancies-whatsapp"]["missingTitleCount"], 1)
+    self.assertNotIn(job_scout.duplicate_key(missing_title), by_key)
+
   def test_filter_ranks_email_candidates_before_earlier_manual_candidates(self) -> None:
     candidates = [
       {

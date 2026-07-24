@@ -37,7 +37,7 @@ from .constants import (
   WHATSAPP_CHANNEL_SOURCES,
 )
 from .profile import clean_items, preference_code, profile_values, search_queries, user_key
-from .textutil import public_text
+from .textutil import display_job_title, public_text
 
 
 class JSearchUnavailable(RuntimeError):
@@ -402,6 +402,7 @@ def source_filter_stats() -> dict[str, int]:
     "expiredCount": 0,
     "duplicateCount": 0,
     "lowInfoCount": 0,
+    "missingTitleCount": 0,
     "excludedCount": 0,
     "unknownDeadlineCount": 0,
     "malformedDeadlineCount": 0,
@@ -418,6 +419,9 @@ def global_filter_candidates(candidates: list[dict]) -> tuple[list[dict], dict[s
     source_stats = stats.setdefault(source, source_filter_stats())
     if is_low_information_candidate(candidate):
       source_stats["lowInfoCount"] += 1
+      continue
+    if not display_job_title(candidate):
+      source_stats["missingTitleCount"] += 1
       continue
     deadline = closing_state(candidate.get("closing"))
     if deadline == "expired":
@@ -471,6 +475,9 @@ def filter_candidates_for_user_with_stats(
     source_stats = stats.setdefault(source, source_filter_stats())
     if is_low_information_candidate(candidate):
       source_stats["lowInfoCount"] += 1
+      continue
+    if not display_job_title(candidate):
+      source_stats["missingTitleCount"] += 1
       continue
     text = " ".join([
       str(candidate.get("company") or ""),
@@ -566,6 +573,7 @@ def apply_source_filter_stats(source_results: dict[str, dict], filter_stats: dic
       "expiredCount",
       "duplicateCount",
       "lowInfoCount",
+      "missingTitleCount",
       "excludedCount",
       "unknownDeadlineCount",
       "malformedDeadlineCount",

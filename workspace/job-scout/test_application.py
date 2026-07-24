@@ -6,6 +6,7 @@ import unittest
 
 from jobscout.application import build_user_summary, clean_role, cover_letter_text
 from jobscout.formality import employer_formality
+from jobscout.textutil import display_job_title
 
 SUBSCRIBER = {"profile": {"displayName": "Joseph Munemo"}}
 # The real messy role from a WhatsApp post: a "looking for ..." blurb truncated
@@ -59,6 +60,61 @@ class CleanRoleTests(unittest.TestCase):
     self.assertEqual(clean_role("Driver. Must have license"), "Driver")
 
 
+class DisplayJobTitleTests(unittest.TestCase):
+  def title(self, description: str, role: str = "Unknown role", company: str = "Unknown employer") -> str | None:
+    return display_job_title({"role": role, "company": company, "description": description})
+
+  def test_recovers_titles_from_live_channel_headlines(self) -> None:
+    self.assertEqual(
+      self.title("RE-ADVERTISEMENT – HEAVY-DUTY MECHANIC Applicants who applied previously are kindly requested not to reapply."),
+      "Heavy-Duty Mechanic",
+    )
+    self.assertEqual(
+      self.title("RE-ADVERTISEMENT – WAREHOUSE ASSISTANT Applicants who applied previously are kindly requested not to reapply."),
+      "Warehouse Assistant",
+    )
+    self.assertEqual(
+      self.title("Team Leader (Underwriting) • Old Mutual Zimbabwe • Expires 26 Jul 2026 • Harare • Full Time"),
+      "Team Leader (Underwriting)",
+    )
+    self.assertEqual(
+      self.title("Attachment Students* - Human Resources - Public Relations - Economics - Procurement - Business Development"),
+      "Attachment Students",
+    )
+
+  def test_recovers_titles_from_recruiting_phrases(self) -> None:
+    self.assertEqual(
+      self.title(
+        "We’re hiring international truck drivers! Swift is inviting suitably qualified candidates to apply.",
+        role="international truck drivers! 🚛",
+      ),
+      "International Truck Drivers",
+    )
+    self.assertEqual(
+      self.title("Sister Charge* WE'RE HIRING! Mutapa Energy Resources is inviting applications."),
+      "Sister Charge",
+    )
+
+  def test_multi_role_headlines_are_professional(self) -> None:
+    self.assertEqual(
+      self.title(
+        "Gates Foundation Jobs 2026 | 20 International Career Opportunities Now Open",
+        company="Gates Foundation",
+      ),
+      "Multiple roles at Gates Foundation",
+    )
+    self.assertEqual(
+      self.title("WE'RE HIRING FULL TIME Bulawayo Group Inventory Controller x 1 Accounts Clerk x 1"),
+      "Multiple roles",
+    )
+
+  def test_non_job_prose_has_no_display_title(self) -> None:
+    self.assertIsNone(self.title(
+      "Thank you to everyone who participated in my survey. I genuinely appreciate every single vote.",
+      role="just a paycheck. We spend nearly a third of our lives at work.",
+    ))
+
+
 class CoverLetterTests(unittest.TestCase):
   def test_known_company_and_role(self) -> None:
     text = letter({"role": "Personal Assistant", "company": "Acme Ltd"})
@@ -100,7 +156,7 @@ class CoverLetterTests(unittest.TestCase):
 
   def test_blurb_role_produces_clean_letter(self) -> None:
     text = letter({"role": BLURB_ROLE, "company": "Unknown employer"})
-    self.assertIn("I am applying for the advertised role position.", text)
+    self.assertIn("I am applying for the Personal Assistant position.", text)
     self.assertNotIn("The ideal c", text)
 
   def test_no_doubled_the(self) -> None:
@@ -187,7 +243,7 @@ class UserSummaryTests(unittest.TestCase):
       applied=[{"candidate": {"role": BLURB_ROLE, "company": "Acme Ltd"}}],
       action_required=[],
     )
-    self.assertIn("advertised role - APPLIED", summary)
+    self.assertIn("Personal Assistant - APPLIED", summary)
     self.assertNotIn("The ideal c", summary)
 
   def test_action_required_role_cleaned(self) -> None:

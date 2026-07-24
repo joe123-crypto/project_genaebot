@@ -107,7 +107,7 @@ class GroupFeedTests(unittest.TestCase):
       role="motivated, detail-oriented, and enthusiastic Accounting Intern to join our Finance Department",
       description="Application Send your CV to hr@example.co.zw.",
     ))
-    self.assertTrue(message.startswith("Job Title: Unknown role"))
+    self.assertTrue(message.startswith("Job Title: Accounting Intern"))
 
     doctor = jobscout.group_feed.format_group_feed_message(self.candidate(
       role="Doctor* to attend to patients in accordance with regulations.",
@@ -124,6 +124,16 @@ class GroupFeedTests(unittest.TestCase):
       role="Cimas Health Group is hiring: Internal Auditor | Closing Date: 10 July 2026",
     ))
     self.assertTrue(hiring.startswith("Job Title: Internal Auditor"))
+
+  def test_group_feed_message_recovers_title_from_description(self) -> None:
+    message = jobscout.group_feed.format_group_feed_message(self.candidate(
+      role="Unknown role",
+      company="Unknown employer",
+      description="RE-ADVERTISEMENT – HEAVY-DUTY MECHANIC Applicants who applied previously are kindly requested not to reapply.",
+    ))
+
+    self.assertTrue(message.startswith("Job Title: Heavy-Duty Mechanic"))
+    self.assertNotIn("Job Title: Unknown role", message)
 
   def test_group_feed_cache_dedupes_and_writes_latest(self) -> None:
     candidate = self.candidate()

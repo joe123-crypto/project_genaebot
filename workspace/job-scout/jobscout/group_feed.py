@@ -29,7 +29,7 @@ from .jsearch import (
   fetch_whatsapp_channel_candidates_with_results,
   is_low_information_candidate,
 )
-from .textutil import clean_job_title, public_text
+from .textutil import display_job_title, public_text
 from .util import safe_run_id, utc_now
 
 
@@ -96,12 +96,16 @@ def _dedupe_candidates(candidates: list[dict], limit: int) -> tuple[list[dict], 
     "expiredCount": 0,
     "duplicateCount": 0,
     "lowInfoCount": 0,
+    "missingTitleCount": 0,
     "unknownDeadlineCount": 0,
     "malformedDeadlineCount": 0,
   }
   for candidate in candidates:
     if is_low_information_candidate(candidate):
       stats["lowInfoCount"] += 1
+      continue
+    if not display_job_title(candidate):
+      stats["missingTitleCount"] += 1
       continue
     deadline = closing_state(candidate.get("closing"))
     if deadline == "expired":
@@ -146,6 +150,7 @@ def fetch_group_feed_candidates(limit: int = DEFAULT_GROUP_FEED_LIMIT) -> tuple[
       "expiredCount",
       "duplicateCount",
       "lowInfoCount",
+      "missingTitleCount",
       "unknownDeadlineCount",
       "malformedDeadlineCount",
     ):
@@ -374,16 +379,8 @@ SECTION_HEADINGS = (
 )
 
 
-def _role_candidate(value: object) -> str:
-  return clean_job_title(_clean_line(value, 240))
-
-
 def _job_title(candidate: dict) -> str:
-  for key in ("role", "title", "jobTitle", "job_title"):
-    title = _role_candidate(candidate.get(key))
-    if title:
-      return title
-  return "Unknown role"
+  return display_job_title(candidate) or "Job opportunity"
 
 
 def _description_text(value: object) -> str:
