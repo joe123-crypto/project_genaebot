@@ -192,6 +192,66 @@ class GroupFeedTests(unittest.TestCase):
     self.assertEqual(len(re.findall(r"(?im)^Closing Date\b", message)), 1)
     self.assertNotIn("Closing Date: 31 Jul 2026", message)
 
+  def test_group_feed_message_summarizes_long_description_without_losing_key_details(self) -> None:
+    invite = "https://chat.whatsapp.com/JZvh9lwFOvc3N2sSs8F1QD"
+    message = jobscout.group_feed.format_group_feed_message(self.candidate(
+      source="everyday-vacancies-whatsapp",
+      sourceUrl="https://whatsapp.com/channel/example/hiph",
+      sourcePostUrl="https://whatsapp.com/channel/example/hiph",
+      sourceChannelJid="123@newsletter",
+      sourcePostId="hiph",
+      role="Group Corporate Affairs Manager",
+      company="Harare Institute of Public Health",
+      location="Harare",
+      closing="28 Jul 2026",
+      applyLinks=[],
+      contactLinks=[invite],
+      applicationEmails=["admin@hiph.ac.zw"],
+      applicationEmail="admin@hiph.ac.zw",
+      description=(
+        "Job Description Reports To: Group Chief Executive Officer "
+        "About the Position Harare Institute of Public Health invites applications from suitably qualified, "
+        "innovative and results-oriented professionals. The successful candidate will provide strategic leadership "
+        "in corporate affairs by overseeing marketing, communications, public relations, human resources and "
+        "administrative services across the Group. The role is responsible for strengthening the Group's corporate "
+        "image, protecting its reputation, driving stakeholder engagement and ensuring effective management. "
+        "Duties and Responsibilities Key Responsibilities The successful candidate will be responsible for: "
+        "* Developing and implementing comprehensive corporate affairs, marketing and communication strategies. "
+        "* Leading integrated marketing campaigns across digital, print, social media and public relations platforms. "
+        "* Safeguarding and promoting the Group's corporate identity across all business units. "
+        "* Serving as the primary liaison with the media and responding to media enquiries. "
+        "* Developing internal communication strategies that promote employee engagement. "
+        "* Leading recruitment, induction, employee relations, performance management and staff development. "
+        "* Ensuring compliance with labour legislation and corporate policies. "
+        "* Managing disciplinary processes, grievances and employee wellness initiatives. "
+        "* Overseeing facilities, office assets, security services and general office operations. "
+        "* Preparing departmental budgets and monitoring performance indicators. "
+        "Qualifications and Experience Minimum Qualifications Applicants should possess: "
+        "* A Diploma or Bachelor's Degree in Human Resources Management, Communications, Marketing or Business Studies. "
+        "* A recognised professional qualification in Public Relations or Marketing is an added advantage. "
+        "* Membership of a recognised professional body is an added advantage. "
+        "Experience The ideal candidate should have: "
+        "* A minimum of five to seven years' progressive experience in Human Resources, Marketing or Communications. "
+        "* Demonstrated experience in corporate communications, brand management and stakeholder engagement. "
+        "* Proven leadership experience in human resource management and organisational development. "
+        "Application Closing Date: 28 Jul 2026 Email: admin@hiph.ac.zw "
+        f"Join the group for more jobs: {invite}"
+      ),
+    ), invite_url=invite)
+
+    self.assertLess(len(message), 2200)
+    self.assertIn("\nOverview\n", message)
+    self.assertIn("\nKey Responsibilities\n", message)
+    self.assertIn("\nQualifications and Experience\n", message)
+    self.assertIn("Developing and implementing comprehensive corporate affairs", message)
+    self.assertIn("Diploma or Bachelor's Degree", message)
+    self.assertIn("Closing Date: 28 Jul 2026", message)
+    self.assertIn("Email: admin@hiph.ac.zw", message)
+    self.assertNotIn("\n- Key\n", message)
+    self.assertNotIn("Preparing departmental budgets", message)
+    self.assertNotIn("Apply: https://chat.whatsapp.com", message)
+    self.assertEqual(message.count("Join the group for more jobs:"), 1)
+
   def test_group_feed_cache_dedupes_and_writes_latest(self) -> None:
     candidate = self.candidate()
     duplicate = {**candidate, "candidateId": "job-duplicate"}
@@ -214,9 +274,9 @@ class GroupFeedTests(unittest.TestCase):
   def test_group_feed_cache_skips_low_information_candidates(self) -> None:
     low_info = self.candidate(
       candidateId="low-info",
-      source="everyday-vacancies-whatsapp",
-      sourceUrl="https://whatsapp.com/channel/example/low-info",
-      sourcePostUrl="https://whatsapp.com/channel/example/low-info",
+      source="vacancymail",
+      sourceUrl=None,
+      sourcePostUrl=None,
       applyLinks=[],
       contactLinks=[],
       applicationEmails=[],
@@ -232,8 +292,8 @@ class GroupFeedTests(unittest.TestCase):
       source="everyday-vacancies-whatsapp",
       sourceUrl="https://whatsapp.com/channel/example/actionable-short",
       sourcePostUrl="https://whatsapp.com/channel/example/actionable-short",
-      applyLinks=[],
-      contactLinks=["https://wa.me/263700000001"],
+      applyLinks=["https://employer.example/jobs/receptionist/apply"],
+      contactLinks=[],
       applicationEmails=[],
       applicationEmail=None,
       company="Unknown employer",
@@ -258,6 +318,33 @@ class GroupFeedTests(unittest.TestCase):
       self.assertEqual(cache["candidateCount"], 1)
       self.assertEqual(cache["candidates"][0]["candidateId"], "actionable-short")
       self.assertEqual(result["sourceResults"]["_filter"]["lowInfoCount"], 1)
+
+  def test_group_feed_cache_skips_channel_post_with_only_group_invite(self) -> None:
+    caregiver = self.candidate(
+      candidateId="caregiver",
+      source="everyday-vacancies-whatsapp",
+      sourceUrl="https://whatsapp.com/channel/example/caregiver",
+      sourcePostUrl="https://whatsapp.com/channel/example/caregiver",
+      sourceChannelJid="123@newsletter",
+      sourcePostId="caregiver",
+      applyLinks=[],
+      contactLinks=["https://chat.whatsapp.com/JZvh9lwFOvc3N2sSs8F1QD"],
+      applicationEmails=[],
+      applicationEmail=None,
+      company="Unknown employer",
+      role="Caregiver or Nurse Aid",
+      location="Harare Westgate",
+      closing=None,
+      description=(
+        "Looking for a stay-in caregiver to assist a five-year-old child with all daily activities. "
+        "Salary $320 and ready to start."
+      ),
+    )
+    kept, stats = jobscout.group_feed._dedupe_candidates([caregiver], 10)
+
+    self.assertEqual(kept, [])
+    self.assertEqual(stats["unactionableCount"], 1)
+    self.assertEqual(stats["eligibleCount"], 0)
 
   def test_deliver_group_feed_reads_cache_and_marks_success_only(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:

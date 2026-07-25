@@ -13,10 +13,9 @@ from .constants import (
   MAX_APPLICATION_ATTEMPTS,
   PUBLIC_DISPATCH_FAILURE_MESSAGE,
   UNKNOWN_EMPLOYER,
-  WHATSAPP_CHANNEL_SOURCES,
 )
 from .formality import employer_formality
-from .jsearch import application_key, candidate_key
+from .jsearch import application_key, candidate_application_url, candidate_key
 from . import api
 from .delivery import cover_letter_html, render_html_to_pdf, render_one_page_cv
 from .profile import clean_items, profile_values, subscriber_user_id
@@ -208,22 +207,6 @@ def store_application_artifacts(
       raise RuntimeError("application artifact upload returned no reference")
     refs[result_key] = ref
   return refs
-
-
-def candidate_application_url(candidate: dict) -> str | None:
-  links = candidate.get("applyLinks")
-  if isinstance(links, list):
-    for value in links:
-      link = str(value or "").strip()
-      if link.startswith(("https://", "http://")):
-        return link
-  # The channel permalink is provenance, not an application form.
-  if str(candidate.get("source") or "") in WHATSAPP_CHANNEL_SOURCES or (
-    candidate.get("sourceChannelJid") and candidate.get("sourcePostId")
-  ):
-    return None
-  source = str(candidate.get("sourceUrl") or "").strip()
-  return source if source.startswith(("https://", "http://")) else None
 
 
 def web_apply_payload(

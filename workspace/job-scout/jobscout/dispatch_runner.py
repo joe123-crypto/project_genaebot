@@ -381,6 +381,7 @@ def dispatch_jsearch_locked(args: argparse.Namespace, run_id: str) -> dict:
     "candidateCount": len(cleaned_pool),
     "expiredCount": sum(int(stats.get("expiredCount") or 0) for stats in global_filter_stats.values()),
     "duplicateCount": sum(int(stats.get("duplicateCount") or 0) for stats in global_filter_stats.values()),
+    "unactionableCount": sum(int(stats.get("unactionableCount") or 0) for stats in global_filter_stats.values()),
     "lowInfoCount": sum(int(stats.get("lowInfoCount") or 0) for stats in global_filter_stats.values()),
     "missingTitleCount": sum(int(stats.get("missingTitleCount") or 0) for stats in global_filter_stats.values()),
     "sourceResults": global_filter_stats,

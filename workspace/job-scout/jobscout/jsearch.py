@@ -232,19 +232,36 @@ def candidate_source(candidate: dict) -> str:
   return str(candidate.get("source") or "unknown")
 
 
+def is_whatsapp_channel_candidate(candidate: dict) -> bool:
+  return candidate_source(candidate) in WHATSAPP_CHANNEL_SOURCES or bool(
+    candidate.get("sourceChannelJid") and candidate.get("sourcePostId")
+  )
+
+
+def is_actionable_application_url(value: object) -> bool:
+  link = str(value or "").strip()
+  if not link.startswith(("https://", "http://")):
+    return False
+  try:
+    host = (urllib.parse.urlsplit(link).hostname or "").casefold().rstrip(".")
+  except ValueError:
+    return False
+  if not host:
+    return False
+  return host != "wa.me" and host != "whatsapp.com" and not host.endswith(".whatsapp.com")
+
+
 def candidate_application_url(candidate: dict) -> str | None:
   links = candidate.get("applyLinks")
   if isinstance(links, list):
     for value in links:
       link = str(value or "").strip()
-      if link.startswith(("https://", "http://")):
+      if is_actionable_application_url(link):
         return link
-  if candidate_source(candidate) in WHATSAPP_CHANNEL_SOURCES or (
-    candidate.get("sourceChannelJid") and candidate.get("sourcePostId")
-  ):
+  if is_whatsapp_channel_candidate(candidate):
     return None
   source = str(candidate.get("sourceUrl") or "").strip()
-  return source if source.startswith(("https://", "http://")) else None
+  return source if is_actionable_application_url(source) else None
 
 
 LOW_INFORMATION_DESCRIPTION_CHAR_LIMIT = 80
@@ -293,7 +310,18 @@ def is_low_information_candidate(candidate: dict) -> bool:
 
 
 def has_application_email(candidate: dict) -> bool:
-  return bool(str(candidate.get("applicationEmail") or "").strip())
+  if str(candidate.get("applicationEmail") or "").strip():
+    return True
+  values = candidate.get("applicationEmails")
+  return isinstance(values, list) and any(str(value or "").strip() for value in values)
+
+
+def is_unactionable_channel_candidate(candidate: dict) -> bool:
+  return (
+    is_whatsapp_channel_candidate(candidate)
+    and not has_application_email(candidate)
+    and candidate_application_url(candidate) is None
+  )
 
 
 def application_priority(candidate: dict) -> str:
@@ -401,6 +429,7 @@ def source_filter_stats() -> dict[str, int]:
     "eligibleCount": 0,
     "expiredCount": 0,
     "duplicateCount": 0,
+    "unactionableCount": 0,
     "lowInfoCount": 0,
     "missingTitleCount": 0,
     "excludedCount": 0,
@@ -417,6 +446,9 @@ def global_filter_candidates(candidates: list[dict]) -> tuple[list[dict], dict[s
   for index, candidate in enumerate(candidates):
     source = candidate_source(candidate)
     source_stats = stats.setdefault(source, source_filter_stats())
+    if is_unactionable_channel_candidate(candidate):
+      source_stats["unactionableCount"] += 1
+      continue
     if is_low_information_candidate(candidate):
       source_stats["lowInfoCount"] += 1
       continue
@@ -473,6 +505,9 @@ def filter_candidates_for_user_with_stats(
   for index, candidate in enumerate(candidates):
     source = candidate_source(candidate)
     source_stats = stats.setdefault(source, source_filter_stats())
+    if is_unactionable_channel_candidate(candidate):
+      source_stats["unactionableCount"] += 1
+      continue
     if is_low_information_candidate(candidate):
       source_stats["lowInfoCount"] += 1
       continue
@@ -572,6 +607,7 @@ def apply_source_filter_stats(source_results: dict[str, dict], filter_stats: dic
       "eligibleCount",
       "expiredCount",
       "duplicateCount",
+      "unactionableCount",
       "lowInfoCount",
       "missingTitleCount",
       "excludedCount",

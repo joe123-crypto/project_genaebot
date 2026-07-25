@@ -27,7 +27,9 @@ from .jsearch import (
   closing_state,
   fetch_scraped_candidates_with_results,
   fetch_whatsapp_channel_candidates_with_results,
+  is_actionable_application_url,
   is_low_information_candidate,
+  is_unactionable_channel_candidate,
 )
 from .textutil import display_job_title, public_text
 from .util import safe_run_id, utc_now
@@ -95,12 +97,16 @@ def _dedupe_candidates(candidates: list[dict], limit: int) -> tuple[list[dict], 
     "eligibleCount": 0,
     "expiredCount": 0,
     "duplicateCount": 0,
+    "unactionableCount": 0,
     "lowInfoCount": 0,
     "missingTitleCount": 0,
     "unknownDeadlineCount": 0,
     "malformedDeadlineCount": 0,
   }
   for candidate in candidates:
+    if is_unactionable_channel_candidate(candidate):
+      stats["unactionableCount"] += 1
+      continue
     if is_low_information_candidate(candidate):
       stats["lowInfoCount"] += 1
       continue
@@ -149,6 +155,7 @@ def fetch_group_feed_candidates(limit: int = DEFAULT_GROUP_FEED_LIMIT) -> tuple[
       "eligibleCount",
       "expiredCount",
       "duplicateCount",
+      "unactionableCount",
       "lowInfoCount",
       "missingTitleCount",
       "unknownDeadlineCount",
@@ -362,13 +369,17 @@ def _looks_internal_line(line: str) -> bool:
 
 SECTION_HEADINGS = (
   "About Us",
+  "About the Position",
   "Role Overview",
+  "Job Description",
   "Job Summary",
   "Duties and Responsibilities",
   "Key Responsibilities",
   "Responsibilities",
+  "Minimum Qualifications",
   "Qualifications and Experience",
   "Qualifications & Experience",
+  "Experience",
   "Requirements",
   "Skills",
   "Company Benefits",
@@ -382,6 +393,8 @@ SECTION_HEADINGS = (
 MONTH_DATE_RE = re.compile(r"\b([0-9]{1,2}\s+[A-Za-z]+,?\s+[0-9]{4})\b")
 ISO_DATE_RE = re.compile(r"\b([0-9]{4}-[0-9]{2}-[0-9]{2})\b")
 SKILLS_SUBSECTION_HEADINGS = {"technology", "communication"}
+GROUP_FEED_DESCRIPTION_COMPACT_THRESHOLD = 1800
+GROUP_FEED_DESCRIPTION_SUMMARY_LIMIT = 1600
 
 
 def _job_title(candidate: dict) -> str:
@@ -394,10 +407,10 @@ def _description_text(value: object) -> str:
   if not text:
     return ""
   if "\n" not in text:
-    text = re.sub(r"\s*[\u2022]\s*", "\n- ", text)
+    text = re.sub(r"\s*(?:[\u2022]|\s\*\s+)\s*", "\n- ", text)
     heading_pattern = "|".join(re.escape(heading) for heading in sorted(SECTION_HEADINGS, key=len, reverse=True))
     text = re.sub(
-      rf"\s+({heading_pattern})(?:\s*:)?\s+",
+      rf"(?<!\S)({heading_pattern})(?:\s*:)?(?=\s)",
       r"\n\n\1\n\n",
       text,
       flags=re.I,
@@ -657,6 +670,125 @@ def _normalize_group_feed_description(
   return _compact_description_lines(output)
 
 
+SUMMARY_SECTION_KEYS = {
+  "about us": "overview",
+  "about the position": "overview",
+  "role overview": "overview",
+  "job description": "overview",
+  "job summary": "overview",
+  "duties and responsibilities": "responsibilities",
+  "key responsibilities": "responsibilities",
+  "responsibilities": "responsibilities",
+  "minimum qualifications": "qualifications",
+  "qualifications and experience": "qualifications",
+  "qualifications & experience": "qualifications",
+  "experience": "qualifications",
+  "requirements": "qualifications",
+  "skills": "qualifications",
+  "company benefits": "other",
+  "benefits": "other",
+  "how to apply": "skip",
+  "application": "skip",
+  "closing date": "skip",
+}
+
+
+def _summary_excerpt(value: str, limit: int) -> str:
+  text = re.sub(r"^\s*[-\u2022*]\s*", "", value)
+  text = re.sub(r"\s+", " ", text).strip()
+  if len(text) <= limit:
+    return text
+
+  sentences = re.split(r"(?<=[.!?])\s+", text)
+  complete: list[str] = []
+  for sentence in sentences:
+    candidate = " ".join([*complete, sentence]).strip()
+    if len(candidate) > limit:
+      break
+    complete.append(sentence)
+  if complete:
+    return " ".join(complete)
+
+  boundary = max(text.rfind(delimiter, 0, limit) for delimiter in (",", ";", ":"))
+  if boundary >= limit // 2:
+    return text[:boundary].rstrip(" ,;:") + "."
+  shortened = text[:limit].rsplit(" ", 1)[0].rstrip(" ,;:")
+  return shortened + "." if shortened else ""
+
+
+def _is_summary_lead_in(line: str) -> bool:
+  text = line.strip()
+  return bool(
+    text.endswith(":")
+    and len(text) <= 120
+    and re.search(r"\b(?:applicants?|candidate|responsible|possess|demonstrate)\b", text, flags=re.I)
+  )
+
+
+def _summarize_group_feed_description(description: str) -> str:
+  if len(description) <= GROUP_FEED_DESCRIPTION_COMPACT_THRESHOLD:
+    return description
+
+  sections: dict[str, list[str]] = {
+    "overview": [],
+    "responsibilities": [],
+    "qualifications": [],
+    "other": [],
+  }
+  current = "overview"
+  for raw_line in description.splitlines():
+    line = raw_line.strip()
+    if not line:
+      continue
+    section = SUMMARY_SECTION_KEYS.get(_heading_key(line))
+    if section is not None:
+      current = section
+      continue
+    if current == "skip" or _is_summary_lead_in(line):
+      continue
+    cleaned = re.sub(r"^\s*[-\u2022*]\s*", "", line).strip()
+    if cleaned and cleaned.casefold() not in {item.casefold() for item in sections[current]}:
+      sections[current].append(cleaned)
+
+  output: list[str] = []
+  overview_parts = [
+    excerpt
+    for excerpt in (_summary_excerpt(item, 320) for item in sections["overview"][:2])
+    if excerpt
+  ]
+  if overview_parts:
+    output.extend(["Overview", " ".join(overview_parts)])
+
+  for heading, key, item_limit in (
+    ("Key Responsibilities", "responsibilities", 4),
+    ("Qualifications and Experience", "qualifications", 3),
+    ("Other Details", "other", 2),
+  ):
+    items = [
+      excerpt
+      for excerpt in (_summary_excerpt(item, 180) for item in sections[key][:item_limit])
+      if excerpt
+    ]
+    if not items:
+      continue
+    if output:
+      output.append("")
+    output.append(heading)
+    output.extend(f"- {item}" for item in items)
+
+  summary = _compact_description_lines(output)
+  if not summary:
+    summary = _summary_excerpt(description, GROUP_FEED_DESCRIPTION_SUMMARY_LIMIT)
+  while len(summary) > GROUP_FEED_DESCRIPTION_SUMMARY_LIMIT and "\n- " in summary:
+    lines = summary.splitlines()
+    for index in range(len(lines) - 1, -1, -1):
+      if lines[index].startswith("- "):
+        del lines[index]
+        break
+    summary = _compact_description_lines(lines)
+  return summary
+
+
 def _append_group_join_link(lines: list[str], invite_url: str) -> None:
   invite = _clean_line(invite_url, 240)
   if not invite:
@@ -674,11 +806,13 @@ def format_group_feed_message(candidate: dict, invite_url: str = DEFAULT_GROUP_F
   location = _clean_line(candidate.get("location"), 180)
   company = _clean_line(candidate.get("company"), 180)
   closing = _clean_line(candidate.get("closing"), 120)
-  description = _normalize_group_feed_description(
-    _description_text(candidate.get("description")),
-    role=role,
-    location=location,
-    company=company,
+  description = _summarize_group_feed_description(
+    _normalize_group_feed_description(
+      _description_text(candidate.get("description")),
+      role=role,
+      location=location,
+      company=company,
+    )
   )
   lines = [f"Job Title: {role}", ""]
   if location:
@@ -698,13 +832,12 @@ def format_group_feed_message(candidate: dict, invite_url: str = DEFAULT_GROUP_F
     if not _description_has(description, email):
       application_lines.append(f"Email: {email}")
   links: list[str] = []
-  for key in ("applyLinks", "contactLinks"):
-    values = candidate.get(key)
-    if isinstance(values, list):
-      for value in values:
-        text = str(value or "").strip()
-        if text and text not in links:
-          links.append(text)
+  values = candidate.get("applyLinks")
+  if isinstance(values, list):
+    for value in values:
+      text = str(value or "").strip()
+      if is_actionable_application_url(text) and text not in links:
+        links.append(text)
   source = str(candidate.get("sourcePostUrl") or candidate.get("sourceUrl") or "").strip()
   for link in links:
     if link != source and not _description_has(description, link):

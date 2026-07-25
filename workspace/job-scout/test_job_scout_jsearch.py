@@ -167,6 +167,76 @@ class JSearchTests(unittest.TestCase):
     self.assertIn("Review the original advert", job_scout.action_instruction(candidate, "channel_post_manual"))
     self.assertIn(candidate["sourcePostUrl"], job_scout.action_instruction(candidate, "channel_post_manual"))
 
+  def test_channel_posts_require_email_or_non_whatsapp_application_url(self) -> None:
+    base = {
+      "source": "everyday-vacancies-whatsapp",
+      "sourceUrl": "https://whatsapp.com/channel/example/post",
+      "sourcePostUrl": "https://whatsapp.com/channel/example/post",
+      "sourceChannelJid": "123@newsletter",
+      "company": "Unknown employer",
+      "location": "Harare",
+      "closing": None,
+      "applicationEmails": [],
+      "applicationEmail": None,
+    }
+    group_invite_only = {
+      **base,
+      "candidateId": "caregiver",
+      "sourcePostId": "caregiver",
+      "role": "Caregiver or Nurse Aid",
+      "description": (
+        "Looking for a stay-in caregiver in Westgate to assist a five-year-old child with all daily activities. "
+        "Salary $320. Ready to start."
+      ),
+      "applyLinks": [],
+      "contactLinks": ["https://chat.whatsapp.com/JZvh9lwFOvc3N2sSs8F1QD"],
+    }
+    whatsapp_contact_only = {
+      **base,
+      "candidateId": "driver",
+      "sourcePostId": "driver",
+      "role": "Driver",
+      "description": "Driver vacancy in Harare with a valid licence required.",
+      "applyLinks": ["https://wa.me/263700000001"],
+      "contactLinks": [],
+    }
+    email_application = {
+      **base,
+      "candidateId": "clerk",
+      "sourcePostId": "clerk",
+      "role": "Clerk",
+      "description": "Clerk vacancy in Harare.",
+      "applyLinks": [],
+      "contactLinks": [],
+      "applicationEmails": ["jobs@example.co.zw"],
+      "applicationEmail": "jobs@example.co.zw",
+    }
+    web_application = {
+      **base,
+      "candidateId": "assistant",
+      "sourcePostId": "assistant",
+      "role": "Assistant",
+      "description": "Assistant vacancy in Harare.",
+      "applyLinks": ["https://employer.example/jobs/assistant/apply"],
+      "contactLinks": [],
+    }
+
+    cleaned, stats, _by_key = job_scout.global_filter_candidates([
+      group_invite_only,
+      whatsapp_contact_only,
+      email_application,
+      web_application,
+    ])
+
+    self.assertEqual([item["candidateId"] for item in cleaned], ["clerk", "assistant"])
+    self.assertEqual(stats["everyday-vacancies-whatsapp"]["unactionableCount"], 2)
+    self.assertIsNone(job_scout.candidate_application_url(group_invite_only))
+    self.assertIsNone(job_scout.candidate_application_url(whatsapp_contact_only))
+    self.assertEqual(
+      job_scout.candidate_application_url(web_application),
+      "https://employer.example/jobs/assistant/apply",
+    )
+
   def test_whatsapp_channel_results_are_reported_per_source(self) -> None:
     candidates = [
       {"source": "zimlinks-whatsapp", "role": "Driver"},
@@ -290,8 +360,8 @@ class JSearchTests(unittest.TestCase):
     low_info = {
       "company": "Unknown employer",
       "role": "Sales and Commercial Officer",
-      "source": "everyday-vacancies-whatsapp",
-      "sourceUrl": "https://whatsapp.com/channel/example/low",
+      "source": "vacancymail",
+      "sourceUrl": None,
       "candidateId": "low",
       "description": "Sales and Commercial Officer Wanted",
       "applicationEmail": None,
@@ -347,8 +417,7 @@ class JSearchTests(unittest.TestCase):
     ])
 
     self.assertEqual([item["candidateId"] for item in cleaned], ["email", "link", "details", "long"])
-    self.assertEqual(stats["everyday-vacancies-whatsapp"]["lowInfoCount"], 1)
-    self.assertEqual(stats["everyday-vacancies-whatsapp"]["unknownDeadlineCount"], 0)
+    self.assertEqual(stats["vacancymail"]["lowInfoCount"], 1)
     self.assertNotIn(job_scout.duplicate_key(low_info), by_key)
     self.assertTrue(job_scout.is_low_information_candidate(low_info))
     self.assertFalse(job_scout.is_low_information_candidate(short_with_email))
