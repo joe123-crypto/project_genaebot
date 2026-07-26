@@ -81,7 +81,7 @@ from .util import safe_run_id, utc_now
 
 
 AGENT_RESULT_SCHEMA_VERSION = 1
-AGENT_MATCH_THRESHOLD = 70
+AGENT_MATCH_THRESHOLD = 65
 AGENT_SHORTLIST_LIMIT = 20
 AGENT_COMPLETION_STALE_SECONDS = 45 * 60
 # Matches the render worker's request cap so a validated CV cannot fail at
