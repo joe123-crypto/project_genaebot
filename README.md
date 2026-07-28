@@ -236,8 +236,14 @@ gateway and worker tokens match, at least one subscriber is ready, and every
 ready CV is accessible. It installs an isolated `main` agent turn at
 `08:00 Africa/Harare` with a six-hour run budget. The parent prepares every
 ready subscriber and delegates four isolated same-model children at a time;
-children score the deterministic shortlist and personalize documents, while
-the validated dispatcher remains the only component allowed to submit or send.
+children score the deterministic shortlist, while the validated dispatcher
+remains the only component allowed to record, submit, or send. For subscribers
+with `autoApply: false`, strong email and website matches are recorded as
+`pending_approval` without creating personalized documents or submitting an
+application. The dashboard exposes those records for approval. A separate
+five-minute `job-scout-approvals` worker picks up records the user changed to
+`approved`, then runs CV and application-letter customization before the
+dispatcher sends email applications or submits supported website forms.
 
 ### Dashboard task telemetry
 
@@ -305,6 +311,9 @@ The deploy script used by both paths:
 - best-effort builds and readiness-checks the optional Job Scout browser after
   the core gateway is healthy; failure is reported without failing the gateway
   deployment
+- installs or reconciles the isolated `job-scout-approvals` worker, which checks
+  every five minutes for dashboard-approved applications and processes them
+  under the user's approval
 
 Host automation files:
 
