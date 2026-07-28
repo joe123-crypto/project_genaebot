@@ -86,6 +86,9 @@ def publish_user_dashboard_telemetry(
   elif status == "action_required":
     last_run_status = "action_required"
     summary = f"{action_required_count} job(s) need your action"
+  elif status == "pending_approval":
+    last_run_status = "action_required"
+    summary = f"{action_required_count} matched job(s) waiting for approval"
   elif status == "failed":
     last_run_status = "failed"
     summary = str(error_note or "")[:240] or "Job Scout run failed"
@@ -139,6 +142,7 @@ def record_candidate_application(
   blocker_code: str | None = None,
   attempt_count: int | None = None,
   evidence: dict | None = None,
+  candidate_snapshot: dict | None = None,
   replace: bool = False,
 ) -> dict:
   return cmd_record_application(argparse.Namespace(
@@ -158,6 +162,7 @@ def record_candidate_application(
     blocker_code=blocker_code,
     attempt_count=attempt_count,
     evidence=evidence,
+    candidate_snapshot=candidate_snapshot if candidate_snapshot is not None else candidate,
     replace=replace,
   ))
 

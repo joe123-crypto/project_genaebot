@@ -10,6 +10,7 @@ from .commands_dispatch import cmd_finish_dispatch, cmd_record_dispatch_outcome,
 from .commands_group_feed import cmd_deliver_group_feed
 from .commands_setup import (
   cmd_check_runtime,
+  cmd_count_approved_applications,
   cmd_convert_pending_cvs,
   cmd_fetch_candidates,
   cmd_list_applications,
@@ -107,13 +108,17 @@ def build_parser() -> argparse.ArgumentParser:
   apps.add_argument("--user-id", required=True)
   apps.set_defaults(func=cmd_list_applications)
 
+  approved = subparsers.add_parser("count-approved-applications", help="count applications queued after user approval")
+  approved.add_argument("--limit", type=int, default=100)
+  approved.set_defaults(func=cmd_count_approved_applications)
+
   record = subparsers.add_parser("record-application", help="record a Job Scout application outcome")
   record.add_argument("--user-id", required=True)
   record.add_argument("--company", required=True)
   record.add_argument("--role", required=True)
   record.add_argument(
     "--status",
-    choices=["applied", "skipped", "action_required", "physical_submission", "failed"],
+    choices=["applied", "pending_approval", "approved", "skipped", "action_required", "physical_submission", "failed"],
     required=True,
   )
   record.add_argument("--application-email")
@@ -128,6 +133,7 @@ def build_parser() -> argparse.ArgumentParser:
   record.add_argument("--blocker-code")
   record.add_argument("--attempt-count", type=int)
   record.add_argument("--evidence", type=json.loads)
+  record.add_argument("--candidate-snapshot", type=json.loads)
   record.add_argument("--replace", action="store_true")
   record.set_defaults(func=cmd_record_application)
 
@@ -163,6 +169,11 @@ def build_parser() -> argparse.ArgumentParser:
   dispatch_jsearch.add_argument("--dispatch-root", type=Path, default=DEFAULT_DISPATCH_ROOT)
   dispatch_jsearch.add_argument("--dry-run", action="store_true")
   dispatch_jsearch.add_argument("--write-group-feed-cache", action="store_true")
+  dispatch_jsearch.add_argument(
+    "--approved-only",
+    action="store_true",
+    help="process only application records that the user has approved",
+  )
   dispatch_jsearch.add_argument("--group-feed-root", type=Path, default=DEFAULT_GROUP_FEED_ROOT)
   dispatch_jsearch.add_argument("--group-feed-limit", type=int, default=DEFAULT_GROUP_FEED_LIMIT)
   dispatch_jsearch.add_argument(

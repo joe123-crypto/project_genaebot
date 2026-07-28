@@ -77,7 +77,7 @@ class JobScoutDeploymentTests(unittest.TestCase):
     wrapper = (ROOT / "workspace/bin/job-scout-agent").read_text(encoding="utf-8")
 
     self.assertIn('prepare_json="$("${job_scout[@]}" "${prepare_args[@]}")"', wrapper)
-    self.assertIn('run_id="$(printf', wrapper)
+    self.assertIn("read -r run_id claim_count busy", wrapper)
     self.assertIn("json.load(sys.stdin)", wrapper)
     self.assertNotIn("| jq", wrapper)
     self.assertIn("The trusted wrapper has already completed preparation", wrapper)
@@ -171,6 +171,21 @@ class JobScoutDeploymentTests(unittest.TestCase):
     self.assertIn("flock -n 9", wrapper)
     self.assertIn("convert-pending-cvs --limit 100", wrapper)
     self.assertIn('bash "$OC_DIR/deploy/install-job-scout-cv-conversion.sh"', deploy)
+
+  def test_approved_application_worker_runs_every_five_minutes(self) -> None:
+    installer = (ROOT / "deploy/install-job-scout-approvals.sh").read_text(encoding="utf-8")
+    wrapper = (ROOT / "workspace/bin/job-scout-agent").read_text(encoding="utf-8")
+    deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")
+
+    self.assertIn('NAME="job-scout-approvals"', installer)
+    self.assertIn('CRON_EXPR="0 */5 * * * *"', installer)
+    self.assertIn('"--approved-live"', installer)
+    self.assertIn("--approved-only --browser-apply", wrapper)
+    self.assertIn('bash "$OC_DIR/deploy/install-job-scout-approvals.sh"', deploy)
+    self.assertLess(
+      deploy.index('bash "$OC_DIR/deploy/install-job-scout-approvals.sh"'),
+      deploy.index('bash "$OC_DIR/deploy/install-job-scout.sh"'),
+    )
 
   def test_optional_worker_starts_after_core_restart(self) -> None:
     deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")

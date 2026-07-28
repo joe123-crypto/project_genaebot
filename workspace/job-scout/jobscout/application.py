@@ -278,8 +278,15 @@ def action_instruction(candidate: dict, blocker_code: str | None = None) -> str:
   return prefix
 
 
-def build_user_summary(date_label: str, applied: list[dict], action_required: list[dict], failed_note: str | None = None) -> str:
+def build_user_summary(
+  date_label: str,
+  applied: list[dict],
+  action_required: list[dict],
+  failed_note: str | None = None,
+  pending_approval: list[dict] | None = None,
+) -> str:
   lines = [f"Job Scout - {date_label}", ""]
+  pending_approval = pending_approval or []
   if applied:
     for index, item in enumerate(applied, 1):
       candidate = item["candidate"]
@@ -307,8 +314,17 @@ def build_user_summary(date_label: str, applied: list[dict], action_required: li
         action_instruction(candidate, blocker_code),
         "",
       ])
+  if pending_approval:
+    for item in pending_approval:
+      candidate = item["candidate"] if isinstance(item, dict) and "candidate" in item else item
+      lines.extend([
+        f"- {candidate_role(candidate)} - WAITING FOR APPROVAL",
+        f"Company: {public_text(candidate.get('company'), 100)}",
+        "Review and approve it in your Agent Genaie dashboard.",
+        "",
+      ])
   if failed_note:
     lines.append(PUBLIC_DISPATCH_FAILURE_MESSAGE)
-  if not applied and not action_required and not failed_note:
+  if not applied and not action_required and not pending_approval and not failed_note:
     lines.append("No strong matches today. I will keep checking.")
   return "\n".join(line for line in lines).strip()

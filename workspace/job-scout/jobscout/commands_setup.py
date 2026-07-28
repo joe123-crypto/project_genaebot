@@ -879,6 +879,29 @@ def cmd_list_applications(args: argparse.Namespace) -> dict:
   return api.request_json("GET", endpoint(f"/internal/job-scout/applications?{query}"))
 
 
+def cmd_count_approved_applications(args: argparse.Namespace) -> dict:
+  subscribers = cmd_list_ready(argparse.Namespace(limit=args.limit)).get("subscribers", [])
+  approved_count = 0
+  user_count = 0
+  for subscriber in subscribers if isinstance(subscribers, list) else []:
+    user_id = subscriber_user_id(subscriber)
+    applications = cmd_list_applications(argparse.Namespace(user_id=user_id)).get("applications", [])
+    records = applications if isinstance(applications, list) else []
+    count = sum(
+      1
+      for application_record in records
+      if isinstance(application_record, dict) and str(application_record.get("status") or "") == "approved"
+    )
+    if count:
+      user_count += 1
+      approved_count += count
+  return {
+    "ok": True,
+    "approvedCount": approved_count,
+    "userCount": user_count,
+  }
+
+
 def cmd_record_application(args: argparse.Namespace) -> dict:
   payload = {
     "userId": args.user_id,
@@ -897,6 +920,7 @@ def cmd_record_application(args: argparse.Namespace) -> dict:
     "blockerCode": getattr(args, "blocker_code", None),
     "attemptCount": getattr(args, "attempt_count", None),
     "evidence": getattr(args, "evidence", None),
+    "candidateSnapshot": getattr(args, "candidate_snapshot", None),
     "replace": args.replace,
   }
   return api.request_json("POST", endpoint("/internal/job-scout/applications"), payload)

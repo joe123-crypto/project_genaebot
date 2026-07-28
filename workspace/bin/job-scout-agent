@@ -6,6 +6,7 @@ phone=""
 user_id=""
 mode=""
 daily_live=false
+approved_live=false
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --phone)
@@ -29,12 +30,23 @@ while [ "$#" -gt 0 ]; do
       }
       daily_live=true; scope="daily"; mode="live"; shift
       ;;
-    *) printf 'usage: %s ((--phone E164|--user-id UID|--all) (--preview|--live)|--daily-live)\n' "$0" >&2; exit 2 ;;
+    --approved-live)
+      [ -z "$scope" ] && [ -z "$mode" ] && [ "$#" -eq 1 ] || {
+        printf -- '--approved-live cannot be combined with another scope or mode\n' >&2
+        exit 2
+      }
+      approved_live=true; scope="approved"; mode="live"; shift
+      ;;
+    *) printf 'usage: %s ((--phone E164|--user-id UID|--all) (--preview|--live)|--daily-live|--approved-live)\n' "$0" >&2; exit 2 ;;
   esac
 done
 [ -n "$scope" ] && [ -n "$mode" ] || { printf 'scope and mode are required\n' >&2; exit 2; }
 if [ "$daily_live" = true ] && { [ "$scope" != "daily" ] || [ "$mode" != "live" ]; }; then
   printf -- '--daily-live cannot be combined with another scope or mode\n' >&2
+  exit 2
+fi
+if [ "$approved_live" = true ] && { [ "$scope" != "approved" ] || [ "$mode" != "live" ]; }; then
+  printf -- '--approved-live cannot be combined with another scope or mode\n' >&2
   exit 2
 fi
 if [ "$scope" = "phone" ]; then
@@ -50,14 +62,28 @@ if [ "$scope" = "all" ] && [ "$mode" != "preview" ]; then
 fi
 
 job_scout=(/home/joseph/.openclaw/workspace/bin/job-scout)
+if [ "$scope" = "approved" ]; then
+  approved_json="$("${job_scout[@]}" count-approved-applications --limit 100)"
+  approved_count="$(printf '%s' "$approved_json" | python3 -c '
+import json
+import sys
+value = json.load(sys.stdin).get("approvedCount")
+if not isinstance(value, int):
+  raise SystemExit("Job Scout approval count returned an invalid result")
+print(value)
+')"
+  [ "$approved_count" -gt 0 ] || exit 0
+fi
 run_prefix="manual-job-scout"
 [ "$scope" = "daily" ] && run_prefix="daily-job-scout"
+[ "$scope" = "approved" ] && run_prefix="approved-job-scout"
 run_id="${run_prefix}-$(date -u +%Y%m%dT%H%M%SZ)"
 prepare_args=(dispatch-jsearch --agent-phase prepare --run-id "$run_id" --limit-ready 100 --shortlist-limit 20 --match-threshold 65)
 [ "$scope" = "phone" ] && prepare_args+=(--phone "$phone")
 [ "$scope" = "user" ] && prepare_args+=(--user-id "$user_id")
 [ "$mode" = "preview" ] && prepare_args+=(--dry-run)
 [ "$scope" = "daily" ] && prepare_args+=(--write-group-feed-cache)
+[ "$scope" = "approved" ] && prepare_args+=(--approved-only --browser-apply)
 
 if [ "$scope" = "phone" ]; then
   "${job_scout[@]}" status --phone "$phone" >/dev/null
@@ -68,21 +94,34 @@ fi
 # or waste source credits by starting it again. If an unfinished run is being
 # resumed, its canonical runId replaces the newly requested one here.
 prepare_json="$("${job_scout[@]}" "${prepare_args[@]}")"
-run_id="$(printf '%s' "$prepare_json" | python3 -c '
+read -r run_id claim_count busy < <(printf '%s' "$prepare_json" | python3 -c '
 import json
 import sys
 
 result = json.load(sys.stdin)
 run_id = result.get("runId")
-if result.get("ok") is not True or result.get("agentPhase") != "prepare" or not isinstance(run_id, str) or not run_id:
+claim_count = result.get("claimCount")
+busy = result.get("busy") is True
+if result.get("ok") is not True or result.get("agentPhase") != "prepare" or not isinstance(run_id, str) or not run_id or not isinstance(claim_count, int):
   raise SystemExit("Job Scout preparation returned an invalid result")
-print(run_id)
-')"
+print(run_id, claim_count, "true" if busy else "false")
+')
+if [ "$busy" = true ]; then
+  [ "$scope" = "approved" ] && exit 0
+  printf 'another Job Scout dispatch mode is already active\n' >&2
+  exit 1
+fi
+if [ "$claim_count" -eq 0 ]; then
+  "${job_scout[@]}" dispatch-jsearch --agent-phase finish --run-id "$run_id" >/dev/null
+  "${job_scout[@]}" verify-dispatch --run-id "$run_id" --require-no-failures >/dev/null
+  exit 0
+fi
 read -r -d '' prompt <<EOF || true
 Run one operator-authorized Job Scout ${mode} dispatch.
 
 Follow the Daily OpenClaw Agent Dispatch parent and child protocol in /home/joseph/.openclaw/workspace/skills/job-scout/SKILL.md exactly, with these overrides:
 - The trusted wrapper has already completed preparation for runId ${run_id}. Do not run the prepare phase.
+- This run may contain discovery claims, approval-first matching claims, or user-approved submission claims. Follow each claim packet's approvalRequired and approvedSubmission flags exactly.
 - Start by running the status phase for runId ${run_id}; use its opaque pending or claimed claims.
 - Spawn isolated main children as documented, no more than four at once. Use simple lowercase task names such as job_scout_1; never derive a task name from a claim ID.
 - After each batch is spawned, use the durable wait phase exactly as documented. Never call sessions_yield and never depend on child announce delivery.

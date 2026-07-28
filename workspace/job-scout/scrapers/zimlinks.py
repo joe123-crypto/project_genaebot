@@ -306,7 +306,7 @@ def finalize_dispatch(run_id: str) -> None:
       "SELECT DISTINCT channel_jid, post_id FROM post_eligibility WHERE run_id=?",
       (run_id,),
     ).fetchall()
-    terminal = {"applied", "action_required", "skipped"}
+    terminal = {"applied", "pending_approval", "action_required", "skipped"}
     finalized: list[tuple[str, str]] = []
     for ref in posts:
       eligibility = conn.execute(

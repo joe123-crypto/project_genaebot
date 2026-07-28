@@ -161,6 +161,29 @@ def _agent_candidate(candidate: dict) -> dict:
   return output
 
 
+def _approved_candidate(application_record: dict) -> dict:
+  snapshot = application_record.get("candidateSnapshot")
+  candidate = dict(snapshot) if isinstance(snapshot, dict) else {}
+  for field in (
+    "company",
+    "role",
+    "source",
+    "sourceUrl",
+    "closing",
+    "applicationEmail",
+  ):
+    if not candidate.get(field) and application_record.get(field):
+      candidate[field] = application_record[field]
+  if not candidate.get("sourceUrl"):
+    candidate["sourceUrl"] = application_record.get("applicationUrl") or application_record.get("url")
+  if not candidate.get("applyLinks") and application_record.get("applicationUrl"):
+    candidate["applyLinks"] = [application_record["applicationUrl"]]
+  candidate["approvalApplicationId"] = application_record.get("applicationId") or application_record.get("id")
+  candidate["approvalMatchReason"] = application_record.get("matchReason")
+  candidate["approvalSubmissionMethod"] = application_record.get("submissionMethod")
+  return _agent_candidate(candidate)
+
+
 def _numbered_agent_candidates(candidates: list[dict]) -> list[dict]:
   """Give the model short stable references without replacing canonical IDs."""
   numbered: list[dict] = []
@@ -272,6 +295,7 @@ def _reserve_agent_run(args: argparse.Namespace) -> tuple[str, bool]:
       "schemaVersion": 3,
       "mode": "openclaw-agent",
       "dryRun": requested_preview,
+      "approvedOnly": bool(getattr(args, "approved_only", False)),
       "phase": "preparing",
       "claimIds": [],
       "updatedAt": utc_now(),
@@ -293,14 +317,27 @@ def cmd_agent_prepare(args: argparse.Namespace) -> dict:
   with dispatch_store.exclusive_dispatch_lock(args.dispatch_root, safe_run_id(lock_run)):
     run_id, resumed = _reserve_agent_run(args)
     marker = dispatch_store.load_dispatch(run_id, args.dispatch_root)
+    if resumed and bool(marker.get("approvedOnly")) != bool(getattr(args, "approved_only", False)):
+      return {
+        "ok": True,
+        "agentPhase": "prepare",
+        "busy": True,
+        "runId": run_id,
+        "dryRun": bool(marker.get("dryRun")),
+        "readyCount": 0,
+        "claimCount": 0,
+        "terminalCount": 0,
+        "claims": [],
+      }
     if resumed and marker.get("phase") in {"ready", "running", "finishing"}:
       return _resume_result(args.dispatch_root, run_id)
 
-    # Convert any pending PDF CVs first so those subscribers are ready for
-    # this very run instead of waiting a day; failures never block dispatch.
+    approved_only = bool(getattr(args, "approved_only", False))
+    # Convert pending PDFs during discovery. Approval processing only consumes
+    # already-ready subscribers and must stay lightweight when the queue is empty.
     cv_conversion = (
-      {"ok": True, "skipped": True, "reason": "preview"}
-      if getattr(args, "dry_run", False)
+      {"ok": True, "skipped": True, "reason": "preview" if getattr(args, "dry_run", False) else "approved-only"}
+      if getattr(args, "dry_run", False) or approved_only
       else convert_pending_cvs_best_effort(args.limit_ready)
     )
 
@@ -314,7 +351,9 @@ def cmd_agent_prepare(args: argparse.Namespace) -> dict:
       getattr(args, "user_id", None),
     )
     shortlist_limit = max(1, min(int(getattr(args, "shortlist_limit", AGENT_SHORTLIST_LIMIT)), AGENT_SHORTLIST_LIMIT))
-    if not getattr(args, "dry_run", False):
+    if approved_only and getattr(args, "dry_run", False):
+      raise SystemExit("--approved-only cannot be combined with --dry-run")
+    if not getattr(args, "dry_run", False) and not approved_only:
       maybe_write_group_feed_cache(args, run_id)
 
     prepared: list[dict] = []
@@ -325,6 +364,24 @@ def cmd_agent_prepare(args: argparse.Namespace) -> dict:
       source_results = _source_results()
       try:
         applications = applications_from_response(cmd_list_applications(argparse.Namespace(user_id=user_id)))
+        if approved_only:
+          approved_candidates = [
+            _approved_candidate(application_record)
+            for application_record in applications
+            if str(application_record.get("status") or "") == "approved"
+          ][:shortlist_limit]
+          if approved_candidates:
+            prepared.append({
+              "subscriber": subscriber,
+              "userId": user_id,
+              "preferences": preferences,
+              "applications": applications,
+              "approvedCandidates": approved_candidates,
+              "rawKeys": [],
+              "sourceResults": source_results,
+              "preparationError": None,
+            })
+          continue
         raw_candidates: list[dict] = []
         if search_queries(preferences):
           raw_candidates, source_results = fetch_candidate_sources(preferences, shortlist_limit)
@@ -346,35 +403,43 @@ def cmd_agent_prepare(args: argparse.Namespace) -> dict:
           "userId": user_id,
           "preferences": preferences,
           "applications": [],
+          "approvedCandidates": [],
           "rawKeys": [],
           "sourceResults": source_results,
           "preparationError": public_text(err),
         })
 
-    _cleaned, global_stats, global_candidates = global_filter_candidates(raw_pool)
+    if approved_only:
+      global_stats: dict = {}
+      global_candidates: dict = {}
+    else:
+      _cleaned, global_stats, global_candidates = global_filter_candidates(raw_pool)
     claim_ids: list[str] = []
     claim_summaries: list[dict] = []
     for item in prepared:
-      seen: set[tuple[str, str]] = set()
-      pool: list[dict] = []
-      for key in item["rawKeys"]:
-        if key in seen:
-          continue
-        seen.add(key)
-        candidate = global_candidates.get(key)
-        if candidate is not None:
-          pool.append(candidate)
-      candidates, filter_stats = filter_candidates_for_user_with_stats(
-        pool,
-        item["preferences"],
-        item["applications"],
-        shortlist_limit,
-      )
-      candidates = candidates_for_subscriber_channels(item["subscriber"], candidates)
-      apply_source_filter_stats(item["sourceResults"], filter_stats)
-      candidates = [_agent_candidate(candidate) for candidate in candidates]
+      if approved_only:
+        candidates = item.get("approvedCandidates") or []
+      else:
+        seen: set[tuple[str, str]] = set()
+        pool: list[dict] = []
+        for key in item["rawKeys"]:
+          if key in seen:
+            continue
+          seen.add(key)
+          candidate = global_candidates.get(key)
+          if candidate is not None:
+            pool.append(candidate)
+        candidates, filter_stats = filter_candidates_for_user_with_stats(
+          pool,
+          item["preferences"],
+          item["applications"],
+          shortlist_limit,
+        )
+        candidates = candidates_for_subscriber_channels(item["subscriber"], candidates)
+        apply_source_filter_stats(item["sourceResults"], filter_stats)
+        candidates = [_agent_candidate(candidate) for candidate in candidates]
       user_id = item["userId"]
-      if candidates and not getattr(args, "dry_run", False):
+      if candidates and not getattr(args, "dry_run", False) and not approved_only:
         register_channel_candidate_eligibility(run_id, user_id, candidates)
       claim_id = secrets.token_urlsafe(18)
       claim = {
@@ -396,13 +461,15 @@ def cmd_agent_prepare(args: argparse.Namespace) -> dict:
         "userId": user_id,
         "preferences": item["preferences"],
         "applications": item["applications"],
-        "applicationLimit": max(0, max_applications(item["preferences"])),
+        "applicationLimit": len(candidates) if approved_only else max(0, max_applications(item["preferences"])),
         "matchThreshold": int(getattr(args, "match_threshold", AGENT_MATCH_THRESHOLD)),
         "candidates": candidates,
         "sourceResults": item["sourceResults"],
         "globalFilter": global_stats,
         "preparationError": item["preparationError"],
         "dryRun": bool(getattr(args, "dry_run", False)),
+        "approvalRequired": item["preferences"].get("autoApply", True) is False and not approved_only,
+        "approvedSubmission": approved_only,
       }
       dispatch_store.save_agent_work(args.dispatch_root, run_id, claim_id, work)
       dispatch_store.save_agent_claim(args.dispatch_root, run_id, claim_id, claim)
@@ -413,7 +480,8 @@ def cmd_agent_prepare(args: argparse.Namespace) -> dict:
       marker = dispatch_store.load_dispatch(run_id, args.dispatch_root)
       marker.update({
         "phase": "ready",
-        "readyCount": len(subscribers),
+        "readyCount": len(claim_ids),
+        "approvedOnly": approved_only,
         "claimIds": claim_ids,
         "updatedAt": utc_now(),
       })
@@ -425,7 +493,7 @@ def cmd_agent_prepare(args: argparse.Namespace) -> dict:
     "resumed": False,
     "runId": run_id,
     "dryRun": bool(getattr(args, "dry_run", False)),
-    "readyCount": len(subscribers),
+    "readyCount": len(claim_ids),
     "claimCount": len(claim_ids),
     "terminalCount": 0,
     "claims": claim_summaries,
@@ -494,13 +562,21 @@ def cmd_agent_claim(args: argparse.Namespace) -> dict:
     "cvDesignGuidance": CV_DESIGN_GUIDANCE,
     "baseCoverLetterPath": str(base_letter),
     "coverLetterGuidance": COVER_LETTER_GUIDANCE,
+    "approvalRequired": bool(work.get("approvalRequired")),
+    "approvedSubmission": bool(work.get("approvedSubmission")),
     "personalizedOutputDirectory": str(personalized_dir),
     "resultPath": str(result_path),
     "resultEditingGuidance": (
       "agent-result.json is already populated with every exact candidateId and unique "
-      "placeholders. Use the edit tool to replace only the placeholder assessment values "
-      "and, for selected jobs, the null artifact paths. Never use write on resultPath, "
-      "never edit candidateId or assessmentNumber, and never reorder assessments."
+      "placeholders. Use the edit tool to replace only the placeholder assessment values. "
+      + (
+        "For selected jobs, leave cvHtmlPath and coverLetterPath null because the user "
+        "must approve before personalization. "
+        if work.get("approvalRequired")
+        else "For selected jobs, replace the null artifact paths with the personalized files. "
+      )
+      + "Never use write on resultPath, never edit candidateId or assessmentNumber, "
+      "and never reorder assessments."
     ),
     "dryRun": bool(work.get("dryRun")),
   }
@@ -770,6 +846,8 @@ def validate_agent_result(args: argparse.Namespace, work: dict, result: dict) ->
   used_paths: set[Path] = set()
   selected: list[dict] = []
   threshold = int(work.get("matchThreshold") or AGENT_MATCH_THRESHOLD)
+  approval_required = bool(work.get("approvalRequired"))
+  approved_submission = bool(work.get("approvedSubmission"))
   output_root = dispatch_store.agent_claim_output_dir(args.dispatch_root, args.run_id, args.claim_id) / "personalized"
   base_path = dispatch_store.agent_claim_output_dir(args.dispatch_root, args.run_id, args.claim_id) / "base-cv.html"
 
@@ -797,9 +875,22 @@ def validate_agent_result(args: argparse.Namespace, work: dict, result: dict) ->
     if not reason:
       raise AgentResultError("each assessment needs a concise reason")
     if not assessment["selected"]:
+      if approved_submission:
+        raise AgentResultError("every user-approved candidate must be personalized and submitted")
       continue
-    if score < threshold or assessment["hardMismatch"]:
+    if not approved_submission and (score < threshold or assessment["hardMismatch"]):
       raise AgentResultError("selected candidate does not meet the strong-fit policy")
+    if approval_required:
+      if assessment.get("cvHtmlPath") is not None or assessment.get("coverLetterPath") is not None:
+        raise AgentResultError("approval-first matching must not create personalized artifacts")
+      selected.append({
+        "candidate": candidates[candidate_id],
+        "reason": reason,
+        "fitScore": score,
+        "cvHtmlPath": None,
+        "coverLetterPath": None,
+      })
+      continue
     cv_path = _safe_output_file(output_root, assessment.get("cvHtmlPath"), MAX_HTML_BYTES, ".html")
     letter_path = _safe_output_file(output_root, assessment.get("coverLetterPath"), MAX_LETTER_BYTES, ".txt")
     # Shared artifact files would break later candidates once the first
@@ -896,6 +987,27 @@ def _remove_retained_personalized_html(path: object, artifact_refs: dict) -> Non
     pass
 
 
+def _record_approved_failure(work: dict, note: str) -> None:
+  if not work.get("approvedSubmission"):
+    return
+  for candidate in work.get("candidates") or []:
+    try:
+      attempt_count, _replace = candidate_attempt(work.get("applications") or [], candidate)
+      record_candidate_application(
+        work["userId"],
+        candidate,
+        "failed",
+        notes=public_text(note, 240),
+        match=candidate.get("approvalMatchReason") or match_reason(work["preferences"], candidate),
+        submission_method=candidate.get("approvalSubmissionMethod"),
+        application_url=candidate_application_url(candidate),
+        attempt_count=attempt_count,
+        replace=True,
+      )
+    except Exception:
+      pass
+
+
 def _prepare_documents(
   subscriber: dict,
   candidate: dict,
@@ -921,18 +1033,24 @@ def dispatch_agent_user(args: argparse.Namespace, work: dict, selected: list[dic
   subscriber = work["subscriber"]
   user_id = work["userId"]
   preferences = work["preferences"]
+  approval_required = bool(work.get("approvalRequired"))
+  approved_submission = bool(work.get("approvedSubmission"))
   if bool(work.get("dryRun")):
     preview_artifacts: list[dict] = []
     for item in selected:
       candidate = item["candidate"]
-      personalized_html = Path(item["cvHtmlPath"])
-      preview_pdf = application.render_one_page_cv(personalized_html, personalized_html.with_name("preview-cv.pdf"))
-      preview_artifacts.append({
+      preview = {
         "candidateId": candidate.get("agentCandidateId") or candidate_key(candidate),
-        "cvPdfPath": str(preview_pdf),
-        "cvSource": "agent",
-        "coverLetterSource": "agent",
-      })
+      }
+      if not approval_required:
+        personalized_html = Path(item["cvHtmlPath"])
+        preview_pdf = application.render_one_page_cv(personalized_html, personalized_html.with_name("preview-cv.pdf"))
+        preview.update({
+          "cvPdfPath": str(preview_pdf),
+          "cvSource": "agent",
+          "coverLetterSource": "agent",
+        })
+      preview_artifacts.append(preview)
     return {
       "ok": True,
       "runId": args.run_id,
@@ -951,8 +1069,10 @@ def dispatch_agent_user(args: argparse.Namespace, work: dict, selected: list[dic
     }
   applications = applications_from_response(cmd_list_applications(argparse.Namespace(user_id=user_id)))
   auto_apply = preferences.get("autoApply", True) is not False
+  submission_authorized = auto_apply or approved_submission
   allow_browser = browser_apply_enabled(args)
   user_applied: list[dict] = []
+  user_pending_approval: list[dict] = []
   user_action_required: list[dict] = []
   failed_note = work.get("preparationError")
   channel_outcomes: set[str] = set()
@@ -966,13 +1086,45 @@ def dispatch_agent_user(args: argparse.Namespace, work: dict, selected: list[dic
     # A sibling/recovered run may have recorded the same company/role after the
     # packet was prepared. Re-run terminal/attempt filtering immediately before
     # any external side effect.
-    eligible, _stats = filter_candidates_for_user_with_stats([candidate], preferences, applications, 1)
-    if not eligible:
-      continue
+    if not approved_submission:
+      eligible, _stats = filter_candidates_for_user_with_stats([candidate], preferences, applications, 1)
+      if not eligible:
+        continue
     reason = item.get("reason") or match_reason(preferences, candidate)
     attempt_count, replace_existing = candidate_attempt(applications, candidate)
     email = str(candidate.get("applicationEmail") or "").strip()
     application_url = candidate_application_url(candidate)
+    if approval_required:
+      if email or application_url:
+        submission_method = "email" if email else "website"
+        record_candidate_application(
+          user_id,
+          candidate,
+          "pending_approval",
+          match=reason,
+          submission_method=submission_method,
+          application_url=application_url,
+          attempt_count=0,
+          replace=replace_existing,
+        )
+        _note_channel_outcome(candidate, "pending_approval", 0)
+        user_pending_approval.append({"candidate": candidate, "reason": reason, "method": submission_method})
+      else:
+        blocker = "channel_post_manual"
+        record_candidate_application(
+          user_id,
+          candidate,
+          "action_required",
+          notes=action_instruction(candidate, blocker),
+          match=reason,
+          submission_method="manual",
+          blocker_code=blocker,
+          attempt_count=0,
+          replace=replace_existing,
+        )
+        _note_channel_outcome(candidate, "action_required", 0)
+        user_action_required.append({"candidate": candidate, "blockerCode": blocker})
+      continue
     personalized_html = item.get("cvHtmlPath")
     tailored_letter = item.get("coverLetterPath")
     if not personalized_html or not tailored_letter:
@@ -981,7 +1133,7 @@ def dispatch_agent_user(args: argparse.Namespace, work: dict, selected: list[dic
     cover_letter_source = "agent"
     cv_source = "agent"
 
-    if email and auto_apply:
+    if email and submission_authorized:
       if not gmail_sender_connected(subscriber):
         blocker = "gmail_not_connected"
         record_candidate_application(
@@ -1040,7 +1192,7 @@ def dispatch_agent_user(args: argparse.Namespace, work: dict, selected: list[dic
           pass
         _note_channel_outcome(candidate, "failed", attempt_count)
         break
-    elif application_url and auto_apply and allow_browser:
+    elif application_url and submission_authorized and allow_browser:
       web_result: dict = {}
       try:
         documents = _prepare_documents(
@@ -1096,7 +1248,7 @@ def dispatch_agent_user(args: argparse.Namespace, work: dict, selected: list[dic
         _note_channel_outcome(candidate, "failed", attempt_count)
         break
     elif application_url:
-      blocker = "auto_apply_disabled"
+      blocker = "unsupported_site" if approved_submission else "auto_apply_disabled"
       record_candidate_application(
         user_id, candidate, "action_required", notes=action_instruction(candidate, blocker), match=reason,
         submission_method="manual", application_url=application_url, blocker_code=blocker, attempt_count=0,
@@ -1122,12 +1274,14 @@ def dispatch_agent_user(args: argparse.Namespace, work: dict, selected: list[dic
       continue
     _note_channel_outcome(candidate, "skipped", 0)
 
-  if user_applied:
+  if failed_note:
+    status = "failed"
+  elif user_applied:
     status = "applied"
+  elif user_pending_approval:
+    status = "pending_approval"
   elif user_action_required:
     status = "action_required"
-  elif failed_note:
-    status = "failed"
   else:
     status = "no_matches"
   delivered = None
@@ -1136,12 +1290,26 @@ def dispatch_agent_user(args: argparse.Namespace, work: dict, selected: list[dic
     delivered = False
     try:
       date_label = datetime.now(timezone.utc).date().isoformat()
-      send_whatsapp_summary(subscriber_phone(subscriber), build_user_summary(date_label, user_applied, user_action_required, failed_note))
+      send_whatsapp_summary(
+        subscriber_phone(subscriber),
+        build_user_summary(
+          date_label,
+          user_applied,
+          user_action_required,
+          failed_note,
+          pending_approval=user_pending_approval,
+        ),
+      )
       delivered = True
     except Exception as err:
       summary_error = public_text(err)
   publish_user_dashboard_telemetry(
-    user_id, status, len(user_applied), len(user_action_required), delivered, summary_error or failed_note,
+    user_id,
+    status,
+    len(user_applied),
+    len(user_action_required) + len(user_pending_approval),
+    delivered,
+    summary_error or failed_note,
   )
   applied = user_applied
   # Personalization health: every delivered application must use both agent
@@ -1154,7 +1322,8 @@ def dispatch_agent_user(args: argparse.Namespace, work: dict, selected: list[dic
     "claimId": work["claimId"],
     "status": status,
     "appliedCount": len(applied),
-    "actionRequiredCount": len(user_action_required) if status != "failed" else 0,
+    "actionRequiredCount": (len(user_action_required) + len(user_pending_approval)) if status != "failed" else 0,
+    "pendingApprovalCount": len(user_pending_approval) if status != "failed" else 0,
     "personalizedCvCount": personalized_cv_count,
     "personalizedLetterCount": personalized_letter_count,
     "templateLetterCount": len(applied) - personalized_letter_count,
@@ -1227,6 +1396,7 @@ def cmd_agent_complete(args: argparse.Namespace) -> dict:
     selected = validate_agent_result(args, work, _read_result_arg(args.result))
     outcome = dispatch_agent_user(args, work, selected, fallback=False)
   except (Exception, SystemExit) as err:
+    _record_approved_failure(work, public_text(err, 240))
     outcome = {
       "ok": True,
       "runId": args.run_id,
@@ -1266,6 +1436,11 @@ def cmd_agent_fallback(args: argparse.Namespace) -> dict:
   claim, existing = _begin_completion(args)
   if existing is not None:
     return {"ok": True, "agentPhase": "fallback", "duplicate": True, **existing}
+  failure_reason = public_text(
+    getattr(args, "fallback_reason", None) or "OpenClaw child failed; no application was sent",
+    240,
+  )
+  _record_approved_failure(work, failure_reason)
   outcome = {
     "ok": True,
     "runId": args.run_id,
@@ -1279,10 +1454,7 @@ def cmd_agent_fallback(args: argparse.Namespace) -> dict:
     "summaryError": None,
     "fallback": False,
     "fallbackReason": None,
-    "failureReason": public_text(
-      getattr(args, "fallback_reason", None) or "OpenClaw child failed; no application was sent",
-      240,
-    ),
+    "failureReason": failure_reason,
   }
   _record_outcome(args.dispatch_root, args.run_id, work, outcome)
   return {"agentPhase": "fallback", **outcome}
