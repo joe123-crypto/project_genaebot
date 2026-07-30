@@ -15,6 +15,7 @@ RUNTIME_ROOT = Path(os.environ.get("JOB_SCOUT_RUNTIME_ROOT", "/home/joseph/.open
 DEFAULT_STORAGE_ROOT = RUNTIME_ROOT / "users"
 DEFAULT_DISPATCH_ROOT = RUNTIME_ROOT / "dispatch-runs"
 DEFAULT_GROUP_FEED_ROOT = RUNTIME_ROOT / "group-feed"
+DEFAULT_AGENT_MATCH_THRESHOLD = 51
 DISPATCH_STATUSES = {
   "applied",
   "pending_approval",

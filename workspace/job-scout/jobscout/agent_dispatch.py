@@ -38,7 +38,7 @@ from .commands_dispatch import (
 )
 from .commands_group_feed import maybe_write_group_feed_cache
 from .commands_setup import cmd_list_applications, cmd_list_ready, convert_pending_cvs_best_effort
-from .constants import UNKNOWN_EMPLOYER, UNKNOWN_ROLE, WHATSAPP_CHANNEL_SOURCES
+from .constants import DEFAULT_AGENT_MATCH_THRESHOLD, UNKNOWN_EMPLOYER, UNKNOWN_ROLE, WHATSAPP_CHANNEL_SOURCES
 from .formality import employer_formality
 from .delivery import (
   MAX_RENDER_HTML_BYTES,
@@ -60,6 +60,7 @@ from .dispatch_runner import (
 from .jsearch import (
   apply_source_filter_stats,
   candidate_key,
+  closing_state,
   duplicate_key,
   fetch_candidate_sources,
   filter_candidates_for_user_with_stats,
@@ -81,7 +82,7 @@ from .util import safe_run_id, utc_now
 
 
 AGENT_RESULT_SCHEMA_VERSION = 1
-AGENT_MATCH_THRESHOLD = 65
+AGENT_MATCH_THRESHOLD = DEFAULT_AGENT_MATCH_THRESHOLD
 AGENT_SHORTLIST_LIMIT = 20
 AGENT_COMPLETION_STALE_SECONDS = 45 * 60
 # Matches the render worker's request cap so a validated CV cannot fail at
@@ -832,6 +833,10 @@ def validate_agent_result(args: argparse.Namespace, work: dict, result: dict) ->
     raise AgentResultError("agent result assessments must be an array")
   candidate_list = work["candidates"]
   candidates = {candidate["agentCandidateId"]: candidate for candidate in candidate_list}
+  candidate_order = {
+    candidate["agentCandidateId"]: index
+    for index, candidate in enumerate(candidate_list)
+  }
   numbered_flags = [isinstance(assessment, dict) and "assessmentNumber" in assessment for assessment in assessments]
   numbered_result = any(numbered_flags)
   if numbered_result:
@@ -850,6 +855,7 @@ def validate_agent_result(args: argparse.Namespace, work: dict, result: dict) ->
   approved_submission = bool(work.get("approvedSubmission"))
   output_root = dispatch_store.agent_claim_output_dir(args.dispatch_root, args.run_id, args.claim_id) / "personalized"
   base_path = dispatch_store.agent_claim_output_dir(args.dispatch_root, args.run_id, args.claim_id) / "base-cv.html"
+  selection_rows: list[dict] = []
 
   for assessment in assessments:
     if not isinstance(assessment, dict):
@@ -874,6 +880,13 @@ def validate_agent_result(args: argparse.Namespace, work: dict, result: dict) ->
     reason = public_text(assessment.get("reason"), 300)
     if not reason:
       raise AgentResultError("each assessment needs a concise reason")
+    selection_rows.append({
+      "candidateId": candidate_id,
+      "order": candidate_order[candidate_id],
+      "fitScore": score,
+      "hardMismatch": assessment["hardMismatch"],
+      "selected": assessment["selected"],
+    })
     if not assessment["selected"]:
       if approved_submission:
         raise AgentResultError("every user-approved candidate must be personalized and submitted")
@@ -911,8 +924,28 @@ def validate_agent_result(args: argparse.Namespace, work: dict, result: dict) ->
 
   if seen != set(candidates):
     raise AgentResultError("agent must assess every shortlisted candidate exactly once")
-  if len(selected) > int(work.get("applicationLimit") or 0):
-    raise AgentResultError("agent selected more jobs than the subscriber limit")
+  if not approved_submission:
+    application_limit = max(0, int(work.get("applicationLimit") or 0))
+    ranked_eligible = sorted(
+      (
+        row for row in selection_rows
+        if row["fitScore"] >= threshold and not row["hardMismatch"]
+      ),
+      key=lambda row: (-row["fitScore"], row["order"]),
+    )
+    expected_selected = {
+      row["candidateId"]
+      for row in ranked_eligible[:application_limit]
+    }
+    actual_selected = {
+      row["candidateId"]
+      for row in selection_rows
+      if row["selected"]
+    }
+    if actual_selected != expected_selected:
+      raise AgentResultError(
+        "agent must select the highest-scoring eligible jobs up to the subscriber limit"
+      )
   return selected
 
 
@@ -1083,6 +1116,19 @@ def dispatch_agent_user(args: argparse.Namespace, work: dict, selected: list[dic
 
   for item in selected:
     candidate = item["candidate"]
+    if closing_state(candidate.get("closing")) == "expired":
+      if approved_submission:
+        record_candidate_application(
+          user_id,
+          candidate,
+          "skipped",
+          notes="Application deadline passed before submission.",
+          match=item.get("reason") or match_reason(preferences, candidate),
+          attempt_count=candidate_attempt(applications, candidate)[0],
+          replace=True,
+        )
+        _note_channel_outcome(candidate, "skipped", 0)
+      continue
     # A sibling/recovered run may have recorded the same company/role after the
     # packet was prepared. Re-run terminal/attempt filtering immediately before
     # any external side effect.

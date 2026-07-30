@@ -558,6 +558,13 @@ def closing_state(value: object, now: datetime | None = None) -> str:
     return "unknown"
   current = now or datetime.now(timezone.utc)
   cleaned = re.sub(r"^(?:expires?|due|closing(?: date)?|deadline)\s*:?\s*", "", text, flags=re.I).strip()
+  cleaned = re.sub(
+    r"^(?:Monday|Mon|Tuesday|Tue|Tues|Wednesday|Wed|Thursday|Thu|Thur|Thurs|"
+    r"Friday|Fri|Saturday|Sat|Sunday|Sun)\.?,?\s+",
+    "",
+    cleaned,
+    flags=re.I,
+  ).strip()
   for fmt in ("%Y-%m-%d", "%d %B %Y", "%d %b %Y", "%d %B, %Y", "%d %b, %Y"):
     try:
       closing_date = datetime.strptime(cleaned, fmt).date()

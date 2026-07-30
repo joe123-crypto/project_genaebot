@@ -78,7 +78,7 @@ run_prefix="manual-job-scout"
 [ "$scope" = "daily" ] && run_prefix="daily-job-scout"
 [ "$scope" = "approved" ] && run_prefix="approved-job-scout"
 run_id="${run_prefix}-$(date -u +%Y%m%dT%H%M%SZ)"
-prepare_args=(dispatch-jsearch --agent-phase prepare --run-id "$run_id" --limit-ready 100 --shortlist-limit 20 --match-threshold 65)
+prepare_args=(dispatch-jsearch --agent-phase prepare --run-id "$run_id" --limit-ready 100 --shortlist-limit 20 --match-threshold 51)
 [ "$scope" = "phone" ] && prepare_args+=(--phone "$phone")
 [ "$scope" = "user" ] && prepare_args+=(--user-id "$user_id")
 [ "$mode" = "preview" ] && prepare_args+=(--dry-run)

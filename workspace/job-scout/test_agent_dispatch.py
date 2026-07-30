@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from jobscout import agent_dispatch, commands_dispatch, dispatch_store
+from jobscout import agent_dispatch, cli, commands_dispatch, dispatch_store
 
 
 class AgentDispatchTests(unittest.TestCase):
@@ -87,7 +87,7 @@ class AgentDispatchTests(unittest.TestCase):
       limit_ready=100,
       max_candidates_per_user=5,
       shortlist_limit=20,
-      match_threshold=70,
+      match_threshold=51,
       dispatch_root=root,
       dry_run=False,
       write_group_feed_cache=False,
@@ -198,6 +198,108 @@ class AgentDispatchTests(unittest.TestCase):
     self.assertEqual(len(selected), 1)
     self.assertIsNone(selected[0]["cvHtmlPath"])
     self.assertIsNone(selected[0]["coverLetterPath"])
+
+  def test_default_match_threshold_accepts_51_but_not_50(self) -> None:
+    parsed = cli.build_parser().parse_args(["dispatch-jsearch", "--agent-phase", "status"])
+    self.assertEqual(parsed.match_threshold, 51)
+    candidate = agent_dispatch._agent_candidate(self.candidate())
+    work = {
+      "runId": "agent-test",
+      "claimId": "claim-1",
+      "subscriber": self.subscriber(),
+      "preferences": {**self.subscriber()["preferences"], "autoApply": False},
+      "candidates": [candidate],
+      "applicationLimit": 1,
+      "approvalRequired": True,
+    }
+
+    def result(score: int, selected: bool) -> dict:
+      return {
+        "schemaVersion": 1,
+        "runId": "agent-test",
+        "claimId": "claim-1",
+        "assessments": [{
+          "assessmentNumber": 1,
+          "candidateId": candidate["agentCandidateId"],
+          "fitScore": score,
+          "hardMismatch": False,
+          "selected": selected,
+          "reason": "The role and location have a plausible fit.",
+          "cvHtmlPath": None,
+          "coverLetterPath": None,
+        }],
+      }
+
+    rejected = agent_dispatch.validate_agent_result(
+      self.args(Path("/tmp"), "complete", claim_id="claim-1"),
+      work,
+      result(50, False),
+    )
+    accepted = agent_dispatch.validate_agent_result(
+      self.args(Path("/tmp"), "complete", claim_id="claim-1"),
+      work,
+      result(51, True),
+    )
+    self.assertEqual(rejected, [])
+    self.assertEqual(len(accepted), 1)
+
+  def test_validator_requires_top_eligible_match_with_ties_in_shortlist_order(self) -> None:
+    candidates = [
+      agent_dispatch._agent_candidate({
+        **self.candidate(),
+        "candidateId": f"source-job-{index}",
+        "role": f"Driver {index}",
+        "sourceUrl": f"https://jobs.example/driver-{index}",
+        "applyLinks": [f"https://jobs.example/driver-{index}"],
+      })
+      for index in range(1, 4)
+    ]
+    work = {
+      "runId": "agent-test",
+      "claimId": "claim-1",
+      "subscriber": self.subscriber(),
+      "preferences": {**self.subscriber()["preferences"], "autoApply": False},
+      "candidates": candidates,
+      "applicationLimit": 1,
+      "matchThreshold": 51,
+      "approvalRequired": True,
+    }
+
+    def result(selected_number: int) -> dict:
+      return {
+        "schemaVersion": 1,
+        "runId": "agent-test",
+        "claimId": "claim-1",
+        "assessments": [
+          {
+            "assessmentNumber": index,
+            "candidateId": candidate["agentCandidateId"],
+            "fitScore": score,
+            "hardMismatch": hard_mismatch,
+            "selected": index == selected_number,
+            "reason": "Evidence-based assessment.",
+            "cvHtmlPath": None,
+            "coverLetterPath": None,
+          }
+          for index, (candidate, score, hard_mismatch) in enumerate(
+            zip(candidates, (90, 60, 60), (True, False, False)),
+            1,
+          )
+        ],
+      }
+
+    selected = agent_dispatch.validate_agent_result(
+      self.args(Path("/tmp"), "complete", claim_id="claim-1"),
+      work,
+      result(2),
+    )
+    self.assertEqual(selected[0]["candidate"], candidates[1])
+    with self.assertRaisesRegex(agent_dispatch.AgentResultError, "highest-scoring eligible"):
+      agent_dispatch.validate_agent_result(
+        self.args(Path("/tmp"), "complete", claim_id="claim-1"),
+        work,
+        result(3),
+      )
 
   def test_prepare_excludes_low_information_candidates_from_work_packet(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
@@ -922,6 +1024,53 @@ class AgentDispatchTests(unittest.TestCase):
       self.assertEqual(record.call_args.kwargs["message_id"], "gmail-1")
       self.assertIsNone(telemetry.call_args.args[4])
 
+  def test_dispatch_rechecks_weekday_prefixed_expiry_before_sending(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      subscriber = self.subscriber()
+      candidate = agent_dispatch._agent_candidate({
+        **self.candidate(),
+        "closing": "Wednesday, 29 July 2026",
+      })
+      work = {
+        "runId": "agent-test",
+        "claimId": "claim-1",
+        "userId": "user-1",
+        "subscriber": subscriber,
+        "preferences": subscriber["preferences"],
+        "candidates": [candidate],
+        "applicationLimit": 1,
+      }
+      selected = [{
+        "candidate": candidate,
+        "reason": "The role and location align.",
+        "cvHtmlPath": root / "cv.html",
+        "coverLetterPath": root / "letter.txt",
+      }]
+      with (
+        mock.patch.object(agent_dispatch, "cmd_list_applications", return_value={"applications": []}),
+        mock.patch.object(agent_dispatch, "record_candidate_application") as record,
+        mock.patch.object(agent_dispatch, "_prepare_documents") as prepare_documents,
+        mock.patch.object(agent_dispatch, "send_application_email") as send,
+        mock.patch.object(agent_dispatch, "request_web_application") as web_apply,
+        mock.patch.object(agent_dispatch, "record_channel_candidate_outcome"),
+        mock.patch.object(agent_dispatch, "send_whatsapp_summary", return_value={"ok": True}),
+        mock.patch.object(agent_dispatch, "publish_user_dashboard_telemetry"),
+      ):
+        outcome = agent_dispatch.dispatch_agent_user(
+          self.args(root, "complete", claim_id="claim-1"),
+          work,
+          selected,
+          fallback=False,
+        )
+
+      self.assertEqual(outcome["status"], "no_matches")
+      self.assertEqual(outcome["appliedCount"], 0)
+      record.assert_not_called()
+      prepare_documents.assert_not_called()
+      send.assert_not_called()
+      web_apply.assert_not_called()
+
   def test_manual_policy_records_email_match_without_personalizing_or_sending(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
       root = Path(tmp)
@@ -1041,6 +1190,58 @@ class AgentDispatchTests(unittest.TestCase):
       send.assert_called_once()
       self.assertEqual(record.call_args.args[2], "applied")
       self.assertTrue(record.call_args.kwargs["replace"])
+
+  def test_approved_application_that_expired_is_skipped_without_sending(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      subscriber = self.subscriber()
+      subscriber["preferences"]["autoApply"] = False
+      candidate = agent_dispatch._agent_candidate({
+        **self.candidate(),
+        "approvalApplicationId": "application-1",
+        "approvalMatchReason": "Previously selected as a strong fit.",
+        "approvalSubmissionMethod": "email",
+        "closing": "Wednesday, 29 July 2026",
+      })
+      work = {
+        "runId": "approved-test",
+        "claimId": "claim-1",
+        "userId": "user-1",
+        "subscriber": subscriber,
+        "preferences": subscriber["preferences"],
+        "candidates": [candidate],
+        "applicationLimit": 1,
+        "approvedSubmission": True,
+      }
+      selected = [{
+        "candidate": candidate,
+        "reason": "Previously selected as a strong fit.",
+        "cvHtmlPath": root / "cv.html",
+        "coverLetterPath": root / "letter.txt",
+      }]
+      existing = {**candidate, "status": "approved", "attemptCount": 0}
+      with (
+        mock.patch.object(agent_dispatch, "cmd_list_applications", return_value={"applications": [existing]}),
+        mock.patch.object(agent_dispatch, "record_candidate_application", return_value={}) as record,
+        mock.patch.object(agent_dispatch, "_prepare_documents") as prepare_documents,
+        mock.patch.object(agent_dispatch, "send_application_email") as send,
+        mock.patch.object(agent_dispatch, "record_channel_candidate_outcome"),
+        mock.patch.object(agent_dispatch, "send_whatsapp_summary", return_value={"ok": True}),
+        mock.patch.object(agent_dispatch, "publish_user_dashboard_telemetry"),
+      ):
+        outcome = agent_dispatch.dispatch_agent_user(
+          self.args(root, "complete", claim_id="claim-1"),
+          work,
+          selected,
+          fallback=False,
+        )
+
+      self.assertEqual(outcome["status"], "no_matches")
+      self.assertEqual(record.call_args.args[2], "skipped")
+      self.assertEqual(record.call_args.kwargs["notes"], "Application deadline passed before submission.")
+      self.assertTrue(record.call_args.kwargs["replace"])
+      prepare_documents.assert_not_called()
+      send.assert_not_called()
 
   def test_expired_gmail_token_becomes_action_required_without_retry(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:

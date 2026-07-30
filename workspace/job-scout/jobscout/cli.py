@@ -23,6 +23,7 @@ from .commands_setup import (
   cmd_status,
 )
 from .constants import (
+  DEFAULT_AGENT_MATCH_THRESHOLD,
   DEFAULT_DISPATCH_ROOT,
   DEFAULT_GROUP_FEED_CACHE_MAX_AGE_SECONDS,
   DEFAULT_GROUP_FEED_LIMIT,
@@ -165,7 +166,12 @@ def build_parser() -> argparse.ArgumentParser:
   dispatch_jsearch.add_argument("--limit-ready", type=int, default=100)
   dispatch_jsearch.add_argument("--max-candidates-per-user", type=int, default=5)
   dispatch_jsearch.add_argument("--shortlist-limit", type=int, default=20, help="agent shortlist size, capped at 20")
-  dispatch_jsearch.add_argument("--match-threshold", type=int, default=70, help="minimum agent fit score for selection")
+  dispatch_jsearch.add_argument(
+    "--match-threshold",
+    type=int,
+    default=DEFAULT_AGENT_MATCH_THRESHOLD,
+    help="minimum agent fit score for selection",
+  )
   dispatch_jsearch.add_argument("--dispatch-root", type=Path, default=DEFAULT_DISPATCH_ROOT)
   dispatch_jsearch.add_argument("--dry-run", action="store_true")
   dispatch_jsearch.add_argument("--write-group-feed-cache", action="store_true")

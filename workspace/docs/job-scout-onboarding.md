@@ -275,8 +275,9 @@ source feed, and suppresses jobs already recorded as applied, skipped, action
 needed, pending approval, or physically submitted. The parent processes every
 ready user through at most four isolated children at a time. Each child inherits
 the default model, assesses a deterministic shortlist of at most 20 jobs, and
-selects only scores at or above the configured match threshold without a hard
-mismatch. For `autoApply: false`, completion records selected email and website
+selects the highest scores at or above 51 without a hard mismatch, up to the
+user's configured per-run application limit. For `autoApply: false`, completion
+records selected email and website
 matches as `pending_approval` and creates no application documents. For
 `autoApply: true`, the child personalizes truthful application documents before
 submission. Each claim creates a private result template with every opaque

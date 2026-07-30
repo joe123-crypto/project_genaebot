@@ -141,6 +141,9 @@ class JSearchTests(unittest.TestCase):
     self.assertEqual(job_scout.closing_state("04 JUL 2026", now), "expired")
     self.assertEqual(job_scout.closing_state("05 JUL 2026", now), "open")
     self.assertEqual(job_scout.closing_state("2026-07-06T00:00:00Z", now), "open")
+    incident_now = datetime(2026, 7, 30, 6, tzinfo=timezone.utc)
+    self.assertEqual(job_scout.closing_state("Wednesday, 29 July 2026", incident_now), "expired")
+    self.assertEqual(job_scout.closing_state("Thu, 30 Jul 2026", incident_now), "open")
     self.assertEqual(job_scout.closing_state(None, now), "unknown")
     self.assertEqual(job_scout.closing_state("when filled", now), "malformed")
 
@@ -328,7 +331,7 @@ class JSearchTests(unittest.TestCase):
         "source": "jsearch",
         "sourceUrl": "https://jobs.example/acme-driver",
         "candidateId": "a",
-        "closing": "01 Jul 2026",
+        "closing": "Wednesday, 01 July 2026",
       },
       {
         "company": "Beta",
