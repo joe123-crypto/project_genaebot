@@ -722,6 +722,68 @@ class AgentDispatchTests(unittest.TestCase):
       with self.assertRaisesRegex(agent_dispatch.AgentResultError, "phone number not in"):
         agent_dispatch.cmd_agent_validate(validate_args)
 
+  def test_validate_preflights_selected_cv_layout_and_surfaces_underfill(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      prepared = self.prepare(root)
+      claim_id = prepared["claims"][0]["claimId"]
+      canonical = root / "canonical.html"
+      canonical.write_text(
+        "<html><body><p data-cv-field='identity'>Test Applicant</p>"
+        "<p data-cv-field='contact'>+263 700 000001 applicant@example.com</p></body></html>",
+        encoding="utf-8",
+      )
+      with mock.patch.object(agent_dispatch, "subscriber_cv_html", return_value=str(canonical)):
+        claimed = agent_dispatch.cmd_agent_claim(self.args(root, "claim", claim_id=claim_id))
+      output = Path(claimed["work"]["personalizedOutputDirectory"]) / "job"
+      output.mkdir()
+      cv = output / "cv.html"
+      cv.write_text(
+        "<html><head><style>body{font-size:12pt}</style></head><body>"
+        "Test Applicant +263 700 000001 applicant@example.com</body></html>",
+        encoding="utf-8",
+      )
+      letter = output / "cover-letter.txt"
+      letter.write_text(
+        "Dear Hiring Team at Example Logistics,\n\n"
+        "I am applying for the Driver position at Example Logistics.\n"
+        "My background includes safe parcel delivery and a clean driving record,\n"
+        "and I am ready to contribute reliably from the first day.\n\n"
+        "Kind regards,\nTest Applicant\n",
+        encoding="utf-8",
+      )
+      validate_args = self.args(root, "validate", claim_id=claim_id)
+      validate_args.result = json.dumps({
+        "schemaVersion": 1,
+        "runId": "agent-test",
+        "claimId": claim_id,
+        "assessments": [{
+          "assessmentNumber": 1,
+          "candidateId": claimed["work"]["candidates"][0]["agentCandidateId"],
+          "fitScore": 90,
+          "hardMismatch": False,
+          "selected": True,
+          "reason": "Strong fit.",
+          "cvHtmlPath": str(cv),
+          "coverLetterPath": str(letter),
+        }],
+      })
+      before_claim = dispatch_store.load_agent_claim(root, "agent-test", claim_id)
+
+      with mock.patch.object(
+        agent_dispatch.application,
+        "render_one_page_cv",
+        side_effect=RuntimeError(
+          "rendered CV uses only 49.0% of the page height; it must use at least 85.0%"
+        ),
+      ) as render:
+        with self.assertRaisesRegex(RuntimeError, r"49\.0%.*85\.0%"):
+          agent_dispatch.cmd_agent_validate(validate_args)
+
+      self.assertEqual(Path(render.call_args.args[0]), cv)
+      self.assertEqual(Path(render.call_args.args[1]).suffix, ".pdf")
+      self.assertEqual(dispatch_store.load_agent_claim(root, "agent-test", claim_id), before_claim)
+
   def test_durable_outcome_restores_a_tampered_terminal_claim(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
       root = Path(tmp)
@@ -1344,6 +1406,8 @@ class AgentDispatchTests(unittest.TestCase):
         claimed = agent_dispatch.cmd_agent_claim(self.args(root, "claim", claim_id=claim_id))
       guidance = claimed["work"]["cvDesignGuidance"]
       self.assertIn("single A4 page", guidance)
+      self.assertIn("at least 85%", guidance)
+      self.assertIn("larger readable typography", guidance)
       self.assertIn("self-contained", guidance)
       self.assertIn("never by dropping facts", guidance.lower())
 

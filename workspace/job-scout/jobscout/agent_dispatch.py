@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import tempfile
 import time
 from typing import Iterable
 
@@ -118,10 +119,14 @@ CV_DESIGN_GUIDANCE = (
   "images, or stylesheets; inline SVG/data: URIs are fine). Reorganise the content into "
   "clear, sensibly-ordered sections even if the source text is jumbled, and make it "
   "visually polished (for example a clean two-column layout). The entire CV MUST fit on "
-  "a single A4 page — achieve this through layout density and concise wording, NEVER by "
-  "dropping facts. Preserve every factual detail exactly: the applicant's name, every "
-  "email and phone number, education, employers, and dates. Never invent contact "
-  "details, qualifications, or dates that are not in the source."
+  "a single A4 page and its substantive text must extend through at least 85% of the "
+  "page height. For a sparse CV, use larger readable typography, balanced line height, "
+  "section spacing, and well-proportioned columns to use the available space instead of "
+  "cramming everything at the top. For a dense CV, achieve one-page fit through layout "
+  "density and concise wording, NEVER by dropping facts. Do not add filler or invented "
+  "details merely to occupy space. Preserve every factual detail exactly: the applicant's "
+  "name, every email and phone number, education, employers, and dates. Never invent "
+  "contact details, qualifications, or dates that are not in the source."
 )
 TERMINAL_CLAIM_STATUSES = {"completed", "failed", "fallback_completed"}
 # html.parser never emits an endtag for a bare void element, so these tags
@@ -1463,10 +1468,17 @@ def cmd_agent_complete(args: argparse.Namespace) -> dict:
 
 
 def cmd_agent_validate(args: argparse.Namespace) -> dict:
-  """Validate the child result and artifacts without claiming side effects."""
+  """Validate the child result and ephemeral CV renders without side effects."""
   run_id = safe_run_id(args.run_id)
   work = dispatch_store.load_agent_work(args.dispatch_root, run_id, args.claim_id)
   selected = validate_agent_result(args, work, _read_result_arg(args.result))
+  if selected and not work.get("approvalRequired"):
+    with tempfile.TemporaryDirectory(prefix="job-scout-cv-preflight-") as tmp:
+      for index, item in enumerate(selected, start=1):
+        application.render_one_page_cv(
+          item["cvHtmlPath"],
+          Path(tmp) / f"candidate-{index:02d}.pdf",
+        )
   return {
     "ok": True,
     "agentPhase": "validate",

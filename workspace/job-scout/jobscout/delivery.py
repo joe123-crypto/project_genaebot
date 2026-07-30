@@ -18,6 +18,7 @@ import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET
 
 from genaie_env import env_default
 
@@ -160,6 +161,39 @@ def pdf_page_count(pdf_path: str | Path) -> int:
   return int(match.group(1))
 
 
+MIN_CV_PAGE_FILL_RATIO = 0.85
+
+
+def pdf_text_fill_ratio(pdf_path: str | Path) -> float:
+  """Return the lowest visible word position as a fraction of page height."""
+  try:
+    completed = subprocess.run(
+      ["pdftotext", "-bbox-layout", str(pdf_path), "-"],
+      check=True,
+      capture_output=True,
+      text=True,
+      timeout=30,
+    )
+  except (OSError, subprocess.SubprocessError) as err:
+    raise RuntimeError("could not inspect rendered CV page fill") from err
+  try:
+    document = ET.fromstring(completed.stdout)
+    pages = [element for element in document.iter() if element.tag.rsplit("}", 1)[-1] == "page"]
+    if len(pages) != 1:
+      raise ValueError("expected one page")
+    page_height = float(pages[0].attrib["height"])
+    word_bottoms = [
+      float(element.attrib["yMax"])
+      for element in pages[0].iter()
+      if element.tag.rsplit("}", 1)[-1] == "word" and str(element.text or "").strip()
+    ]
+  except (ET.ParseError, KeyError, TypeError, ValueError) as err:
+    raise RuntimeError("could not inspect rendered CV page fill") from err
+  if page_height <= 0 or not word_bottoms:
+    raise RuntimeError("could not inspect rendered CV page fill")
+  return max(word_bottoms) / page_height
+
+
 def validate_rendered_cv_pdf(pdf_path: str | Path) -> Path:
   path = Path(pdf_path)
   if pdf_page_count(path) != 1:
@@ -175,6 +209,12 @@ def validate_rendered_cv_pdf(pdf_path: str | Path) -> Path:
     raise RuntimeError("rendered CV contains browser print chrome")
   if any(BROWSER_TIMESTAMP.fullmatch(line) or PAGE_COUNTER.fullmatch(line) for line in lines):
     raise RuntimeError("rendered CV contains browser print chrome")
+  fill_ratio = pdf_text_fill_ratio(path)
+  if fill_ratio < MIN_CV_PAGE_FILL_RATIO:
+    raise RuntimeError(
+      f"rendered CV uses only {fill_ratio:.1%} of the page height; "
+      f"it must use at least {MIN_CV_PAGE_FILL_RATIO:.1%}"
+    )
   return path
 
 

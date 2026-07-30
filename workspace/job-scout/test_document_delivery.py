@@ -13,7 +13,16 @@ from jobscout.application import (
   store_application_artifacts,
   web_apply_payload,
 )
-from jobscout.delivery import application_email_body, cover_letter_html, pdf_page_count, render_html_to_pdf, send_application_email
+from jobscout.delivery import (
+  MIN_CV_PAGE_FILL_RATIO,
+  application_email_body,
+  cover_letter_html,
+  pdf_page_count,
+  pdf_text_fill_ratio,
+  render_html_to_pdf,
+  send_application_email,
+  validate_rendered_cv_pdf,
+)
 import jobscout.subscriber
 
 
@@ -109,6 +118,54 @@ class RenderClientTests(unittest.TestCase):
     self.assertEqual(agent_dispatch.MAX_HTML_BYTES, jobscout.delivery.MAX_RENDER_HTML_BYTES)
 
 
+class CvPdfValidationTests(unittest.TestCase):
+  def test_reads_lowest_visible_word_as_page_fill_ratio(self) -> None:
+    bbox = """\
+      <html xmlns="http://www.w3.org/1999/xhtml"><body><doc>
+      <page width="595.0" height="842.0">
+      <word xMin="40" yMin="30" xMax="80" yMax="40">Top</word>
+      <word xMin="40" yMin="705" xMax="100" yMax="715.7">Bottom</word>
+      </page></doc></body></html>
+    """
+    with mock.patch("jobscout.delivery.subprocess.run", return_value=mock.Mock(stdout=bbox)):
+      self.assertAlmostEqual(pdf_text_fill_ratio("/tmp/cv.pdf"), 0.85)
+
+  def test_page_fill_inspection_fails_closed_without_visible_words(self) -> None:
+    bbox = '<html><body><page width="595" height="842"></page></body></html>'
+    with mock.patch("jobscout.delivery.subprocess.run", return_value=mock.Mock(stdout=bbox)):
+      with self.assertRaisesRegex(RuntimeError, "page fill"):
+        pdf_text_fill_ratio("/tmp/cv.pdf")
+
+  def test_rejects_one_page_cv_below_minimum_fill(self) -> None:
+    with mock.patch("jobscout.delivery.pdf_page_count", return_value=1), mock.patch(
+      "jobscout.delivery.subprocess.run",
+      return_value=mock.Mock(stdout="Valid CV text\n"),
+    ), mock.patch(
+      "jobscout.delivery.pdf_text_fill_ratio",
+      return_value=MIN_CV_PAGE_FILL_RATIO - 0.001,
+    ):
+      with self.assertRaisesRegex(RuntimeError, r"84\.9%.*85\.0%"):
+        validate_rendered_cv_pdf("/tmp/cv.pdf")
+
+  def test_accepts_one_page_cv_at_minimum_fill(self) -> None:
+    with mock.patch("jobscout.delivery.pdf_page_count", return_value=1), mock.patch(
+      "jobscout.delivery.subprocess.run",
+      return_value=mock.Mock(stdout="Valid CV text\n"),
+    ), mock.patch(
+      "jobscout.delivery.pdf_text_fill_ratio",
+      return_value=MIN_CV_PAGE_FILL_RATIO,
+    ):
+      self.assertEqual(validate_rendered_cv_pdf("/tmp/cv.pdf"), Path("/tmp/cv.pdf"))
+
+  def test_rejects_multi_page_cv_before_fill_inspection(self) -> None:
+    with mock.patch("jobscout.delivery.pdf_page_count", return_value=2), mock.patch(
+      "jobscout.delivery.pdf_text_fill_ratio",
+    ) as fill:
+      with self.assertRaisesRegex(RuntimeError, "exactly one page"):
+        validate_rendered_cv_pdf("/tmp/cv.pdf")
+    fill.assert_not_called()
+
+
 class CanonicalCvTests(unittest.TestCase):
   def setUp(self) -> None:
     jobscout.subscriber._cv_download_cache.clear()
@@ -200,6 +257,9 @@ class ApplicationDocumentTests(unittest.TestCase):
       with mock.patch("jobscout.delivery.render_html_to_pdf", side_effect=render), mock.patch(
         "jobscout.delivery.pdf_page_count",
         side_effect=[2, 2, 1, 1],
+      ), mock.patch(
+        "jobscout.delivery.pdf_text_fill_ratio",
+        return_value=0.9,
       ), mock.patch(
         "jobscout.delivery.subprocess.run",
         return_value=mock.Mock(stdout="Fits me@example.com\n"),
