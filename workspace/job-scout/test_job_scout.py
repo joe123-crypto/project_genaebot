@@ -24,6 +24,28 @@ import jobscout.commands_group_feed
 import jobscout.commands_setup
 import jobscout.dispatch_runner
 
+
+class ApprovedQueueTests(unittest.TestCase):
+  def test_approved_count_uses_one_bounded_global_query(self) -> None:
+    response = {
+      "applications": [
+        {"userId": "user-a", "status": "approved"},
+        {"userId": "user-a", "status": "approved"},
+        {"userId": "user-b", "status": "approved"},
+      ],
+    }
+    with mock.patch.object(jobscout.commands_setup, "endpoint", side_effect=lambda value: value), \
+         mock.patch.object(jobscout.commands_setup.api, "request_json", return_value=response) as request:
+      result = jobscout.commands_setup.cmd_count_approved_applications(argparse.Namespace(limit=500))
+
+    self.assertEqual(result["approvedCount"], 3)
+    self.assertEqual(result["userCount"], 2)
+    request.assert_called_once_with(
+      "GET",
+      "/internal/job-scout/applications?status=approved&limit=100",
+    )
+
+
 class OpenClawBinResolutionTests(unittest.TestCase):
   def test_openclaw_bin_env_override_wins(self) -> None:
     with mock.patch.dict(job_scout.os.environ, {"OPENCLAW_BIN": "/custom/openclaw"}, clear=True), \

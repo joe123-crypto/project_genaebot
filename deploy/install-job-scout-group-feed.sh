@@ -118,6 +118,7 @@ print(json.dumps([
   "deliver-group-feed",
   "--target",
   os.environ["GROUP_TARGET"],
+  "--refresh-if-stale",
 ], separators=(",", ":")))
 PY
 )"

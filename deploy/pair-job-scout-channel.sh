@@ -10,6 +10,7 @@ mkdir -p "$DATA_DIR/auth" "$DATA_DIR/media"
 chmod 0700 "$DATA_DIR" "$DATA_DIR/auth" "$DATA_DIR/media"
 cd "$DEPLOY_DIR"
 "$DOCKER" compose --profile job-scout-channel stop job-scout-channel-listener >/dev/null 2>&1 || true
+"$DOCKER" compose --profile job-scout-channel build job-scout-channel-listener
 printf 'Scan the QR code with the WhatsApp account that should follow the configured Job Scout channels.\n'
 "$DOCKER" compose --profile job-scout-channel run --rm --no-deps \
   -e JOB_SCOUT_CHANNEL_PAIRING=1 job-scout-channel-listener

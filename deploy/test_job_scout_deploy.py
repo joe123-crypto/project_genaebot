@@ -47,6 +47,7 @@ class JobScoutDeploymentTests(unittest.TestCase):
     self.assertIn("cap_drop:\n      - ALL", compose)
     self.assertIn("auth/creds.json", deploy)
     self.assertIn("JOB_SCOUT_CHANNEL_PAIRING=1", pair)
+    self.assertLess(pair.index(" compose --profile job-scout-channel build "), pair.index("JOB_SCOUT_CHANNEL_PAIRING=1"))
     self.assertIn("install-job-scout-channel-health.sh", pair)
 
   def test_channel_listener_image_pins_baileys_and_runs_read_only(self) -> None:
@@ -130,6 +131,7 @@ class JobScoutDeploymentTests(unittest.TestCase):
     self.assertIn('NAME="job-scout-group-feed"', installer)
     self.assertIn('CRON_EXPR="20 9 * * *"', installer)
     self.assertIn('"deliver-group-feed"', installer)
+    self.assertIn('"--refresh-if-stale"', installer)
     self.assertIn("JOB_SCOUT_GROUP_FEED_TARGET", installer)
     self.assertIn("directory groups list --channel whatsapp", installer)
     self.assertIn("@g.us", installer)
@@ -169,7 +171,8 @@ class JobScoutDeploymentTests(unittest.TestCase):
     deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")
 
     self.assertIn('NAME="job-scout-cv-conversion"', installer)
-    self.assertIn('CRON_EXPR="*/10 * * * * *"', installer)
+    self.assertIn('CRON_EXPR="0 * * * * *"', installer)
+    self.assertIn("--timeout-seconds 600", installer)
     self.assertIn('"/home/joseph/.openclaw/workspace/bin/job-scout-convert-pending"', installer)
     self.assertIn("flock -n 9", wrapper)
     self.assertIn("convert-pending-cvs --limit 100", wrapper)

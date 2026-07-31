@@ -90,6 +90,10 @@ def cmd_verify_dispatch(args: argparse.Namespace) -> dict:
   outcomes = data.get("outcomes") if isinstance(data.get("outcomes"), dict) else {}
   final_counts = data.get("finalCounts") if isinstance(data.get("finalCounts"), dict) else None
 
+  if data.get("phase") == "failed":
+    reason = str(data.get("preparationError") or "preparation failed").strip()
+    errors.append(f"dispatch preparation failed: {reason}")
+
   if ready_count < 0:
     errors.append("readyCount is missing or invalid")
   if not data.get("finishedAt") or not final_counts:
@@ -157,3 +161,17 @@ def cmd_verify_dispatch(args: argparse.Namespace) -> dict:
     print(json.dumps(result, indent=2, sort_keys=True))
     raise SystemExit(1)
   return result
+
+
+def cmd_reconcile_agent_state(args: argparse.Namespace) -> dict:
+  """Mark a stale active run failed without starting or resending any work."""
+  with dispatch_store.agent_state_lock(args.dispatch_root):
+    active = dispatch_store.active_agent_dispatch(args.dispatch_root)
+    previous_run_id = str((active or {}).get("runId") or "").strip() or None
+    active_run_id = dispatch_store.resolve_active_agent_run(args.dispatch_root)
+  return {
+    "ok": True,
+    "previousRunId": previous_run_id,
+    "activeRunId": active_run_id,
+    "reconciled": previous_run_id is not None and active_run_id is None,
+  }

@@ -4,7 +4,7 @@ set -euo pipefail
 CONTAINER="${OPENCLAW_CONTAINER:-openclaw-gateway}"
 DOCKER="${DOCKER:-docker}"
 NAME="job-scout-cv-conversion"
-CRON_EXPR="*/10 * * * * *"
+CRON_EXPR="0 * * * * *"
 TZ="Africa/Algiers"
 ALERT_TO="${JOB_SCOUT_FAILURE_ALERT_TO:-+213563719936}"
 COMMAND_ARGV='["/home/joseph/.openclaw/workspace/bin/job-scout-convert-pending"]'
@@ -17,13 +17,13 @@ if [ -n "$existing_id" ]; then
   "${openclaw[@]}" cron edit "$existing_id" \
     --name "$NAME" --cron "$CRON_EXPR" --tz "$TZ" --exact \
     --session isolated --command-argv "$COMMAND_ARGV" \
-    --command-cwd /home/joseph/.openclaw/workspace --timeout-seconds 30 \
+    --command-cwd /home/joseph/.openclaw/workspace --timeout-seconds 600 \
     --no-deliver --enable >/dev/null
 else
   "${openclaw[@]}" cron add \
     --name "$NAME" --cron "$CRON_EXPR" --tz "$TZ" --exact \
     --session isolated --command-argv "$COMMAND_ARGV" \
-    --command-cwd /home/joseph/.openclaw/workspace --timeout-seconds 30 \
+    --command-cwd /home/joseph/.openclaw/workspace --timeout-seconds 600 \
     --no-deliver --json >/dev/null
   jobs_json="$("${openclaw[@]}" cron list --all --json)"
   existing_id="$(printf '%s' "$jobs_json" | jq -r --arg name "$NAME" '.jobs[] | select(.name == $name) | .id' | head -1)"
@@ -43,8 +43,8 @@ fi
     .schedule.expr == $expr and
     .schedule.tz == $tz and
     .payload.argv == $argv and
-    .payload.timeoutSeconds == 30 and
+    .payload.timeoutSeconds == 600 and
     .failureAlert.after == 1
   )' >/dev/null
 
-printf 'Job Scout pending PDF conversion scheduled every 10 seconds.\n'
+printf 'Job Scout pending PDF conversion scheduled every minute.\n'

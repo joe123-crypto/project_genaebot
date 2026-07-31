@@ -220,6 +220,23 @@ def build_group_feed_cache(
   }
 
 
+def refresh_group_feed_cache(
+  run_id: str,
+  root: Path = DEFAULT_GROUP_FEED_ROOT,
+  limit: int = DEFAULT_GROUP_FEED_LIMIT,
+) -> dict:
+  """Replace the delivery cache only when fresh discovery found candidates."""
+  candidates, source_results = fetch_group_feed_candidates(limit)
+  if not candidates:
+    raise SystemExit(
+      "Job Scout group-feed refresh produced no candidates; preserving the existing cache"
+    )
+  return {
+    **write_group_feed_cache(run_id, candidates, source_results, root),
+    "sourceResults": source_results,
+  }
+
+
 def _parse_utc(value: object) -> datetime | None:
   text = str(value or "").strip()
   if not text:

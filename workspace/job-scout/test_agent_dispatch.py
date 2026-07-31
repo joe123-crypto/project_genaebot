@@ -127,6 +127,50 @@ class AgentDispatchTests(unittest.TestCase):
       self.assertEqual(claim_path.stat().st_mode & 0o777, 0o600)
       self.assertEqual(work_path.stat().st_mode & 0o777, 0o600)
 
+  def test_prepare_failure_is_durable_and_releases_active_run(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      with mock.patch.object(agent_dispatch, "cmd_list_ready", side_effect=SystemExit("quota exceeded")):
+        with self.assertRaisesRegex(SystemExit, "quota exceeded"):
+          agent_dispatch.cmd_agent_prepare(self.args(root, "prepare", run_id="failed-prepare"))
+
+      marker = dispatch_store.load_dispatch("failed-prepare", root)
+      self.assertEqual(marker["phase"], "failed")
+      self.assertEqual(marker["preparationError"], "quota exceeded")
+      self.assertIsNotNone(marker["finishedAt"])
+      self.assertIsNone(dispatch_store.active_agent_dispatch(root))
+      with self.assertRaises(SystemExit):
+        commands_dispatch.cmd_verify_dispatch(argparse.Namespace(
+          run_id="failed-prepare",
+          dispatch_root=root,
+          require_no_failures=True,
+        ))
+
+  def test_reconcile_marks_a_stale_active_run_failed_without_dispatching(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      commands_dispatch.cmd_start_dispatch(argparse.Namespace(
+        run_id="stale-prepare",
+        ready_count=0,
+        dispatch_root=root,
+      ))
+      marker = dispatch_store.load_dispatch("stale-prepare", root)
+      marker["phase"] = "preparing"
+      dispatch_store.save_dispatch(marker, root)
+      dispatch_store.set_active_agent_dispatch(root, {
+        "runId": "stale-prepare",
+        "startedAt": "2020-01-01T00:00:00+00:00",
+        "mode": "openclaw-agent",
+      })
+
+      result = commands_dispatch.cmd_reconcile_agent_state(argparse.Namespace(dispatch_root=root))
+
+      self.assertTrue(result["reconciled"])
+      self.assertIsNone(result["activeRunId"])
+      failed = dispatch_store.load_dispatch("stale-prepare", root)
+      self.assertEqual(failed["phase"], "failed")
+      self.assertIsNotNone(failed["finishedAt"])
+
   def test_approved_prepare_rebuilds_candidate_from_stored_snapshot_without_discovery(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
       root = Path(tmp)

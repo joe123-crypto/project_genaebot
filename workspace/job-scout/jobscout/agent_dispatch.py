@@ -291,6 +291,7 @@ def _reserve_agent_run(args: argparse.Namespace) -> tuple[str, bool]:
           f"an unfinished {active_mode} Job Scout agent run is active; "
           f"refusing to resume it as {requested_mode}"
         )
+      setattr(args, "_reserved_agent_run_id", active_run)
       return active_run, True
 
     run_id = requested or f"job-scout-agent-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
@@ -312,10 +313,11 @@ def _reserve_agent_run(args: argparse.Namespace) -> tuple[str, bool]:
       "startedAt": marker["startedAt"],
       "mode": "openclaw-agent",
     })
+    setattr(args, "_reserved_agent_run_id", run_id)
     return run_id, False
 
 
-def cmd_agent_prepare(args: argparse.Namespace) -> dict:
+def _cmd_agent_prepare_unprotected(args: argparse.Namespace) -> dict:
   """Persist one deterministic shortlist/claim for every ready subscriber."""
   # The long lock excludes the legacy one-process dispatcher while discovery is
   # building the durable run. Child completion intentionally does not hold it.
@@ -505,6 +507,24 @@ def cmd_agent_prepare(args: argparse.Namespace) -> dict:
     "claims": claim_summaries,
     "cvConversion": cv_conversion,
   }
+
+
+def cmd_agent_prepare(args: argparse.Namespace) -> dict:
+  try:
+    return _cmd_agent_prepare_unprotected(args)
+  except (Exception, SystemExit) as err:
+    # Reservation happens before network discovery. If discovery aborts, make
+    # that durable instead of leaving a misleading forever-preparing marker.
+    with dispatch_store.agent_state_lock(args.dispatch_root):
+      run_id = str(getattr(args, "_reserved_agent_run_id", "") or "").strip()
+      marker = dispatch_store.load_dispatch_optional(run_id, args.dispatch_root) if run_id else None
+      if marker is not None and marker.get("phase") == "preparing":
+        dispatch_store.fail_agent_dispatch(
+          args.dispatch_root,
+          run_id,
+          public_text(err, 240) or "Job Scout preparation failed",
+        )
+    raise
 
 
 def cmd_agent_claim(args: argparse.Namespace) -> dict:

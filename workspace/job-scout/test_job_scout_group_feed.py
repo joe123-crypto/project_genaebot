@@ -404,6 +404,64 @@ class GroupFeedTests(unittest.TestCase):
       self.assertEqual(result["failedCount"], 1)
       self.assertFalse((root / "delivered.json").exists())
 
+  def test_deliver_group_feed_refreshes_a_stale_cache_before_sending(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      old = self.candidate(candidateId="old", sourceUrl="https://example.com/old")
+      fresh = self.candidate(candidateId="fresh", sourceUrl="https://example.com/fresh")
+      jobscout.group_feed.write_group_feed_cache("old-cache", [old], {}, root)
+      cache_path = root / "latest.json"
+      stale = json.loads(cache_path.read_text(encoding="utf-8"))
+      stale["createdAt"] = "2020-01-01T00:00:00+00:00"
+      cache_path.write_text(json.dumps(stale), encoding="utf-8")
+      args = argparse.Namespace(
+        target="120363000000000000@g.us",
+        invite_url="https://chat.whatsapp.com/example",
+        group_feed_root=root,
+        cache_max_age_seconds=3600,
+        refresh_if_stale=True,
+        group_feed_limit=80,
+        max_messages=1,
+        send_delay_seconds=0,
+        dry_run=False,
+      )
+      with mock.patch.object(jobscout.group_feed, "fetch_group_feed_candidates", return_value=([fresh], {})), \
+           mock.patch.object(jobscout.commands_group_feed, "send_whatsapp_message", return_value={"messageId": "wa-fresh"}) as send:
+        result = job_scout.cmd_deliver_group_feed(args)
+
+      self.assertTrue(result["cacheRefreshed"])
+      self.assertEqual(result["sentCount"], 1)
+      self.assertIn("Poultry Supervisor", send.call_args.args[1])
+      refreshed = json.loads(cache_path.read_text(encoding="utf-8"))
+      self.assertEqual(refreshed["candidates"][0]["candidateId"], "fresh")
+
+  def test_empty_refresh_preserves_existing_stale_cache(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      old = self.candidate(candidateId="old", sourceUrl="https://example.com/old")
+      jobscout.group_feed.write_group_feed_cache("old-cache", [old], {}, root)
+      cache_path = root / "latest.json"
+      stale = json.loads(cache_path.read_text(encoding="utf-8"))
+      stale["createdAt"] = "2020-01-01T00:00:00+00:00"
+      cache_path.write_text(json.dumps(stale), encoding="utf-8")
+      before = cache_path.read_bytes()
+      args = argparse.Namespace(
+        target="120363000000000000@g.us",
+        invite_url="https://chat.whatsapp.com/example",
+        group_feed_root=root,
+        cache_max_age_seconds=3600,
+        refresh_if_stale=True,
+        group_feed_limit=80,
+        max_messages=1,
+        send_delay_seconds=0,
+        dry_run=False,
+      )
+      with mock.patch.object(jobscout.group_feed, "fetch_group_feed_candidates", return_value=([], {})):
+        with self.assertRaisesRegex(SystemExit, "produced no candidates"):
+          job_scout.cmd_deliver_group_feed(args)
+
+      self.assertEqual(cache_path.read_bytes(), before)
+
   def test_deliver_group_feed_caps_and_spaces_sends(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
       root = Path(tmp)
@@ -441,6 +499,7 @@ class GroupFeedTests(unittest.TestCase):
     self.assertEqual(args.max_messages, jobscout.constants.DEFAULT_GROUP_FEED_MAX_MESSAGES)
     self.assertEqual(args.send_delay_seconds, jobscout.constants.DEFAULT_GROUP_FEED_SEND_DELAY_SECONDS)
     self.assertIsNone(args.invite_url)
+    self.assertFalse(args.refresh_if_stale)
 
   def test_deliver_group_feed_invite_url_env_is_used_when_flag_omitted(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:

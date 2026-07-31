@@ -880,25 +880,24 @@ def cmd_list_applications(args: argparse.Namespace) -> dict:
 
 
 def cmd_count_approved_applications(args: argparse.Namespace) -> dict:
-  subscribers = cmd_list_ready(argparse.Namespace(limit=args.limit)).get("subscribers", [])
-  approved_count = 0
-  user_count = 0
-  for subscriber in subscribers if isinstance(subscribers, list) else []:
-    user_id = subscriber_user_id(subscriber)
-    applications = cmd_list_applications(argparse.Namespace(user_id=user_id)).get("applications", [])
-    records = applications if isinstance(applications, list) else []
-    count = sum(
-      1
-      for application_record in records
-      if isinstance(application_record, dict) and str(application_record.get("status") or "") == "approved"
-    )
-    if count:
-      user_count += 1
-      approved_count += count
+  limit = max(1, min(int(args.limit), 100))
+  query = urllib.parse.urlencode({"status": "approved", "limit": limit})
+  result = api.request_json("GET", endpoint(f"/internal/job-scout/applications?{query}"))
+  applications = result.get("applications") if isinstance(result, dict) else []
+  records = applications if isinstance(applications, list) else []
+  approved = [
+    record for record in records
+    if isinstance(record, dict) and str(record.get("status") or "") == "approved"
+  ]
+  user_ids = {
+    str(record.get("userId") or "").strip()
+    for record in approved
+    if str(record.get("userId") or "").strip()
+  }
   return {
     "ok": True,
-    "approvedCount": approved_count,
-    "userCount": user_count,
+    "approvedCount": len(approved),
+    "userCount": len(user_ids),
   }
 
 

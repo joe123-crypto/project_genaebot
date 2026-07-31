@@ -6,7 +6,13 @@ import argparse
 import json
 from pathlib import Path
 
-from .commands_dispatch import cmd_finish_dispatch, cmd_record_dispatch_outcome, cmd_start_dispatch, cmd_verify_dispatch
+from .commands_dispatch import (
+  cmd_finish_dispatch,
+  cmd_reconcile_agent_state,
+  cmd_record_dispatch_outcome,
+  cmd_start_dispatch,
+  cmd_verify_dispatch,
+)
 from .commands_group_feed import cmd_deliver_group_feed
 from .commands_setup import (
   cmd_check_runtime,
@@ -91,6 +97,10 @@ def build_parser() -> argparse.ArgumentParser:
   summary.add_argument("--limit", type=int, default=100)
   summary.add_argument("--dispatch-root", type=Path, default=DEFAULT_DISPATCH_ROOT)
   summary.set_defaults(func=cmd_summary)
+
+  reconcile = subparsers.add_parser("reconcile-agent-state", help="fail and release a stale active agent run")
+  reconcile.add_argument("--dispatch-root", type=Path, default=DEFAULT_DISPATCH_ROOT)
+  reconcile.set_defaults(func=cmd_reconcile_agent_state)
 
   convert = subparsers.add_parser("convert-pending-cvs", help="convert pending PDF CVs into canonical HTML CVs")
   convert.add_argument("--limit", type=int, default=100)
@@ -194,6 +204,8 @@ def build_parser() -> argparse.ArgumentParser:
   deliver_group_feed.add_argument("--invite-url")
   deliver_group_feed.add_argument("--group-feed-root", type=Path, default=DEFAULT_GROUP_FEED_ROOT)
   deliver_group_feed.add_argument("--cache-max-age-seconds", type=int, default=DEFAULT_GROUP_FEED_CACHE_MAX_AGE_SECONDS)
+  deliver_group_feed.add_argument("--refresh-if-stale", action="store_true")
+  deliver_group_feed.add_argument("--group-feed-limit", type=int, default=DEFAULT_GROUP_FEED_LIMIT)
   deliver_group_feed.add_argument("--max-messages", type=int, default=DEFAULT_GROUP_FEED_MAX_MESSAGES, help="0 means no cap")
   deliver_group_feed.add_argument(
     "--send-delay-seconds",

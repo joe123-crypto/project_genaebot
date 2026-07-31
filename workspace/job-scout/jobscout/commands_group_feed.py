@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import os
 import time
 
@@ -59,7 +60,24 @@ def cmd_deliver_group_feed(args: argparse.Namespace) -> dict:
   invite_url = group_feed_invite_url_from_args(args)
   root = args.group_feed_root
   with group_feed.exclusive_delivery_lock(root):
-    cache = group_feed.load_latest_cache(root, args.cache_max_age_seconds)
+    cache_refreshed = False
+    try:
+      cache = group_feed.load_latest_cache(root, args.cache_max_age_seconds)
+    except SystemExit as err:
+      message = str(err)
+      refreshable = message.startswith("Job Scout group-feed cache is missing:") or message.startswith(
+        "Job Scout group-feed cache is stale:"
+      )
+      if not getattr(args, "refresh_if_stale", False) or not refreshable:
+        raise
+      refresh_run_id = f"group-feed-refresh-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
+      group_feed.refresh_group_feed_cache(
+        refresh_run_id,
+        root=root,
+        limit=getattr(args, "group_feed_limit", DEFAULT_GROUP_FEED_LIMIT),
+      )
+      cache = group_feed.load_latest_cache(root, args.cache_max_age_seconds)
+      cache_refreshed = True
     state = group_feed.load_delivered_state(root)
     delivered = state.setdefault("delivered", {})
     candidates = cache.get("candidates") if isinstance(cache.get("candidates"), list) else []
@@ -113,6 +131,7 @@ def cmd_deliver_group_feed(args: argparse.Namespace) -> dict:
     "target": target,
     "cacheRunId": cache.get("runId"),
     "cacheCreatedAt": cache.get("createdAt"),
+    "cacheRefreshed": cache_refreshed,
     "candidateCount": len(candidates),
     "pendingCount": len(pending),
     "sentCount": sent_count,
@@ -120,5 +139,4 @@ def cmd_deliver_group_feed(args: argparse.Namespace) -> dict:
     "failedCount": failed_count,
     "messages": messages,
   }
-
 

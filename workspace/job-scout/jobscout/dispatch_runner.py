@@ -265,6 +265,8 @@ def cmd_summary(args: argparse.Namespace) -> dict:
       "runId": marker.get("runId"),
       "startedAt": marker.get("startedAt"),
       "finishedAt": marker.get("finishedAt"),
+      "phase": marker.get("phase"),
+      "preparationError": marker.get("preparationError"),
       "finalCounts": marker.get("finalCounts"),
     }
 

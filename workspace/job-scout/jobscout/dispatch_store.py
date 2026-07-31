@@ -169,6 +169,27 @@ def clear_active_agent_dispatch(root: Path, run_id: str) -> None:
     path.unlink()
 
 
+def fail_agent_dispatch(root: Path, run_id: str, error: str) -> bool:
+  """Finish an uncompleted run as failed and release its active pointer.
+
+  Caller must hold agent_state_lock.
+  """
+  marker = load_dispatch_optional(run_id, root)
+  if marker is None or marker.get("finishedAt"):
+    clear_active_agent_dispatch(root, run_id)
+    return False
+  finished_at = utc_now()
+  marker.update({
+    "phase": "failed",
+    "preparationError": str(error or "Job Scout preparation failed")[:240],
+    "finishedAt": finished_at,
+    "updatedAt": finished_at,
+  })
+  save_dispatch(marker, root)
+  clear_active_agent_dispatch(root, run_id)
+  return True
+
+
 def iso_age_seconds(value: object) -> float | None:
   try:
     text = str(value or "").replace("Z", "+00:00")
@@ -201,9 +222,11 @@ def resolve_active_agent_run(root: Path, stale_after_seconds: int = AGENT_RUN_ST
     return None
   age = iso_age_seconds(active.get("startedAt"))
   if age is not None and age > stale_after_seconds:
-    # An unfinished stale marker is retained for audit, but no longer blocks
-    # a future day's run. Per-application duplicate checks remain authoritative.
-    clear_active_agent_dispatch(root, run_id)
+    fail_agent_dispatch(
+      root,
+      run_id,
+      "Job Scout preparation did not finish before the active-run timeout",
+    )
     return None
   return safe_run_id(run_id)
 
