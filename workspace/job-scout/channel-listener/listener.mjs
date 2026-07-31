@@ -6,8 +6,10 @@ import { pipeline } from "node:stream/promises";
 
 import makeWASocket, {
   Browsers,
+  DEFAULT_CONNECTION_CONFIG,
   DisconnectReason,
   downloadMediaMessage,
+  fetchLatestBaileysVersion,
   getAllBinaryNodeChildren,
   getBinaryNodeChild,
   proto,
@@ -33,6 +35,26 @@ const MAX_RECONNECT_MS = 60_000;
 function envInt(name, fallback) {
   const value = Number.parseInt(process.env[name] ?? "", 10);
   return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function validWhatsAppVersion(value) {
+  return Array.isArray(value)
+    && value.length === 3
+    && value.every((part) => Number.isInteger(part) && part >= 0);
+}
+
+export async function resolveWhatsAppVersion(
+  fetchVersion = fetchLatestBaileysVersion,
+  fallbackVersion = DEFAULT_CONNECTION_CONFIG.version,
+) {
+  if (!validWhatsAppVersion(fallbackVersion)) throw new Error("Baileys fallback WhatsApp version is invalid");
+  try {
+    const result = await fetchVersion();
+    if (!validWhatsAppVersion(result?.version)) throw new Error("resolved WhatsApp version is invalid");
+    return { source: "latest", version: [...result.version] };
+  } catch (error) {
+    return { error, source: "fallback", version: [...fallbackVersion] };
+  }
 }
 
 function channelConfig(env) {
@@ -302,10 +324,13 @@ export async function runListener(config = listenerConfig()) {
     lastSubscriptionAt: null,
     reconnectCount: 0,
     startedAt: new Date().toISOString(),
+    whatsappVersion: null,
+    whatsappVersionSource: null,
   };
   let stopped = false;
   let storeClosed = false;
   let socket;
+  let cachedWhatsAppVersion;
   const renewalTimers = new Map();
   let reconnectAttempt = 0;
 
@@ -365,6 +390,25 @@ export async function runListener(config = listenerConfig()) {
 
   async function connect() {
     if (stopped) return;
+    let versionResolution = cachedWhatsAppVersion;
+    if (!versionResolution) {
+      versionResolution = await resolveWhatsAppVersion();
+      if (versionResolution.source === "latest") {
+        cachedWhatsAppVersion = versionResolution;
+        logger.info(
+          { version: versionResolution.version.join(".") },
+          "resolved current WhatsApp Web version",
+        );
+      } else {
+        logger.warn(
+          { error: String(versionResolution.error), version: versionResolution.version.join(".") },
+          "could not resolve current WhatsApp Web version; using Baileys fallback",
+        );
+      }
+    }
+    health.whatsappVersion = versionResolution.version.join(".");
+    health.whatsappVersionSource = versionResolution.source;
+    heartbeat();
     const { state, saveCreds } = await useMultiFileAuthState(config.authDir);
     const sock = makeWASocket({
       auth: state,
@@ -375,6 +419,7 @@ export async function runListener(config = listenerConfig()) {
       logger,
       markOnlineOnConnect: false,
       syncFullHistory: false,
+      version: versionResolution.version,
     });
     socket = sock;
     const channelsByJid = new Map();

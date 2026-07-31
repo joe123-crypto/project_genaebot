@@ -4,7 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { extractPostContent, fetchBackfillMessages, ingestMessage, listenerConfig, postUrl } from "./listener.mjs";
+import {
+  extractPostContent,
+  fetchBackfillMessages,
+  ingestMessage,
+  listenerConfig,
+  postUrl,
+  resolveWhatsAppVersion,
+} from "./listener.mjs";
 import { openStore, postId } from "./store.mjs";
 
 test("listener defaults to ZimLinks and ten-post backfill", () => {
@@ -28,6 +35,34 @@ test("listener accepts two distinct channel definitions", () => {
     () => listenerConfig({ JOB_SCOUT_CHANNELS_JSON: JSON.stringify([channels[0], { ...channels[1], source: channels[0].source }]) }),
     /duplicate channel source/,
   );
+});
+
+test("resolves and validates the current WhatsApp Web version", async () => {
+  const resolved = await resolveWhatsAppVersion(async () => ({
+    isLatest: true,
+    version: [2, 3000, 1043857760],
+  }));
+  assert.deepEqual(resolved, {
+    source: "latest",
+    version: [2, 3000, 1043857760],
+  });
+});
+
+test("uses the controlled fallback when WhatsApp version lookup fails", async () => {
+  const failed = await resolveWhatsAppVersion(
+    async () => { throw new Error("version service unavailable"); },
+    [2, 3000, 1035194821],
+  );
+  assert.equal(failed.source, "fallback");
+  assert.deepEqual(failed.version, [2, 3000, 1035194821]);
+  assert.match(String(failed.error), /version service unavailable/);
+
+  const invalid = await resolveWhatsAppVersion(
+    async () => ({ version: [2, "invalid", 1] }),
+    [2, 3000, 1035194821],
+  );
+  assert.equal(invalid.source, "fallback");
+  assert.match(String(invalid.error), /resolved WhatsApp version is invalid/);
 });
 
 test("extracts captions and identifies media", () => {

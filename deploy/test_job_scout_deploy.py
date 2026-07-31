@@ -52,9 +52,12 @@ class JobScoutDeploymentTests(unittest.TestCase):
   def test_channel_listener_image_pins_baileys_and_runs_read_only(self) -> None:
     package = json.loads((ROOT / "workspace/job-scout/channel-listener/package.json").read_text(encoding="utf-8"))
     dockerfile = (ROOT / "deploy/job-scout-channel-listener.Dockerfile").read_text(encoding="utf-8")
+    listener = (ROOT / "workspace/job-scout/channel-listener/listener.mjs").read_text(encoding="utf-8")
     self.assertEqual(package["dependencies"]["baileys"], "7.0.0-rc13")
     self.assertIn("FROM node:24-bookworm-slim", dockerfile)
     self.assertIn('CMD ["node", "listener.mjs"]', dockerfile)
+    self.assertIn("fetchLatestBaileysVersion", listener)
+    self.assertIn("version: versionResolution.version", listener)
 
   def test_scheduler_is_verified_command_wrapper(self) -> None:
     installer = (ROOT / "deploy/install-job-scout.sh").read_text(encoding="utf-8")
