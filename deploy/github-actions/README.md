@@ -175,9 +175,21 @@ sudo /usr/local/sbin/openclaw-prod-deploy "$GITHUB_WORKSPACE" \
 ```
 
 The wrapper refuses dirty checkouts, unexpected remotes, stale commits, and
-overlapping deploys. It validates the exact SHA once, reconciles changed
+overlapping deploys. It requires the checkout to be owned by `joseph` and runs
+Git fetch/revision checks as that user, allowing an Actions-injected credential
+or Joseph's normal HTTPS credential helper to authenticate without exposing a
+GitHub credential to root. Root-run child checks receive an exact, command-scoped
+Git safe-directory value for that owner-checked checkout; neither user's global
+Git configuration is changed. It validates the exact SHA once, reconciles changed
 container inputs without force-recreating unchanged services, waits for two
 successful gateway API probes, then runs health and cron reconciliation.
+
+The same wrapper is the supported manual fallback from the normal checkout:
+
+```bash
+cd /home/joseph/projects/genaebot
+sudo /usr/local/sbin/openclaw-prod-deploy "$PWD"
+```
 
 The source-controlled health check skips Webetu entirely when its public
 feature flag is disabled. When Webetu is enabled, its external dependency

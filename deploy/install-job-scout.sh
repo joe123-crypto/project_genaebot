@@ -37,7 +37,19 @@ if [ "$gateway_token_hash" != "$browser_token_hash" ]; then
 fi
 unset gateway_token_hash browser_token_hash
 
-"${job_scout[@]}" check-runtime --check-browser --check-subscribers
+set +e
+runtime_check_output="$("${job_scout[@]}" check-runtime --check-browser --check-subscribers 2>&1)"
+runtime_check_rc=$?
+set -e
+if [ "$runtime_check_rc" -ne 0 ]; then
+  if printf '%s\n' "$runtime_check_output" | grep -Eqi 'RESOURCE_EXHAUSTED|quota exceeded'; then
+    printf '[WARN] Agent Genaie Firestore quota is exhausted; Job Scout schedule reconciliation was deferred and the existing schedule was not changed.\n' >&2
+    exit 75
+  fi
+  printf '%s\n' "$runtime_check_output" >&2
+  exit "$runtime_check_rc"
+fi
+printf '%s\n' "$runtime_check_output"
 
 # Recreate the job so a historical agent-turn payload cannot survive an edit.
 # The new job is added before the old ones are removed so a failed add leaves

@@ -44,6 +44,7 @@ if [ "$#" -eq 5 ]; then
   bundle_dir="$5"
 fi
 repo_slug="joe123-crypto/project_genaebot"
+repo_user="joseph"
 service_name="${OPENCLAW_CONTAINER_SERVICE:-openclaw-gateway-container.service}"
 lock_file="/var/lock/openclaw-prod-deploy.lock"
 job_scout_ledger="/var/lib/openclaw-deploy/job-scout-production-ledger.jsonl"
@@ -53,8 +54,23 @@ job_scout_ledger="/var/lib/openclaw-deploy/job-scout-production-ledger.jsonl"
 [ -x "$src/deploy/validate-openclaw-deploy.sh" ] || die "missing deploy/validate-openclaw-deploy.sh in $src"
 [ -x "$src/deploy/check-deploy-resources.sh" ] || die "missing deploy/check-deploy-resources.sh in $src"
 
+for required in git node python3 bash rsync systemctl flock runuser realpath sha256sum stat find; do
+  command -v "$required" >/dev/null 2>&1 || die "missing required command: $required"
+done
+
+repo_uid="$(id -u "$repo_user")"
+src_uid="$(stat -c '%u' "$src")"
+[ "$src_uid" = "$repo_uid" ] || die "refusing checkout not owned by $repo_user: $src"
+
+# Child validation/deploy scripts execute with root privileges but only against
+# the owner-checked checkout above. Keep the exception command-scoped instead of
+# mutating root's global Git configuration.
+export GIT_CONFIG_COUNT=1
+export GIT_CONFIG_KEY_0=safe.directory
+export GIT_CONFIG_VALUE_0="$src"
+
 git_cmd() {
-  git -c "safe.directory=$src" -C "$src" "$@"
+  runuser -u "$repo_user" -- git -c "safe.directory=$src" -C "$src" "$@"
 }
 
 remote_url="$(git_cmd config --get remote.origin.url || true)"
@@ -79,10 +95,6 @@ fi
 if crontab -l 2>/dev/null | grep -Fq '/home/joseph/.openclaw/gitclaw/auto_backup.sh'; then
   die "GitClaw autocommit cron entry is still active"
 fi
-
-for required in git node python3 bash rsync systemctl flock realpath sha256sum stat find; do
-  command -v "$required" >/dev/null 2>&1 || die "missing required command: $required"
-done
 
 if [ ! -e /var/lock ]; then
   die "/var/lock is missing"

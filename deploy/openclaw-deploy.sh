@@ -674,6 +674,22 @@ wait_gateway_api_ready() {
   return 1
 }
 
+install_job_scout_schedule() {
+  local rc
+
+  if bash "$OC_DIR/deploy/install-job-scout.sh"; then
+    return 0
+  else
+    rc=$?
+  fi
+
+  if [ "$rc" -eq 75 ]; then
+    log "WARNING: Job Scout schedule reconciliation deferred because Agent Genaie Firestore quota is exhausted; existing schedule preserved"
+    return 0
+  fi
+  return "$rc"
+}
+
 diagnose_health_failure() {
   local docker
   docker="$(docker_bin)"
@@ -790,7 +806,7 @@ main() {
   bash "$OC_DIR/deploy/install-job-scout-cv-conversion.sh"
   start_optional_job_scout_browser
   bash "$OC_DIR/deploy/install-job-scout-approvals.sh"
-  bash "$OC_DIR/deploy/install-job-scout.sh"
+  install_job_scout_schedule
   start_optional_job_scout_channel_listener
   record_successful_deploy
   log "Deploy complete."

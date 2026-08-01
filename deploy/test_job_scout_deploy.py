@@ -182,6 +182,7 @@ class JobScoutDeploymentTests(unittest.TestCase):
     installer = (ROOT / "deploy/install-job-scout-approvals.sh").read_text(encoding="utf-8")
     wrapper = (ROOT / "workspace/bin/job-scout-agent").read_text(encoding="utf-8")
     deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")
+    main = deploy[deploy.index("main()") :]
 
     self.assertIn('NAME="job-scout-approvals"', installer)
     self.assertIn('CRON_EXPR="0 */5 * * * *"', installer)
@@ -189,8 +190,8 @@ class JobScoutDeploymentTests(unittest.TestCase):
     self.assertIn("--approved-only --browser-apply", wrapper)
     self.assertIn('bash "$OC_DIR/deploy/install-job-scout-approvals.sh"', deploy)
     self.assertLess(
-      deploy.index('bash "$OC_DIR/deploy/install-job-scout-approvals.sh"'),
-      deploy.index('bash "$OC_DIR/deploy/install-job-scout.sh"'),
+      main.index('bash "$OC_DIR/deploy/install-job-scout-approvals.sh"'),
+      main.index("install_job_scout_schedule"),
     )
 
   def test_optional_worker_starts_after_core_restart(self) -> None:
@@ -215,6 +216,74 @@ class JobScoutDeploymentTests(unittest.TestCase):
       main.index("  wait_gateway_api_ready\n"),
       main.index('bash "$OC_DIR/deploy/install-job-scout-cv-conversion.sh"'),
     )
+
+  def test_firestore_quota_defers_job_scout_schedule_without_hiding_other_failures(self) -> None:
+    installer = (ROOT / "deploy/install-job-scout.sh").read_text(encoding="utf-8")
+    deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")
+
+    self.assertIn("RESOURCE_EXHAUSTED|quota exceeded", installer)
+    self.assertIn("exit 75", installer)
+    self.assertLess(installer.index("check-runtime --check-browser --check-subscribers"), installer.index("cron list --all --json"))
+    self.assertIn("install_job_scout_schedule()", deploy)
+    self.assertIn('if [ "$rc" -eq 75 ]', deploy)
+    self.assertIn("existing schedule preserved", deploy)
+    self.assertIn('return "$rc"', deploy)
+    self.assertIn("  install_job_scout_schedule\n", deploy[deploy.index("main()") :])
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+      temp = Path(temp_dir)
+      fake_docker = temp / "docker"
+      calls = temp / "calls.log"
+      fake_docker.write_text(
+        """#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_CALLS"
+if [ "${1:-}" = ps ]; then
+  printf '%s\\n' browser-container
+  exit 0
+fi
+if printf '%s\\n' "$*" | grep -q sha256sum; then
+  printf '%s\\n' matching-token-hash
+  exit 0
+fi
+if printf '%s\\n' "$*" | grep -q check-runtime; then
+  if [ "${FAKE_RUNTIME_MODE:-quota}" = quota ]; then
+    printf '%s\\n' '8 RESOURCE_EXHAUSTED: Quota exceeded.' >&2
+    exit 1
+  fi
+  printf '%s\\n' 'runtime transport failed' >&2
+  exit 42
+fi
+exit 0
+""",
+        encoding="utf-8",
+      )
+      fake_docker.chmod(0o755)
+      env = {**os.environ, "DOCKER": str(fake_docker), "FAKE_DOCKER_CALLS": str(calls)}
+
+      quota = subprocess.run(
+        ["bash", str(ROOT / "deploy/install-job-scout.sh")],
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+      )
+      self.assertEqual(quota.returncode, 75, quota.stderr)
+      self.assertIn("existing schedule was not changed", quota.stderr)
+      self.assertNotIn("cron list", calls.read_text(encoding="utf-8"))
+
+      env["FAKE_RUNTIME_MODE"] = "other"
+      other = subprocess.run(
+        ["bash", str(ROOT / "deploy/install-job-scout.sh")],
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+      )
+      self.assertEqual(other.returncode, 42, other.stderr)
+      self.assertIn("runtime transport failed", other.stderr)
+      self.assertNotIn("reconciliation was deferred", other.stderr)
 
   def test_live_source_bind_mount_is_refreshed_safely(self) -> None:
     deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")
