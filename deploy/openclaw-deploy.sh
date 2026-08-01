@@ -564,6 +564,34 @@ restart_and_check() {
   fi
 }
 
+wait_gateway_api_ready() {
+  local docker attempt last_output consecutive_successes=0
+  docker="$(docker_bin)"
+
+  log "Wait for two consecutive gateway API readiness probes"
+  for attempt in $(seq 1 15); do
+    if last_output="$(
+      "$docker" exec -u joseph "$CONTAINER" sh -lc \
+        'exec env -u OPENCLAW_HOME OPENCLAW_GATEWAY_TOKEN="$GATEWAY_AUTH_TOKEN" openclaw cron status --timeout 5000 --json' \
+        2>&1
+    )"; then
+      consecutive_successes=$((consecutive_successes + 1))
+      if [ "$consecutive_successes" -ge 2 ]; then
+        log "Gateway API is ready"
+        return 0
+      fi
+    else
+      consecutive_successes=0
+    fi
+    sleep 2
+  done
+
+  printf 'ERROR: gateway API did not stabilize before cron installation. Last probe:\n%s\n' \
+    "${last_output:-no output}" >&2
+  diagnose_health_failure || true
+  return 1
+}
+
 is_isolated_webetu_health_failure() {
   local health_log="$1"
   local fail_count
@@ -668,6 +696,7 @@ main() {
   apply_config_template
   verify_live_workspace
   restart_and_check
+  wait_gateway_api_ready
   bash "$OC_DIR/deploy/install-job-scout-cv-conversion.sh"
   start_optional_job_scout_browser
   bash "$OC_DIR/deploy/install-job-scout-approvals.sh"

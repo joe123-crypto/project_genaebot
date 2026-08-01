@@ -201,6 +201,19 @@ class JobScoutDeploymentTests(unittest.TestCase):
     self.assertLess(restart, optional)
     self.assertIn("core gateway remains available", deploy)
 
+  def test_gateway_api_stabilizes_before_cron_installation(self) -> None:
+    deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")
+    main = deploy[deploy.index("main()") :]
+
+    self.assertIn("wait_gateway_api_ready()", deploy)
+    self.assertIn("openclaw cron status --timeout 5000 --json", deploy)
+    self.assertIn('consecutive_successes" -ge 2', deploy)
+    self.assertLess(main.index("  restart_and_check\n"), main.index("  wait_gateway_api_ready\n"))
+    self.assertLess(
+      main.index("  wait_gateway_api_ready\n"),
+      main.index('bash "$OC_DIR/deploy/install-job-scout-cv-conversion.sh"'),
+    )
+
   def test_live_source_bind_mount_is_refreshed_safely(self) -> None:
     deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")
     staging = (ROOT / "deploy/stage-openclaw-source.sh").read_text(encoding="utf-8")
