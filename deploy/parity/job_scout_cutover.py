@@ -96,6 +96,20 @@ EXPECTED_CRONS = {
         ],
     },
 }
+RUNTIME_TOPOLOGY_PATHS = (
+    "job-scout",
+    "job-scout-channel",
+    "job-scout-channel/auth",
+    "job-scout-channel/media",
+)
+REQUIRED_PRODUCTION_HEALTH_CHECKS = (
+    "gateway",
+    "browser",
+    "channel",
+    "runtime",
+    "publicStatus",
+    "r2CvAccess",
+)
 
 
 class ValidationError(ValueError):
@@ -531,8 +545,35 @@ def compare_overlay(
     }
 
 
+def directory_identity(path: Path, identity_path: str, label: str) -> dict[str, object]:
+    try:
+        metadata = path.lstat()
+    except OSError as error:
+        raise ValidationError(f"missing {label}: {path}: {error}") from error
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        raise ValidationError(f"{label} must be a real directory: {path}")
+    return {
+        "path": identity_path,
+        "device": metadata.st_dev,
+        "inode": metadata.st_ino,
+        "mode": f"{stat.S_IMODE(metadata.st_mode):04o}",
+        "uid": metadata.st_uid,
+        "gid": metadata.st_gid,
+    }
+
+
+def runtime_identities(root: Path) -> tuple[dict[str, object], list[dict[str, object]]]:
+    root_identity = directory_identity(root, str(root.absolute()), "runtime root")
+    topology = [
+        directory_identity(root / rel, rel, f"required runtime directory {rel}")
+        for rel in RUNTIME_TOPOLOGY_PATHS
+    ]
+    return root_identity, topology
+
+
 def runtime_snapshot(root: Path) -> dict[str, Any]:
     require_plain_directory(root, "runtime root")
+    root_identity, topology = runtime_identities(root)
     aggregate = hashlib.sha256()
     counts = {"entries": 0, "files": 0, "directories": 0, "symlinks": 0, "bytes": 0}
     for current_raw, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
@@ -588,49 +629,85 @@ def runtime_snapshot(root: Path) -> dict[str, Any]:
             aggregate.update(
                 f"{kind}\0{rel}\0{stat.S_IMODE(metadata.st_mode):04o}\0{size}\0{value}\n".encode("utf-8")
             )
+    after_root_identity, after_topology = runtime_identities(root)
+    if root_identity != after_root_identity or topology != after_topology:
+        raise ValidationError("runtime identity or topology changed while it was being observed")
     return {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "kind": "job-scout-runtime-snapshot",
         "capturedAt": utc_now(),
-        "root": str(root.absolute()),
-        "digest": aggregate.hexdigest(),
-        **counts,
+        "rootIdentity": root_identity,
+        "topology": topology,
+        "content": {
+            "digest": aggregate.hexdigest(),
+            **counts,
+        },
     }
+
+
+def validate_directory_identity(value: object, label: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValidationError(f"{label} must be an object")
+    if set(value) != {"path", "device", "inode", "mode", "uid", "gid"}:
+        raise ValidationError(f"{label} shape is invalid")
+    if not isinstance(value["path"], str) or not value["path"]:
+        raise ValidationError(f"{label} path is invalid")
+    if not isinstance(value["mode"], str) or re.fullmatch(r"[0-7]{4}", value["mode"]) is None:
+        raise ValidationError(f"{label} mode is invalid")
+    for field in ("device", "inode", "uid", "gid"):
+        if not isinstance(value[field], int) or isinstance(value[field], bool) or value[field] < 0:
+            raise ValidationError(f"{label} {field} is invalid")
+    return value
 
 
 def load_runtime_snapshot(path: Path) -> dict[str, Any]:
     snapshot = read_json(path, "runtime snapshot")
-    if snapshot.get("schemaVersion") != 1 or snapshot.get("kind") != "job-scout-runtime-snapshot":
+    if snapshot.get("schemaVersion") != 2 or snapshot.get("kind") != "job-scout-runtime-snapshot":
         raise ValidationError(f"unsupported runtime snapshot: {path}")
-    digest = snapshot.get("digest")
+    root_identity = validate_directory_identity(snapshot.get("rootIdentity"), "runtime root identity")
+    if not Path(root_identity["path"]).is_absolute():
+        raise ValidationError(f"runtime root identity path must be absolute: {path}")
+    topology = snapshot.get("topology")
+    if not isinstance(topology, list):
+        raise ValidationError(f"runtime snapshot topology must be a list: {path}")
+    validated_topology = [
+        validate_directory_identity(value, f"runtime topology[{index}]")
+        for index, value in enumerate(topology)
+    ]
+    if [value["path"] for value in validated_topology] != list(RUNTIME_TOPOLOGY_PATHS):
+        raise ValidationError(f"runtime snapshot required topology mismatch: {path}")
+    content = snapshot.get("content")
+    if not isinstance(content, dict):
+        raise ValidationError(f"runtime snapshot content observation must be an object: {path}")
+    digest = content.get("digest")
     if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
         raise ValidationError(f"invalid runtime snapshot digest: {path}")
     for field in ("entries", "files", "directories", "symlinks", "bytes"):
-        value = snapshot.get(field)
+        value = content.get(field)
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
             raise ValidationError(f"invalid runtime snapshot {field}: {path}")
-    if not isinstance(snapshot.get("root"), str) or not snapshot["root"]:
-        raise ValidationError(f"invalid runtime snapshot root: {path}")
     validate_timestamp(snapshot.get("capturedAt"), f"runtime snapshot capturedAt: {path}")
     return snapshot
 
 
-def assert_runtime_unchanged(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
-    compared_fields = ("root", "digest", "entries", "files", "directories", "symlinks", "bytes")
-    differences = [field for field in compared_fields if before.get(field) != after.get(field)]
-    if differences:
-        raise ValidationError(f"runtime changed across cutover evidence capture: {differences}")
+def assess_runtime_preservation(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
+    if before["rootIdentity"] != after["rootIdentity"]:
+        raise ValidationError("runtime root identity, mode, or ownership changed across cutover")
+    if before["topology"] != after["topology"]:
+        raise ValidationError("runtime topology identity, mode, or ownership changed across cutover")
     return {
-        "root": before["root"],
-        "beforeCapturedAt": before.get("capturedAt"),
-        "afterCapturedAt": after.get("capturedAt"),
-        "digest": before["digest"],
-        "entries": before["entries"],
-        "files": before["files"],
-        "directories": before["directories"],
-        "symlinks": before["symlinks"],
-        "bytes": before["bytes"],
-        "unchanged": True,
+        "rootIdentity": deepcopy(before["rootIdentity"]),
+        "topology": deepcopy(before["topology"]),
+        "beforeObservation": {
+            "capturedAt": before["capturedAt"],
+            **deepcopy(before["content"]),
+        },
+        "afterObservation": {
+            "capturedAt": after["capturedAt"],
+            **deepcopy(after["content"]),
+        },
+        "contentChanged": before["content"] != after["content"],
+        "preserved": True,
     }
 
 
@@ -646,6 +723,68 @@ def assert_runtime_observation_window(
         raise ValidationError("runtime before/after capture timestamps must be strictly ordered")
     if not (before_time <= deployed <= after_time):
         raise ValidationError("runtime captures must bracket the declared deployment time")
+
+
+def require_path_outside_runtime(path: Path, runtime_root: str, label: str) -> None:
+    root = Path(runtime_root).resolve(strict=False)
+    candidate = path.resolve(strict=False)
+    if candidate == root or root in candidate.parents:
+        raise ValidationError(f"{label} must be outside the runtime root: {path}")
+
+
+def validate_health_evidence(
+    evidence: object,
+    deployment_time: str,
+    require_all_passed: bool,
+) -> dict[str, Any]:
+    if not isinstance(evidence, dict):
+        raise ValidationError("production health evidence must be an object")
+    if (
+        type(evidence.get("schemaVersion")) is not int
+        or evidence["schemaVersion"] != 1
+        or evidence.get("kind") != "job-scout-production-health"
+    ):
+        raise ValidationError("production health evidence schema is invalid")
+    captured_at = validate_timestamp(evidence.get("capturedAt"), "health evidence capturedAt")
+    deployed = parse_timestamp(deployment_time, "deployment time")
+    captured = parse_timestamp(captured_at, "health evidence capturedAt")
+    if captured < deployed:
+        raise ValidationError("production health evidence must be captured after deployment")
+    checks = evidence.get("checks")
+    if not isinstance(checks, dict) or set(checks) != set(REQUIRED_PRODUCTION_HEALTH_CHECKS):
+        raise ValidationError(
+            "production health evidence must contain exactly gateway, browser, channel, runtime, publicStatus, and r2CvAccess"
+        )
+    failed: list[str] = []
+    for name in REQUIRED_PRODUCTION_HEALTH_CHECKS:
+        check = checks[name]
+        if not isinstance(check, dict) or set(check) != {"passed", "observedAt", "summary"}:
+            raise ValidationError(f"production health check shape is invalid: {name}")
+        if not isinstance(check["passed"], bool):
+            raise ValidationError(f"production health check passed flag is invalid: {name}")
+        observed_at = validate_timestamp(check["observedAt"], f"production health check observedAt: {name}")
+        observed = parse_timestamp(observed_at, f"production health check observedAt: {name}")
+        if observed < deployed or observed > captured:
+            raise ValidationError(f"production health check is outside the post-deployment evidence window: {name}")
+        if not isinstance(check["summary"], str) or not check["summary"].strip():
+            raise ValidationError(f"production health check summary is empty: {name}")
+        if not check["passed"]:
+            failed.append(name)
+    if require_all_passed and failed:
+        raise ValidationError(f"production health checks did not all pass: {failed}")
+    return evidence
+
+
+def load_health_evidence(
+    path: Path,
+    deployment_time: str,
+    require_all_passed: bool,
+) -> dict[str, Any]:
+    return validate_health_evidence(
+        read_json(path, "production health evidence"),
+        deployment_time,
+        require_all_passed,
+    )
 
 
 def normalize_crons(snapshot_path: Path) -> list[dict[str, Any]]:
@@ -818,8 +957,18 @@ def record_evidence(args: argparse.Namespace) -> dict[str, Any]:
     after = load_runtime_snapshot(args.runtime_after)
     deployment_time = validate_timestamp(args.deployment_time, "deployment time")
     assert_runtime_observation_window(before, after, deployment_time)
-    runtime = assert_runtime_unchanged(before, after)
+    runtime = assess_runtime_preservation(before, after)
     crons = normalize_crons(args.cron_snapshot)
+    health_path = getattr(args, "health_evidence", None)
+    if args.deployment_status == "production-success" and health_path is None:
+        raise ValidationError("production-success requires structured production health evidence")
+    health = None
+    if health_path is not None:
+        health = load_health_evidence(
+            health_path,
+            deployment_time,
+            require_all_passed=args.deployment_status == "production-success",
+        )
 
     genaebot_sha = validate_sha(args.genaebot_sha, "genaebot SHA")
     job_scout_sha = validate_sha(args.job_scout_sha, "Job Scout SHA")
@@ -846,6 +995,11 @@ def record_evidence(args: argparse.Namespace) -> dict[str, Any]:
         raise ValidationError("correlation ID must be between 1 and 128 characters")
 
     records_dir = args.records_dir
+    require_path_outside_runtime(
+        records_dir,
+        str(runtime["rootIdentity"]["path"]),
+        "rollback records directory",
+    )
     require_records_directory(records_dir)
     catalog = load_catalog(records_dir)
     sequence = len(catalog["records"]) + 1
@@ -868,6 +1022,7 @@ def record_evidence(args: argparse.Namespace) -> dict[str, Any]:
         "parity": parity,
         "cronSchedules": crons,
         "runtime": runtime,
+        "healthEvidence": health,
         "rollback": {
             "releaseManifest": f"{record_id}/release-manifest.json",
             "overlay": f"{record_id}/overlay",
@@ -920,6 +1075,31 @@ def catalog_path(records_dir: Path, raw: object, label: str) -> Path:
     return current
 
 
+def load_cataloged_evidence(
+    records_dir: Path,
+    entry: dict[str, Any],
+    label: str,
+) -> dict[str, Any]:
+    evidence_path = catalog_path(records_dir, entry.get("evidencePath"), f"{label} evidence")
+    if sha256_file(evidence_path) != entry.get("evidenceSha256"):
+        raise ValidationError(f"{label} evidence differs from its catalog record")
+    evidence = read_json(evidence_path, f"{label} cutover evidence")
+    if evidence.get("recordId") != entry.get("recordId"):
+        raise ValidationError(f"{label} evidence record ID differs from its catalog record")
+    return evidence
+
+
+def require_recorded_production_health(evidence: dict[str, Any], label: str) -> None:
+    if evidence.get("deploymentStatus") != "production-success":
+        raise ValidationError(f"{label} evidence is not a successful production deployment")
+    composite = evidence.get("compositeRevision")
+    if not isinstance(composite, dict):
+        raise ValidationError(f"{label} evidence composite revision is invalid")
+    deployment_time = composite.get("deploymentTime")
+    validate_timestamp(deployment_time, f"{label} evidence deployment time")
+    validate_health_evidence(evidence.get("healthEvidence"), deployment_time, True)
+
+
 def validate_rollback(args: argparse.Namespace) -> dict[str, Any]:
     records_dir = args.records_dir
     require_plain_directory(records_dir, "rollback records directory")
@@ -930,6 +1110,8 @@ def validate_rollback(args: argparse.Namespace) -> dict[str, Any]:
         raise ValidationError(f"current record is not in the rollback catalog: {args.current_record_id}")
     if current.get("deploymentStatus") != "production-success":
         raise ValidationError("current rollback record is not a successful production deployment")
+    current_evidence = load_cataloged_evidence(records_dir, current, "current deployment")
+    require_recorded_production_health(current_evidence, "current deployment")
 
     supplied_manifest = args.manifest
     if not supplied_manifest.is_absolute():
@@ -960,10 +1142,8 @@ def validate_rollback(args: argparse.Namespace) -> dict[str, Any]:
     if sha256_file(archived_manifest) != candidate["releaseManifestSha256"]:
         raise ValidationError("rollback overlay manifest differs from its recorded release manifest")
 
-    evidence_path = catalog_path(records_dir, candidate.get("evidencePath"), "evidence")
-    if sha256_file(evidence_path) != candidate["evidenceSha256"]:
-        raise ValidationError("rollback evidence differs from its catalog record")
-    evidence = read_json(evidence_path, "cutover evidence")
+    evidence = load_cataloged_evidence(records_dir, candidate, "rollback")
+    require_recorded_production_health(evidence, "rollback")
     selection = {
         "schemaVersion": 1,
         "kind": "job-scout-rollback-selection",
@@ -1013,6 +1193,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     record_parser.add_argument("--runtime-before", type=Path, required=True)
     record_parser.add_argument("--runtime-after", type=Path, required=True)
     record_parser.add_argument("--cron-snapshot", type=Path, required=True)
+    record_parser.add_argument("--health-evidence", type=Path)
     record_parser.add_argument("--records-dir", type=Path, required=True)
     record_parser.add_argument("--genaebot-sha", required=True)
     record_parser.add_argument("--job-scout-sha", required=True)
@@ -1046,6 +1227,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "compare":
         result = compare_overlay(args.bundle_root, args.curated_root, args.manifest, args.allowlist)
     elif args.command == "snapshot-runtime":
+        require_plain_directory(args.root, "runtime root")
+        require_path_outside_runtime(args.output, str(args.root.absolute()), "runtime snapshot output")
         result = runtime_snapshot(args.root)
         write_json_atomic(args.output, result)
         print(f"Runtime snapshot written to {args.output}")
@@ -1058,6 +1241,12 @@ def main(argv: list[str] | None = None) -> int:
         raise AssertionError(f"unsupported command: {args.command}")
 
     if getattr(args, "output", None):
+        if args.command == "validate-rollback":
+            require_path_outside_runtime(
+                args.output,
+                str(result["runtime"]["rootIdentity"]["path"]),
+                "rollback selection output",
+            )
         write_json_atomic(args.output, result)
         print(f"{result['kind']} written to {args.output}")
     else:

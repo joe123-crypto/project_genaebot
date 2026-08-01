@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from copy import deepcopy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -14,10 +15,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from job_scout_cutover import (  # noqa: E402
     EXPECTED_CRONS,
+    REQUIRED_PRODUCTION_HEALTH_CHECKS,
     ValidationError,
-    assert_runtime_unchanged,
+    assess_runtime_preservation,
     compare_overlay,
     file_record,
+    main,
     record_evidence,
     reject_runtime_path,
     runtime_snapshot,
@@ -177,6 +180,29 @@ def cron_snapshot(path: Path) -> None:
     path.write_text(json.dumps({"jobs": jobs}) + "\n", encoding="utf-8")
 
 
+def health_snapshot(path: Path, failed_check: str | None = None) -> None:
+    checks = {}
+    for name in REQUIRED_PRODUCTION_HEALTH_CHECKS:
+        checks[name] = {
+            "passed": name != failed_check,
+            "observedAt": "2026-08-01T10:01:30Z",
+            "summary": f"{name} preview check completed",
+        }
+    path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "job-scout-production-health",
+                "capturedAt": "2026-08-01T10:02:00Z",
+                "checks": checks,
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 class OverlayParityTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -329,6 +355,7 @@ class EvidenceAndRollbackTests(unittest.TestCase):
         self.fixture = Fixture(self.root)
         self.runtime = self.root / "runtime-root"
         (self.runtime / "job-scout-channel/auth").mkdir(parents=True)
+        (self.runtime / "job-scout-channel/media").mkdir(parents=True)
         (self.runtime / "job-scout/state.db").parent.mkdir(parents=True)
         (self.runtime / "job-scout/state.db").write_bytes(b"runtime-state")
         (self.runtime / "job-scout-channel/auth/creds.json").write_bytes(b"runtime-auth")
@@ -342,6 +369,8 @@ class EvidenceAndRollbackTests(unittest.TestCase):
         write_json_atomic(self.after_path, after)
         self.crons = self.root / "crons.json"
         cron_snapshot(self.crons)
+        self.health = self.root / "production-health.json"
+        health_snapshot(self.health)
         self.records = self.root / "records"
 
     def tearDown(self) -> None:
@@ -356,6 +385,7 @@ class EvidenceAndRollbackTests(unittest.TestCase):
             runtime_before=self.before_path,
             runtime_after=self.after_path,
             cron_snapshot=self.crons,
+            health_evidence=self.health if status == "production-success" else None,
             records_dir=self.records,
             genaebot_sha="c" * 40,
             job_scout_sha=commit,
@@ -369,17 +399,43 @@ class EvidenceAndRollbackTests(unittest.TestCase):
             deployment_status=status,
         )
 
-    def test_runtime_snapshot_detects_change(self) -> None:
+    def test_runtime_content_drift_is_observed_when_identity_is_stable(self) -> None:
         before = runtime_snapshot(self.runtime)
         (self.runtime / "job-scout/state.db").write_bytes(b"changed")
+        (self.runtime / "job-scout/new-application-state.json").write_text("{}\n", encoding="utf-8")
         after = runtime_snapshot(self.runtime)
-        with self.assertRaisesRegex(ValidationError, "runtime changed"):
-            assert_runtime_unchanged(before, after)
+        evidence = assess_runtime_preservation(before, after)
+        self.assertTrue(evidence["preserved"])
+        self.assertTrue(evidence["contentChanged"])
+        self.assertNotEqual(
+            evidence["beforeObservation"]["digest"],
+            evidence["afterObservation"]["digest"],
+        )
+
+    def test_runtime_root_replacement_is_rejected(self) -> None:
+        before = runtime_snapshot(self.runtime)
+        old_runtime = self.root / "runtime-root-old"
+        self.runtime.rename(old_runtime)
+        (self.runtime / "job-scout").mkdir(parents=True)
+        (self.runtime / "job-scout-channel/auth").mkdir(parents=True)
+        (self.runtime / "job-scout-channel/media").mkdir(parents=True)
+        after = runtime_snapshot(self.runtime)
+        with self.assertRaisesRegex(ValidationError, "runtime root identity"):
+            assess_runtime_preservation(before, after)
+
+    def test_runtime_required_topology_replacement_is_rejected(self) -> None:
+        before = runtime_snapshot(self.runtime)
+        old_job_scout = self.runtime / "job-scout-old"
+        (self.runtime / "job-scout").rename(old_job_scout)
+        (self.runtime / "job-scout").mkdir()
+        after = runtime_snapshot(self.runtime)
+        with self.assertRaisesRegex(ValidationError, "runtime topology identity"):
+            assess_runtime_preservation(before, after)
 
     def test_runtime_snapshot_digest_is_deterministic(self) -> None:
         first = runtime_snapshot(self.runtime)
         second = runtime_snapshot(self.runtime)
-        self.assertEqual(first["digest"], second["digest"])
+        self.assertEqual(first["content"]["digest"], second["content"]["digest"])
 
     def test_record_captures_composite_five_crons_and_preserves_runtime(self) -> None:
         state_before = (self.runtime / "job-scout/state.db").read_bytes()
@@ -389,9 +445,59 @@ class EvidenceAndRollbackTests(unittest.TestCase):
         self.assertEqual(evidence["compositeRevision"]["browserDigest"], DIGEST_B)
         self.assertEqual(len(evidence["cronSchedules"]), 5)
         self.assertTrue(all(job["enabled"] for job in evidence["cronSchedules"]))
-        self.assertTrue(evidence["runtime"]["unchanged"])
+        self.assertTrue(evidence["runtime"]["preserved"])
+        self.assertFalse(evidence["runtime"]["contentChanged"])
+        self.assertTrue(all(
+            check["passed"] for check in evidence["healthEvidence"]["checks"].values()
+        ))
         self.assertEqual((self.runtime / "job-scout/state.db").read_bytes(), state_before)
         self.assertTrue((self.records / "record-000001-aaaaaaaaaaaa/overlay").is_dir())
+
+    def test_record_accepts_live_content_drift_with_stable_runtime_identity(self) -> None:
+        before = runtime_snapshot(self.runtime)
+        before["capturedAt"] = "2026-08-01T09:59:00Z"
+        (self.runtime / "job-scout/state.db").write_bytes(b"legitimate-live-update")
+        after = runtime_snapshot(self.runtime)
+        after["capturedAt"] = "2026-08-01T10:01:00Z"
+        write_json_atomic(self.before_path, before)
+        write_json_atomic(self.after_path, after)
+        evidence = record_evidence(self.record_args(COMMIT_A))
+        self.assertTrue(evidence["runtime"]["preserved"])
+        self.assertTrue(evidence["runtime"]["contentChanged"])
+
+    def test_production_success_requires_all_structured_health_evidence(self) -> None:
+        args = self.record_args(COMMIT_A)
+        args.health_evidence = None
+        with self.assertRaisesRegex(ValidationError, "requires structured production health"):
+            record_evidence(args)
+
+        health_snapshot(self.health, failed_check="r2CvAccess")
+        args.health_evidence = self.health
+        with self.assertRaisesRegex(ValidationError, "did not all pass.*r2CvAccess"):
+            record_evidence(args)
+
+    def test_local_rehearsal_may_omit_health_evidence(self) -> None:
+        evidence = record_evidence(self.record_args(COMMIT_A, "local-rehearsal"))
+        self.assertIsNone(evidence["healthEvidence"])
+
+    def test_record_refuses_to_write_catalog_under_runtime(self) -> None:
+        args = self.record_args(COMMIT_A)
+        args.records_dir = self.runtime / "rollback-records"
+        with self.assertRaisesRegex(ValidationError, "must be outside the runtime root"):
+            record_evidence(args)
+        self.assertFalse(args.records_dir.exists())
+
+    def test_snapshot_command_refuses_output_under_runtime(self) -> None:
+        output = self.runtime / "snapshot.json"
+        with self.assertRaisesRegex(ValidationError, "must be outside the runtime root"):
+            main([
+                "snapshot-runtime",
+                "--root",
+                str(self.runtime),
+                "--output",
+                str(output),
+            ])
+        self.assertFalse(output.exists())
 
     def test_record_rejects_manifest_image_digest_mismatch(self) -> None:
         args = self.record_args(COMMIT_A)
@@ -472,6 +578,29 @@ class EvidenceAndRollbackTests(unittest.TestCase):
 
         args.manifest = self.records / second["recordId"] / "release-manifest.json"
         with self.assertRaisesRegex(ValidationError, "must precede"):
+            validate_rollback(args)
+
+    def test_rollback_rejects_legacy_production_record_without_health_evidence(self) -> None:
+        first = record_evidence(self.record_args(COMMIT_A))
+        self.fixture.write_manifest(COMMIT_B)
+        second = record_evidence(self.record_args(COMMIT_B))
+        evidence_path = self.records / first["recordId"] / "evidence.json"
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+        evidence["healthEvidence"] = None
+        write_json_atomic(evidence_path, evidence)
+        catalog_path = self.records / "catalog.json"
+        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+        catalog["records"][0]["evidenceSha256"] = hashlib.sha256(
+            evidence_path.read_bytes()
+        ).hexdigest()
+        write_json_atomic(catalog_path, catalog)
+        args = argparse.Namespace(
+            records_dir=self.records,
+            manifest=self.records / first["recordId"] / "release-manifest.json",
+            current_record_id=second["recordId"],
+            allowlist=self.fixture.allowlist,
+        )
+        with self.assertRaisesRegex(ValidationError, "health evidence must be an object"):
             validate_rollback(args)
 
     def test_local_rehearsal_record_is_not_rollback_eligible(self) -> None:

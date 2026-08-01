@@ -65,12 +65,22 @@ python3 deploy/parity/job_scout_cutover.py snapshot-runtime \
   --output "$EVIDENCE_DIR/runtime-after.json"
 ```
 
-The command only reads the tree. Evidence stores one aggregate digest plus
-counts and total bytes, not runtime paths or file contents. Recording fails if
-the before and after snapshots differ. The two inputs must be distinct files,
-their `capturedAt` timestamps must be strictly ordered, and the declared
-deployment time must fall between them; copying one snapshot cannot establish a
-cutover observation.
+The command only reads the tree. Each snapshot records the runtime root and the
+required `job-scout`, `job-scout-channel`, listener auth, and listener media
+directory identities: path, device, inode, mode, UID, and GID. Those identities
+and ownership values must remain exact. Replacing, relocating, deleting,
+re-permissioning, or changing ownership of a required runtime directory fails.
+
+Content digest, entry/file/directory counts, and total bytes are stored as
+before/after observations. They may differ because SQLite, listener health, and
+application state can legitimately advance while services remain live. No
+runtime file names or contents enter evidence. The two snapshot inputs must be
+distinct files, their `capturedAt` timestamps must be strictly ordered, and the
+declared deployment time must fall between them.
+
+Snapshot output, rollback records, and rollback-selection output are rejected if
+placed below the recorded runtime root. The tooling has no operation that
+writes, moves, or removes runtime content.
 
 ## Composite release record
 
@@ -88,6 +98,7 @@ python3 deploy/parity/job_scout_cutover.py record \
   --runtime-before "$EVIDENCE_DIR/runtime-before.json" \
   --runtime-after "$EVIDENCE_DIR/runtime-after.json" \
   --cron-snapshot "$EVIDENCE_DIR/openclaw-crons.json" \
+  --health-evidence "$EVIDENCE_DIR/production-health.json" \
   --records-dir "$ROLLBACK_RECORDS" \
   --genaebot-sha "$GENAEBOT_SHA" \
   --job-scout-sha "$JOB_SCOUT_SHA" \
@@ -103,12 +114,34 @@ python3 deploy/parity/job_scout_cutover.py record \
 
 The composite record contains both repository SHAs, all three artifact digests,
 deployment time, both workflow run IDs, correlation ID, five exact cron objects,
-parity results, and the unchanged runtime fingerprint. Browser and listener
-digests must equal the structured manifest image digests.
+parity results, stable runtime identity/topology, before/after content
+observations, and health evidence. Browser and listener digests must equal the
+structured manifest image digests.
 
-Use `production-success` only after the artifact-backed deployment and all
-approved health checks have completed successfully. A `local-rehearsal` record
-is intentionally ineligible for rollback.
+`production-success` requires this exact health-evidence shape, with every check
+passing and observed after the declared deployment time:
+
+```json
+{
+  "schemaVersion": 1,
+  "kind": "job-scout-production-health",
+  "capturedAt": "2026-08-01T10:02:00Z",
+  "checks": {
+    "gateway": {"passed": true, "observedAt": "2026-08-01T10:01:00Z", "summary": "gateway healthy"},
+    "browser": {"passed": true, "observedAt": "2026-08-01T10:01:00Z", "summary": "browser ready"},
+    "channel": {"passed": true, "observedAt": "2026-08-01T10:01:00Z", "summary": "channel healthy"},
+    "runtime": {"passed": true, "observedAt": "2026-08-01T10:01:00Z", "summary": "runtime checks passed"},
+    "publicStatus": {"passed": true, "observedAt": "2026-08-01T10:01:00Z", "summary": "status/onboarding preview passed"},
+    "r2CvAccess": {"passed": true, "observedAt": "2026-08-01T10:01:00Z", "summary": "R2 CV access passed"}
+  }
+}
+```
+
+The check set is closed. Every entry requires a boolean `passed`, timezone-aware
+`observedAt`, and non-empty `summary`; observations must fall between deployment
+and `capturedAt`. A missing or failed check blocks rollback eligibility. A
+`local-rehearsal` record may omit health evidence and remains ineligible for
+rollback.
 
 ## Rollback selection
 
@@ -125,7 +158,9 @@ python3 deploy/parity/job_scout_cutover.py validate-rollback \
 The selected manifest must be the exact catalog path and hash of an earlier
 `production-success` record. A copied manifest, an arbitrary same-content file,
 a local rehearsal, the current record, a later record, a modified archived
-overlay, or modified evidence is rejected. The selection always carries
+overlay, modified evidence, or a legacy production record without passing
+health evidence is rejected. Health evidence is revalidated for both the current
+and selected records. The selection always carries
 `runtimePolicy: preserve`; a separate integrated deployment implementation must
 apply the recorded overlay and image digests without touching runtime.
 
@@ -165,7 +200,8 @@ The following remain hard gates and are not performed by this workstream branch:
 - publish and deploy the bootstrap artifact from the exact deployed source;
 - capture public status/onboarding preview, browser readiness, channel health,
   R2 CV accessibility, and all five live cron definitions;
-- prove one artifact-backed deployment and rollback while runtime is unchanged;
+- prove one artifact-backed deployment and rollback while runtime roots,
+  topology, mode, and ownership remain stable;
 - remove duplicate source and add the activation marker;
 - enable automatic `main` release deployment after all preceding gates pass.
 
