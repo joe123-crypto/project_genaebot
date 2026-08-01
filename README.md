@@ -166,7 +166,9 @@ sudo /usr/local/sbin/openclaw-prod-deploy "$GITHUB_WORKSPACE"
 The sudo rule is intentionally narrow: the runner user may run only that wrapper,
 not arbitrary root commands. The wrapper refuses to deploy anything except a clean
 checkout of `joe123-crypto/project_genaebot` on `main`, and it uses a lock so two
-deploys cannot overlap. Before dependency installation or deployment, the workflow
+deploys cannot overlap. Repository fetches and revision checks run as the checkout
+owner `joseph`, so both Actions' temporary credentials and Joseph's normal HTTPS
+credential helper work without giving GitHub credentials to root. Before dependency installation or deployment, the workflow
 and wrapper run `deploy/check-deploy-resources.sh`. The preflight requires at least
 1 GiB of immediately available memory and 6 GiB of combined available memory plus
 free swap, and reports the largest processes without changing production if the
@@ -194,8 +196,8 @@ on `main`; the revert passes through the same validation and deployment path.
 Manual fallback deploy for emergency/local use:
 
 ```bash
-cd /home/joseph/.openclaw
-sudo ./deploy/openclaw-deploy.sh
+cd /home/joseph/projects/genaebot
+sudo /usr/local/sbin/openclaw-prod-deploy "$PWD"
 ```
 
 Job Scout scheduler activation is deliberately separate from a normal gateway

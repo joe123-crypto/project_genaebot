@@ -155,6 +155,9 @@ class DeploymentContractTests(unittest.TestCase):
         wrapper = (ROOT / "deploy/github-actions/openclaw-prod-deploy").read_text(encoding="utf-8")
         self.assertIn('"$src/deploy/check-deploy-resources.sh"', wrapper)
         self.assertIn('--validated-head "$head_sha"', wrapper)
+        self.assertIn('repo_user="joseph"', wrapper)
+        self.assertIn('stat -c \'%u\' "$src"', wrapper)
+        self.assertIn('runuser -u "$repo_user" -- git', wrapper)
 
     def test_deploy_is_single_restart_and_records_success_last(self) -> None:
         deploy = DEPLOY.read_text(encoding="utf-8")
