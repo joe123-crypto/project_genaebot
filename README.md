@@ -166,7 +166,11 @@ sudo /usr/local/sbin/openclaw-prod-deploy "$GITHUB_WORKSPACE"
 The sudo rule is intentionally narrow: the runner user may run only that wrapper,
 not arbitrary root commands. The wrapper refuses to deploy anything except a clean
 checkout of `joe123-crypto/project_genaebot` on `main`, and it uses a lock so two
-deploys cannot overlap.
+deploys cannot overlap. Before dependency installation or deployment, the workflow
+and wrapper run `deploy/check-deploy-resources.sh`. The preflight requires at least
+1 GiB of immediately available memory and 6 GiB of combined available memory plus
+free swap, and reports the largest processes without changing production if the
+host is under pressure.
 
 Validate without deploying:
 
@@ -292,19 +296,26 @@ The deploy script used by both paths:
 - preserves the `live-source` root inode so Docker's read-only bind mount cannot
   become detached from the newly staged files
 - stamps `live-source` with `.OPENCLAW_GENERATED` and a source manifest
+- compares the staged-source and container-boundary digest with the last applied
+  digest; an unchanged deploy skips the Compose build and preserves the running
+  gateway process
 - excludes runtime files such as `state.json`, `pending-links.json`,
   `subscriptions.json`, `*.log`, caches, and bytecode, and removes stale
   excluded files from the existing generated mirror during restaging
 - syncs curated source into the live container (skipped when the container
   boundary is active — `workspace/` and agent-room docs then arrive via the
   read-only bind mounts instead)
-- applies `config/openclaw.template.json` to the container's live config
+- applies `config/openclaw.template.json` to the container's live config only when
+  deploy inputs changed
 - verifies the `main` and `public` agent definitions, their separate workspace
   paths, required context files, and the absence of public `MEMORY.md` and
   `COMMANDS.md`
-  with bounded retries while the recreated container stabilizes
-- restarts `openclaw-gateway-container.service`
-- runs the deployment health check
+  with bounded retries while a changed container stabilizes
+- reconciles `openclaw-gateway-container.service` without forcing container
+  recreation; unchanged inputs do not restart the gateway
+- installs and runs the source-controlled deployment health check; when Webetu is
+  disabled it does not contact the worker or Firestore, and quota exhaustion from
+  an enabled Webetu probe is an isolated warning rather than a gateway failure
 - waits for two consecutive authenticated gateway API status probes before any
   cron reconciliation, preventing transient WebSocket startup closures from
   interrupting deployment after a successful container restart
@@ -317,6 +328,8 @@ The deploy script used by both paths:
 - installs or reconciles the isolated `job-scout-approvals` worker, which checks
   every five minutes for dashboard-approved applications and processes them
   under the user's approval
+- writes `/home/joseph/openclaw-deploy/.last-successful-deploy.json` only after all
+  required readiness, health, and reconciliation steps finish successfully
 
 Host automation files:
 
@@ -324,10 +337,19 @@ Host automation files:
 .github/workflows/deploy-main.yml
 deploy/github-actions/openclaw-prod-deploy
 deploy/github-actions/register-openclaw-runner.sh
+deploy/github-actions/install-openclaw-runner-hardening.sh
+deploy/github-actions/ensure-openclaw-swap.sh
+deploy/systemd/actions-runner-openclaw-prod.override.conf
 /usr/local/sbin/openclaw-prod-deploy
 /etc/sudoers.d/openclaw-prod-deploy
+/swap-openclaw.img
 /home/joseph/actions-runner-openclaw-prod/
 ```
+
+The runner override restarts the service after failures and keeps OOM handling
+within its control group. `ensure-openclaw-swap.sh` provisions a dedicated,
+persistent 8 GiB swap file at the exact path above and refuses unexpected targets
+or sizes.
 
 If the runner ever needs to be registered again, get a fresh registration token
 from the GitHub repository settings and run:
