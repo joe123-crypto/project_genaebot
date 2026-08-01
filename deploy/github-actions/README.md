@@ -18,6 +18,38 @@ The workflow is:
 .github/workflows/deploy-main.yml
 ```
 
+## One-Time Receiver Bootstrap
+
+Before enabling `job_scout_release` dispatches, install the request-aware
+wrapper from a reviewed `main` checkout. The workflow never replaces its own
+privileged entrypoint:
+
+```bash
+cd /home/joseph/.openclaw
+sudo ./deploy/github-actions/install-openclaw-prod-deploy-wrapper.sh
+sudo cmp deploy/github-actions/openclaw-prod-deploy /usr/local/sbin/openclaw-prod-deploy
+```
+
+The installer requires the existing narrow sudoers file, validates it with
+`visudo`, rejects `NOPASSWD: ALL`, and installs the wrapper as
+`root:root 0755`. Future runner registration also runs this installer. The
+sudoers rule must authorize only `/usr/local/sbin/openclaw-prod-deploy` with
+arguments; it must not authorize direct access to deploy scripts, Python,
+Docker, or a shell.
+
+The same bootstrap creates, without truncating an existing file, the root-owned
+successful-release ledger:
+
+```text
+/var/lib/openclaw-deploy/job-scout-production-ledger.jsonl
+```
+
+It remains outside every application runtime directory and is `root:root 0600`.
+
+Grant `joe123-crypto/project_genaebot` read access to the private Job Scout GHCR
+packages. The receiver uses only its read-scoped `GITHUB_TOKEN` for package
+pulls.
+
 ## Activate The Runner
 
 Get a short-lived runner registration token from:
@@ -65,10 +97,53 @@ sets are audited. The self-hosted deploy checkout installs the same locked
 dependencies before its mandatory validation pass. The production Job Scout
 browser image is built when one of its inputs changes.
 
-The deploy job has read-only repository permissions and runs only for a `main`
-push after every hosted job succeeds. Actions are pinned to commit revisions;
-containerized validation tools are pinned to versions. A successful deployment
-records the exact production commit in the workflow summary.
+The ordinary deploy job has read-only repository permissions and runs only for
+a `main` push after every hosted job succeeds. Job Scout releases additionally
+require read-only Actions and Packages permissions. Actions are pinned to commit
+revisions; containerized validation tools are pinned to versions.
+
+## Job Scout Release Receiver
+
+The receiver accepts only `job_scout_release`. Its payload has exactly these
+string fields:
+
+```text
+jobScoutSha, bundleDigest, browserDigest, listenerDigest,
+manifestHash, sourceRunId, correlationId
+```
+
+The three artifact values must be distinct lowercase `sha256:` digests. Mutable
+tags and caller-supplied registry names are rejected; references are assembled
+under `ghcr.io/joe123-crypto/genaie-job-scout`. A hosted job pulls all three by
+digest, verifies OCI source/revision/artifact labels, and safely extracts the
+non-running bundle without starting it. It binds the canonical manifest
+repository, commit, worker references, and raw-byte SHA-256 to the payload, then
+runs the WS4 command:
+
+```bash
+python3 deploy/job_scout_consumer.py validate "$BUNDLE_DIR"
+```
+
+Only the resulting same-run Actions artifact can reach the self-hosted job. The
+self-hosted job verifies the hosted candidate tar SHA-256, safely extracts it
+to preserve declared executable modes, recomputes the request hash, and invokes
+the installed wrapper
+with the checkout, request, request hash, and paired bundle. The wrapper checks
+paths, ownership, permissions, symlinks, hashes, receiver SHA, manifest binding,
+and the WS4 consumer again under the host-wide lock. A rollback must also match
+the Job Scout SHA, manifest hash, and all three artifact digests in an existing
+hash-chained host ledger entry. The wrapper appends a new entry only after the
+deployment and health path succeeds. It forwards
+`JOB_SCOUT_BUNDLE_DIR` internally; the workflow does not rely on `sudo`
+preserving environment variables.
+
+Successful deploys publish a 90-day `job-scout-production-<manifest-hash>`
+ledger artifact containing the exact manifest and normalized request. Manual
+rollback accepts only that 64-character manifest hash. The hosted job must find
+an unexpired ledger from a successful `main` workflow run and repull all three
+immutable artifacts. The UI has no bundle or worker digest inputs.
+The hosted ledger is a discovery mechanism; it cannot authorize a privileged
+rollback when the matching successful release is absent from the host ledger.
 
 Before dependency installation and again before production mutation, the host
 must have at least 1 GiB of `MemAvailable` and 6 GiB of combined available
@@ -89,6 +164,14 @@ self-hosted job runs:
 
 ```bash
 sudo /usr/local/sbin/openclaw-prod-deploy "$GITHUB_WORKSPACE"
+```
+
+For a hosted-validated Job Scout release, the workflow uses the constrained
+request form:
+
+```bash
+sudo /usr/local/sbin/openclaw-prod-deploy "$GITHUB_WORKSPACE" \
+  --job-scout-request "$REQUEST_FILE" "$REQUEST_SHA256" "$BUNDLE_DIR"
 ```
 
 The wrapper refuses dirty checkouts, unexpected remotes, stale commits, and

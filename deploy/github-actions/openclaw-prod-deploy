@@ -4,8 +4,11 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage: openclaw-prod-deploy /path/to/github-actions/checkout
+       openclaw-prod-deploy /path/to/github-actions/checkout \
+         --job-scout-request REQUEST_FILE REQUEST_SHA256 BUNDLE_DIR
 
 Deploys the checked-out main branch to the local OpenClaw production container.
+The optional request form applies a hosted-validated Job Scout source overlay.
 This wrapper is intended to be installed root-owned at:
   /usr/local/sbin/openclaw-prod-deploy
 EOF
@@ -25,15 +28,25 @@ if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
   exit 0
 fi
 
-if [ "$#" -ne 1 ]; then
+if [ "$#" -ne 1 ] && [ "$#" -ne 5 ]; then
   usage >&2
   exit 2
 fi
 
 src="${1%/}"
+request_file=""
+request_sha256=""
+bundle_dir=""
+if [ "$#" -eq 5 ]; then
+  [ "$2" = "--job-scout-request" ] || die "unknown deployment option: $2"
+  request_file="$3"
+  request_sha256="$4"
+  bundle_dir="$5"
+fi
 repo_slug="joe123-crypto/project_genaebot"
 service_name="${OPENCLAW_CONTAINER_SERVICE:-openclaw-gateway-container.service}"
 lock_file="/var/lock/openclaw-prod-deploy.lock"
+job_scout_ledger="/var/lib/openclaw-deploy/job-scout-production-ledger.jsonl"
 
 [ -d "$src/.git" ] || die "$src is not a Git checkout"
 [ -x "$src/deploy/openclaw-deploy.sh" ] || die "missing deploy/openclaw-deploy.sh in $src"
@@ -67,7 +80,7 @@ if crontab -l 2>/dev/null | grep -Fq '/home/joseph/.openclaw/gitclaw/auto_backup
   die "GitClaw autocommit cron entry is still active"
 fi
 
-for required in git node python3 bash rsync systemctl flock; do
+for required in git node python3 bash rsync systemctl flock realpath sha256sum stat find; do
   command -v "$required" >/dev/null 2>&1 || die "missing required command: $required"
 done
 
@@ -80,15 +93,78 @@ if ! flock -n 9; then
   die "another OpenClaw production deploy is already running"
 fi
 
+validate_job_scout_request() {
+  local request_root checkout_uid unexpected actual_hash bad_path
+
+  [[ "$request_sha256" =~ ^[0-9a-f]{64}$ ]] || die "invalid Job Scout request SHA-256"
+  request_file="$(realpath -e -- "$request_file")" || die "could not resolve Job Scout request"
+  bundle_dir="$(realpath -e -- "$bundle_dir")" || die "could not resolve Job Scout bundle"
+  [ -f "$request_file" ] && [ ! -L "$request_file" ] || die "Job Scout request is not a regular file"
+  [ -d "$bundle_dir" ] && [ ! -L "$bundle_dir" ] || die "Job Scout bundle is not a directory"
+  request_root="$(dirname "$request_file")"
+  [ "$(basename "$request_file")" = "job-scout-deploy-request.json" ] \
+    || die "unexpected Job Scout request filename"
+  [ "$bundle_dir" = "$request_root/bundle" ] || die "Job Scout bundle is not paired with its request"
+  [ "$(stat -c %s "$request_file")" -le 16384 ] || die "Job Scout request file is too large"
+
+  unexpected="$(find "$request_root" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)"
+  [ "$unexpected" = $'bundle\njob-scout-deploy-request.json' ] \
+    || die "Job Scout request directory contains unexpected entries"
+  [ -z "$(find "$request_root" -xdev -type l -print -quit)" ] \
+    || die "Job Scout request directory contains a symlink"
+  checkout_uid="$(stat -c %u "$src")"
+  bad_path="$(find "$request_root" -xdev ! -uid "$checkout_uid" -print -quit)"
+  [ -z "$bad_path" ] || die "Job Scout request path has an unexpected owner: $bad_path"
+  bad_path="$(find "$request_root" -xdev -perm /022 -print -quit)"
+  [ -z "$bad_path" ] || die "Job Scout request path is group/world writable: $bad_path"
+
+  actual_hash="$(sha256sum "$request_file" | awk '{print $1}')"
+  [ "$actual_hash" = "$request_sha256" ] || die "Job Scout request hash mismatch"
+  [ -f "$src/deploy/job_scout_release.py" ] || die "missing Job Scout release validator"
+  [ -f "$src/deploy/job_scout_consumer.py" ] || die "missing Job Scout bundle consumer"
+  [ -f "$job_scout_ledger" ] && [ ! -L "$job_scout_ledger" ] \
+    || die "root-owned Job Scout production ledger is missing"
+  [ "$(stat -c '%u:%g:%a' "$job_scout_ledger")" = "0:0:600" ] \
+    || die "Job Scout production ledger must be root:root 0600"
+  python3 "$src/deploy/job_scout_release.py" verify-request \
+    --request "$request_file" \
+    --request-sha256 "$request_sha256" \
+    --bundle "$bundle_dir" \
+    --genaebot-sha "$head_sha"
+  python3 "$src/deploy/job_scout_release.py" authorize-host-request \
+    --ledger "$job_scout_ledger" \
+    --request "$request_file"
+  python3 "$src/deploy/job_scout_consumer.py" validate "$bundle_dir"
+}
+
+if [ -n "$request_file" ]; then
+  validate_job_scout_request
+fi
+
 log "Deploying ${repo_slug}@${head_sha}"
 
 "$src/deploy/check-deploy-resources.sh"
 
-OPENCLAW_DIR="$src" \
-"$src/deploy/validate-openclaw-deploy.sh"
+deploy_env=(OPENCLAW_DIR="$src")
+if [ -n "$request_file" ]; then
+  deploy_env+=(
+    JOB_SCOUT_BUNDLE_DIR="$bundle_dir"
+    JOB_SCOUT_DEPLOY_REQUEST="$request_file"
+    JOB_SCOUT_DEPLOY_REQUEST_SHA256="$request_sha256"
+  )
+fi
 
-OPENCLAW_DIR="$src" \
-OPENCLAW_CONTAINER_SERVICE="$service_name" \
-"$src/deploy/openclaw-deploy.sh" --validated-head "$head_sha"
+env "${deploy_env[@]}" "$src/deploy/validate-openclaw-deploy.sh"
+
+env "${deploy_env[@]}" \
+  OPENCLAW_CONTAINER_SERVICE="$service_name" \
+  "$src/deploy/openclaw-deploy.sh" --validated-head "$head_sha"
+
+if [ -n "$request_file" ]; then
+  python3 "$src/deploy/job_scout_release.py" record-host-success \
+    --ledger "$job_scout_ledger" \
+    --request "$request_file" \
+    --request-sha256 "$request_sha256"
+fi
 
 log "Production deploy complete"

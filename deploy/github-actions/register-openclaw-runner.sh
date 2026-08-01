@@ -56,6 +56,7 @@ fi
 [ -x "$runner_dir/svc.sh" ] || die "runner config did not create svc.sh"
 ./svc.sh install "$runner_user"
 ./svc.sh start
+"$source_root/deploy/github-actions/install-openclaw-prod-deploy-wrapper.sh"
 OPENCLAW_RUNNER_DIR="$runner_dir" \
   "$source_root/deploy/github-actions/install-openclaw-runner-hardening.sh" --restart
 ./svc.sh status
