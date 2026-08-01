@@ -95,7 +95,9 @@ The wrapper refuses dirty checkouts, unexpected remotes, stale commits, and
 overlapping deploys. It requires the checkout to be owned by `joseph` and runs
 Git fetch/revision checks as that user, allowing an Actions-injected credential
 or Joseph's normal HTTPS credential helper to authenticate without exposing a
-GitHub credential to root. It validates the exact SHA once, reconciles changed
+GitHub credential to root. Root-run child checks receive an exact, command-scoped
+Git safe-directory value for that owner-checked checkout; neither user's global
+Git configuration is changed. It validates the exact SHA once, reconciles changed
 container inputs without force-recreating unchanged services, waits for two
 successful gateway API probes, then runs health and cron reconciliation.
 
