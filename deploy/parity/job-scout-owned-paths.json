@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "manifestContractCommit": "9459a9b",
+  "repository": "https://github.com/joe123-crypto/genaie-job-scout",
+  "protocolVersion": 1,
+  "overlayRoot": "workspace",
+  "trees": [
+    "workspace/job-scout"
+  ],
+  "files": [
+    "workspace/bin/job-scout",
+    "workspace/bin/job-scout-agent",
+    "workspace/bin/job-scout-channel-health",
+    "workspace/bin/job-scout-convert-pending",
+    "workspace/docs/job-scout-onboarding.md",
+    "workspace/skills/job-scout/SKILL.md"
+  ],
+  "requiredFiles": [
+    "workspace/docs/job-scout-onboarding.md",
+    "workspace/job-scout/channel-listener/listener.mjs",
+    "workspace/job-scout/channel-listener/package-lock.json",
+    "workspace/job-scout/channel-listener/package.json",
+    "workspace/job-scout/job_scout.py",
+    "workspace/job-scout/package-lock.json",
+    "workspace/job-scout/package.json",
+    "workspace/job-scout/web_apply_server.mjs",
+    "workspace/skills/job-scout/SKILL.md"
+  ],
+  "requiredLivePaths": [
+    "/home/joseph/.openclaw/workspace/bin/job-scout",
+    "/home/joseph/.openclaw/workspace/bin/job-scout-agent",
+    "/home/joseph/.openclaw/workspace/bin/job-scout-channel-health",
+    "/home/joseph/.openclaw/workspace/bin/job-scout-convert-pending"
+  ],
+  "sourceRemovalPaths": [
+    "deploy/job-scout-browser.Dockerfile",
+    "deploy/job-scout-channel-listener.Dockerfile",
+    "workspace/bin/job-scout",
+    "workspace/bin/job-scout-agent",
+    "workspace/bin/job-scout-channel-health",
+    "workspace/bin/job-scout-convert-pending",
+    "workspace/docs/job-scout-onboarding.md",
+    "workspace/job-scout",
+    "workspace/skills/job-scout"
+  ]
+}
