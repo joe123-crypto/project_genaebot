@@ -25,7 +25,50 @@ from .constants import (
   CV_URL_LOOKUP_RETRY_SECONDS,
   OPENCLAW_BIN_FALLBACKS,
 )
+from .textutil import public_text
 from .util import normalize_phone, phone_hash, utc_now
+
+
+SAFE_READ_ATTEMPTS = 3
+SAFE_READ_RETRY_SECONDS = 1
+TRANSIENT_HTTP_STATUSES = frozenset({429, 500, 502, 503, 504})
+
+
+class JobScoutApiError(RuntimeError):
+  """Actionable, sanitized failure from the Agent Genaie internal API."""
+
+  def __init__(self, message: str, *, status_code: int | None = None) -> None:
+    super().__init__(message)
+    self.status_code = status_code
+
+
+def _http_error_message(status_code: int, body: str) -> str:
+  detail: object = body
+  try:
+    parsed = json.loads(body) if body else None
+  except json.JSONDecodeError:
+    parsed = None
+  if isinstance(parsed, dict):
+    detail = parsed.get("error") or parsed.get("message") or ""
+  safe_detail = public_text(detail, 240)
+  suffix = f": {safe_detail}" if safe_detail else ""
+  return f"Agent Genaie Job Scout API failed with HTTP {status_code}{suffix}"
+
+
+def _read_http_error_body(error: urllib.error.HTTPError) -> str:
+  try:
+    raw = error.read()
+  except (AttributeError, OSError):
+    return ""
+  if isinstance(raw, bytes):
+    return raw.decode("utf-8", errors="replace")
+  return str(raw or "")
+
+
+def _network_error_message(error: BaseException) -> str:
+  detail = public_text(getattr(error, "reason", error), 240)
+  suffix = f": {detail}" if detail else ""
+  return f"Could not reach Agent Genaie Job Scout API{suffix}"
 
 
 def resolve_openclaw_bin(fallbacks: tuple[Path, ...] = OPENCLAW_BIN_FALLBACKS) -> Path:
@@ -60,27 +103,41 @@ def request_json(method: str, url: str, payload: dict | None = None) -> dict:
   key = api_key()
   if not key:
     raise SystemExit("Missing AGENT_GENAI_INTERNAL_API_KEY.")
+  normalized_method = str(method or "GET").upper()
   data = json.dumps(payload or {}).encode("utf-8") if payload is not None else None
   request = urllib.request.Request(
     url,
     data=data,
-    method=method,
+    method=normalized_method,
     headers={
       "Authorization": f"Bearer {key}",
       "Content-Type": "application/json",
     },
   )
-  try:
-    with urllib.request.urlopen(request, timeout=45) as response:
-      body = response.read().decode("utf-8")
-      return json.loads(body) if body else {}
-  except urllib.error.HTTPError as err:
-    body = err.read().decode("utf-8", errors="replace")
-    print(f"Agent Genaie Job Scout API failed with HTTP {err.code}: {body}", file=sys.stderr)
-    raise SystemExit(1) from err
-  except urllib.error.URLError as err:
-    print(f"Could not reach Agent Genaie Job Scout API: {err}", file=sys.stderr)
-    raise SystemExit(1) from err
+  attempts = SAFE_READ_ATTEMPTS if normalized_method == "GET" else 1
+  for attempt in range(attempts):
+    try:
+      with urllib.request.urlopen(request, timeout=45) as response:
+        body = response.read().decode("utf-8")
+        return json.loads(body) if body else {}
+    except urllib.error.HTTPError as err:
+      message = _http_error_message(err.code, _read_http_error_body(err))
+      should_retry = normalized_method == "GET" and err.code in TRANSIENT_HTTP_STATUSES and attempt + 1 < attempts
+      if should_retry:
+        print(f"{message}; retrying safe read ({attempt + 2}/{attempts})", file=sys.stderr)
+        time.sleep(SAFE_READ_RETRY_SECONDS * (attempt + 1))
+        continue
+      print(message, file=sys.stderr)
+      raise JobScoutApiError(message, status_code=err.code) from err
+    except (urllib.error.URLError, TimeoutError, OSError) as err:
+      message = _network_error_message(err)
+      if normalized_method == "GET" and attempt + 1 < attempts:
+        print(f"{message}; retrying safe read ({attempt + 2}/{attempts})", file=sys.stderr)
+        time.sleep(SAFE_READ_RETRY_SECONDS * (attempt + 1))
+        continue
+      print(message, file=sys.stderr)
+      raise JobScoutApiError(message) from err
+  raise AssertionError("Agent Genaie API retry loop ended unexpectedly")
 
 
 def request_multipart(url: str, fields: dict[str, str], file_field: str, file_path: Path, filename: str, content_type: str) -> dict:
@@ -115,12 +172,13 @@ def request_multipart(url: str, fields: dict[str, str], file_field: str, file_pa
       raw = response.read().decode("utf-8")
       return json.loads(raw) if raw else {}
   except urllib.error.HTTPError as err:
-    raw = err.read().decode("utf-8", errors="replace")
-    print(f"Agent Genaie Job Scout API failed with HTTP {err.code}: {raw}", file=sys.stderr)
-    raise SystemExit(1) from err
-  except urllib.error.URLError as err:
-    print(f"Could not reach Agent Genaie Job Scout API: {err}", file=sys.stderr)
-    raise SystemExit(1) from err
+    message = _http_error_message(err.code, _read_http_error_body(err))
+    print(message, file=sys.stderr)
+    raise SystemExit(message) from err
+  except (urllib.error.URLError, TimeoutError, OSError) as err:
+    message = _network_error_message(err)
+    print(message, file=sys.stderr)
+    raise SystemExit(message) from err
 
 
 def safe_cv_suffix(path: Path) -> str:
@@ -270,22 +328,24 @@ def upload_application_artifact(
 
 
 def cv_object_available(user_id: str) -> bool:
-  """Non-fatal readiness probe: does the user's CV actually exist in R2?
+  """Readiness probe: does the user's CV actually exist in R2?
 
   The GET endpoint returns 404 when there is no cvFileRef or the object is
-  missing, so a 200 with a URL means the CV is truly downloadable.
+  missing, so a 200 with a URL means the CV is truly downloadable. Transient
+  service failures are retried and then propagated so they are not mislabeled
+  as a missing user CV.
   """
   user = str(user_id or "").strip()
   key = api_key()
   if not user or not key:
     return False
   url = endpoint(f"/internal/job-scout/cv?{urllib.parse.urlencode({'userId': user, 'format': 'html'})}")
-  request = urllib.request.Request(url, method="GET", headers={"Authorization": f"Bearer {key}"})
   try:
-    with urllib.request.urlopen(request, timeout=30) as response:
-      data = json.loads(response.read().decode("utf-8") or "{}")
-  except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
-    return False
+    data = request_json("GET", url)
+  except JobScoutApiError as err:
+    if err.status_code == 404:
+      return False
+    raise
   return bool(str(data.get("url") or "").strip())
 
 

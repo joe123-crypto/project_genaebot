@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 from datetime import date, datetime, timezone
 import io
 import json
@@ -23,6 +24,44 @@ import jobscout.subscriber
 import jobscout.commands_group_feed
 import jobscout.commands_setup
 import jobscout.dispatch_runner
+
+
+class ApiRequestTests(unittest.TestCase):
+  def test_safe_get_retries_transient_http_failure(self) -> None:
+    error = urllib.error.HTTPError(
+      "https://example.test/subscribers",
+      500,
+      "server error",
+      {},
+      io.BytesIO(b'{"ok":false,"error":"temporary quota pressure"}'),
+    )
+    response = mock.MagicMock()
+    response.__enter__.return_value.read.return_value = b'{"subscribers":[]}'
+    with mock.patch.object(jobscout.api, "api_key", return_value="k"), \
+         mock.patch.object(jobscout.api.urllib.request, "urlopen", side_effect=[error, response]) as urlopen, \
+         mock.patch.object(jobscout.api.time, "sleep") as sleep:
+      result = jobscout.api.request_json("GET", "https://example.test/subscribers")
+
+    self.assertEqual(result, {"subscribers": []})
+    self.assertEqual(urlopen.call_count, 2)
+    sleep.assert_called_once_with(1)
+
+  def test_post_failure_is_not_retried_and_keeps_api_error(self) -> None:
+    error = urllib.error.HTTPError(
+      "https://example.test/profile",
+      500,
+      "server error",
+      {},
+      io.BytesIO(b'{"ok":false,"error":"8 RESOURCE_EXHAUSTED: Quota exceeded."}'),
+    )
+    with mock.patch.object(jobscout.api, "api_key", return_value="k"), \
+         mock.patch.object(jobscout.api.urllib.request, "urlopen", side_effect=error) as urlopen, \
+         mock.patch.object(jobscout.api.time, "sleep") as sleep:
+      with self.assertRaisesRegex(jobscout.api.JobScoutApiError, "RESOURCE_EXHAUSTED"):
+        jobscout.api.request_json("POST", "https://example.test/profile", {"ok": True})
+
+    urlopen.assert_called_once()
+    sleep.assert_not_called()
 
 
 class ApprovedQueueTests(unittest.TestCase):
@@ -182,6 +221,29 @@ class CheckRuntimeTests(unittest.TestCase):
     self.assertEqual(result["htmlReadyCount"], 1)
     self.assertEqual(result["accessibleCvCount"], 1)
     probe.assert_called_once_with("user-html")
+
+  def test_check_runtime_reports_actionable_api_error(self) -> None:
+    message = "Agent Genaie Job Scout API failed with HTTP 500: 8 RESOURCE_EXHAUSTED: Quota exceeded."
+    output = io.StringIO()
+    with tempfile.TemporaryDirectory() as tmp:
+      with mock.patch.object(jobscout.commands_setup.api, "pending_links_path", return_value=Path(tmp) / "pending.json"), \
+           mock.patch.object(jobscout.commands_setup, "api_key", return_value="k"), \
+           mock.patch.object(jobscout.commands_setup, "RUNTIME_ROOT", Path(tmp) / "runtime"), \
+           mock.patch.object(
+             jobscout.commands_setup,
+             "cmd_list_ready",
+             side_effect=jobscout.api.JobScoutApiError(message, status_code=500),
+           ), \
+           contextlib.redirect_stdout(output):
+        with self.assertRaisesRegex(SystemExit, "1"):
+          jobscout.commands_setup.cmd_check_runtime(
+            argparse.Namespace(check_browser=False, check_subscribers=True)
+          )
+
+    result = json.loads(output.getvalue())
+    self.assertFalse(result["ok"])
+    self.assertEqual(result["errors"], [message])
+    self.assertNotEqual(result["errors"], ["1"])
 
 
 class CvDownloadTests(unittest.TestCase):
