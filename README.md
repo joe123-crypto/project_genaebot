@@ -328,6 +328,10 @@ The deploy script used by both paths:
 - installs or reconciles the isolated `job-scout-approvals` worker, which checks
   every five minutes for dashboard-approved applications and processes them
   under the user's approval
+- reconciles the main Job Scout schedule only after its subscriber/CV readiness
+  gate passes; Agent Genaie Firestore quota exhaustion defers reconciliation and
+  preserves the existing schedule without failing the gateway deploy, while all
+  other readiness failures remain fatal
 - writes `/home/joseph/openclaw-deploy/.last-successful-deploy.json` only after all
   required readiness, health, and reconciliation steps finish successfully
 
