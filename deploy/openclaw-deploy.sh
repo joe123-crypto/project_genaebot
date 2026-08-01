@@ -582,6 +582,7 @@ wait_gateway_api_ready() {
       fi
     else
       consecutive_successes=0
+      log "Gateway API readiness probe $attempt/15 failed; retrying"
     fi
     sleep 2
   done
