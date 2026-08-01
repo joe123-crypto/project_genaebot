@@ -79,6 +79,13 @@ class WorkflowContractTests(unittest.TestCase):
                 self.assertIn(install, deploy_job)
                 self.assertLess(deploy_job.index(install), deployment)
 
+    def test_memory_preflight_runs_before_self_hosted_dependency_install(self) -> None:
+        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+        deploy_job = workflow[workflow.index("\n  deploy:"):]
+        preflight = deploy_job.index("run: ./deploy/check-deploy-resources.sh")
+        install = deploy_job.index("npm ci --ignore-scripts --prefix workspace/job-scout")
+        self.assertLess(preflight, install)
+
     def test_node_cache_tracks_both_package_locks(self) -> None:
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
         self.assertIn("workspace/job-scout/package-lock.json", workflow)

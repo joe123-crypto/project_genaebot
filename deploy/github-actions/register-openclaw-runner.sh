@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 repo_url="${OPENCLAW_GITHUB_REPO_URL:-https://github.com/joe123-crypto/project_genaebot}"
 runner_dir="${OPENCLAW_RUNNER_DIR:-/home/joseph/actions-runner-openclaw-prod}"
 runner_user="${OPENCLAW_RUNNER_USER:-joseph}"
@@ -55,4 +56,6 @@ fi
 [ -x "$runner_dir/svc.sh" ] || die "runner config did not create svc.sh"
 ./svc.sh install "$runner_user"
 ./svc.sh start
+OPENCLAW_RUNNER_DIR="$runner_dir" \
+  "$source_root/deploy/github-actions/install-openclaw-runner-hardening.sh" --restart
 ./svc.sh status

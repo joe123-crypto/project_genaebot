@@ -38,6 +38,7 @@ lock_file="/var/lock/openclaw-prod-deploy.lock"
 [ -d "$src/.git" ] || die "$src is not a Git checkout"
 [ -x "$src/deploy/openclaw-deploy.sh" ] || die "missing deploy/openclaw-deploy.sh in $src"
 [ -x "$src/deploy/validate-openclaw-deploy.sh" ] || die "missing deploy/validate-openclaw-deploy.sh in $src"
+[ -x "$src/deploy/check-deploy-resources.sh" ] || die "missing deploy/check-deploy-resources.sh in $src"
 
 git_cmd() {
   git -c "safe.directory=$src" -C "$src" "$@"
@@ -81,11 +82,13 @@ fi
 
 log "Deploying ${repo_slug}@${head_sha}"
 
+"$src/deploy/check-deploy-resources.sh"
+
 OPENCLAW_DIR="$src" \
 "$src/deploy/validate-openclaw-deploy.sh"
 
 OPENCLAW_DIR="$src" \
 OPENCLAW_CONTAINER_SERVICE="$service_name" \
-"$src/deploy/openclaw-deploy.sh"
+"$src/deploy/openclaw-deploy.sh" --validated-head "$head_sha"
 
 log "Production deploy complete"

@@ -8,6 +8,8 @@ Installed host files:
 /home/joseph/actions-runner-openclaw-prod/
 /usr/local/sbin/openclaw-prod-deploy
 /etc/sudoers.d/openclaw-prod-deploy
+/etc/systemd/system/actions.runner.*.service.d/override.conf
+/swap-openclaw.img
 ```
 
 The workflow is:
@@ -29,6 +31,21 @@ Then run:
 ```bash
 cd /home/joseph/.openclaw
 sudo RUNNER_TOKEN='...' ./deploy/github-actions/register-openclaw-runner.sh
+```
+
+Provision the persistent 8 GiB deployment swap file once on the production
+host. The command is idempotent and refuses unexpected targets or sizes:
+
+```bash
+sudo ./deploy/github-actions/ensure-openclaw-swap.sh
+```
+
+Runner registration installs a systemd drop-in that restarts a failed runner
+and kills the complete runner cgroup after an OOM, preventing orphaned deploy
+shells from continuing a partial deployment. Reapply it independently with:
+
+```bash
+sudo ./deploy/github-actions/install-openclaw-runner-hardening.sh --restart
 ```
 
 The runner must show online in GitHub with the `openclaw-prod` label before the
@@ -53,6 +70,11 @@ push after every hosted job succeeds. Actions are pinned to commit revisions;
 containerized validation tools are pinned to versions. A successful deployment
 records the exact production commit in the workflow summary.
 
+Before dependency installation and again before production mutation, the host
+must have at least 1 GiB of `MemAvailable` and 6 GiB of combined available
+memory plus free swap. A failed preflight prints the largest resident-memory
+consumers and exits before staging or restarting production.
+
 ## Deploy Flow
 
 After the runner is online, production deploys happen when `main` changes:
@@ -70,7 +92,23 @@ sudo /usr/local/sbin/openclaw-prod-deploy "$GITHUB_WORKSPACE"
 ```
 
 The wrapper refuses dirty checkouts, unexpected remotes, stale commits, and
-overlapping deploys.
+overlapping deploys. It validates the exact SHA once, reconciles changed
+container inputs without force-recreating unchanged services, waits for two
+successful gateway API probes, then runs health and cron reconciliation.
+
+The source-controlled health check skips Webetu entirely when its public
+feature flag is disabled. When Webetu is enabled, its external dependency
+health remains advisory and Firestore quota exhaustion is reported concisely.
+Core gateway/container/API failures remain hard failures.
+
+Only a fully completed deploy updates:
+
+```text
+/home/joseph/openclaw-deploy/.last-successful-deploy.json
+```
+
+The marker contains the successful Git SHA, completion time, and staged-content
+digest. Failed or canceled deploys leave the previous successful marker intact.
 
 Because branch protection is unavailable for this private repository on the
 current GitHub plan, CI cannot prevent a failing commit from entering `main`.

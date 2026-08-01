@@ -10,6 +10,10 @@ ENTRYPOINT_SRC="$OC_DIR/deploy/container/entrypoint.sh"
 ENTRYPOINT_DST="$DEPLOY_DIR/entrypoint.sh"
 GATEWAY_DOCKERFILE_SRC="$OC_DIR/deploy/container/Dockerfile"
 GATEWAY_DOCKERFILE_DST="$DEPLOY_DIR/Dockerfile"
+HEALTH_CHECK_SRC="$OC_DIR/deploy/ops/check-health.sh"
+HEALTH_CHECK_DST="$DEPLOY_DIR/ops/check-health.sh"
+RESOURCE_CHECK="$OC_DIR/deploy/check-deploy-resources.sh"
+SUCCESS_MARKER="$DEPLOY_DIR/.last-successful-deploy.json"
 SERVICE_NAME="${OPENCLAW_CONTAINER_SERVICE:-openclaw-gateway-container.service}"
 SERVICE_UNIT_SRC="$OC_DIR/deploy/systemd/openclaw-gateway-container.service"
 SERVICE_UNIT_DST="/etc/systemd/system/$SERVICE_NAME"
@@ -18,6 +22,9 @@ DOCKER_WAIT_DST="/usr/local/libexec/openclaw-wait-for-docker"
 CONTAINER="${OPENCLAW_CONTAINER:-openclaw-gateway}"
 DOCKER_BIN="${DOCKER:-}"
 APPLY_CONTAINER_BOUNDARY=0
+VALIDATED_HEAD=""
+DEPLOY_INPUTS_CHANGED=0
+GATEWAY_RECREATED=0
 
 log() {
   printf '==> %s\n' "$*"
@@ -53,6 +60,41 @@ require_file() {
   [ -f "$1" ] || die "missing required file: $1"
 }
 
+mark_if_different() {
+  local source="$1"
+  local destination="$2"
+  if [ ! -f "$destination" ] || ! cmp -s "$source" "$destination"; then
+    DEPLOY_INPUTS_CHANGED=1
+  fi
+}
+
+stage_manifest_digest() {
+  local manifest="$STAGE_DIR/.openclaw-source-manifest.json"
+  if [ ! -f "$manifest" ]; then
+    printf 'missing\n'
+    return 0
+  fi
+  python3 - "$manifest" <<'PY'
+import hashlib
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as fh:
+    payload = json.load(fh)
+rows = sorted(
+    (str(item.get("path") or ""), str(item.get("sha256") or ""))
+    for item in payload.get("files", [])
+)
+digest = hashlib.sha256()
+for path, sha256 in rows:
+    digest.update(path.encode())
+    digest.update(b"\0")
+    digest.update(sha256.encode())
+    digest.update(b"\n")
+print(digest.hexdigest())
+PY
+}
+
 # The container boundary is active when the compose override is installed in the
 # deploy dir. Under it, workspace + context MDs reach the container as read-only
 # bind mounts and runtime/agent-workspace are writable host bind mounts, so the
@@ -81,9 +123,14 @@ parse_args() {
       --apply-container-boundary)
         APPLY_CONTAINER_BOUNDARY=1
         ;;
+      --validated-head)
+        [ "$#" -ge 2 ] || die "--validated-head requires a Git SHA"
+        VALIDATED_HEAD="$2"
+        shift
+        ;;
       -h|--help)
         cat <<'EOF'
-Usage: openclaw-deploy.sh [--apply-container-boundary]
+Usage: openclaw-deploy.sh [--apply-container-boundary] [--validated-head SHA]
 
 By default, deploy validates source, stages curated files, patches the live
 container config, restarts the gateway, and runs health checks.
@@ -91,6 +138,9 @@ container config, restarts the gateway, and runs health checks.
 Use --apply-container-boundary to also install the Docker Compose override that
 mounts curated source read-only and runtime paths writable. This is intentionally
 opt-in because it changes container mounts.
+
+The privileged production wrapper passes --validated-head after it validates
+that exact clean main revision. Direct/manual deploys validate normally.
 EOF
         exit 0
         ;;
@@ -145,6 +195,8 @@ install_container_service() {
   require_file "$DOCKER_WAIT_SRC"
 
   log "Install source-controlled container service and Docker readiness check"
+  mark_if_different "$DOCKER_WAIT_SRC" "$DOCKER_WAIT_DST"
+  mark_if_different "$SERVICE_UNIT_SRC" "$SERVICE_UNIT_DST"
   run_root install -D -m 0755 "$DOCKER_WAIT_SRC" "$DOCKER_WAIT_DST"
   run_root install -D -m 0644 "$SERVICE_UNIT_SRC" "$SERVICE_UNIT_DST"
   run_systemctl daemon-reload
@@ -197,10 +249,14 @@ ensure_container_running() {
   fi
 }
 
-recreate_boundary_stack() {
-  local docker
+reconcile_boundary_stack() {
+  local docker before_started after_started
   docker="$(docker_bin)"
   boundary_active || return 0
+  [ "$DEPLOY_INPUTS_CHANGED" = 1 ] || {
+    log "Deployment inputs are unchanged; skip container build/reconciliation"
+    return 0
+  }
   install -d -o joseph -g joseph -m 0700 \
     /home/joseph/projects/genaebot/agent-workspace-admin \
     /home/joseph/projects/genaebot/agent-workspace-admin/data \
@@ -223,10 +279,15 @@ recreate_boundary_stack() {
     /home/joseph/projects/genaebot/runtime/job-scout-channel \
     /home/joseph/projects/genaebot/runtime/job-scout-channel/auth \
     /home/joseph/projects/genaebot/runtime/job-scout-channel/media
-  log "Build and recreate the container stack so bind mounts use the current live-source inode"
-  (cd "$DEPLOY_DIR" && "$docker" compose up -d --build --force-recreate)
+  before_started="$("$docker" inspect -f '{{.State.StartedAt}}' "$CONTAINER" 2>/dev/null || true)"
+  log "Build changed inputs and reconcile the container stack without forcing unchanged services"
+  (cd "$DEPLOY_DIR" && "$docker" compose up -d --build)
   if ! wait_container_running "$docker" 90 >/dev/null; then
-    die "container $CONTAINER did not become ready after stack recreation"
+    die "container $CONTAINER did not become ready after stack reconciliation"
+  fi
+  after_started="$("$docker" inspect -f '{{.State.StartedAt}}' "$CONTAINER" 2>/dev/null || true)"
+  if [ -z "$before_started" ] || [ "$before_started" != "$after_started" ]; then
+    GATEWAY_RECREATED=1
   fi
 }
 
@@ -251,7 +312,7 @@ start_optional_job_scout_browser() {
   unset token
 
   log "Build and start optional Job Scout browser"
-  if ! (cd "$DEPLOY_DIR" && "$docker" compose --profile job-scout up -d --build --force-recreate job-scout-browser); then
+  if ! (cd "$DEPLOY_DIR" && "$docker" compose --profile job-scout up -d --build job-scout-browser); then
     log "WARNING: Job Scout browser failed to build or start; core gateway remains available"
     (cd "$DEPLOY_DIR" && "$docker" compose --profile job-scout stop job-scout-browser >/dev/null 2>&1) || true
     return 0
@@ -284,7 +345,7 @@ start_optional_job_scout_channel_listener() {
     return 0
   fi
   log "Build and start Job Scout channel listener"
-  if ! (cd "$DEPLOY_DIR" && "$docker" compose --profile job-scout-channel up -d --build --force-recreate job-scout-channel-listener); then
+  if ! (cd "$DEPLOY_DIR" && "$docker" compose --profile job-scout-channel up -d --build job-scout-channel-listener); then
     log "WARNING: Job Scout channel listener failed to build or start; core gateway remains available"
     return 0
   fi
@@ -306,6 +367,14 @@ start_optional_job_scout_channel_listener() {
 }
 
 syntax_checks() {
+  local current_head
+  if [ -n "$VALIDATED_HEAD" ]; then
+    current_head="$(git_cmd rev-parse --verify HEAD)"
+    [ "$VALIDATED_HEAD" = "$current_head" ] || \
+      die "validated head does not match current source; validated=$VALIDATED_HEAD current=$current_head"
+    log "Use source validation already completed for $VALIDATED_HEAD"
+    return 0
+  fi
   log "Portable source validation"
   "$OC_DIR/deploy/ci-check.sh"
 }
@@ -314,18 +383,29 @@ stage_source() {
   require_file "$COMPOSE_OVERRIDE_SRC"
   require_file "$ENTRYPOINT_SRC"
   require_file "$GATEWAY_DOCKERFILE_SRC"
+  require_file "$HEALTH_CHECK_SRC"
+  local previous_stage_digest current_stage_digest
+  previous_stage_digest="$(stage_manifest_digest)"
   log "Stage curated source into $STAGE_DIR"
   bash "$OC_DIR/deploy/stage-openclaw-source.sh" "$OC_DIR" "$STAGE_DIR"
   if [ "$APPLY_CONTAINER_BOUNDARY" = "1" ] || boundary_active; then
     log "Install Docker Compose override with container read/write boundary"
+    mark_if_different "$COMPOSE_OVERRIDE_SRC" "$COMPOSE_OVERRIDE_DST"
     install -m 0644 "$COMPOSE_OVERRIDE_SRC" "$COMPOSE_OVERRIDE_DST"
   else
     log "Skip Docker Compose override; pass --apply-container-boundary when ready"
   fi
+  mark_if_different "$ENTRYPOINT_SRC" "$ENTRYPOINT_DST"
+  mark_if_different "$GATEWAY_DOCKERFILE_SRC" "$GATEWAY_DOCKERFILE_DST"
   install -m 0755 "$ENTRYPOINT_SRC" "$ENTRYPOINT_DST"
   install -m 0644 "$GATEWAY_DOCKERFILE_SRC" "$GATEWAY_DOCKERFILE_DST"
+  install -D -m 0755 "$HEALTH_CHECK_SRC" "$HEALTH_CHECK_DST"
 
   write_generated_marker
+  current_stage_digest="$(stage_manifest_digest)"
+  if [ "$previous_stage_digest" != "$current_stage_digest" ]; then
+    DEPLOY_INPUTS_CHANGED=1
+  fi
   reject_staged_runtime_files
   require_staged_workspace_files
 }
@@ -539,26 +619,27 @@ apply_config_template() {
   die "container $CONTAINER not reachable; refusing to patch host config as a live deploy"
 }
 
-restart_and_check() {
-  log "Restart $SERVICE_NAME"
-  run_systemctl restart "$SERVICE_NAME"
+restart_gateway_if_needed() {
+  if [ "$DEPLOY_INPUTS_CHANGED" != 1 ]; then
+    log "Deployment inputs are unchanged; preserve the running gateway process"
+    return 0
+  fi
+  if [ "$GATEWAY_RECREATED" = 1 ]; then
+    log "Gateway was already recreated by container reconciliation; skip a second restart"
+  else
+    log "Restart $SERVICE_NAME once to load changed runtime inputs"
+    run_systemctl restart "$SERVICE_NAME"
+  fi
   run_systemctl is-active "$SERVICE_NAME"
+}
 
+run_health_check() {
   if [ -x "$DEPLOY_DIR/ops/check-health.sh" ]; then
-    log "Run health check"
-    local health_log
-    health_log="$(mktemp)"
-    if ! "$DEPLOY_DIR/ops/check-health.sh" 2>&1 | tee "$health_log"; then
-      if is_isolated_webetu_health_failure "$health_log"; then
-        log "Health check warning: isolated Webetu worker probe failed; gateway deploy checks passed"
-        rm -f "$health_log"
-        return 0
-      fi
+    log "Run post-readiness health check"
+    if ! "$DEPLOY_DIR/ops/check-health.sh"; then
       diagnose_health_failure || true
-      rm -f "$health_log"
       return 1
     fi
-    rm -f "$health_log"
   else
     log "Skipping health check; missing $DEPLOY_DIR/ops/check-health.sh"
   fi
@@ -593,38 +674,42 @@ wait_gateway_api_ready() {
   return 1
 }
 
-is_isolated_webetu_health_failure() {
-  local health_log="$1"
-  local fail_count
-
-  fail_count="$(grep -c '^\[FAIL\]' "$health_log" || true)"
-  [ "$fail_count" = "1" ] || return 1
-  grep -Fqx '[FAIL] webetu worker list-registrations failed' "$health_log"
-}
-
 diagnose_health_failure() {
   local docker
   docker="$(docker_bin)"
 
-  log "Health check failed; collecting Webetu worker diagnostics"
+  log "Gateway health check failed; collecting core container diagnostics"
   "$docker" inspect -f 'container={{.Name}} status={{.State.Status}} restarting={{.State.Restarting}} exitCode={{.State.ExitCode}}' "$CONTAINER" 2>&1 || true
-  "$docker" exec "$CONTAINER" sh -lc 'ls -l /usr/local/bin/webetu-worker-safe /opt/webetu-worker/.venv/bin/webetu-worker /etc/webetu-worker/config.json /var/lib/webetu-worker 2>&1' || true
-  "$docker" exec "$CONTAINER" sh -lc '
-    out="$(mktemp)"
-    err="$(mktemp)"
-    if runuser -u webetu-worker -- /usr/local/bin/webetu-worker-safe list-registrations >"$out" 2>"$err"; then
-      rc=0
-    else
-      rc=$?
-    fi
-    printf "webetu-list-registrations rc=%s\n" "$rc"
-    printf "webetu-list-registrations stdout:\n"
-    sed "s/[[:space:]]\\+/ /g" "$out" | head -20
-    printf "webetu-list-registrations stderr:\n"
-    sed "s/[[:space:]]\\+/ /g" "$err" | head -20
-    rm -f "$out" "$err"
-    exit "$rc"
-  ' || true
+  "$docker" logs --tail 120 "$CONTAINER" 2>&1 | tail -120 || true
+}
+
+record_successful_deploy() {
+  local head generated_at manifest_digest marker_tmp
+  head="$(git_cmd rev-parse --verify HEAD)"
+  generated_at="$(date -Is)"
+  manifest_digest="$(stage_manifest_digest)"
+  marker_tmp="$(mktemp "$DEPLOY_DIR/.last-successful-deploy.XXXXXX")"
+  OPENCLAW_SUCCESS_HEAD="$head" \
+  OPENCLAW_SUCCESS_AT="$generated_at" \
+  OPENCLAW_SUCCESS_MANIFEST_DIGEST="$manifest_digest" \
+  python3 - "$marker_tmp" <<'PY'
+import json
+import os
+import sys
+
+payload = {
+    "version": 1,
+    "gitHead": os.environ["OPENCLAW_SUCCESS_HEAD"],
+    "completedAt": os.environ["OPENCLAW_SUCCESS_AT"],
+    "stageManifestDigest": os.environ["OPENCLAW_SUCCESS_MANIFEST_DIGEST"],
+}
+with open(sys.argv[1], "w", encoding="utf-8") as fh:
+    json.dump(payload, fh, indent=2, sort_keys=True)
+    fh.write("\n")
+PY
+  chmod 0644 "$marker_tmp"
+  mv -f "$marker_tmp" "$SUCCESS_MARKER"
+  log "Recorded successful deployment $head"
 }
 
 verify_live_workspace() {
@@ -688,22 +773,29 @@ main() {
   check_staged_files
   check_docker_access
   syntax_checks
+  "$RESOURCE_CHECK"
   install_container_service
   stage_source
   "$OC_DIR/deploy/check-openclaw-mirror.sh" --strict
-  recreate_boundary_stack
   ensure_container_running
-  sync_source_to_container
-  apply_config_template
-  verify_live_workspace
-  restart_and_check
+  if [ "$DEPLOY_INPUTS_CHANGED" = 1 ]; then
+    sync_source_to_container
+    apply_config_template
+    reconcile_boundary_stack
+  fi
+  restart_gateway_if_needed
   wait_gateway_api_ready
+  verify_live_workspace
+  run_health_check
   bash "$OC_DIR/deploy/install-job-scout-cv-conversion.sh"
   start_optional_job_scout_browser
   bash "$OC_DIR/deploy/install-job-scout-approvals.sh"
   bash "$OC_DIR/deploy/install-job-scout.sh"
   start_optional_job_scout_channel_listener
-  log "Deploy complete. Review Git diff and commit/push manually when ready."
+  record_successful_deploy
+  log "Deploy complete."
 }
 
-main "$@"
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  main "$@"
+fi

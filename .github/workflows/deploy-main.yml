@@ -156,6 +156,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Check production host memory headroom
+        run: ./deploy/check-deploy-resources.sh
+
       - name: Install locked Node dependencies
         run: |
           npm ci --ignore-scripts --prefix workspace/job-scout

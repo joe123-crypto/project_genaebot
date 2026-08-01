@@ -195,11 +195,12 @@ class JobScoutDeploymentTests(unittest.TestCase):
 
   def test_optional_worker_starts_after_core_restart(self) -> None:
     deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")
-    restart = deploy.index("  restart_and_check\n", deploy.index("main()"))
+    restart = deploy.index("  restart_gateway_if_needed\n", deploy.index("main()"))
     optional = deploy.index("  start_optional_job_scout_browser\n", deploy.index("main()"))
 
     self.assertLess(restart, optional)
     self.assertIn("core gateway remains available", deploy)
+    self.assertNotIn("--force-recreate", deploy)
 
   def test_gateway_api_stabilizes_before_cron_installation(self) -> None:
     deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")
@@ -208,7 +209,8 @@ class JobScoutDeploymentTests(unittest.TestCase):
     self.assertIn("wait_gateway_api_ready()", deploy)
     self.assertIn("openclaw cron status --timeout 5000 --json", deploy)
     self.assertIn('consecutive_successes" -ge 2', deploy)
-    self.assertLess(main.index("  restart_and_check\n"), main.index("  wait_gateway_api_ready\n"))
+    self.assertLess(main.index("  restart_gateway_if_needed\n"), main.index("  wait_gateway_api_ready\n"))
+    self.assertLess(main.index("  wait_gateway_api_ready\n"), main.index("  run_health_check\n"))
     self.assertLess(
       main.index("  wait_gateway_api_ready\n"),
       main.index('bash "$OC_DIR/deploy/install-job-scout-cv-conversion.sh"'),
@@ -218,13 +220,13 @@ class JobScoutDeploymentTests(unittest.TestCase):
     deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")
     staging = (ROOT / "deploy/stage-openclaw-source.sh").read_text(encoding="utf-8")
     stage = deploy[deploy.index("stage_source()") : deploy.index("write_generated_marker()")]
-    recreate = deploy.index("  recreate_boundary_stack\n", deploy.index("main()"))
+    recreate = deploy.index("    reconcile_boundary_stack\n", deploy.index("main()"))
     ensure_running = deploy.index("  ensure_container_running\n", deploy.index("main()"))
 
     self.assertIn('stage-openclaw-source.sh" "$OC_DIR" "$STAGE_DIR"', stage)
     self.assertNotIn('rm -rf "$stage_root"', staging)
     self.assertIn('"$stage_root/workspace"', staging)
-    self.assertLess(recreate, ensure_running)
+    self.assertLess(ensure_running, recreate)
 
   def test_container_service_waits_for_docker_api(self) -> None:
     unit = (ROOT / "deploy/systemd/openclaw-gateway-container.service").read_text(encoding="utf-8")
