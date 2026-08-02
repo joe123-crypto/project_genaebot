@@ -4,11 +4,23 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import re
 import unittest
 
 
 MODULE_PATH = Path(__file__).parent / "ci" / "check.py"
 WORKFLOW_PATH = Path(__file__).parents[1] / ".github" / "workflows" / "deploy-main.yml"
+NODE_INSTALLS = (
+    "npm ci --ignore-scripts --prefix workspace/job-scout",
+    "npm ci --ignore-scripts --prefix workspace/job-scout/channel-listener",
+)
+
+
+def job_block(workflow: str, name: str) -> str:
+    """Return one top-level job's text, bounded by the next job's key."""
+    rest = workflow[workflow.index(f"\n  {name}:\n") + 1 :]
+    following = re.search(r"\n  [A-Za-z0-9_-]+:\n", rest)
+    return rest[: following.start()] if following else rest
 SPEC = importlib.util.spec_from_file_location("ci_check", MODULE_PATH)
 assert SPEC and SPEC.loader
 ci_check = importlib.util.module_from_spec(SPEC)
@@ -54,37 +66,44 @@ class DocumentationContractTests(unittest.TestCase):
 
 
 class WorkflowContractTests(unittest.TestCase):
+    def assert_installs_precede(self, job: str, marker: str) -> None:
+        deployment = job.index(marker)
+        for install in NODE_INSTALLS:
+            with self.subTest(install=install):
+                self.assertIn(install, job)
+                self.assertLess(job.index(install), deployment)
+
     def test_node_dependencies_are_installed_before_repository_tests(self) -> None:
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
-        validation = workflow.index('run: ./deploy/ci-check.sh')
-        installs = (
-            "npm ci --ignore-scripts --prefix workspace/job-scout",
-            "npm ci --ignore-scripts --prefix workspace/job-scout/channel-listener",
+        self.assert_installs_precede(
+            job_block(workflow, "validate"), "run: ./deploy/ci-check.sh"
         )
-        for install in installs:
-            with self.subTest(install=install):
-                self.assertIn(install, workflow)
-                self.assertLess(workflow.index(install), validation)
 
     def test_node_dependencies_are_installed_before_production_deploy(self) -> None:
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
-        deploy_job = workflow[workflow.index("\n  deploy:"):]
-        deployment = deploy_job.index('run: sudo /usr/local/sbin/openclaw-prod-deploy')
-        installs = (
-            "npm ci --ignore-scripts --prefix workspace/job-scout",
-            "npm ci --ignore-scripts --prefix workspace/job-scout/channel-listener",
+        self.assert_installs_precede(
+            job_block(workflow, "deploy"),
+            "run: sudo /usr/local/sbin/openclaw-prod-deploy",
         )
-        for install in installs:
-            with self.subTest(install=install):
-                self.assertIn(install, deploy_job)
-                self.assertLess(deploy_job.index(install), deployment)
+
+    def test_node_dependencies_are_installed_before_job_scout_deploy(self) -> None:
+        # openclaw-prod-deploy re-runs deploy/ci-check.sh on the production
+        # host, and its node --test pass imports playwright and baileys from
+        # workspace/job-scout. A dispatched Job Scout release must install
+        # them exactly like the push-to-main deploy job does.
+        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+        self.assert_installs_precede(
+            job_block(workflow, "job-scout-deploy"),
+            "sudo /usr/local/sbin/openclaw-prod-deploy",
+        )
 
     def test_memory_preflight_runs_before_self_hosted_dependency_install(self) -> None:
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
-        deploy_job = workflow[workflow.index("\n  deploy:"):]
-        preflight = deploy_job.index("run: ./deploy/check-deploy-resources.sh")
-        install = deploy_job.index("npm ci --ignore-scripts --prefix workspace/job-scout")
-        self.assertLess(preflight, install)
+        for name in ("deploy", "job-scout-deploy"):
+            with self.subTest(job=name):
+                job = job_block(workflow, name)
+                preflight = job.index("run: ./deploy/check-deploy-resources.sh")
+                self.assertLess(preflight, job.index(NODE_INSTALLS[0]))
 
     def test_node_cache_tracks_both_package_locks(self) -> None:
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
