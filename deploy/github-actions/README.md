@@ -124,6 +124,26 @@ runs the WS4 command:
 python3 deploy/job_scout_consumer.py validate "$BUNDLE_DIR"
 ```
 
+The bundle is unpacked with `docker create` + `docker export`, which writes a
+*container* filesystem rather than the image filesystem. That tar therefore also
+carries files the container runtime injects into every container: `/etc/mtab`
+(a **symlink** to `/proc/mounts`), `/.dockerenv`, and empty `/dev`, `/proc`,
+`/sys`, `/etc`. None of it belongs to the release, so the extraction is scoped
+to the release payload:
+
+```bash
+python3 deploy/job_scout_release.py safe-extract \
+  --archive "$BUNDLE_TAR" --destination "$BUNDLE_DIR" \
+  --only job-scout-manifest.json --only workspace
+```
+
+Out-of-scope members are ignored, never written, so no runtime file reaches a
+deploy stage. Scoping does not relax any check: traversal, absolute paths, and
+control characters are still rejected for every member, and a symlink or other
+non-regular file *inside* the scope still fails the release. The self-hosted
+transport extracts its own `pack-candidate` tar with no `--only`, keeping the
+fully strict behaviour there.
+
 Only the resulting same-run Actions artifact can reach the self-hosted job. The
 self-hosted job verifies the hosted candidate tar SHA-256, safely extracts it
 to preserve declared executable modes, recomputes the request hash, and invokes

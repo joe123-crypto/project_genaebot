@@ -486,7 +486,29 @@ def verify_image_inspect(inspect_path: Path, request: dict[str, Any], artifact: 
             raise ReleaseError(f"pulled {artifact} image label {key} mismatch")
 
 
-def safe_extract(archive: Path, destination: Path) -> None:
+def safe_extract(
+    archive: Path, destination: Path, only: frozenset[str] | None = None
+) -> None:
+    """Extract a tar archive without ever writing a non-regular file.
+
+    ``only`` restricts extraction to the named top-level entries and their
+    subtrees; anything else is ignored. It exists for archives produced by
+    ``docker export``, which exports a *container* filesystem and therefore
+    carries runtime files the runtime injects into every container -- notably
+    ``/etc/mtab``, a SYMLINK to ``/proc/mounts``, plus ``/.dockerenv`` and empty
+    ``/dev``, ``/proc``, ``/sys``, ``/etc`` entries. None of that is part of a
+    release, so scoping the extraction to the release payload keeps the strict
+    non-regular-file rejection below meaningful for everything that IS part of
+    it. Callers that extract a self-produced archive (``pack_candidate``) pass
+    no ``only`` and keep the fully strict behaviour.
+
+    Path safety (traversal, absolute paths, control characters) is enforced for
+    every member regardless of ``only``.
+    """
+    if only is not None:
+        for name in only:
+            if not name or "/" in name or name in {".", ".."}:
+                raise ReleaseError(f"invalid extraction scope: {name!r}")
     destination.mkdir(parents=True, exist_ok=False)
     seen: set[str] = set()
     count = 0
@@ -495,8 +517,6 @@ def safe_extract(archive: Path, destination: Path) -> None:
         for member in source:
             raw_name = member.name.removeprefix("./")
             if raw_name in {"", "."}:
-                continue
-            if raw_name == ".dockerenv" and member.isfile() and member.size == 0:
                 continue
             path = PurePosixPath(raw_name)
             if (
@@ -507,6 +527,9 @@ def safe_extract(archive: Path, destination: Path) -> None:
                 or any(part in {"", ".", ".."} for part in path.parts)
             ):
                 raise ReleaseError(f"unsafe bundle archive path: {member.name!r}")
+            # Out-of-scope container-runtime noise is ignored, never extracted.
+            if only is not None and path.parts[0] not in only:
+                continue
             normalized = path.as_posix()
             if normalized in seen:
                 raise ReleaseError(f"duplicate bundle archive path: {normalized}")
@@ -629,6 +652,12 @@ def main(argv: list[str] | None = None) -> int:
     extract = sub.add_parser("safe-extract")
     extract.add_argument("--archive", type=Path, required=True)
     extract.add_argument("--destination", type=Path, required=True)
+    extract.add_argument(
+        "--only", action="append", default=[], metavar="TOP_LEVEL_ENTRY",
+        help="extract only this top-level entry and its subtree (repeatable); "
+             "use for docker export archives, which carry container-runtime "
+             "files that are not part of the release",
+    )
 
     pack = sub.add_parser("pack-candidate")
     pack.add_argument("--candidate", type=Path, required=True)
@@ -691,7 +720,10 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "verify-image":
         verify_image_inspect(args.inspect, validate_request(_load_json(args.request)), args.artifact)
     elif args.command == "safe-extract":
-        safe_extract(args.archive, args.destination)
+        safe_extract(
+            args.archive, args.destination,
+            frozenset(args.only) if args.only else None,
+        )
     elif args.command == "pack-candidate":
         pack_candidate(args.candidate, args.archive)
     elif args.command == "record-ledger":

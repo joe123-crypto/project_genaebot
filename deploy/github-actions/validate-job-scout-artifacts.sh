@@ -63,9 +63,16 @@ container_id="$(docker create "$BUNDLE_REF" /bin/false)"
 docker export --output "$scratch/bundle.tar" "$container_id"
 
 mkdir "$candidate_dir"
+# docker export writes a CONTAINER filesystem, so the tar also carries files the
+# container runtime injects: /etc/mtab (a SYMLINK to /proc/mounts), /.dockerenv,
+# and empty /dev, /proc, /sys. None of it belongs to the release, so extract the
+# release payload only -- the strict non-regular-file rejection still applies to
+# everything inside it.
 python3 "$helper" safe-extract \
   --archive "$scratch/bundle.tar" \
-  --destination "$candidate_dir/bundle"
+  --destination "$candidate_dir/bundle" \
+  --only job-scout-manifest.json \
+  --only workspace
 install -m 0644 "$request_file" "$candidate_dir/job-scout-deploy-request.json"
 
 request_hash="$(sha256sum "$candidate_dir/job-scout-deploy-request.json" | awk '{print $1}')"

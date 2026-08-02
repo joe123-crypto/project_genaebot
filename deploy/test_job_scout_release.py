@@ -300,6 +300,90 @@ class SafeExtractionTests(unittest.TestCase):
                 with self.assertRaises(release.ReleaseError):
                     release.safe_extract(archive, root / "out")
 
+    def docker_export_archive(self, path: Path) -> None:
+        """A tar shaped like `docker export` of the scratch bundle image.
+
+        Besides the release payload, the container runtime injects /etc/mtab as
+        a SYMLINK to /proc/mounts, /.dockerenv, and empty /dev, /proc, /sys.
+        """
+        with tarfile.open(path, "w") as archive:
+            for name in ("dev", "etc", "proc", "sys", "workspace", "workspace/bin"):
+                directory = tarfile.TarInfo(name)
+                directory.type = tarfile.DIRTYPE
+                directory.mode = 0o755
+                archive.addfile(directory)
+            mtab = tarfile.TarInfo("etc/mtab")
+            mtab.type = tarfile.SYMTYPE
+            mtab.linkname = "/proc/mounts"
+            archive.addfile(mtab)
+            for name, data, mode in (
+                (".dockerenv", b"", 0o644),
+                ("etc/hostname", b"container\n", 0o644),
+                ("job-scout-manifest.json", b"{}\n", 0o644),
+                ("workspace/bin/job-scout", b"#!/bin/sh\n", 0o755),
+            ):
+                item = tarfile.TarInfo(name)
+                item.size = len(data)
+                item.mode = mode
+                archive.addfile(item, io.BytesIO(data))
+
+    def test_docker_export_symlink_noise_is_ignored_when_scoped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            archive = root / "bundle.tar"
+            self.docker_export_archive(archive)
+            destination = root / "out"
+            release.safe_extract(
+                archive, destination,
+                frozenset({"job-scout-manifest.json", "workspace"}),
+            )
+            self.assertEqual((destination / "job-scout-manifest.json").read_bytes(), b"{}\n")
+            self.assertEqual(
+                (destination / "workspace/bin/job-scout").stat().st_mode & 0o777, 0o755
+            )
+            self.assertEqual(
+                sorted(path.name for path in destination.iterdir()),
+                ["job-scout-manifest.json", "workspace"],
+            )
+
+    def test_docker_export_symlink_noise_still_fails_unscoped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            archive = root / "bundle.tar"
+            self.docker_export_archive(archive)
+            with self.assertRaises(release.ReleaseError):
+                release.safe_extract(archive, root / "out")
+
+    def test_symlink_inside_the_scope_is_still_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            archive = root / "bundle.tar"
+            self.archive(archive, "workspace/link", symlink=True)
+            with self.assertRaises(release.ReleaseError):
+                release.safe_extract(
+                    archive, root / "out",
+                    frozenset({"job-scout-manifest.json", "workspace"}),
+                )
+
+    def test_traversal_is_rejected_even_when_out_of_scope(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            archive = root / "bundle.tar"
+            self.archive(archive, "../escape")
+            with self.assertRaises(release.ReleaseError):
+                release.safe_extract(
+                    archive, root / "out", frozenset({"workspace"})
+                )
+
+    def test_invalid_extraction_scope_is_rejected(self) -> None:
+        for scope in ("workspace/bin", "..", ""):
+            with self.subTest(scope=scope), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                archive = root / "bundle.tar"
+                self.archive(archive, "workspace/job-scout/code.py")
+                with self.assertRaises(release.ReleaseError):
+                    release.safe_extract(archive, root / "out", frozenset({scope}))
+
     def test_candidate_archive_round_trip_preserves_executable_modes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
