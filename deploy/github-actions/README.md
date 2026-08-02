@@ -93,9 +93,13 @@ ShellCheck, actionlint, locked npm dependencies, high-severity production npm
 advisories, secret/private-state scanning, and Docker Compose rendering. The
 Job Scout and ZimLinks listener dependency sets are installed from their
 respective lockfiles before Node tests run, then both production dependency
-sets are audited. The self-hosted deploy checkout installs the same locked
-dependencies before its mandatory validation pass. The production Job Scout
-browser image is built when one of its inputs changes.
+sets are audited. Both self-hosted deploy jobs — the ordinary `main` deploy and
+the dispatched Job Scout release deploy — install the same locked dependencies
+before handing off to `openclaw-prod-deploy`, because that wrapper re-runs
+`deploy/ci-check.sh` on the production host and its Node tests import
+`playwright` and `baileys` from those trees. `actions/checkout` wipes untracked
+paths, so a previous run's `node_modules` never carries over. The production Job
+Scout browser image is built when one of its inputs changes.
 
 The ordinary deploy job has read-only repository permissions and runs only for
 a `main` push after every hosted job succeeds. Job Scout releases additionally

@@ -343,6 +343,16 @@ jobs:
       - name: Check production host memory headroom
         run: ./deploy/check-deploy-resources.sh
 
+      # actions/checkout wipes untracked paths, so node_modules never survives
+      # from an earlier run on this self-hosted runner. openclaw-prod-deploy
+      # runs deploy/ci-check.sh, whose node --test pass imports playwright and
+      # baileys from these trees; without the install it fails on every
+      # dispatched release.
+      - name: Install locked Node dependencies
+        run: |
+          npm ci --ignore-scripts --prefix workspace/job-scout
+          npm ci --ignore-scripts --prefix workspace/job-scout/channel-listener
+
       - name: Apply release through constrained root wrapper
         run: |
           request="$RUNNER_TEMP/job-scout-candidate/job-scout-deploy-request.json"
