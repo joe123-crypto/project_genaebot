@@ -358,6 +358,7 @@ jobs:
           JOB_SCOUT_SHA: ${{ needs.job-scout-release.outputs.job_scout_sha }}
         run: |
           printf '### Job Scout production deployment\n\n' >>"$GITHUB_STEP_SUMMARY"
+          # shellcheck disable=SC2016  # backticks are literal Markdown, not command substitution
           printf 'Deployed `%s` with correlation `%s`.\n' \
             "$JOB_SCOUT_SHA" "$CORRELATION_ID" >>"$GITHUB_STEP_SUMMARY"
 
