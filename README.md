@@ -174,6 +174,26 @@ and wrapper run `deploy/check-deploy-resources.sh`. The preflight requires at le
 free swap, and reports the largest processes without changing production if the
 host is under pressure.
 
+Cross-repository Job Scout releases use a second hosted validation gate in the
+same workflow. Before enabling that event, install the reviewed request-aware
+root wrapper once:
+
+```bash
+cd /home/joseph/.openclaw
+sudo ./deploy/github-actions/install-openclaw-prod-deploy-wrapper.sh
+sudo cmp deploy/github-actions/openclaw-prod-deploy /usr/local/sbin/openclaw-prod-deploy
+```
+
+The self-hosted job cannot accept UI-entered artifact digests. It receives a
+hosted-validated request and bundle, hashes the request, and passes the path and
+hash through the narrow root wrapper. Manual Job Scout rollback selects only an
+unexpired, previously successful production ledger by manifest hash and must
+also match the root-owned, hash-chained successful-release ledger on the host.
+The ledger is deployment metadata under `/var/lib/openclaw-deploy`; rollback
+does not read or modify Job Scout runtime state. The full
+payload, GHCR access, validation, and rollback contracts are documented in
+`deploy/github-actions/README.md`.
+
 Validate without deploying:
 
 ```bash
