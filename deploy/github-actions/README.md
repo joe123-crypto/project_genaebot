@@ -46,9 +46,15 @@ successful-release ledger:
 
 It remains outside every application runtime directory and is `root:root 0600`.
 
-Grant `joe123-crypto/project_genaebot` read access to the private Job Scout GHCR
-packages. The receiver uses only its read-scoped `GITHUB_TOKEN` for package
-pulls.
+The Job Scout release images are **public** GHCR packages owned by
+`joe123-crypto/genaie-job-scout`, so the receiver pulls them **anonymously** and
+no cross-repository package grant is required. The receiver must **not**
+`docker login ghcr.io` before pulling: this repository's `GITHUB_TOKEN` carries
+no grant on another repository's packages, and once docker is authenticated GHCR
+scopes the pull token to this identity's empty permissions and answers
+`denied: denied` for the public images instead of serving them over the
+anonymous public read path. The `job-scout-release` job therefore logs out of
+GHCR before pulling to guarantee the anonymous path.
 
 ## Activate The Runner
 
@@ -103,8 +109,10 @@ Scout browser image is built when one of its inputs changes.
 
 The ordinary deploy job has read-only repository permissions and runs only for
 a `main` push after every hosted job succeeds. Job Scout releases additionally
-require read-only Actions and Packages permissions. Actions are pinned to commit
-revisions; containerized validation tools are pinned to versions.
+use a read-only Actions permission to correlate the dispatch; the release images
+are public and pulled anonymously, so no package grant or registry login is
+used. Actions are pinned to commit revisions; containerized validation tools are
+pinned to versions.
 
 ## Job Scout Release Receiver
 
@@ -118,8 +126,9 @@ manifestHash, sourceRunId, correlationId
 
 The three artifact values must be distinct lowercase `sha256:` digests. Mutable
 tags and caller-supplied registry names are rejected; references are assembled
-under `ghcr.io/joe123-crypto/genaie-job-scout`. A hosted job pulls all three by
-digest, verifies OCI source/revision/artifact labels, and safely extracts the
+under `ghcr.io/joe123-crypto/genaie-job-scout`. A hosted job pulls all three
+public images anonymously by digest, verifies OCI source/revision/artifact
+labels, and safely extracts the
 non-running bundle without starting it. It binds the canonical manifest
 repository, commit, worker references, and raw-byte SHA-256 to the payload, then
 runs the WS4 command:

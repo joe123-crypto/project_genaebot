@@ -230,10 +230,18 @@ jobs:
             --request-out "$RUNNER_TEMP/request/job-scout-deploy-request.json" \
             --github-output "$GITHUB_OUTPUT"
 
-      - name: Log in to GHCR with read-only workflow permission
-        env:
-          GHCR_TOKEN: ${{ github.token }}
-        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+      # The Job Scout release images are PUBLIC packages owned by the
+      # genaie-job-scout repository, and must be pulled ANONYMOUSLY here.
+      #
+      # Do NOT `docker login ghcr.io` before the pull: this job's GITHUB_TOKEN is
+      # scoped to project_genaebot and holds no grant on genaie-job-scout's
+      # packages. Once docker is authenticated, GHCR scopes the pull token to
+      # this identity's (empty) permissions and answers `denied: denied` for the
+      # public images instead of falling back to the anonymous public read path.
+      # An anonymous pull of the same digests succeeds. Logging out first clears
+      # any inherited credentials so the pull in the next step stays anonymous.
+      - name: Ensure anonymous GHCR access for public release images
+        run: docker logout ghcr.io || true
 
       - name: Pull and validate release artifacts on hosted runner
         id: artifact-validation
@@ -246,10 +254,6 @@ jobs:
           "$RUNNER_TEMP/request/job-scout-deploy-request.json"
           "$RUNNER_TEMP/job-scout-candidate"
           "$GITHUB_OUTPUT"
-
-      - name: Log out of GHCR
-        if: always()
-        run: docker logout ghcr.io || true
 
       - name: Upload validated deploy request and bundle
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
