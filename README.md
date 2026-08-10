@@ -227,10 +227,15 @@ deploy. Use this order:
 
 ```text
 JOB_SCOUT_BROWSER_TOKEN=<at least 32 random bytes>
+OPENROUTER_API_KEY=<OpenRouter API key, sk-or-...>
 ```
 
-   Do not put this value in Git. The same Compose interpolation supplies the
+   Do not put these values in Git. The same Compose interpolation supplies the
    browser token to the gateway and worker, preventing mismatched delivery paths.
+   `OPENROUTER_API_KEY` backs all LLM model calls (the agent brain and the Job
+   Scout channel post classifier), which now route through OpenRouter. The
+   retained `AI_GATEWAY_API_KEY` (Vercel AI Gateway) is used only for
+   memory-search embeddings, since OpenRouter has no embeddings endpoint.
 
 2. Deploy the Agent Genaie API schema change, then deploy this repository. The
    core gateway starts independently. The optional browser is built afterward;

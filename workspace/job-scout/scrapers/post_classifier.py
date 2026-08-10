@@ -24,7 +24,7 @@ from jobscout.constants import CANDIDATE_DESCRIPTION_CHAR_LIMIT
 
 SOURCE = "zimlinks-whatsapp"
 DEFAULT_MODEL = "deepseek/deepseek-v4-pro"
-AI_GATEWAY_URL = "https://ai-gateway.vercel.sh/v1/chat/completions"
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 RAW_RETENTION_DAYS = 14
 
 URL_RE = re.compile(r"https?://[^\s<>\]\[()]+", re.I)
@@ -133,9 +133,9 @@ def model_schema() -> dict:
 
 
 def classify_with_model(text: str, *, timeout: int) -> tuple[dict, str]:
-  api_key = os.environ.get("AI_GATEWAY_API_KEY", "").strip()
+  api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
   if not api_key:
-    raise RuntimeError("AI_GATEWAY_API_KEY is unavailable")
+    raise RuntimeError("OPENROUTER_API_KEY is unavailable")
   model = os.environ.get("JOB_SCOUT_CHANNEL_CLASSIFIER_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
   body = {
     "model": model,
@@ -158,10 +158,15 @@ def classify_with_model(text: str, *, timeout: int) -> tuple[dict, str]:
     },
   }
   request = urllib.request.Request(
-    AI_GATEWAY_URL,
+    OPENROUTER_URL,
     data=json.dumps(body).encode("utf-8"),
     method="POST",
-    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+    headers={
+      "Authorization": f"Bearer {api_key}",
+      "Content-Type": "application/json",
+      "HTTP-Referer": "https://openclaw.ai",
+      "X-Title": "OpenClaw",
+    },
   )
   try:
     with urllib.request.urlopen(request, timeout=timeout) as response:

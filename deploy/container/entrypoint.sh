@@ -39,6 +39,7 @@ mkdir -p \
 #    the .env the openclaw dotenv provider reads. Only non-empty vars are written.
 SECRET_KEYS=(
   GEMINI_API_KEY
+  OPENROUTER_API_KEY
   AI_GATEWAY_API_KEY
   AGENT_GENAI_INTERNAL_API_KEY
   GATEWAY_AUTH_TOKEN
@@ -104,10 +105,10 @@ for path in \
 done
 
 # Secondary agents do not inherit model-provider environment keys at run time.
-# Materialize the existing gateway key as a static profile for the restricted
-# public agent before the gateway opens and locks the auth store.
-if [ -n "${AI_GATEWAY_API_KEY:-}" ] && grep -q '"id"[[:space:]]*:[[:space:]]*"public"' "$OC_DIR/openclaw.json"; then
-  runuser -u joseph -- env PUBLIC_MODEL_API_KEY="$AI_GATEWAY_API_KEY" python3 - <<'PY'
+# Materialize the OpenRouter key as a static profile for the restricted public
+# agent before the gateway opens and locks the auth store.
+if [ -n "${OPENROUTER_API_KEY:-}" ] && grep -q '"id"[[:space:]]*:[[:space:]]*"public"' "$OC_DIR/openclaw.json"; then
+  runuser -u joseph -- env PUBLIC_MODEL_API_KEY="$OPENROUTER_API_KEY" python3 - <<'PY'
 import json
 import os
 import sqlite3
@@ -132,9 +133,9 @@ except (TypeError, json.JSONDecodeError):
     payload = {"version": 1, "profiles": {}}
 payload.setdefault("version", 1)
 profiles = payload.setdefault("profiles", {})
-profiles["vercel-ai-gateway:public-env"] = {
+profiles["openrouter:public-env"] = {
     "type": "api_key",
-    "provider": "vercel-ai-gateway",
+    "provider": "openrouter",
     "key": os.environ["PUBLIC_MODEL_API_KEY"],
 }
 database.execute(
@@ -147,7 +148,7 @@ database.commit()
 database.close()
 os.chmod(database_path, 0o600)
 PY
-  log "provisioned public agent model authentication"
+  log "provisioned public agent model authentication (openrouter)"
 fi
 
 # The currently published @openclaw/whatsapp 2026.6.11 imports a channel SDK

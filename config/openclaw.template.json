@@ -17,9 +17,9 @@
   "agents": {
     "defaults": {
       "model": {
-        "primary": "vercel-ai-gateway/deepseek/deepseek-v4-pro",
+        "primary": "openrouter/deepseek/deepseek-v4-pro",
         "fallbacks": [
-          "vercel-ai-gateway/deepseek/deepseek-v4-pro"
+          "openrouter/deepseek/deepseek-v4-pro"
         ]
       },
       "workspace": "/home/joseph/.openclaw/agent-workspace-admin",
@@ -101,6 +101,9 @@
   ],
   "plugins": {
     "entries": {
+      "openrouter": {
+        "enabled": true
+      },
       "vercel-ai-gateway": {
         "enabled": true
       },
@@ -389,6 +392,7 @@
       "dotenv": {
         "source": "env",
         "allowlist": [
+          "OPENROUTER_API_KEY",
           "AI_GATEWAY_API_KEY",
           "GATEWAY_AUTH_TOKEN",
           "AGENT_GENAI_INTERNAL_API_KEY",
