@@ -106,10 +106,10 @@ ${url}`;
     return "You're ready to continue here. Do you want guided questions or CV autofill?";
   }
   if (!url) return "Continue your Job Scout setup here in WhatsApp.";
-  return `Connect your account and Gmail here:
+  return `Sign in to connect your account here:
 ${url}
 
-Then come back here to finish your Job Scout profile.`;
+Gmail is granted as part of sign-in. The app will bring you back here automatically.`;
 }
 
 export async function handleJobScoutRequest(api, sender, text = "") {

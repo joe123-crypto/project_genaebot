@@ -8,7 +8,6 @@ Allowed in public chat:
 
 - Ask whether the user wants web or WhatsApp setup before sending any URL.
 - Send the canonical Agent Genaie WhatsApp-link URL only after that choice.
-- Tell the user to sign in and connect Gmail in the app.
 - Offer two setup paths: web setup or chat setup.
 - If the user chooses chat setup, offer guided questions or CV autofill.
 - Ask only one or two onboarding questions per message.
@@ -34,13 +33,16 @@ User asks for Job Scout
 Agent asks whether setup should continue in the web app or in WhatsApp
 Agent records that choice and starts or resumes Job Scout for the requester
 If the chat is not linked, Agent Genaie creates the canonical WhatsApp-link URL
-User signs in to Agent Genaie with their email
-The scoped WhatsApp page shows the originating number and asks only for confirmation
+User signs in to Agent Genaie; Gmail is granted as part of sign-in (single consent)
+First-time linking is automatic: the WhatsApp number is linked without a confirmation step
+Sign-in redirects the user back to this WhatsApp chat automatically
 If user chose web setup, normal web onboarding continues with Job Scout already selected
-If user chose chat setup, user connects Gmail in the app and returns to WhatsApp
-Agent asks whether the user wants guided questions or CV autofill inside chat
-Agent collects target roles, a preferred location that includes its country, and other details gradually, one or two questions per message
+If user chose chat setup and already has a CV in R2, Agent uses CV autofill automatically
+If user chose chat setup and has no CV in R2, Agent asks whether to answer questions or upload a CV
+Always confirm the preferred location and country; a CV cannot reliably supply it
+Agent collects any remaining details gradually, one or two questions per message
 Agent summarizes the profile and asks for corrections
+Agent validates every preferred location before saving
 Agent sends scam warning and requires acknowledgement
 Agent saves profile through job-scout helper
 Daily dispatcher finds and scores matching jobs for ready users
@@ -64,7 +66,7 @@ How do you want to set up Job Scout?
 
 Call the same action again with the user's choice. A current choice replaces an older pending Job Scout choice or link. If the user is already linked, the tool returns the next missing step instead of restarting setup.
 
-For an unlinked user, the returned URL must use `/whatsapp?token=...`. After sign-in it becomes `/<publicUserId>/whatsapp?token=...`. The page shows the masked originating WhatsApp number and a **Confirm and link** action; it must not ask that user to type a number.
+For an unlinked user, the returned URL must use `/whatsapp?token=...`. After sign-in it becomes `/<publicUserId>/whatsapp?token=...`. For a first-time signup the WhatsApp number is linked automatically and the user is redirected back to the WhatsApp chat without any confirmation step. A returning user who is changing their linked number must confirm the change explicitly before it takes effect.
 
 Do not send or recreate `/account-link/setup`, `/job-scout/setup`, or either legacy confirm URL.
 
@@ -79,14 +81,14 @@ How do you want to set up Job Scout?
 2. Here in WhatsApp
 ```
 
-If the user chooses option 1, send the returned canonical or resume URL and stop. After confirmation, Agent Genaie continues the normal web onboarding flow with Job Scout preselected. Only service selection is skipped; WhatsApp confirmation, Gmail connection, and the Job Scout profile remain part of onboarding.
+If the user chooses option 1, send the returned canonical or resume URL and stop. Agent Genaie continues the normal web onboarding flow with Job Scout preselected.
 
 ```text
 Finish setting up Job Scout in the web app:
 <setupUrl or nextUrl>
 ```
 
-If the user chooses option 2, send the returned canonical link or Gmail resume URL. After Gmail is connected, Agent Genaie hands the user back to WhatsApp. Then ask:
+If the user chooses option 2, send the returned canonical link. Sign-in grants Gmail access as part of the same step, and the app redirects the user back to WhatsApp automatically. Once the user returns, check `api.cv_object_available()`. If a CV already exists in R2, go straight to the CV Autofill Flow. Otherwise ask:
 
 ```text
 How do you want to set up Job Scout in chat?
@@ -98,6 +100,8 @@ How do you want to set up Job Scout in chat?
 Do not continue to CV extraction unless the user chose WhatsApp setup and gives permission. Saving a ready WhatsApp-collected profile completes the in-progress Job Scout onboarding automatically.
 
 ## Guided Question Flow
+
+Use this flow only when the user does not already have a CV in R2. Check with `api.cv_object_available()` before asking questions. If a CV exists, use the CV Autofill Flow instead.
 
 Ask one or two questions per message, then wait for the user to answer before asking the next question.
 
@@ -156,15 +160,23 @@ If validation fails, ask the user to restate the location with its country. Do n
 
 ## CV Autofill Flow
 
-If the user chooses CV autofill, ask for explicit permission before reading/extracting from the CV:
+Use this flow when the user already has a CV in R2 (`api.cv_object_available()` returns true) or when the user explicitly chooses CV autofill.
+
+If a CV already exists in R2, use the stored `cvFileRef` directly. Tell the user their existing CV was found and ask permission to extract from it:
+
+```text
+I found your CV on file. Can I use it to prefill your Job Scout profile?
+```
+
+If the user is uploading a new CV, ask for explicit permission first:
 
 ```text
 Upload your CV and say, "Use my CV for Job Scout."
 ```
 
-After the user uploads the CV and gives permission:
+After the user grants permission and the CV source is confirmed:
 
-- Immediately stage the CV. This uploads the PDF to the Agent Genaie R2 bucket:
+- If a new CV was uploaded, stage it first and use the returned `cvFileRef` (R2 object key `<uid>/cv/cv.pdf`) for CV extraction and final profile saving:
 
 ```bash
 /home/joseph/.openclaw/workspace/bin/job-scout stage-cv \
@@ -172,9 +184,10 @@ After the user uploads the CV and gives permission:
   --cv "<MediaPath>"
 ```
 
-- Use the returned `cvFileRef` (R2 object key `<uid>/cv/cv.pdf`) for CV extraction and final profile saving.
+- If the user's existing CV was already in R2, no `stage-cv` call is needed. The existing key is retained automatically when you omit `--cv` from `save-profile`.
 - Extract likely job types, qualifications, work experience, and skills from the CV.
 - Ask follow-up questions only for missing or unclear details.
+- Always confirm the preferred location and country. A CV cannot reliably supply a current location. Ask: "Which city or area should I search for jobs? Include the country, for example: Bindura, Zimbabwe."
 - Ask at most one or two questions per message.
 - Do not invent details not supported by the CV or the user's answers.
 
@@ -215,7 +228,7 @@ Rules:
 
 ## Save Profile
 
-After the user has provided enough details, uploaded a CV, confirmed the summary, and acknowledged the scam warning, save the profile:
+After the user has provided enough details, confirmed the summary, and acknowledged the scam warning, save the profile:
 
 ```bash
 /home/joseph/.openclaw/workspace/bin/job-scout save-profile \
@@ -232,12 +245,12 @@ After the user has provided enough details, uploaded a CV, confirmed the summary
   --safety-acknowledged
 ```
 
-`--cv` accepts either the `cvFileRef` returned by `stage-cv` (the R2 object key, already uploaded) or a local CV path (which `save-profile` uploads to R2). If the user gives many details, use repeated flags. The CV lives in the Agent Genaie Cloudflare R2 bucket under `<uid>/cv/cv.pdf`; Firestore stores that key as `cvFileRef`. Raw WhatsApp media is temporary and must not be treated as the durable CV location.
+`--cv` accepts either the `cvFileRef` returned by `stage-cv` (the R2 object key, already uploaded) or a local CV path (which `save-profile` uploads to R2). When the user already has a CV in R2 and did not upload a new one during this session, `--cv` may be omitted; `save-profile` will retain the existing CV on file. If the user gives many details, use repeated flags. The CV lives in the Agent Genaie Cloudflare R2 bucket under `<uid>/cv/cv.pdf`; Firestore stores that key as `cvFileRef`. Raw WhatsApp media is temporary and must not be treated as the durable CV location.
 
 After saving, reply:
 
 ```text
-Your Job Scout profile is saved. Make sure Gmail shows Connected in the app. When automatic applications are enabled, I can send email applications and submit straightforward website forms. If a site needs a login, CAPTCHA, payment, declaration, or an answer only you can provide, I'll send you the link instead.
+Your Job Scout profile is saved. When automatic applications are enabled, I can send email applications and submit straightforward website forms. If a site needs a login, CAPTCHA, payment, declaration, or an answer only you can provide, I'll send you the link instead.
 ```
 
 When automatic applications are disabled, explain that strong matches will
@@ -253,11 +266,12 @@ after the user approves each one.
 This returns only the requesting user's sanitized setup state. A WhatsApp
 onboarding user is dispatch-ready only when the chat is linked, Gmail is
 connected, target roles and a validated location are saved, the profile summary
-and safety warning are acknowledged, and the CV object is available in R2. A
-user who completed setup in the web app can be dispatch-ready without a linked
-WhatsApp phone when the same Gmail, profile, safety, subscription, and CV
-requirements are satisfied. A web-only user receives no WhatsApp summary. When
-that user's `autoApply` setting is false, Job Scout records both email and
+and safety warning are acknowledged, and the CV object is available in R2. Gmail
+is connected as part of Google sign-in; it does not require a separate step for
+users who sign in with Google. A user who completed setup in the web app can be
+dispatch-ready without a linked WhatsApp phone when the same Gmail, profile,
+safety, subscription, and CV requirements are satisfied. A web-only user receives no WhatsApp summary.
+When that user's `autoApply` setting is false, Job Scout records both email and
 website matches as `pending_approval` without personalizing a CV or submitting
 anything. The CV is fetched from R2 on demand when an automatic application or
 an approved application needs customization. Files under
@@ -341,7 +355,7 @@ If setup or saving fails, do not show raw output. Reply:
 I couldn't save your Job Scout setup. Try again later.
 ```
 
-If Gmail is not connected, send:
+If Gmail is not connected (this can happen when the user signed in via an email link rather than Google sign-in), send:
 
 ```text
 Connect Gmail in the app first. I'll use it only for applications you approve.

@@ -293,7 +293,9 @@ printf '{"linked":false,"channel":"chat","nextStep":"whatsapp","setupUrl":"https
   assert.doesNotMatch(firstReply.text, /https?:\/\//);
   const reply = await handleJobScoutRequest(api, MEMBER, "2");
   assert.equal(reply.handled, true);
-  assert.match(reply.text, /Connect your account and Gmail here/);
+  assert.match(reply.text, /Sign in to connect your account here/);
+  assert.match(reply.text, /Gmail is granted as part of sign-in/);
+  assert.match(reply.text, /app will bring you back here automatically/);
   assert.match(reply.text, /https:\/\/app\.example\.test\/whatsapp\?token=chat/);
 });
 
