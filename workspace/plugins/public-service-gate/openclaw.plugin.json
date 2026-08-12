@@ -45,6 +45,9 @@
       "accessRequiredText": {
         "type": "string"
       },
+      "pendingAckText": {
+        "type": "string"
+      },
       "memberStoreScript": {
         "type": "string"
       },

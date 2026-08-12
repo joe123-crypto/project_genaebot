@@ -8,6 +8,15 @@ import { loadGreeting } from "./greeting.js";
 const DEFAULT_MEMBER_STORE_SCRIPT = "~/.openclaw/workspace/bin/whatsapp-invite";
 const DEFAULT_ALLOW_FAILED = `I couldn't unlock that number. Try again later.`;
 const DEFAULT_ACCESS_REQUIRED = `Genaie isn't open for new users right now.`;
+const DEFAULT_PENDING_ACK =
+  `Thanks for reaching out. Genae grants access manually, so your request has been received and is ` +
+  `waiting for review. You'll get a message here once you're approved.`;
+
+// Keep admin alerts and stored snippets short and single-line.
+const LEAD_SNIPPET_MAX = 280;
+function leadSnippet(text) {
+  return String(text ?? "").replace(/\s+/g, " ").trim().slice(0, LEAD_SNIPPET_MAX);
+}
 
 // Admin-only in-chat command to unlock a user, e.g. "allow +263788390903".
 // "grandfather" is kept as a legacy spelling. Returns the normalized phone or "".
@@ -111,4 +120,44 @@ export function loadAccessRequiredText(api) {
   return typeof pluginCfg.accessRequiredText === "string" && pluginCfg.accessRequiredText.trim()
     ? pluginCfg.accessRequiredText.trim()
     : DEFAULT_ACCESS_REQUIRED;
+}
+
+export function loadPendingAckText(api) {
+  const pluginCfg = getPluginConfig(api);
+  return typeof pluginCfg.pendingAckText === "string" && pluginCfg.pendingAckText.trim()
+    ? pluginCfg.pendingAckText.trim()
+    : DEFAULT_PENDING_ACK;
+}
+
+// Record a non-member's cold message as a pending lead. Returns the store result
+// (notably `isNew`, false for repeat contacts) so the caller can avoid re-alerting.
+export function recordLead(api, phone, text) {
+  return runMemberStoreScript(api, ["request", "--phone", normalizePhone(phone || ""), "--message", leadSnippet(text)]);
+}
+
+// Best-effort WhatsApp alert to each configured admin so they can approve a lead
+// by replying "allow +<number>".
+export async function notifyAdminOfLead(api, phone, text) {
+  try {
+    const target = normalizePhone(phone || "");
+    if (!target) return;
+    const admins = getAdminUsers(api);
+    if (!admins.size) {
+      api.logger?.warn?.("public-service-gate: lead recorded but no whatsappAdminUsers configured to notify");
+      return;
+    }
+    const snippet = leadSnippet(text);
+    const body = `New access request from ${target}:\n"${snippet}"\n\nReply: allow ${target}`;
+    for (const admin of admins) {
+      await helperLimiter(() =>
+        runTextCommand(
+          "openclaw",
+          ["message", "send", "--channel", "whatsapp", "--target", admin, "--message", body],
+          { timeoutMs: HELPER_TIMEOUT_MS },
+        ),
+      );
+    }
+  } catch (err) {
+    api.logger?.warn?.(`public-service-gate: failed to notify admin of lead (${String(err)})`);
+  }
 }

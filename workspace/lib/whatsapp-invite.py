@@ -104,6 +104,43 @@ def cmd_grandfather(args: argparse.Namespace, store: dict) -> tuple[dict, bool]:
     return {"ok": True, "phone": phone, "status": "unlocked", "changed": True}, True
 
 
+def cmd_request(args: argparse.Namespace, store: dict) -> tuple[dict, bool]:
+    """Record a pending access request (lead) for a non-member.
+
+    First contact creates a phone-keyed record with status "pending" so the gate
+    keeps the sender blocked until an admin runs "allow". Repeat contacts refresh
+    contact metadata but never re-alert (isNew False) and never clobber an
+    existing "unlocked"/"pending" status.
+    """
+    phone = normalize_phone(args.phone)
+    members = store.setdefault("members", {})
+    member = members.get(phone)
+    now = utc_now_iso()
+    message = str(getattr(args, "message", "") or "").strip()[:280]
+
+    if isinstance(member, dict) and member.get("status") in ("unlocked", "pending"):
+        prior = str(member.get("status"))
+        member["lastContactAt"] = now
+        member["contactCount"] = int(member.get("contactCount", 0)) + 1
+        if message:
+            member["lastMessage"] = message
+        return {"ok": True, "phone": phone, "status": prior, "changed": True, "isNew": False}, True
+
+    member = {
+        "phone": phone,
+        "status": "pending",
+        "source": "lead",
+        "firstContactAt": now,
+        "requestedAt": now,
+        "lastContactAt": now,
+        "contactCount": 1,
+    }
+    if message:
+        member["lastMessage"] = message
+    members[phone] = member
+    return {"ok": True, "phone": phone, "status": "pending", "changed": True, "isNew": True}, True
+
+
 def merge_store(store: dict, source: dict) -> tuple[dict, bool]:
     members_added = 0
     members_updated = 0
@@ -150,7 +187,10 @@ def cmd_merge_store(args: argparse.Namespace, store: dict) -> tuple[dict, bool]:
 
 def cmd_list(args: argparse.Namespace, store: dict) -> tuple[dict, bool]:
     members = list(store.get("members", {}).values())
-    members.sort(key=lambda r: r.get("activatedAt", ""), reverse=True)
+    wanted = getattr(args, "status", None)
+    if wanted:
+        members = [m for m in members if isinstance(m, dict) and m.get("status") == wanted]
+    members.sort(key=lambda r: r.get("requestedAt") or r.get("activatedAt", ""), reverse=True)
     return {"count": len(members), "members": members}, False
 
 
@@ -184,11 +224,17 @@ def build_parser() -> argparse.ArgumentParser:
         allow.add_argument("--phone", required=True)
         allow.set_defaults(func=cmd_grandfather)
 
+    request = sub.add_parser("request", help="Record a pending access request (lead)")
+    request.add_argument("--phone", required=True)
+    request.add_argument("--message", default="", help="Optional first-message snippet")
+    request.set_defaults(func=cmd_request)
+
     merge = sub.add_parser("merge-store", help="Add missing unlocked members from another store")
     merge.add_argument("--from", dest="from_file", required=True, help="Path to a source invites.json")
     merge.set_defaults(func=cmd_merge_store)
 
     listp = sub.add_parser("list", help="List members")
+    listp.add_argument("--status", default=None, help="Filter by status, e.g. pending or unlocked")
     listp.set_defaults(func=cmd_list)
     return parser
 
