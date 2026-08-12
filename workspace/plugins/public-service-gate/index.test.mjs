@@ -490,7 +490,9 @@ test("failsafe stop command requires a one-word stop message", async () => {
   assert.equal(await handler(eventFor("unstoppable"), { channelId: "whatsapp", senderId: MEMBER }), undefined);
 });
 
-test("unknown sender greeting gets access-required reply instead of silence", async () => {
+const PENDING_ACK = /waiting for review/i;
+
+test("unknown sender greeting is captured as a pending lead with an ack", async () => {
   let calls = 0;
   const handler = registerHandler({}, async () => {
     calls += 1;
@@ -499,12 +501,12 @@ test("unknown sender greeting gets access-required reply instead of silence", as
   const reply = await handler(eventFor("hi", UNKNOWN), { channelId: "whatsapp", senderId: UNKNOWN });
 
   assert.equal(reply.handled, true);
-  assert.match(reply.text, /isn't open for new users/);
+  assert.match(reply.text, PENDING_ACK);
   assert.doesNotMatch(reply.text, /invite/i);
   assert.equal(calls, 0);
 });
 
-test("unknown sender service keyword gets access-required reply", async () => {
+test("unknown sender service keyword is captured as a pending lead", async () => {
   let calls = 0;
   const handler = registerHandler({}, async () => {
     calls += 1;
@@ -513,11 +515,11 @@ test("unknown sender service keyword gets access-required reply", async () => {
   const reply = await handler(eventFor("webetu", UNKNOWN), { channelId: "whatsapp", senderId: UNKNOWN });
 
   assert.equal(reply.handled, true);
-  assert.match(reply.text, /isn't open for new users/);
+  assert.match(reply.text, PENDING_ACK);
   assert.equal(calls, 0);
 });
 
-test("unknown sender unrelated text remains a silent handled drop", async () => {
+test("unknown sender unrelated text is captured as a pending lead instead of silence", async () => {
   let calls = 0;
   const handler = registerHandler({}, async () => {
     calls += 1;
@@ -529,8 +531,38 @@ test("unknown sender unrelated text remains a silent handled drop", async () => 
   });
 
   assert.equal(reply.handled, true);
-  assert.equal(reply.text, undefined);
-  assert.equal(calls, 1);
+  assert.match(reply.text, PENDING_ACK);
+  assert.equal(calls, 0);
+});
+
+test("unknown sender lead is recorded via the member store with the message snippet", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-lead-"));
+  const memberStoreScript = path.join(dir, "whatsapp-invite");
+  const argsLog = path.join(dir, "member-args.txt");
+  writeExecutable(
+    memberStoreScript,
+    `#!/usr/bin/env bash
+set -eu
+printf '%s\\n' "$*" >> "${argsLog}"
+case "$1" in
+  status) printf '{"phone":"%s","status":"unknown","unlocked":false}\\n' "$3" ;;
+  request) printf '{"ok":true,"phone":"%s","status":"pending","changed":true,"isNew":true}\\n' "$3" ;;
+  *) exit 2 ;;
+esac
+`,
+  );
+
+  // No whatsappAdminUsers configured -> notifyAdminOfLead short-circuits (no send).
+  const handler = registerHandler({ memberStoreScript });
+  const reply = await handler(eventFor("hello I'm interested how do I apply", UNKNOWN), {
+    channelId: "whatsapp",
+    senderId: UNKNOWN,
+  });
+
+  assert.equal(reply.handled, true);
+  assert.match(reply.text, PENDING_ACK);
+  const logged = fs.readFileSync(argsLog, "utf-8");
+  assert.match(logged, /request --phone \+19995550123 --message hello I'm interested how do I apply/);
 });
 
 test("join codes are no longer redeemed and get the access-required reply", async () => {
@@ -557,7 +589,7 @@ esac
   });
 
   assert.equal(reply.handled, true);
-  assert.match(reply.text ?? "", /isn't open for new users/);
+  assert.match(reply.text ?? "", PENDING_ACK);
   assert.doesNotMatch(fs.readFileSync(argsLog, "utf-8"), /redeem/);
 });
 
@@ -595,7 +627,7 @@ esac
   });
 
   assert.equal(reply.handled, true);
-  assert.match(reply.text, /isn't open for new users/);
+  assert.match(reply.text, PENDING_ACK);
   assert.doesNotMatch(reply.text, /Choose a service/);
 });
 
@@ -797,7 +829,7 @@ test("admin sender follows public member gate when WhatsApp admin mode is disabl
     const reply = await handler(eventFor("hi", ADMIN), { channelId: "whatsapp", senderId: ADMIN });
 
     assert.equal(reply.handled, true);
-    assert.match(reply.text, /isn't open for new users/);
+    assert.match(reply.text, PENDING_ACK);
   });
 });
 

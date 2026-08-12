@@ -22,7 +22,6 @@ import {
   isFailsafeStopCommand,
   markFailsafeStopSuppression,
 } from "./lib/failsafe.js";
-import { isUnknownSenderRelevant } from "./lib/relevance.js";
 import {
   getServiceMenuSelection,
   isGreetingOrServiceMenuRequest,
@@ -32,11 +31,13 @@ import {
   isUnlockedMember,
   isWhatsAppAdmin,
   isWhatsAppPublicUser,
-  loadAccessRequiredText,
+  loadPendingAckText,
   memberGateEnabled,
   memberStatus,
+  notifyAdminOfLead,
   notifyMemberAllowed,
   parseAllowCommand,
+  recordLead,
   runMemberStoreScript,
 } from "./services/membership.js";
 import {
@@ -120,22 +121,6 @@ async function runPublicServiceAction(api, sender, action, text) {
 function isEnabled(api) {
   const pluginCfg = getPluginConfig(api);
   return pluginCfg.enabled !== false;
-}
-
-function isKnownServiceRequestText(api, text) {
-  return Boolean(
-    getServiceMenuSelection(text) ||
-      isGreetingOrServiceMenuRequest(text) ||
-      (isServiceEnabled(api, "webetu") && (
-        isWebetuOnboardingStartRequest(text) ||
-        isWebetuGuideRequest(text) ||
-        isWebetuSetupDoneRequest(text) ||
-        isReservationStatusRequest(text)
-      )) ||
-      (isServiceEnabled(api, "news") && (isNewsStopRequest(text) || isNewsRequest(text))) ||
-      (isServiceEnabled(api, "jobScout") && isJobScoutRequest(text)) ||
-      (isServiceEnabled(api, "eventScout") && isEventScoutRequest(text)),
-  );
 }
 
 function isWebetuRequestText(text) {
@@ -290,25 +275,29 @@ export default {
         }
       }
 
+      const status = gateOn && !admin ? await memberStatus(api, sender) : null;
       const configuredMember = !gateOn && isWhatsAppPublicUser(api, event, ctx);
-      const unlockedMember = gateOn && !admin && isUnlockedMember(await memberStatus(api, sender));
+      const unlockedMember = gateOn && !admin && isUnlockedMember(status);
       const member = configuredMember || unlockedMember;
 
-      // Membership gate. Only the admin can unlock a user; service-like messages
-      // from everyone else get a brief access-required reply and unrelated
-      // traffic stays silent. Admins fall through to the full agent.
+      // Membership gate. Only the admin can unlock a user. Everyone else is
+      // captured as a pending lead: their first message records a "pending"
+      // record, alerts the admin (who can reply "allow +<number>"), and they get
+      // an acknowledgement instead of silence. Admins fall through to the agent.
       if (!member) {
         if (admin) return;
         if (!gateOn) return; // classic allowlist mode: leave to core access control
         if (isDisabledServiceRequestText(api, text)) {
           return { handled: true, text: SERVICE_DISABLED_REPLY };
         }
-        if (await isUnknownSenderRelevant(api, text, {
-          isKnownServiceRequest: (candidate) => isKnownServiceRequestText(api, candidate),
-        })) {
-          return { handled: true, text: loadAccessRequiredText(api) };
+        try {
+          const res = await recordLead(api, sender, text);
+          if (res?.isNew) await notifyAdminOfLead(api, sender, text);
+        } catch (err) {
+          if (isQueueFullError(err)) return busyReply();
+          api.logger?.warn?.(`public-service-gate: failed to record lead (${String(err)})`);
         }
-        return { handled: true }; // silent drop unrelated traffic; claim it, no reply, no agent
+        return { handled: true, text: loadPendingAckText(api) };
       }
 
       // From here on, sender is a member. Do not short-circuit service UX:
