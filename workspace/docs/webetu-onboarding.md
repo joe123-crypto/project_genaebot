@@ -13,6 +13,7 @@ The main/public agent must not see, request, store, print, relay, or validate th
 Allowed in public chat:
 
 - Send an Agent Genaie account-link setup URL created for this exact WhatsApp chat.
+- Send that setup URL exactly as returned, in full and on its own line. The `token=...` in it is the user's own one-time sign-in code, not a secret to hide: never mask, shorten, or alter it, and never replace the token with asterisks. A masked link cannot sign anyone in.
 - Ask which restaurant the user wants as their default Webetu restaurant.
 - Offer to show supported restaurant names if the user is unsure.
 - Repeat the selected restaurant back to the user and save it only after the user confirms it.

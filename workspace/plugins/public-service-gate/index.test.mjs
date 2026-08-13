@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import plugin, { createLimiter, isQueueFullError, runJsonCommand } from "./index.js";
-import { accountLinkRequiredText } from "./lib/account-link.js";
+import { accountLinkRequiredText, VERBATIM_LINK_DIRECTIVE } from "./lib/account-link.js";
 import { busyReply } from "./lib/runtime.js";
 import { handleEventScoutRequest } from "./services/event-scout.js";
 import { handleJobScoutRequest } from "./services/job-scout.js";
@@ -924,7 +924,7 @@ test("runJsonCommand parses JSON stdout", async () => {
 test("public canned replies use the concise style", () => {
   assert.equal(
     accountLinkRequiredText("https://example.test/setup", "Event scouting"),
-    "Sign in here to set up Event scouting:\nhttps://example.test/setup\n\nCheck Spam if the sign-in email doesn't arrive.",
+    `${VERBATIM_LINK_DIRECTIVE}\n\nSign in here to set up Event scouting:\nhttps://example.test/setup\n\nCheck Spam if the sign-in email doesn't arrive.`,
   );
   assert.equal(busyReply().text, "I'm busy right now. Try again shortly.");
 

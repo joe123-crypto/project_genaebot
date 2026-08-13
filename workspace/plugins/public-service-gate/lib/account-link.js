@@ -64,11 +64,26 @@ export function scopedAppUrl(api, publicUserId, suffix = "") {
   return `${base}/${publicUserId}${suffix}`;
 }
 
+// These setup replies are returned to the LLM agent as tool results, which it then
+// relays to the user. A sign-in setup URL carries a one-time `?token=...`, the
+// user's own personal sign-in code, not a secret. Left to itself the model tends to
+// "protect" it by masking the token (e.g. token=***), which silently breaks the
+// link. Prefixing the tool result with an explicit directive keeps the agent from
+// mangling the URL.
+export const VERBATIM_LINK_DIRECTIVE =
+  "[Relay the message below to the user exactly as written. The link is a one-time "
+  + "personal sign-in URL, not a secret: include it in full with its token and never "
+  + "mask, redact, shorten, or alter any part of it. Do not output token=***.]";
+
+export function withVerbatimLinkDirective(message) {
+  return `${VERBATIM_LINK_DIRECTIVE}\n\n${message}`;
+}
+
 export function accountLinkRequiredText(setupUrl, serviceName) {
-  return `Sign in here to set up ${serviceName}:
+  return withVerbatimLinkDirective(`Sign in here to set up ${serviceName}:
 ${setupUrl}
 
-Check Spam if the sign-in email doesn't arrive.`;
+Check Spam if the sign-in email doesn't arrive.`);
 }
 
 export function getPendingLinksPath(api) {
