@@ -7,7 +7,7 @@ import {
   runJsonCommand,
   sanitizeLogText,
 } from "../lib/runtime.js";
-import { accountLinkStartOnboarding, getAccountLinkScript } from "../lib/account-link.js";
+import { accountLinkStartOnboarding, getAccountLinkScript, withVerbatimLinkDirective } from "../lib/account-link.js";
 import { clearServiceState, loadServiceState, saveServiceState } from "../lib/state.js";
 
 const DEFAULT_JOB_SCOUT_SCRIPT = "~/.openclaw/workspace/bin/job-scout";
@@ -98,18 +98,18 @@ function selectedChannelReply(channel, result) {
   const url = String(result?.setupUrl || result?.nextUrl || "").trim();
   if (channel === "web") {
     if (!url) return "Your Job Scout setup is ready.";
-    return `Finish setting up Job Scout in the web app:
-${url}`;
+    return withVerbatimLinkDirective(`Finish setting up Job Scout in the web app:
+${url}`);
   }
   if (result?.nextStep === "dashboard") return "Your Job Scout setup is ready.";
   if (result?.nextStep === "whatsapp_chat") {
     return "You're ready to continue here. Do you want guided questions or CV autofill?";
   }
   if (!url) return "Continue your Job Scout setup here in WhatsApp.";
-  return `Sign in to connect your account here:
+  return withVerbatimLinkDirective(`Sign in to connect your account here:
 ${url}
 
-Gmail is granted as part of sign-in. The app will bring you back here automatically.`;
+Gmail is granted as part of sign-in. The app will bring you back here automatically.`);
 }
 
 export async function handleJobScoutRequest(api, sender, text = "") {

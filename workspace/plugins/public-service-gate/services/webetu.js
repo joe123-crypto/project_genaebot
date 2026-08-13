@@ -14,6 +14,7 @@ import {
   accountLinkStatus,
   hasPendingWebetuVaultLink,
   scopedAppUrl,
+  withVerbatimLinkDirective,
 } from "../lib/account-link.js";
 import { getServiceMenuSelection } from "./greeting.js";
 
@@ -115,7 +116,7 @@ function loadWebetuOnboardingStart(api) {
 }
 
 function webetuAccountLinkStart(api, setupUrl) {
-  return loadWebetuOnboardingStart(api).replaceAll("{setupUrl}", setupUrl);
+  return withVerbatimLinkDirective(loadWebetuOnboardingStart(api).replaceAll("{setupUrl}", setupUrl));
 }
 
 function webetuVaultReadyText(api, publicUserId) {

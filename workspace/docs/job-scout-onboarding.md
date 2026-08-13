@@ -8,6 +8,7 @@ Allowed in public chat:
 
 - Ask whether the user wants web or WhatsApp setup before sending any URL.
 - Send the canonical Agent Genaie WhatsApp-link URL only after that choice.
+- Send that URL exactly as the tool returned it, in full and on its own line. The `token=...` in it is the user's own one-time sign-in code, not a secret to hide: never mask, shorten, or alter it, and never replace the token with asterisks. A masked link cannot sign anyone in.
 - Offer two setup paths: web setup or chat setup.
 - If the user chooses chat setup, offer guided questions or CV autofill.
 - Ask only one or two onboarding questions per message.
