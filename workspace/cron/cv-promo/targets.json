@@ -1,0 +1,6 @@
+{
+  "_comment": "Target WhatsApp groups for the daily CV-business ad. Each entry is either a group JID (ends in @g.us) or a WhatsApp invite link (https://chat.whatsapp.com/...). Invite links are resolved to JIDs at runtime via `openclaw channels resolve`; the bot must already be a MEMBER of each group for resolution and sending to work. Edit this list to add/remove groups; no code change needed.",
+  "groups": [
+    "https://chat.whatsapp.com/IiUwDOc6ygRAkcAdh0WUA5"
+  ]
+}

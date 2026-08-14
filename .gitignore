@@ -44,6 +44,12 @@
 !workspace/cron/*/*.py
 !workspace/cron/*/*.sh
 
+# CV promo campaign: editable target list + the ad image (developer-owned,
+# deployed with the workspace).
+!workspace/cron/cv-promo/targets.json
+!workspace/cron/cv-promo/assets/
+!workspace/cron/cv-promo/assets/*.png
+
 # Service docs and source helpers.
 !workspace/docs/
 !workspace/docs/**
