@@ -46,6 +46,25 @@ STATE_FILE = os.environ.get(
 )
 SEND_DELAY_SECONDS = float(os.environ.get("CV_PROMO_SEND_DELAY", "3"))
 
+
+def openclaw_env():
+    """Env for nested `openclaw` calls so they reach the live gateway's WhatsApp
+    channel. A bare `openclaw message send` runs standalone and reports
+    "Channel is unavailable: whatsapp"; it must connect to the running gateway as
+    a client, which needs OPENCLAW_GATEWAY_TOKEN set and OPENCLAW_HOME unset (same
+    wrapper as workspace/bin/job-scout-agent)."""
+    env = dict(os.environ)
+    env.pop("OPENCLAW_HOME", None)
+    token = os.environ.get("GATEWAY_AUTH_TOKEN")
+    if not token:
+        sys.stderr.write(
+            "ERROR: GATEWAY_AUTH_TOKEN is not set; the WhatsApp channel is only "
+            "reachable as a gateway client, so sends will fail.\n"
+        )
+    else:
+        env["OPENCLAW_GATEWAY_TOKEN"] = token
+    return env
+
 # Fixed advert. WhatsApp bold uses *single* asterisks, so the closing line is
 # wrapped in single asterisks to render bold (not literal ** ). Everything else is
 # verbatim.
@@ -134,7 +153,8 @@ def resolve_invite(entry):
     cmd = ["openclaw", "directory", "groups", "list",
            "--channel", "whatsapp", "--json", "--limit", "200"]
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=120,
+                           env=openclaw_env())
     except Exception as ex:
         sys.stderr.write("WARN: directory list exec error for %s: %s\n" % (entry, ex))
         return None
@@ -235,7 +255,8 @@ def send_ad(target):
            "--target", target, "--message", POST_TEXT,
            "--media", IMAGE_PATH, "--json"]
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=180,
+                           env=openclaw_env())
     except Exception as ex:
         return (False, "exec error: %s" % ex)
     out = (p.stdout or "") + (p.stderr or "")
