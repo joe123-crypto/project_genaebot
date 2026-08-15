@@ -807,6 +807,7 @@ main() {
   start_optional_job_scout_browser
   bash "$OC_DIR/deploy/install-job-scout-approvals.sh"
   install_job_scout_schedule
+  bash "$OC_DIR/deploy/install-cv-promo.sh"
   start_optional_job_scout_channel_listener
   record_successful_deploy
   log "Deploy complete."
