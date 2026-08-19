@@ -2,6 +2,10 @@
   "version": 1,
   "customSkills": [
     {
+      "name": "cv-maker",
+      "path": "workspace/skills/cv-maker"
+    },
+    {
       "name": "genaie-calendar",
       "path": "workspace/skills/genaie-calendar"
     },

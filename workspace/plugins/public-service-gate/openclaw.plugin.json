@@ -72,6 +72,9 @@
       "jobScoutOnboardingEnabled": {
         "type": "boolean"
       },
+      "cvMakerEnabled": {
+        "type": "boolean"
+      },
       "workerSudoCommand": {
         "type": "string"
       },

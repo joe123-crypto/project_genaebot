@@ -133,7 +133,8 @@
           "webetuEnabled": false,
           "newsEnabled": false,
           "eventScoutEnabled": false,
-          "jobScoutOnboardingEnabled": true
+          "jobScoutOnboardingEnabled": true,
+          "cvMakerEnabled": true
         }
       },
       "whatsapp-relevance-gate": {

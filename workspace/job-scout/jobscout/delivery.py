@@ -399,6 +399,34 @@ def send_whatsapp_message(target: str, message: str) -> dict:
   ], env=command_env)
 
 
+def send_whatsapp_document(target: str, document_path: str | Path, message: str = "") -> dict:
+  """Send a document (e.g. a rendered CV PDF) to a WhatsApp user as media.
+
+  Mirrors send_whatsapp_message but attaches a file via --media, the same way
+  cron/cv-promo posts its ad image. Used by the standalone CV maker to deliver
+  the finished CV straight back to the requester.
+  """
+  command_env = os.environ.copy()
+  command_env.pop("OPENCLAW_HOME", None)
+  gateway_token = command_env.get("GATEWAY_AUTH_TOKEN", "").strip()
+  if gateway_token:
+    command_env["OPENCLAW_GATEWAY_TOKEN"] = gateway_token
+  return run_json_command([
+    str(api.OPENCLAW_BIN),
+    "message",
+    "send",
+    "--channel",
+    "whatsapp",
+    "--target",
+    target,
+    "--message",
+    message,
+    "--media",
+    str(document_path),
+    "--json",
+  ], env=command_env)
+
+
 def send_whatsapp_summary(phone: str, message: str) -> dict:
   return send_whatsapp_message(phone, message)
 

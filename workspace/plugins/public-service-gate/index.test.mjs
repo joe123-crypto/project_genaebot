@@ -192,6 +192,41 @@ test("job scout onboarding has a generic disabled response", async () => {
   assert.doesNotMatch(reply.text, /pilot/i);
 });
 
+test("enabling the CV maker exposes cv_maker_start and routes to the intro", async () => {
+  const handler = registerHandler({ cvMakerEnabled: true });
+  const tool = handler.publicTool({ agentId: "public", requesterSenderId: MEMBER, messageChannel: "whatsapp" });
+  assert.ok(tool.parameters.properties.action.enum.includes("cv_maker_start"));
+
+  const result = await tool.execute("test", { action: "cv_maker_start", text: "make me a cv" });
+  assert.match(result.content[0].text, /professional one-page CV/i);
+  assert.match(result.content[0].text, /revamp/i);
+});
+
+test("cv_maker_start is omitted while the CV maker is disabled", async () => {
+  const handler = registerHandler({});
+  const tool = handler.publicTool({ agentId: "public", requesterSenderId: MEMBER, messageChannel: "whatsapp" });
+  assert.equal(tool.parameters.properties.action.enum.includes("cv_maker_start"), false);
+});
+
+test("a member CV request defers to the agent when the CV maker is enabled", async () => {
+  const handler = registerHandler({ cvMakerEnabled: true });
+  const reply = await handler(eventFor("can you make me a professional cv", MEMBER), {
+    channelId: "whatsapp",
+    senderId: MEMBER,
+  });
+  assert.equal(reply, undefined);
+});
+
+test("a CV request is unavailable while the CV maker is disabled", async () => {
+  const handler = registerHandler({});
+  const reply = await handler(eventFor("please revamp my cv", MEMBER), {
+    channelId: "whatsapp",
+    senderId: MEMBER,
+  });
+  assert.equal(reply.handled, true);
+  assert.match(reply.text, /isn't available here right now/i);
+});
+
 test("job scout asks for web or WhatsApp before creating a link", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-jobs-"));
   const accountLinkScript = path.join(dir, "account-link");

@@ -58,6 +58,7 @@ import {
 } from "./services/news.js";
 import { handleJobScoutRequest, isJobScoutRequest } from "./services/job-scout.js";
 import { handleEventScoutRequest, isEventScoutRequest } from "./services/event-scout.js";
+import { handleCvMakerRequest, isCvMakerRequest } from "./services/cv-maker.js";
 
 const PUBLIC_SERVICE_ACTIONS = [
   { name: "webetu_start", service: "webetu" },
@@ -68,8 +69,9 @@ const PUBLIC_SERVICE_ACTIONS = [
   { name: "news_topics", service: "news" },
   { name: "event_scout_start", service: "eventScout" },
   { name: "job_scout_start_or_status", service: "jobScout" },
+  { name: "cv_maker_start", service: "cvMaker" },
 ];
-const SERVICE_DISABLED_REPLY = "That isn't available here right now. This chat can help with Job Scout.";
+const SERVICE_DISABLED_REPLY = "That isn't available here right now. This chat can help with Job Scout or making a CV.";
 
 function isServiceEnabled(api, service) {
   const pluginCfg = getPluginConfig(api);
@@ -82,6 +84,8 @@ function isServiceEnabled(api, service) {
       return pluginCfg.eventScoutEnabled !== false;
     case "jobScout":
       return pluginCfg.jobScoutOnboardingEnabled === true;
+    case "cvMaker":
+      return pluginCfg.cvMakerEnabled === true;
     default:
       return false;
   }
@@ -114,6 +118,7 @@ async function runPublicServiceAction(api, sender, action, text) {
     case "news_topics": return toolText(await handleNewsTopicsContinuation(api, sender, text));
     case "event_scout_start": return toolText(await handleEventScoutRequest(api, sender));
     case "job_scout_start_or_status": return toolText(await handleJobScoutRequest(api, sender, text));
+    case "cv_maker_start": return toolText(await handleCvMakerRequest(api, sender, text));
     default: return toolText();
   }
 }
@@ -142,6 +147,7 @@ function isDisabledServiceRequestText(api, text) {
   // applications?" is a Job Scout question, not a disabled-news request.
   if (getServiceMenuSelection(text) || isGreetingOrServiceMenuRequest(text)) return false;
   if (isServiceEnabled(api, "jobScout") && isJobScoutRequest(text)) return false;
+  if (isServiceEnabled(api, "cvMaker") && isCvMakerRequest(text)) return false;
   return Boolean(
     (!isServiceEnabled(api, "webetu") && (
       isWebetuRequestText(text) ||
@@ -151,7 +157,8 @@ function isDisabledServiceRequestText(api, text) {
       isReservationStatusRequest(text)
     )) ||
       (!isServiceEnabled(api, "news") && (isNewsStopRequest(text) || isNewsRequest(text))) ||
-      (!isServiceEnabled(api, "eventScout") && (isEventScoutRequest(text) || isCalendarSaveRequestText(text))),
+      (!isServiceEnabled(api, "eventScout") && (isEventScoutRequest(text) || isCalendarSaveRequestText(text))) ||
+      (!isServiceEnabled(api, "cvMaker") && isCvMakerRequest(text)),
   );
 }
 
