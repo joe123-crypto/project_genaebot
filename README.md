@@ -122,7 +122,11 @@ Tracked categories:
   allowlist; the global runtime/state/cache excludes at the top of that filter
   still keep `__pycache__/`, `node_modules/`, `*.log`, and `*.json` state files
   out of the deployable source.
-- selected custom skills plus `workspace/skills.lock.json`
+- selected custom skills plus `workspace/skills.lock.json`. Unlike the service
+  folders above, skills are **not** covered by a recursive glob: each one is
+  listed explicitly in `deploy/stage-workspace.rsync` (e.g. `+ /skills/cv-maker/`
+  and `+ /skills/cv-maker/SKILL.md`) ahead of the closing `- /**` rule, so a new
+  skill must be added there or it will not ship.
 
 Ignored categories:
 

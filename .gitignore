@@ -83,6 +83,8 @@
 !workspace/skills/gog/**
 !workspace/skills/job-scout/
 !workspace/skills/job-scout/SKILL.md
+!workspace/skills/cv-maker/
+!workspace/skills/cv-maker/SKILL.md
 !workspace/skills/pdf-edit/
 !workspace/skills/pdf-edit/SKILL.md
 !workspace/skills/pdf-edit/pdf_edit.py

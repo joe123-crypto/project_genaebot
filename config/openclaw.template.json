@@ -133,14 +133,15 @@
           "webetuEnabled": false,
           "newsEnabled": false,
           "eventScoutEnabled": false,
-          "jobScoutOnboardingEnabled": true
+          "jobScoutOnboardingEnabled": true,
+          "cvMakerEnabled": true
         }
       },
       "whatsapp-relevance-gate": {
         "enabled": true,
         "config": {
           "enabled": false,
-          "serviceSummary": "Job, scholarship, and internship scouting and applications",
+          "serviceSummary": "Job, scholarship, and internship scouting and applications, plus CV writing and revamping",
           "serviceKeywords": [
             "job",
             "jobs",
@@ -155,12 +156,17 @@
             "bonjour",
             "start",
             "setup",
-            "help"
+            "help",
+            "cv",
+            "resume",
+            "curriculum vitae"
           ],
           "serviceExamples": [
             "find me a job",
             "any scholarships",
-            "help me apply for an internship"
+            "help me apply for an internship",
+            "make me a cv",
+            "revamp my CV"
           ],
           "relevanceMode": "off",
           "embeddingModel": "google/text-multilingual-embedding-002",
@@ -173,7 +179,9 @@
             "help me apply for an internship",
             "ابحث لي عن وظيفة او منحة",
             "how do I get started",
-            "help me set up my account"
+            "help me set up my account",
+            "make me a professional cv",
+            "can you revamp my CV"
           ],
           "offTopicAnchors": [
             "what is the weather today",
@@ -189,7 +197,7 @@
           ],
           "useLlmFallback": false,
           "llmMaxTokens": 5,
-          "rejectionMessage": "I can help with Job Scout. Do you want to set it up?",
+          "rejectionMessage": "I can help with Job Scout or making a CV. Which do you need?",
           "failOpen": false,
           "maxTextLength": 400
         }

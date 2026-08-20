@@ -13,6 +13,7 @@ from .commands_dispatch import (
   cmd_start_dispatch,
   cmd_verify_dispatch,
 )
+from .commands_cv import cmd_make_cv
 from .commands_group_feed import cmd_deliver_group_feed
 from .commands_setup import (
   cmd_check_runtime,
@@ -84,6 +85,19 @@ def build_parser() -> argparse.ArgumentParser:
   profile.add_argument("--storage-root", type=Path, default=DEFAULT_STORAGE_ROOT)
   profile.add_argument("--dry-run", action="store_true")
   profile.set_defaults(func=cmd_save_profile)
+
+  make_cv = subparsers.add_parser(
+    "make-cv",
+    help="render a standalone CV from an uploaded PDF or agent-collected details and send it to the user",
+  )
+  make_cv.add_argument("--phone", required=True, help="WhatsApp recipient for the finished CV")
+  make_cv_source = make_cv.add_mutually_exclusive_group(required=True)
+  make_cv_source.add_argument("--cv", help="uploaded CV PDF to revamp into the professional template")
+  make_cv_source.add_argument(
+    "--details-file",
+    help="text file of agent-collected CV details (name, then SECTION headings and their lines)",
+  )
+  make_cv.set_defaults(func=cmd_make_cv)
 
   status = subparsers.add_parser("status", help="check one WhatsApp user's Job Scout readiness")
   status.add_argument("--phone", required=True)
