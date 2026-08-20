@@ -6,6 +6,7 @@ const DEFAULT_GREETING_TEMPLATE_PATH = "~/.openclaw/workspace/docs/public-greeti
 const DEFAULT_GREETING = `Hi! I can help with:
 
 1. Job, scholarship, and internship scouting
+2. CV writing and revamping
 
 Which one do you need?`;
 

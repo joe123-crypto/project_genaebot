@@ -98,6 +98,16 @@
       "requiredDocs": [
         "workspace/docs/job-scout-onboarding.md"
       ]
+    },
+    {
+      "name": "CV maker public interface",
+      "paths": [
+        "workspace/plugins/public-service-gate/services/cv-maker.js",
+        "workspace/skills/cv-maker/**"
+      ],
+      "requiredDocs": [
+        "workspace/docs/cv-maker-onboarding.md"
+      ]
     }
   ]
 }

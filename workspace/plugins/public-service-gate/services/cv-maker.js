@@ -1,5 +1,4 @@
 import { getPluginConfig } from "../lib/config.js";
-import { saveServiceState } from "../lib/state.js";
 
 const CV_MAKER_UNAVAILABLE = "The CV maker isn't available here right now. Try again later.";
 
@@ -38,10 +37,10 @@ export async function handleCvMakerRequest(api, sender, text = "") {
   // the cv-maker skill/doc, collects the CV (an uploaded PDF or a short question
   // set), runs `job-scout make-cv`, and that command renders and sends the
   // finished PDF back on WhatsApp. No account link, Gmail, or stored profile.
-  try {
-    saveServiceState(api, sender, "cv-maker", "cv-maker.awaiting_choice");
-  } catch (err) {
-    api.logger?.warn?.(`public-service-gate: failed to save cv-maker state (${String(err)})`);
-  }
+  //
+  // Deliberately no saveServiceState here: lib/state.js keeps a single slot per
+  // phone, so writing one would evict a Job Scout setup already in flight for
+  // this sender. The agent continues this flow from conversation context, and
+  // nothing reads a "cv-maker" step, so there is no state worth that cost.
   return { handled: true, text: cvMakerIntro() };
 }

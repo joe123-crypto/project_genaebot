@@ -65,8 +65,25 @@ class CvIdentityTests(unittest.TestCase):
 
 class MakeCvArgumentTests(unittest.TestCase):
   def test_requires_a_phone(self) -> None:
-    with self.assertRaisesRegex(SystemExit, "--phone is required"):
+    with self.assertRaisesRegex(SystemExit, "phone is required"):
       cmd_make_cv(_make_args(phone="", details_file="/tmp/x.txt"))
+
+  def test_rejects_a_group_target(self) -> None:
+    # A CV carries the applicant's name, phone, email, and area. Normalization
+    # strips non-digits, so a group JID can never become the delivery target.
+    with self.assertRaises(SystemExit):
+      cmd_make_cv(_make_args(phone="120363001234567890@g.us", details_file="/tmp/x.txt"))
+
+  def test_rejects_an_implausible_phone(self) -> None:
+    with self.assertRaisesRegex(SystemExit, "9-16 digits"):
+      cmd_make_cv(_make_args(phone="+123", details_file="/tmp/x.txt"))
+
+  def test_rejects_a_non_pdf_cv(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      docx = Path(tmp) / "cv.docx"
+      docx.write_bytes(b"not a pdf")
+      with self.assertRaisesRegex(SystemExit, "must be a PDF"):
+        cmd_make_cv(_make_args(cv=str(docx)))
 
   def test_requires_exactly_one_source(self) -> None:
     with self.assertRaisesRegex(SystemExit, "exactly one"):
@@ -89,7 +106,6 @@ class MakeCvFromDetailsTests(unittest.TestCase):
       details = Path(tmp) / "details.txt"
       details.write_text(DETAILS_TEXT, encoding="utf-8")
       with mock.patch("jobscout.delivery.render_one_page_cv", side_effect=_fake_render) as render, \
-        mock.patch("jobscout.delivery.pdf_page_count", return_value=1), \
         mock.patch(
           "jobscout.delivery.send_whatsapp_document",
           return_value={"messageId": "wamid.1"},
@@ -126,11 +142,53 @@ class MakeCvFromDetailsTests(unittest.TestCase):
       details = Path(tmp) / "details.txt"
       details.write_text(DETAILS_TEXT, encoding="utf-8")
       with mock.patch("jobscout.delivery.render_one_page_cv", side_effect=_fake_render), \
-        mock.patch("jobscout.delivery.pdf_page_count", return_value=1), \
         mock.patch("jobscout.delivery.send_whatsapp_document", return_value={}):
         result = cmd_make_cv(_make_args(details_file=str(details)))
       self.assertTrue(result["ok"])
       self.assertFalse(result["delivered"])
+
+
+class MakeCvFailureTests(unittest.TestCase):
+  def test_render_failure_returns_sanitized_error(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      details = Path(tmp) / "details.txt"
+      details.write_text(DETAILS_TEXT, encoding="utf-8")
+      with mock.patch(
+        "jobscout.delivery.render_one_page_cv",
+        side_effect=RuntimeError("PDF rendering worker is unavailable"),
+      ), mock.patch("jobscout.delivery.send_whatsapp_document") as send:
+        result = cmd_make_cv(_make_args(details_file=str(details)))
+
+      self.assertEqual(result["ok"], False)
+      self.assertIn("unavailable", result["error"])
+      send.assert_not_called()
+
+  def test_error_text_hides_local_paths(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      details = Path(tmp) / "details.txt"
+      details.write_text(DETAILS_TEXT, encoding="utf-8")
+      with mock.patch(
+        "jobscout.delivery.render_one_page_cv",
+        side_effect=RuntimeError("failed reading /home/joseph/.openclaw/secret.txt"),
+      ):
+        result = cmd_make_cv(_make_args(details_file=str(details)))
+
+      self.assertEqual(result["ok"], False)
+      self.assertNotIn("/home/joseph", result["error"])
+
+  def test_send_failure_returns_error(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      details = Path(tmp) / "details.txt"
+      details.write_text(DETAILS_TEXT, encoding="utf-8")
+      with mock.patch("jobscout.delivery.render_one_page_cv", side_effect=_fake_render), \
+        mock.patch(
+          "jobscout.delivery.send_whatsapp_document",
+          side_effect=RuntimeError("whatsapp send failed"),
+        ):
+        result = cmd_make_cv(_make_args(details_file=str(details)))
+
+      self.assertEqual(result["ok"], False)
+      self.assertIn("send failed", result["error"])
 
 
 class MakeCvRevampTests(unittest.TestCase):
@@ -146,7 +204,6 @@ class MakeCvRevampTests(unittest.TestCase):
       pdf.write_bytes(b"%PDF-1.7 source")
       with mock.patch("jobscout.commands_cv.convert_pdf_to_cv_html", side_effect=fake_convert) as convert, \
         mock.patch("jobscout.delivery.render_one_page_cv", side_effect=_fake_render) as render, \
-        mock.patch("jobscout.delivery.pdf_page_count", return_value=1), \
         mock.patch(
           "jobscout.delivery.send_whatsapp_document",
           return_value={"messageId": "wamid.2"},

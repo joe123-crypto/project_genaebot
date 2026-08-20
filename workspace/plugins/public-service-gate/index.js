@@ -71,7 +71,17 @@ const PUBLIC_SERVICE_ACTIONS = [
   { name: "job_scout_start_or_status", service: "jobScout" },
   { name: "cv_maker_start", service: "cvMaker" },
 ];
-const SERVICE_DISABLED_REPLY = "That isn't available here right now. This chat can help with Job Scout or making a CV.";
+const SERVICE_DISABLED_UNAVAILABLE = "That isn't available here right now.";
+
+// The refusal names only the services actually switched on, so a chat with the
+// CV maker disabled never offers a CV in the same breath as declining one.
+function serviceDisabledReply(api) {
+  const offers = [];
+  if (isServiceEnabled(api, "jobScout")) offers.push("Job Scout");
+  if (isServiceEnabled(api, "cvMaker")) offers.push("making a CV");
+  if (!offers.length) return SERVICE_DISABLED_UNAVAILABLE;
+  return `${SERVICE_DISABLED_UNAVAILABLE} This chat can help with ${offers.join(" or ")}.`;
+}
 
 function isServiceEnabled(api, service) {
   const pluginCfg = getPluginConfig(api);
@@ -108,7 +118,7 @@ function toolText(reply) {
 
 async function runPublicServiceAction(api, sender, action, text) {
   const service = actionService(action);
-  if (!service || !isServiceEnabled(api, service)) return toolText({ text: SERVICE_DISABLED_REPLY });
+  if (!service || !isServiceEnabled(api, service)) return toolText({ text: serviceDisabledReply(api) });
   switch (action) {
     case "webetu_start": return toolText(await handleWebetuOnboardingStart(api, sender));
     case "webetu_setup_done": return toolText(await handleWebetuSetupDone(api, sender));
@@ -295,7 +305,7 @@ export default {
         if (admin) return;
         if (!gateOn) return; // classic allowlist mode: leave to core access control
         if (isDisabledServiceRequestText(api, text)) {
-          return { handled: true, text: SERVICE_DISABLED_REPLY };
+          return { handled: true, text: serviceDisabledReply(api) };
         }
         try {
           const res = await recordLead(api, sender, text);
@@ -311,7 +321,7 @@ export default {
       // greetings, menu digits, setup continuations, and service requests all
       // fall through to the agent, which has the public-service docs and tools.
       if (isDisabledServiceRequestText(api, text)) {
-        return { handled: true, text: SERVICE_DISABLED_REPLY };
+        return { handled: true, text: serviceDisabledReply(api) };
       }
       api.logger?.info?.(
         `public-service-gate: member WhatsApp text deferred to agent sender=${sender} textLen=${text.length}`,
