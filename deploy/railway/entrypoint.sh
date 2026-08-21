@@ -143,6 +143,11 @@ for key in "${SECRET_KEYS[@]}"; do
   val="${val#\'}"; val="${val%\'}"
   if [ -n "$val" ]; then
     printf '%s=%s\n' "$key" "$val" >> "$tmp_env"
+    # Re-export the cleaned value into the process environment. job-scout's
+    # env_default() reads os.environ FIRST and verbatim (config.py), only
+    # falling back to .env, so the gateway and the cron subprocesses it spawns
+    # would otherwise inherit Railway's raw (quoted) value and keep 403-ing.
+    export "$key=$val"
     wrote_env=1
   fi
 done
