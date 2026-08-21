@@ -132,6 +132,15 @@ wrote_env=0
 tmp_env="$(mktemp)"
 for key in "${SECRET_KEYS[@]}"; do
   val="${!key:-}"
+  # Sanitize: a Railway variable set with surrounding whitespace or quotes would
+  # otherwise be written verbatim and rejected downstream (e.g. a quoted
+  # AGENT_GENAI_INTERNAL_API_KEY yields HTTP 403 "invalid internal API key",
+  # which silently breaks the job-scout group feed and dispatch crons). Trim
+  # surrounding whitespace, then one layer of surrounding quotes.
+  val="${val#"${val%%[![:space:]]*}"}"
+  val="${val%"${val##*[![:space:]]}"}"
+  val="${val#\"}"; val="${val%\"}"
+  val="${val#\'}"; val="${val%\'}"
   if [ -n "$val" ]; then
     printf '%s=%s\n' "$key" "$val" >> "$tmp_env"
     wrote_env=1
