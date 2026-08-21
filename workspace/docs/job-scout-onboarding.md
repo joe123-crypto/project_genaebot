@@ -39,7 +39,8 @@ First-time linking is automatic: the WhatsApp number is linked without a confirm
 Sign-in redirects the user back to this WhatsApp chat automatically
 If user chose web setup, normal web onboarding continues with Job Scout already selected
 If user chose chat setup and already has a CV in R2, Agent uses CV autofill automatically
-If user chose chat setup and has no CV in R2, Agent asks whether to answer questions or upload a CV
+If user chose chat setup and has no CV in R2, Agent asks whether to answer questions, upload a CV, or build one in chat
+If user chooses to build a CV, Agent interviews for the CV facts and generates a canonical HTML CV in R2
 Always confirm the preferred location and country; a CV cannot reliably supply it
 Agent collects any remaining details gradually, one or two questions per message
 Agent summarizes the profile and asks for corrections
@@ -96,9 +97,10 @@ How do you want to set up Job Scout in chat?
 
 1. Answer a few questions.
 2. Upload your CV.
+3. Build a CV with me (no CV needed).
 ```
 
-Do not continue to CV extraction unless the user chose WhatsApp setup and gives permission. Saving a ready WhatsApp-collected profile completes the in-progress Job Scout onboarding automatically.
+If the user has no CV and does not have one to upload, option 3 builds one for them from a short interview (see the Build CV Flow). Do not continue to CV extraction unless the user chose WhatsApp setup and gives permission. Saving a ready WhatsApp-collected profile completes the in-progress Job Scout onboarding automatically.
 
 ## Guided Question Flow
 
@@ -117,7 +119,7 @@ Recommended order:
 7. Is there anything else I should remember when applying?
 8. Upload your CV.
 
-If the user already answered some of these, do not ask again. Ask only for missing or unclear details.
+If the user already answered some of these, do not ask again. Ask only for missing or unclear details. If the user has no CV to upload at step 8, offer to build one from a short interview instead (see the Build CV Flow); a CV in R2 is still required before the user is dispatch-ready.
 
 Friendly field mapping:
 
@@ -158,6 +160,63 @@ Before confirming or saving the profile, validate every preferred location:
 ```
 
 If validation fails, ask the user to restate the location with its country. Do not guess the country or silently use the Algeria fallback. Multiple locations must resolve to the same country because JSearch accepts one country filter.
+
+## Build CV Flow
+
+Use this flow when the user has no CV in R2 and has no CV file to upload, and they choose to build one in chat (option 3). This is the WhatsApp version of the web app's Create-CV interview: you interview the user for their CV facts, then a helper turns those facts into the same canonical HTML CV that a PDF upload produces and stores it in R2. Only after that is the user CV-ready.
+
+You conduct the interview yourself, acting as a disciplined AI interviewer. Ask for the facts below one at a time and wait for each answer before continuing.
+
+Rules:
+
+- Be brief. No greetings, no filler, no praise, no restating their answers.
+- Ask for only ONE piece of information per turn. You may combine at most TWO closely-related fields in one question (for example a start and end date), but NEVER ask for three or more things at once.
+- Never ask for email, phone and city in the same question. Ask for each in its own turn.
+- Collect a work role or a qualification across several short turns (e.g. job title, then company, then dates), never as one big multi-part question.
+- Never re-ask or re-confirm anything already collected; move straight to the next missing field.
+- Accept "skip"/"none"/"done" to move past optional sections (referees) or to stop adding more experience/education/referees.
+- Experience, education and referees are lists: keep asking "another?" only until the user is done, then move on.
+- Only the full name is required; leave every other field empty when the user has nothing to add.
+- Do NOT ask for skills, the professional summary, or descriptions of work/education. Those are optional; Job Scout fills them in per application. Record them only if the user volunteers them; otherwise leave empty and never prompt.
+
+Suggested wording:
+
+- Opening: "Hi! I'll help you build your CV just by chatting, no long forms. First up: what's your full name?"
+- Contact, each in its own turn: "What's your email address?" / "And your phone number?" / "Which city are you based in?"
+- Experience: "What was your most recent job title?" → "Which company?" → "When did you start and finish there? For example 'Jan 2020 to 2022'." → "Any other roles? Give the job title, or type 'done'."
+- Education: "What's your most recent qualification or certificate?" → "Where did you get it?" → "What were the dates? For example '2015 to 2018'." → "Any others, or type 'done'?"
+- Referees (optional, one field per turn): "Any referees? What's the first referee's name?" → their position → their company → "And their email and phone number?" → "Any other referees, or type 'done'?"
+- Close: tell the user their CV is ready to build/review.
+
+When you have the facts, write them to a JSON file in the InterviewData shape and build the CV. The phone must already be linked:
+
+```bash
+/home/joseph/.openclaw/workspace/bin/job-scout build-cv \
+  --phone "<whatsapp phone>" \
+  --facts @/path/to/facts.json
+```
+
+```json
+{
+  "fullName": "Jane Doe",
+  "email": "jane@example.com",
+  "phone": "+263 77 123 4567",
+  "location": "Bindura, Zimbabwe",
+  "experience": [
+    {"title": "Shop Assistant", "company": "ABC Stores", "start": "Jan 2020", "end": "Present", "description": ""}
+  ],
+  "education": [
+    {"degree": "O Level", "institution": "Bindura High", "start": "2015", "end": "2018", "description": ""}
+  ],
+  "referees": [
+    {"name": "John Smith", "position": "Manager", "company": "ABC Stores", "email": "john@abc.co.zw", "phone": "+263 77 000 1111"}
+  ]
+}
+```
+
+`build-cv` writes the canonical HTML CV to R2 under `<uid>/cv/base/cv.html` and returns its `cvHtmlRef`. Add `--dry-run` to return the built HTML without storing it if you want to preview the result with the user first. Do not mention internal storage keys to the user. After the CV is built, `--cv` may be omitted from `save-profile`; the existing CV on file is retained.
+
+Building a CV supplies the applicant's facts only. It does not supply target roles or a location, so still collect those (see the Guided Question Flow) and always validate every location with `resolve-location` before saving.
 
 ## CV Autofill Flow
 
