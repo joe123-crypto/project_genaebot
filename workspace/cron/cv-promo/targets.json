@@ -2,6 +2,8 @@
   "_comment": "Target WhatsApp groups for the daily CV-business ad. Use group JIDs (ending in @g.us); the bot must be a MEMBER of each. Invite links are NOT reliably resolvable on this gateway (WhatsApp channels resolve is unsupported and the directory is config-backed), so always list JIDs here. Edit this list to add/remove groups; no code change needed.",
   "groups": [
     "120363275485319265@g.us",
-    "120363364576432272@g.us"
+    "120363364576432272@g.us",
+    "120363175904566195@g.us",
+    "120363400161887838@g.us"
   ]
 }
