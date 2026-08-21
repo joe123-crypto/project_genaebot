@@ -99,16 +99,16 @@ ShellCheck, actionlint, locked npm dependencies, high-severity production npm
 advisories, secret/private-state scanning, and Docker Compose rendering. The
 Job Scout and ZimLinks listener dependency sets are installed from their
 respective lockfiles before Node tests run, then both production dependency
-sets are audited. Both self-hosted deploy jobs — the ordinary `main` deploy and
-the dispatched Job Scout release deploy — install the same locked dependencies
-before handing off to `openclaw-prod-deploy`, because that wrapper re-runs
-`deploy/ci-check.sh` on the production host and its Node tests import
-`playwright` and `baileys` from those trees. `actions/checkout` wipes untracked
-paths, so a previous run's `node_modules` never carries over. The production Job
-Scout browser image is built when one of its inputs changes.
+sets are audited. The dispatched Job Scout release deploy (self-hosted) installs
+the same locked dependencies before handing off to `openclaw-prod-deploy`,
+because that wrapper re-runs `deploy/ci-check.sh` on the production host and its
+Node tests import `playwright` and `baileys` from those trees. `actions/checkout`
+wipes untracked paths, so a previous run's `node_modules` never carries over. The
+production Job Scout browser image is built when one of its inputs changes.
 
-The ordinary deploy job has read-only repository permissions and runs only for
-a `main` push after every hosted job succeeds. Job Scout releases additionally
+The former gateway `main` deploy job has been **retired**: the gateway now
+deploys via Railway's GitHub integration (`deploy/railway/Dockerfile`), not this
+workflow. See `deploy/railway/README.md`. Job Scout releases additionally
 use a read-only Actions permission to correlate the dispatch; the release images
 are public and pulled anonymously, so no package grant or registry login is
 used. Actions are pinned to commit revisions; containerized validation tools are
@@ -185,19 +185,15 @@ consumers and exits before staging or restarting production.
 
 ## Deploy Flow
 
-After the runner is online, production deploys happen when `main` changes:
+### Gateway (Railway)
 
-```bash
-cd /home/joseph/.openclaw
-git push origin main
-```
+The gateway deploys via Railway's GitHub integration: merging to `main`
+auto-builds `deploy/railway/Dockerfile` and redeploys the container. The
+`validate` (`Portable validation`) job is the required status check that should
+gate merges. See `deploy/railway/README.md` for the one-time wiring and the
+break-glass `railway up` path.
 
-The hosted jobs validate the exact pushed commit. After they pass, the
-self-hosted job runs:
-
-```bash
-sudo /usr/local/sbin/openclaw-prod-deploy "$GITHUB_WORKSPACE"
-```
+### Job Scout release (self-hosted)
 
 For a hosted-validated Job Scout release, the workflow uses the constrained
 request form:
@@ -238,7 +234,14 @@ Only a fully completed deploy updates:
 The marker contains the successful Git SHA, completion time, and staged-content
 digest. Failed or canceled deploys leave the previous successful marker intact.
 
-Because branch protection is unavailable for this private repository on the
-current GitHub plan, CI cannot prevent a failing commit from entering `main`.
-The job dependency prevents that commit from reaching production. Revert the
+Historically, branch protection was unavailable for this private repository on
+the current GitHub plan, so CI could not prevent a failing commit from entering
+`main`; the retired gateway deploy job's dependency on `validate` was what kept a
+failing commit from reaching production. **Railway's GitHub integration deploys
+whatever lands on `main` regardless of CI**, so that enforced gate must be
+re-established by requiring the `Portable validation` check via branch protection
+(or a ruleset) on `main`. If branch protection cannot be enabled on the current
+plan, prefer the enforced alternative — a GitHub-Actions `deploy` job that runs
+`railway up` and `needs: [validate, secrets]`, so tests still gate the deploy
+without branch protection (turn Railway auto-deploy off in that case). Revert the
 commit on `main` to roll production back through the normal validated path.
