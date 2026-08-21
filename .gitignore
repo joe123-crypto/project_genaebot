@@ -5,6 +5,9 @@
 # Repository metadata.
 !.gitignore
 !README.md
+# Railway build config (root of the build context, read by the GitHub integration).
+!railway.json
+!.dockerignore
 !.github/
 !.github/actionlint.yaml
 !.github/workflows/
