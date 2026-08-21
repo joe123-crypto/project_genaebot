@@ -1,0 +1,35 @@
+# Build context for deploy/railway/Dockerfile (build context = repo root).
+# The stage step (deploy/stage-openclaw-source.sh) only reads curated inputs, but
+# these excludes keep secrets/runtime out of the uploaded context and slim it.
+#
+# NOTE: leading "/" anchors to the repo root, so the private root-level
+# agent-workspace* trees are excluded WITHOUT touching deploy/agent-workspace-*,
+# which the staging step needs.
+
+/.git
+/.github
+
+# Secrets / synthesized env — never upload to the builder.
+/.env
+**/.env
+/.env.example
+/secrets
+
+# Writable runtime state (job-scout/gate/account-link) — reseeded via the volume,
+# not baked into the image.
+/runtime
+
+# Private/runtime agent workspaces (curated context comes from deploy/agent-workspace-*).
+/agent-workspace
+/agent-workspace-admin
+/agent-workspace-public
+
+# Caches, build cruft, local DB pulls.
+**/__pycache__
+**/*.pyc
+**/.venv
+**/node_modules
+*.tgz
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
