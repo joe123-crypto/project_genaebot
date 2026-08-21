@@ -48,11 +48,19 @@ agent context markdown): edit it in this repo, open a PR, merge. That's the whol
    {
      "required_status_checks": { "strict": true, "contexts": ["Portable validation"] },
      "enforce_admins": false,
-     "required_pull_request_reviews": null,
+     "required_pull_request_reviews": { "required_approving_review_count": 0 },
      "restrictions": null
    }
    JSON
    ```
+
+   `required_pull_request_reviews` (with 0 approvals) routes every change through a PR so
+   the check cannot be bypassed by a direct push to `main`; `strict: true` requires the
+   branch be up to date. Leave `enforce_admins: false` so you retain a break-glass hotfix
+   path (set it `true` to gate admins too). If classic branch protection isn't offered on
+   the plan, the equivalent **repository ruleset** (Settings → Rules → Rulesets → require
+   status checks + require a pull request) achieves the same and is available for free
+   private repos.
 
 ## Break-glass: manual deploy without GitHub
 
