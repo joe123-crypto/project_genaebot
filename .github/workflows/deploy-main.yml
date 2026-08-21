@@ -263,44 +263,17 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  deploy:
-    name: Deploy exact main commit
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs:
-      - validate
-      - secrets
-      - browser-image
-    runs-on:
-      - self-hosted
-      - linux
-      - openclaw-prod
-    timeout-minutes: 15
-    concurrency:
-      group: openclaw-production
-      cancel-in-progress: false
-    environment: production
-    env:
-      OPENCLAW_DIR: ${{ github.workspace }}
-
-    steps:
-      - name: Check out validated commit
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          fetch-depth: 0
-
-      - name: Check production host memory headroom
-        run: ./deploy/check-deploy-resources.sh
-
-      - name: Install locked Node dependencies
-        run: |
-          npm ci --ignore-scripts --prefix workspace/job-scout
-          npm ci --ignore-scripts --prefix workspace/job-scout/channel-listener
-
-      - name: Deploy live container
-        run: sudo /usr/local/sbin/openclaw-prod-deploy "$GITHUB_WORKSPACE"
-
-      - name: Record deployed revision
-        run: printf "### Production deployment\n\nDeployed \`%s\` to OpenClaw production.\n" "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+  # NOTE: The former `deploy` job (gateway deploy on push to main) has been
+  # RETIRED. It ran on the self-hosted `openclaw-prod` runner via
+  # `openclaw-prod-deploy`, i.e. the host that was stopped at the 2026-08-20
+  # Railway cutover. The gateway now deploys via Railway's GitHub integration:
+  # merging to main auto-builds deploy/railway/Dockerfile. The `validate` job
+  # above is the required status check that gates merges. See deploy/railway/README.md.
+  #
+  # TODO(follow-up): the `job-scout-deploy` job below is ALSO self-hosted
+  # (openclaw-prod) and now dead, but it only fires on repository_dispatch /
+  # workflow_dispatch (not on push), so it does not block normal merges. Decide
+  # separately whether Job Scout release delivery moves to Railway or is removed.
 
   job-scout-deploy:
     name: Deploy validated Job Scout release

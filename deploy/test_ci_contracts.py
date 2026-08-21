@@ -79,12 +79,11 @@ class WorkflowContractTests(unittest.TestCase):
             job_block(workflow, "validate"), "run: ./deploy/ci-check.sh"
         )
 
-    def test_node_dependencies_are_installed_before_production_deploy(self) -> None:
-        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
-        self.assert_installs_precede(
-            job_block(workflow, "deploy"),
-            "run: sudo /usr/local/sbin/openclaw-prod-deploy",
-        )
+    # The former gateway `deploy` job (push-to-main → self-hosted
+    # openclaw-prod-deploy) has been retired: the gateway now deploys via
+    # Railway's GitHub integration (deploy/railway/Dockerfile). The `validate`
+    # job remains the required gate; its node-install ordering is covered by
+    # test_node_dependencies_are_installed_before_repository_tests above.
 
     def test_node_dependencies_are_installed_before_job_scout_deploy(self) -> None:
         # openclaw-prod-deploy re-runs deploy/ci-check.sh on the production
@@ -99,7 +98,7 @@ class WorkflowContractTests(unittest.TestCase):
 
     def test_memory_preflight_runs_before_self_hosted_dependency_install(self) -> None:
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
-        for name in ("deploy", "job-scout-deploy"):
+        for name in ("job-scout-deploy",):
             with self.subTest(job=name):
                 job = job_block(workflow, name)
                 preflight = job.index("run: ./deploy/check-deploy-resources.sh")
