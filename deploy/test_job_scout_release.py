@@ -631,7 +631,7 @@ class WorkflowAndWrapperContractTests(unittest.TestCase):
 
     def test_hosted_gate_runs_ws4_command_and_cross_contract_helper(self) -> None:
         hosted = self.workflow[
-            self.workflow.index("\n  job-scout-release:") : self.workflow.index("\n  deploy:")
+            self.workflow.index("\n  job-scout-release:") : self.workflow.index("\n  job-scout-deploy:")
         ]
         self.assertIn("runs-on: ubuntu-latest", hosted)
         self.assertIn("validate-job-scout-artifacts.sh", hosted)
