@@ -7,6 +7,8 @@ description: Send Gmail messages through the Agent Genaie app bridge.
 
 Use `genaie-mail` for product/app Gmail sending from OpenClaw. It calls Agent Genaie's internal `/internal/gmail/send` endpoint. Pass `--from sender@example.com` to send as a registered user who connected Gmail in the app; omit `--from` to use the owner fallback.
 
+Sender resolution: the backend maps `--from <email>` to that user's Firebase UID automatically, so you do not need the UID. If the address has no Agent Genaie account the send fails with HTTP 404; if the account exists but has not connected Gmail it fails with HTTP 409 (ask them to connect Gmail at `/connect-gmail`). Only send as the person making the request or the owner fallback; do not send as an arbitrary third party's connected account.
+
 Common commands
 - List connected senders: `/home/joseph/.openclaw/workspace/bin/genaie-mail senders`
 - Dry run: `/home/joseph/.openclaw/workspace/bin/genaie-mail send --from sender@example.com --to a@b.com --subject "Hi" --body "Hello" --dry-run`
