@@ -53,6 +53,12 @@
 !workspace/cron/cv-promo/assets/
 !workspace/cron/cv-promo/assets/*.png
 
+# Building-materials promo campaign: editable target list + the ad image
+# (developer-owned, deployed with the workspace).
+!workspace/cron/building-materials-promo/targets.json
+!workspace/cron/building-materials-promo/assets/
+!workspace/cron/building-materials-promo/assets/*.jpg
+
 # Service docs and source helpers.
 !workspace/docs/
 !workspace/docs/**
