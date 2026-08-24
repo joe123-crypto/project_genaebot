@@ -221,6 +221,7 @@
   "channels": {
     "whatsapp": {
       "dmPolicy": "open",
+      "groupPolicy": "disabled",
       "selfChatMode": false,
       "sendReadReceipts": false,
       "blockStreaming": true,

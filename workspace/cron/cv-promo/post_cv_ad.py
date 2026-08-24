@@ -249,6 +249,30 @@ def save_state(st):
 
 
 # --------------------------------------------------------------------- send ----
+# A send can fail because the bot lacks permission to post (e.g. an admins-only
+# "announcement" group where the bot is not an admin). That is EXPECTED and
+# permanent, not a service fault, so it must not fail the daily cron. WhatsApp/
+# Baileys surfaces this as a forbidden / 403 / not-authorized error; match those
+# markers to treat the send as a skip rather than a failure.
+PERMISSION_MARKERS = (
+    "forbidden",
+    "not-authorized",
+    "not authorized",
+    "403",
+    "only admins",
+    "admins can",
+    "not an admin",
+    "not admin",
+    "restricted",
+    "announcement",
+)
+
+
+def is_permission_error(out):
+    low = (out or "").casefold()
+    return any(marker in low for marker in PERMISSION_MARKERS)
+
+
 def send_ad(target):
     """Send the ad (caption + image) to one group. Returns (ok, combined_output)."""
     cmd = ["openclaw", "message", "send", "--channel", "whatsapp",
@@ -306,6 +330,7 @@ def main():
         return 0
 
     failures = 0
+    skipped = 0
     sent = 0
     for i, jid in enumerate(pending):
         ok, out = send_ad(jid)
@@ -313,6 +338,13 @@ def main():
             sent_map[jid] = today
             save_state(st)  # commit per group: crash/retry never double-posts
             sent += 1
+        elif is_permission_error(out):
+            # Bot can't post here (e.g. admins-only group). Expected and
+            # permanent: log and skip WITHOUT failing the run. Deliberately not
+            # marked sent, so if the bot later becomes an admin it resumes posting
+            # automatically. Raw error kept in the log so misclassification shows.
+            skipped += 1
+            sys.stderr.write("SKIPPED (no permission to post) %s:\n%s\n" % (jid, out))
         else:
             failures += 1
             sys.stderr.write("SEND FAILED for %s:\n%s\n" % (jid, out))
@@ -321,7 +353,7 @@ def main():
 
     save_state(st)  # persist any newly-cached invite resolutions
 
-    print("SENT %d/%d (failures %d)" % (sent, len(pending), failures))
+    print("SENT %d/%d (skipped %d, failures %d)" % (sent, len(pending), skipped, failures))
     return 1 if failures else 0
 
 
