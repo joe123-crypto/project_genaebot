@@ -368,6 +368,11 @@ The deploy script used by both paths:
   `workspace/cron/cv-promo/post_cv_ad.py`, a deterministic (no-agent) job that
   posts the fixed CV-service ad to the WhatsApp group JIDs listed in
   `workspace/cron/cv-promo/targets.json`
+- registers or reconciles the daily `building-materials-promo` command cron via
+  `install-building-materials-promo.sh` at 12:00 `Africa/Harare`; it runs
+  `workspace/cron/building-materials-promo/post_ad.py`, a deterministic (no-agent)
+  job that posts the fixed building-materials for-sale ad to the WhatsApp group
+  JIDs listed in `workspace/cron/building-materials-promo/targets.json`
 - writes `/home/joseph/openclaw-deploy/.last-successful-deploy.json` only after all
   required readiness, health, and reconciliation steps finish successfully
 
