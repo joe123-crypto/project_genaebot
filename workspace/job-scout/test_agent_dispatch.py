@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -13,6 +14,14 @@ from jobscout import agent_dispatch, cli, commands_dispatch, dispatch_store
 
 
 class AgentDispatchTests(unittest.TestCase):
+  def setUp(self) -> None:
+    # These tests exercise the personalization/apply pipeline, which is disabled
+    # by default. Enable it for the class so the claim-building behavior is
+    # covered; the disabled path has its own dedicated test.
+    patcher = mock.patch.dict(os.environ, {"JOB_SCOUT_PERSONALIZATION_ENABLED": "1"})
+    patcher.start()
+    self.addCleanup(patcher.stop)
+
   def subscriber(self, user_id: str = "user-1") -> dict:
     return {
       "userId": user_id,
@@ -110,6 +119,26 @@ class AgentDispatchTests(unittest.TestCase):
       mock.patch.object(agent_dispatch, "register_channel_candidate_eligibility"),
     ):
       return agent_dispatch.cmd_agent_prepare(self.args(root, "prepare"))
+
+  def test_prepare_builds_no_claims_when_personalization_disabled(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      args = self.args(root, "prepare")
+      args.write_group_feed_cache = True
+      with (
+        mock.patch.dict(os.environ, {"JOB_SCOUT_PERSONALIZATION_ENABLED": "0"}),
+        mock.patch.object(agent_dispatch, "maybe_write_group_feed_cache") as group_feed_cache,
+        mock.patch.object(agent_dispatch, "cmd_list_ready", return_value={"subscribers": [self.subscriber()]}),
+        mock.patch.object(agent_dispatch, "fetch_candidate_sources") as fetch,
+      ):
+        prepared = agent_dispatch.cmd_agent_prepare(args)
+      # The group feed cache is still refreshed, but no personalization/apply
+      # claims are built and per-user discovery is skipped entirely.
+      self.assertTrue(prepared["personalizationDisabled"])
+      self.assertEqual(prepared["claimCount"], 0)
+      self.assertEqual(prepared["claims"], [])
+      group_feed_cache.assert_called_once()
+      fetch.assert_not_called()
 
   def test_prepare_creates_private_claim_and_resumes_active_run(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
@@ -816,7 +845,7 @@ class AgentDispatchTests(unittest.TestCase):
 
       with mock.patch.object(
         agent_dispatch.application,
-        "render_one_page_cv",
+        "render_cv_pdf",
         side_effect=RuntimeError(
           "rendered CV uses only 49.0% of the page height; it must use at least 85.0%"
         ),
@@ -1449,11 +1478,15 @@ class AgentDispatchTests(unittest.TestCase):
       with mock.patch.object(agent_dispatch, "subscriber_cv_html", return_value=str(canonical)):
         claimed = agent_dispatch.cmd_agent_claim(self.args(root, "claim", claim_id=claim_id))
       guidance = claimed["work"]["cvDesignGuidance"]
-      self.assertIn("single A4 page", guidance)
+      self.assertIn("at most TWO A4 pages", guidance)
       self.assertIn("at least 85%", guidance)
       self.assertIn("larger readable typography", guidance)
       self.assertIn("self-contained", guidance)
-      self.assertIn("never by dropping facts", guidance.lower())
+      self.assertIn("SINGLE-COLUMN", guidance)
+      self.assertIn("rewrite the professional summary and the skills section", guidance)
+      self.assertIn("RESULTS and impact", guidance)
+      self.assertIn("modestly exaggerate", guidance)
+      self.assertIn("Never invent", guidance)
 
   def test_validator_accepts_full_redesign_and_guards_facts(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
@@ -1521,6 +1554,46 @@ class AgentDispatchTests(unittest.TestCase):
       agent_dispatch._validate_personalized_html(base, faithful)
       with self.assertRaisesRegex(agent_dispatch.AgentResultError, "phone number"):
         agent_dispatch._validate_personalized_html(base, tampered)
+
+  def test_validator_enforces_plain_single_column_design(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      base = root / "base.html"
+      base.write_text(
+        '<main data-cv-template="professional-v2"><h1 data-cv-field="identity">Joseph Munemo</h1>'
+        '<p data-cv-field="contact">+263 78 563 2943<br>me@example.com</p>'
+        '<p data-cv-field="employer">Acme 2019 - 2024</p></main>',
+        encoding="utf-8",
+      )
+      facts = "Joseph Munemo, Registry Assistant. Call +263 78 563 2943 or email me@example.com. Acme, 2019 to 2024."
+
+      def cv(name: str, head_style: str = "", body: str = "") -> Path:
+        path = root / name
+        style = f"<style>{head_style}</style>" if head_style else ""
+        inner = body or f"<header><h1>Joseph Munemo</h1><p>Registry Assistant</p></header><section><p>{facts}</p></section>"
+        path.write_text(f"<html><head>{style}</head><body>{inner}</body></html>", encoding="utf-8")
+        return path
+
+      # A plain, white, single-column CV that keeps every fact is accepted.
+      agent_dispatch._validate_personalized_html(
+        base, cv("plain.html", "body{background:#fff;color:#000;font-family:Arial}.cv-body{display:block}"))
+
+      cases = [
+        ("grid.html", "main{display:grid;grid-template-columns:55mm 1fr}", "", "grid columns"),
+        ("repeat_grid.html", ".g{display:grid;grid-template-columns:repeat(2,1fr)}", "", "grid columns"),
+        ("columns.html", ".c{column-count:2}", "", "CSS columns"),
+        ("float.html", ".s{float:left;width:30%}", "", "floated columns"),
+        ("bg.html", ".band{background:#0b2340}", "", "plain white background"),
+        ("named_bg.html", "aside{background:navy}", "", "plain white background"),
+        ("sidebar.html", ".sidebar{width:60mm}", "", "sidebar"),
+        ("image.html", "", f"<img src='avatar.png'><h1>Joseph Munemo</h1><p>{facts}</p>", "photos, icons, or images"),
+        ("bgimage.html", ".a{background-image:url(data:image/png;base64,AAAA)}", "", "photos, icons, or images"),
+        ("placeholder.html", "", f"<h1>Joseph Munemo</h1><p>[Name]</p><p>{facts}</p>", "placeholder text"),
+      ]
+      for name, head_style, body, expected in cases:
+        with self.subTest(case=name):
+          with self.assertRaisesRegex(agent_dispatch.AgentResultError, expected):
+            agent_dispatch._validate_personalized_html(base, cv(name, head_style, body))
 
   def test_stale_completing_claim_can_be_recovered(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:

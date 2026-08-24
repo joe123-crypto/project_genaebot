@@ -8,8 +8,6 @@ import json
 import os
 from pathlib import Path
 
-from dashboard_telemetry import next_daily_run_iso, publish_task_status
-
 from . import dispatch_store
 from .application import (
   action_instruction,
@@ -59,6 +57,7 @@ from .jsearch import (
   record_channel_candidate_outcome,
   register_channel_candidate_eligibility,
 )
+from .integrations.dashboard_telemetry import next_daily_run_iso, publish_task_status
 from .profile import clean_items, max_applications, preference_code, profile_values, search_queries, subscriber_preferences, subscriber_user_id, user_key
 from .subscriber import subscriber_cv_html_ready, subscriber_has_whatsapp, subscriber_phone
 from .textutil import public_text

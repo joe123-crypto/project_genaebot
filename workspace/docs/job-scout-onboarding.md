@@ -47,11 +47,16 @@ Agent summarizes the profile and asks for corrections
 Agent validates every preferred location before saving
 Agent sends scam warning and requires acknowledgement
 Agent saves profile through job-scout helper
-Daily dispatcher finds and scores matching jobs for ready users
-If autoApply is enabled, Job Scout customizes and submits strong matches
-If autoApply is disabled, Job Scout records strong email and website matches as waiting for approval
-After the user approves a match in the dashboard, the approval worker customizes and submits it
+Daily dispatcher refreshes the shared job feed for the WhatsApp group
+Personalization and automatic applications are currently disabled, so Job Scout does not customize CVs or submit applications
 ```
+
+Personalization and automatic applications are turned off. Job Scout still helps
+each user build and store a CV and still shares jobs to the WhatsApp group feed,
+but it does not tailor CVs to individual jobs or send applications on a user's
+behalf. This is a runtime switch (`JOB_SCOUT_PERSONALIZATION_ENABLED`), so the
+`autoApply` and approval behavior described below only takes effect once an
+operator re-enables it.
 
 ## Start Setup
 
@@ -165,28 +170,15 @@ If validation fails, ask the user to restate the location with its country. Do n
 
 Use this flow when the user has no CV in R2 and has no CV file to upload, and they choose to build one in chat (option 3). This is the WhatsApp version of the web app's Create-CV interview: you interview the user for their CV facts, then a helper turns those facts into the same canonical HTML CV that a PDF upload produces and stores it in R2. Only after that is the user CV-ready.
 
-You conduct the interview yourself, acting as a disciplined AI interviewer. Ask for the facts below one at a time and wait for each answer before continuing.
+You conduct the interview yourself. Collect the facts below, asking at most one or two grouped questions per message and waiting for the answer before continuing. Only the full name is required; everything else is optional and left empty when the user has nothing to add.
 
-Rules:
+1. Full name.
+2. Contact: email, phone, and city (ask together).
+3. Work experience: job title, employer, and rough dates, one role at a time. Ask "another?" until they are done.
+4. Education or certificates: qualification, institution, and rough dates, one at a time.
+5. Referees (optional): name, position, company, email, phone. Accept "skip".
 
-- Be brief. No greetings, no filler, no praise, no restating their answers.
-- Ask for only ONE piece of information per turn. You may combine at most TWO closely-related fields in one question (for example a start and end date), but NEVER ask for three or more things at once.
-- Never ask for email, phone and city in the same question. Ask for each in its own turn.
-- Collect a work role or a qualification across several short turns (e.g. job title, then company, then dates), never as one big multi-part question.
-- Never re-ask or re-confirm anything already collected; move straight to the next missing field.
-- Accept "skip"/"none"/"done" to move past optional sections (referees) or to stop adding more experience/education/referees.
-- Experience, education and referees are lists: keep asking "another?" only until the user is done, then move on.
-- Only the full name is required; leave every other field empty when the user has nothing to add.
-- Do NOT ask for skills, the professional summary, or descriptions of work/education. Those are optional; Job Scout fills them in per application. Record them only if the user volunteers them; otherwise leave empty and never prompt.
-
-Suggested wording:
-
-- Opening: "Hi! I'll help you build your CV just by chatting, no long forms. First up: what's your full name?"
-- Contact, each in its own turn: "What's your email address?" / "And your phone number?" / "Which city are you based in?"
-- Experience: "What was your most recent job title?" → "Which company?" → "When did you start and finish there? For example 'Jan 2020 to 2022'." → "Any other roles? Give the job title, or type 'done'."
-- Education: "What's your most recent qualification or certificate?" → "Where did you get it?" → "What were the dates? For example '2015 to 2018'." → "Any others, or type 'done'?"
-- Referees (optional, one field per turn): "Any referees? What's the first referee's name?" → their position → their company → "And their email and phone number?" → "Any other referees, or type 'done'?"
-- Close: tell the user their CV is ready to build/review.
+Do not ask for a professional summary, skills, or descriptions of each role unless the user volunteers them. Job Scout writes a tailored summary per application, so leaving them empty is expected.
 
 When you have the facts, write them to a JSON file in the InterviewData shape and build the CV. The phone must already be linked:
 
@@ -310,12 +302,13 @@ After the user has provided enough details, confirmed the summary, and acknowled
 After saving, reply:
 
 ```text
-Your Job Scout profile is saved. When automatic applications are enabled, I can send email applications and submit straightforward website forms. If a site needs a login, CAPTCHA, payment, declaration, or an answer only you can provide, I'll send you the link instead.
+Your Job Scout profile is saved, and I've stored your CV. Right now I share matching jobs to the WhatsApp job group so you can apply to the ones you like. I am not tailoring CVs or sending applications for you at the moment.
 ```
 
-When automatic applications are disabled, explain that strong matches will
-wait in the dashboard and that CV customization and submission happen only
-after the user approves each one.
+Automatic and approval-based applications are currently disabled (see the note
+at the top of this doc). Do not promise to customize CVs or submit applications
+on the user's behalf. The `autoApply` and approval wording below only applies
+once an operator re-enables personalization.
 
 ## Verify Ready Users
 
@@ -337,6 +330,13 @@ anything. The CV is fetched from R2 on demand when an automatic application or
 an approved application needs customization. Files under
 `runtime/job-scout/users` are temporary download caches and must never be used
 to decide whether a CV exists.
+
+While personalization is disabled (`JOB_SCOUT_PERSONALIZATION_ENABLED` unset or
+falsy), the daily cron still runs and refreshes the WhatsApp group job feed, but
+the prepare phase builds zero personalization claims. The wrapper then finishes
+the run without opening a model turn, so no CVs are customized and no
+applications are sent. The rest of this section describes the behavior once an
+operator re-enables personalization.
 
 The daily 08:00 `Africa/Harare` cron invokes the trusted
 `job-scout-agent --daily-live` command wrapper. The wrapper prepares one durable
@@ -365,7 +365,9 @@ when a requested WhatsApp summary fails, which activates the configured admin
 failure alert. Candidate artifacts and agent diagnostics are operator-only; do
 not expose them in public chat.
 
-The separate `job-scout-approvals` cron runs every five minutes. It reconstructs
+The separate `job-scout-approvals` cron runs every five minutes. While
+personalization is disabled it also builds zero claims and submits nothing, so
+approved vacancies are not customized or sent. Once re-enabled it reconstructs
 each dashboard-approved vacancy from the immutable `candidateSnapshot`, asks an
 isolated child to customize the CV and application letter, and lets the
 dispatcher send the email application or submit a supported website form. A

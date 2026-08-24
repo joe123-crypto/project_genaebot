@@ -95,7 +95,7 @@ class JobScoutDeploymentTests(unittest.TestCase):
     self.assertNotIn("sleep 10", wrapper)
     self.assertNotIn("After filling the four slots, call sessions_yield", wrapper)
     self.assertIn("--agent-phase wait", (ROOT / "workspace/skills/job-scout/SKILL.md").read_text(encoding="utf-8"))
-    self.assertLess(wrapper.index('prepare_json='), wrapper.index("openclaw agent"))
+    self.assertLess(wrapper.index('prepare_json='), wrapper.index('"$openclaw_bin" agent'))
 
   def test_normal_deploy_reconciles_scheduler_without_reenabling_a_pause(self) -> None:
     deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")

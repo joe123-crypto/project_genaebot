@@ -15,7 +15,7 @@ Commands:
 - For a first-time signup the WhatsApp number is linked automatically after sign-in; no "Confirm and link" step is shown. Gmail is granted during Google sign-in. The app redirects the user back to this WhatsApp chat automatically after sign-in completes.
 - If the user chooses WhatsApp setup, continue with the chat commands below once the user returns from sign-in.
 - Validate the preferred location before saving: `/home/joseph/.openclaw/workspace/bin/job-scout resolve-location --location "Bindura, Zimbabwe"`
-- Build a CV in chat for a user with no CV to upload: interview them tersely for the CV facts, one field per turn (never email, phone and city together), leaving skills and the professional summary empty since Job Scout fills them in per job, then `/home/joseph/.openclaw/workspace/bin/job-scout build-cv --phone "<whatsapp phone>" --facts @/path/to/facts.json`. This writes the canonical HTML CV to R2 (`<uid>/cv/base/cv.html`); add `--dry-run` to preview the HTML without storing it. See the Build CV Flow in the onboarding doc.
+- Build a CV in chat for a user with no CV to upload: interview them for the CV facts, then `/home/joseph/.openclaw/workspace/bin/job-scout build-cv --phone "<whatsapp phone>" --facts @/path/to/facts.json`. This writes the canonical HTML CV to R2 (`<uid>/cv/base/cv.html`); add `--dry-run` to preview the HTML without storing it. See the Build CV Flow in the onboarding doc.
 - Save a confirmed profile after the safety acknowledgement: `/home/joseph/.openclaw/workspace/bin/job-scout save-profile --phone "<whatsapp phone>" --cv "<cvFileRef or local path>" --target-role "..." --location "City or area, Country" --language en --profile-confirmed --safety-acknowledged`. Omit `--cv` only when the user already has a CV in R2 and did not upload a new one during this session.
 - Check one requester's setup: `/home/joseph/.openclaw/workspace/bin/job-scout status --phone "<whatsapp phone>"`
 - List applications: `/home/joseph/.openclaw/workspace/bin/job-scout list-applications --user-id "<firebase uid>"`
@@ -24,6 +24,15 @@ Commands:
 - Preview candidates for ready users: `/home/joseph/.openclaw/workspace/bin/job-scout dispatch-jsearch --dry-run`
 
 ## Daily OpenClaw Agent Dispatch
+
+Personalization and applications are currently disabled by the
+`JOB_SCOUT_PERSONALIZATION_ENABLED` runtime switch (unset or falsy). While it is
+off, the prepare phase still refreshes the WhatsApp group job feed but returns
+zero claims, so the wrapper finishes the run without spawning any child and the
+parent protocol below has nothing to process. The `--approved-live` worker is
+likewise inert and submits nothing. The CV builder (`build-cv`) and group-feed
+delivery are unaffected. The protocol below applies only once an operator
+re-enables personalization.
 
 The installed 08:00 `Africa/Harare` cron is a command that invokes the trusted
 `job-scout-agent --daily-live` wrapper. The wrapper prepares durable work,

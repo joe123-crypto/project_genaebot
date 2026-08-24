@@ -6,12 +6,16 @@ jobscout submodule and job_scout.py to import.
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
+from .config import (
+  DEFAULT_WEB_APPLY_URL,
+  GENAIE_MAIL_BIN,
+  OPENCLAW_BIN_FALLBACKS,
+  RUNTIME_ROOT,
+  WORKSPACE_ROOT,
+)
 
 
-WORKSPACE = Path("/home/joseph/.openclaw/workspace")
-RUNTIME_ROOT = Path(os.environ.get("JOB_SCOUT_RUNTIME_ROOT", "/home/joseph/.openclaw/runtime/job-scout"))
+WORKSPACE = WORKSPACE_ROOT
 DEFAULT_STORAGE_ROOT = RUNTIME_ROOT / "users"
 DEFAULT_DISPATCH_ROOT = RUNTIME_ROOT / "dispatch-runs"
 DEFAULT_GROUP_FEED_ROOT = RUNTIME_ROOT / "group-feed"
@@ -40,7 +44,6 @@ UNKNOWN_ROLE = "Unknown role"
 WHATSAPP_CHANNEL_SOURCES = ("zimlinks-whatsapp", "zim-job-vacancies-whatsapp", "everyday-vacancies-whatsapp")
 CV_URL_LOOKUP_ATTEMPTS = 3
 CV_URL_LOOKUP_RETRY_SECONDS = 2
-DEFAULT_WEB_APPLY_URL = "http://job-scout-browser:8787/apply"
 DEFAULT_JSEARCH_COUNTRY = "dz"
 DEFAULT_JSEARCH_LANGUAGE = "en"
 DEFAULT_JSEARCH_DATE_POSTED = "month"
@@ -50,11 +53,6 @@ DEFAULT_RAPIDAPI_HOST = "jsearch.p.rapidapi.com"
 JSEARCH_REQUEST_TIMEOUT = 20
 JSEARCH_REQUEST_ATTEMPTS = 2
 JSEARCH_RETRY_SECONDS = 2
-GENAIE_MAIL_BIN = Path("/home/joseph/.openclaw/workspace/bin/genaie-mail")
-OPENCLAW_BIN_FALLBACKS = (
-  Path("/usr/local/bin/openclaw"),
-  Path("/home/joseph/.npm-global/bin/openclaw"),
-)
 PUBLIC_DISPATCH_FAILURE_MESSAGE = (
   "Job Scout could not finish today's job check because the service failed. "
   "I recorded it and will try again on the next run."

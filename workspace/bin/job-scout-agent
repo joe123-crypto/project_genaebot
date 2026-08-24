@@ -1,6 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+repo_root="$(cd -- "$script_dir/.." && pwd -P)"
+job_scout_bin="${JOB_SCOUT_BIN:-$script_dir/job-scout}"
+[ -x "$job_scout_bin" ] || {
+  printf 'Job Scout command is not executable: %s\n' "$job_scout_bin" >&2
+  exit 1
+}
+
+if [ -n "${OPENCLAW_BIN:-}" ]; then
+  openclaw_bin="$OPENCLAW_BIN"
+elif command -v openclaw >/dev/null 2>&1; then
+  openclaw_bin="$(command -v openclaw)"
+elif [ -x /usr/local/bin/openclaw ]; then
+  openclaw_bin=/usr/local/bin/openclaw
+elif [ -x /home/joseph/.npm-global/bin/openclaw ]; then
+  openclaw_bin=/home/joseph/.npm-global/bin/openclaw
+else
+  openclaw_bin=openclaw
+fi
+
 scope=""
 phone=""
 user_id=""
@@ -61,7 +81,7 @@ if [ "$scope" = "all" ] && [ "$mode" != "preview" ]; then
   exit 2
 fi
 
-job_scout=(/home/joseph/.openclaw/workspace/bin/job-scout)
+job_scout=("$job_scout_bin")
 if [ "$scope" = "approved" ]; then
   approved_json="$("${job_scout[@]}" count-approved-applications --limit 100)"
   approved_count="$(printf '%s' "$approved_json" | python3 -c '
@@ -116,10 +136,26 @@ if [ "$claim_count" -eq 0 ]; then
   "${job_scout[@]}" verify-dispatch --run-id "$run_id" --require-no-failures >/dev/null
   exit 0
 fi
+job_scout_skill="${JOB_SCOUT_SKILL_PATH:-}"
+if [ -z "$job_scout_skill" ]; then
+  if [ -f "$repo_root/skill/SKILL.md" ]; then
+    job_scout_skill="$repo_root/skill/SKILL.md"
+  elif [ -f "$repo_root/skills/job-scout/SKILL.md" ]; then
+    job_scout_skill="$repo_root/skills/job-scout/SKILL.md"
+  else
+    printf 'unable to locate Job Scout skill; set JOB_SCOUT_SKILL_PATH\n' >&2
+    exit 1
+  fi
+fi
+[ -f "$job_scout_skill" ] || {
+  printf 'Job Scout skill was not found: %s\n' "$job_scout_skill" >&2
+  exit 1
+}
 read -r -d '' prompt <<EOF || true
 Run one operator-authorized Job Scout ${mode} dispatch.
 
-Follow the Daily OpenClaw Agent Dispatch parent and child protocol in /home/joseph/.openclaw/workspace/skills/job-scout/SKILL.md exactly, with these overrides:
+Follow the Daily OpenClaw Agent Dispatch parent and child protocol in ${job_scout_skill} exactly, with these overrides:
+- Use ${job_scout_bin} for every Job Scout command in the parent and child tasks, replacing the deployed absolute command path shown in the skill when different.
 - The trusted wrapper has already completed preparation for runId ${run_id}. Do not run the prepare phase.
 - This run may contain discovery claims, approval-first matching claims, or user-approved submission claims. Follow each claim packet's approvalRequired and approvedSubmission flags exactly.
 - Start by running the status phase for runId ${run_id}; use its opaque pending or claimed claims.
@@ -130,9 +166,54 @@ Follow the Daily OpenClaw Agent Dispatch parent and child protocol in /home/jose
 - Never invoke direct dispatch-jsearch mode and never retry a failed child.
 EOF
 
-env -u OPENCLAW_HOME OPENCLAW_GATEWAY_TOKEN="${GATEWAY_AUTH_TOKEN:?missing gateway token}" \
-  openclaw agent --agent main --session-key "agent:main:job-scout-manual:$run_id" \
-  --message "$prompt" --timeout 21600 --json
+# A model-auth preflight or agent-turn failure must never leave the run frozen at
+# the prepared "ready" phase with the exclusive claim still held: the next daily
+# cron would then wait out the multi-hour active-run timeout before recovering, and
+# the failure would stay invisible until then. Mark every still non-terminal claim
+# failed and finish the marker so the run is durably failed, the active pointer is
+# released, and verify-dispatch surfaces the failure the same day.
+cleanup_failed_dispatch() {
+  local reason="$1"
+  local status_json cid
+  status_json="$("${job_scout[@]}" dispatch-jsearch --agent-phase status --run-id "$run_id" 2>/dev/null || true)"
+  if [ -n "$status_json" ]; then
+    while IFS= read -r cid; do
+      [ -n "$cid" ] || continue
+      "${job_scout[@]}" dispatch-jsearch --agent-phase fallback --run-id "$run_id" \
+        --claim-id "$cid" --fallback-reason "$reason" >/dev/null 2>&1 || true
+    done < <(printf '%s' "$status_json" | python3 -c '
+import json
+import sys
+
+try:
+  data = json.load(sys.stdin)
+except (ValueError, TypeError):
+  raise SystemExit(0)
+terminal = {"completed", "failed", "fallback_completed"}
+for claim in data.get("claims", []):
+  if claim.get("status") not in terminal:
+    cid = claim.get("claimId")
+    if isinstance(cid, str) and cid:
+      print(cid)
+')
+  fi
+  "${job_scout[@]}" dispatch-jsearch --agent-phase finish --run-id "$run_id" >/dev/null 2>&1 || true
+}
+
+if ! env -u OPENCLAW_HOME OPENCLAW_GATEWAY_TOKEN="${GATEWAY_AUTH_TOKEN:?missing gateway token}" \
+  PYTHONPATH="$repo_root${PYTHONPATH:+:$PYTHONPATH}" python3 -m jobscout.model_auth --agent main; then
+  cleanup_failed_dispatch "Job Scout model auth preflight failed"
+  printf 'Job Scout model auth preflight failed for runId %s; dispatch marked failed\n' "$run_id" >&2
+  exit 1
+fi
+
+if ! env -u OPENCLAW_HOME OPENCLAW_GATEWAY_TOKEN="${GATEWAY_AUTH_TOKEN:?missing gateway token}" \
+  "$openclaw_bin" agent --agent main --session-key "agent:main:job-scout-manual:$run_id" \
+  --message "$prompt" --timeout 21600 --json; then
+  cleanup_failed_dispatch "OpenClaw main agent dispatch turn failed"
+  printf 'OpenClaw Job Scout dispatch turn failed for runId %s; dispatch marked failed\n' "$run_id" >&2
+  exit 1
+fi
 
 # A zero exit from the model turn is not sufficient. The command cron succeeds
 # only when durable finish has made the dispatch marker verifiable.
