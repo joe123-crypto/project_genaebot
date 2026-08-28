@@ -27,7 +27,7 @@ RUN userdel -r node 2>/dev/null || true \
  && groupadd -g 1000 joseph \
  && useradd -m -u 1000 -g 1000 -s /bin/bash joseph
 
-RUN npm install -g openclaw@2026.6.11 \
+RUN npm install -g openclaw@2026.6.34 \
  && npm cache clean --force
 
 COPY webetu-worker /tmp/webetu-worker-src
