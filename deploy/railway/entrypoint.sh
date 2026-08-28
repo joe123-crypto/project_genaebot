@@ -240,36 +240,6 @@ PY
   log "provisioned public agent model authentication (openrouter)"
 fi
 
-# The currently published @openclaw/whatsapp 2026.6.11 imports a channel SDK
-# helper that the published openclaw 2026.6.11 package does not export. Apply a
-# narrow idempotent compatibility shim until the registry packages converge.
-python3 - <<'PY'
-from pathlib import Path
-
-root = Path("/home/joseph/.openclaw/npm")
-marker = "function formatInboundMediaUnavailableText({ body, mediaPlaceholder, notice })"
-implementation = '''function formatInboundMediaUnavailableText({ body, mediaPlaceholder, notice }) {
-\treturn [body, mediaPlaceholder, notice].filter((value) => typeof value === "string" && value.trim()).join("\\n");
-}
-'''
-patched = 0
-for path in root.glob("**/@openclaw/whatsapp/dist/monitor-*.js"):
-    text = path.read_text(encoding="utf-8")
-    if marker in text:
-        continue
-    if "formatInboundMediaUnavailableText" not in text:
-        continue
-    updated = text.replace(", formatInboundMediaUnavailableText,", ",", 1)
-    anchor = "//#region"
-    if updated == text or anchor not in updated:
-        raise SystemExit(f"unexpected WhatsApp compatibility target: {path}")
-    updated = updated.replace(anchor, implementation + anchor, 1)
-    path.write_text(updated, encoding="utf-8")
-    patched += 1
-if patched:
-    print(f"[entrypoint] patched {patched} WhatsApp runtime file(s) for SDK compatibility")
-PY
-
 # If a command was passed (e.g. `railway ssh -- openclaw doctor`), run it as
 # joseph after the setup above instead of starting the gateway.
 if [ "$#" -gt 0 ]; then

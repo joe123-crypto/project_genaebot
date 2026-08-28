@@ -550,6 +550,18 @@ git ls-files
 
 ## OpenClaw Updates
 
+The gateway image pins OpenClaw via `npm install -g openclaw@<version>` in
+`deploy/railway/Dockerfile` and `deploy/container/Dockerfile`. The current pin is
+`openclaw@2026.6.34` (the `extended-stable` maintenance channel). Bump both Dockerfiles
+together to keep the Railway and Compose paths from drifting.
+
+A runtime WhatsApp compatibility shim used to live in both `entrypoint.sh` files to work
+around a `formatInboundMediaUnavailableText` import mismatch in the 2026.6.11 packages. As
+of `@openclaw/whatsapp@2026.6.34` the packages have converged (the symbol is gone) and the
+shim has been removed. If a future WhatsApp plugin release reintroduces a similar
+import/export mismatch, reintroduce a narrow, self-skipping shim rather than one that aborts
+boot.
+
 This repo must not edit package-managed files under:
 
 ```text
