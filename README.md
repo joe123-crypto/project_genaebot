@@ -373,6 +373,13 @@ The deploy script used by both paths:
   `workspace/cron/building-materials-promo/post_ad.py`, a deterministic (no-agent)
   job that posts the fixed building-materials for-sale ad to the WhatsApp group
   JIDs listed in `workspace/cron/building-materials-promo/targets.json`
+- registers or reconciles the daily `genaie-promo` command cron via
+  `install-genaie-promo.sh` at 13:00 `Africa/Algiers`; it runs
+  `workspace/cron/genaie-promo/post_ad.py`, a deterministic (no-agent) job that
+  posts the fixed Genaie-services ad (group advertising, poster design, WhatsApp
+  bots) to the WhatsApp group JIDs listed in
+  `workspace/cron/genaie-promo/targets.json` (every group the bot is in except
+  Vacancy Lamp)
 - writes `/home/joseph/openclaw-deploy/.last-successful-deploy.json` only after all
   required readiness, health, and reconciliation steps finish successfully
 

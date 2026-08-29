@@ -1,0 +1,13 @@
+{
+  "_comment": "Target WhatsApp groups for the daily Genaie-services ad. Use group JIDs (ending in @g.us); the bot must be a MEMBER of each. Invite links are NOT reliably resolvable on this gateway (WhatsApp channels resolve is unsupported and the directory is config-backed), so always list JIDs here. This is every group the bot is in EXCEPT 'Vacancy Lamp' (120363407177302513@g.us), which is deliberately omitted. Named groups for reference: Bindura Town Business, Shamva Bindura & Madziva, Bindura Hustlers 24/7, Glendale Hustlers 24/7 (the remaining four have no cached subject). Edit this list to add/remove groups; no code change needed.",
+  "groups": [
+    "120363275485319265@g.us",
+    "120363364576432272@g.us",
+    "120363175904566195@g.us",
+    "120363400161887838@g.us",
+    "120363157571427036@g.us",
+    "120363206130909900@g.us",
+    "120363427709161501@g.us",
+    "120363168421689199@g.us"
+  ]
+}

@@ -809,6 +809,7 @@ main() {
   install_job_scout_schedule
   bash "$OC_DIR/deploy/install-cv-promo.sh"
   bash "$OC_DIR/deploy/install-building-materials-promo.sh"
+  bash "$OC_DIR/deploy/install-genaie-promo.sh"
   start_optional_job_scout_channel_listener
   record_successful_deploy
   log "Deploy complete."

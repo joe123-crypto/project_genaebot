@@ -59,6 +59,12 @@
 !workspace/cron/building-materials-promo/assets/
 !workspace/cron/building-materials-promo/assets/*.jpg
 
+# Genaie-services promo campaign: editable target list + the ad image
+# (developer-owned, deployed with the workspace).
+!workspace/cron/genaie-promo/targets.json
+!workspace/cron/genaie-promo/assets/
+!workspace/cron/genaie-promo/assets/*.png
+
 # Service docs and source helpers.
 !workspace/docs/
 !workspace/docs/**
