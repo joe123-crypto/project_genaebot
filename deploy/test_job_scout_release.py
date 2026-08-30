@@ -585,74 +585,36 @@ class WorkflowAndWrapperContractTests(unittest.TestCase):
         cls.workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
         cls.wrapper = (ROOT / "deploy/github-actions/openclaw-prod-deploy").read_text(encoding="utf-8")
 
-    def test_dispatch_and_sha_correlation_run_name_are_declared(self) -> None:
-        self.assertIn("repository_dispatch:", self.workflow)
-        self.assertIn("- job_scout_release", self.workflow)
-        self.assertIn("github.event.client_payload.jobScoutSha", self.workflow)
-        self.assertIn("github.event.client_payload.correlationId", self.workflow)
+    # The dispatched Job Scout release receiver jobs (`job-scout-release`,
+    # `job-scout-deploy`, `record-job-scout-release`) and their
+    # `repository_dispatch` / `workflow_dispatch` triggers have been REMOVED
+    # from .github/workflows/deploy-main.yml. They ran on the self-hosted
+    # `openclaw-prod` host that was stopped at the 2026-08-20 Railway cutover,
+    # and the upstream repository no longer dispatches `job_scout_release`, so
+    # the jobs were unreachable. The release/rollback/safe-extract helpers in
+    # deploy/job_scout_release.py and the openclaw-prod-deploy wrapper are
+    # retained (pending removal) and their behaviour is still covered by the
+    # unit tests above; only the workflow wiring assertions are dropped here.
 
-    def test_event_payload_is_never_interpolated_into_job_shell(self) -> None:
-        jobs = self.workflow[self.workflow.index("jobs:") :]
-        self.assertNotIn("github.event.client_payload", jobs)
-        self.assertNotIn("inputs.rollback_manifest_hash", jobs)
-        self.assertIn('--event "$GITHUB_EVENT_PATH"', jobs)
+    def test_dispatched_receiver_jobs_and_triggers_are_removed(self) -> None:
+        for job in ("job-scout-release:", "job-scout-deploy:", "record-job-scout-release:"):
+            self.assertNotIn(f"\n  {job}", self.workflow)
+        self.assertNotIn("repository_dispatch", self.workflow)
+        self.assertNotIn("workflow_dispatch", self.workflow)
+        self.assertNotIn("github.event.client_payload", self.workflow)
+        self.assertNotIn("rollback_manifest_hash", self.workflow)
 
-    def test_hosted_artifact_gate_precedes_production_runner(self) -> None:
-        hosted = self.workflow.index("\n  job-scout-release:")
-        self_hosted = self.workflow.index("\n  job-scout-deploy:")
-        self.assertLess(hosted, self_hosted)
-        job = self.workflow[self_hosted : self.workflow.index("\n  record-job-scout-release:")]
-        self.assertIn("- job-scout-release", job)
-        self.assertIn("- self-hosted", job)
-        self.assertIn("- openclaw-prod", job)
-        self.assertIn("environment: production", job)
-        self.assertIn("group: openclaw-production", job)
-        self.assertIn("github.ref == 'refs/heads/main'", job)
-
-    def test_self_hosted_transport_hashes_tar_then_safely_restores_modes(self) -> None:
-        job = self.workflow[
-            self.workflow.index("\n  job-scout-deploy:") :
-            self.workflow.index("\n  record-job-scout-release:")
-        ]
-        download = job.index("Download hosted-validated deploy request and bundle")
-        hash_check = job.index('sha256sum "$archive"')
-        extraction = job.index("job_scout_release.py safe-extract")
-        deployment = job.index("sudo /usr/local/sbin/openclaw-prod-deploy")
-        self.assertLess(download, hash_check)
-        self.assertLess(hash_check, extraction)
-        self.assertLess(extraction, deployment)
-        self.assertIn("job-scout-candidate.tar", job)
-        self.assertIn("job-scout-transfer", job)
-        download_block = job[download:extraction]
-        self.assertNotIn("path: ${{ runner.temp }}/job-scout-candidate\n", download_block)
-        validator = (ROOT / "deploy/github-actions/validate-job-scout-artifacts.sh").read_text(encoding="utf-8")
-        self.assertIn("candidate_archive_sha256=", validator)
-        self.assertIn("pack-candidate", validator)
-
-    def test_hosted_gate_runs_ws4_command_and_cross_contract_helper(self) -> None:
-        hosted = self.workflow[
-            self.workflow.index("\n  job-scout-release:") : self.workflow.index("\n  job-scout-deploy:")
-        ]
-        self.assertIn("runs-on: ubuntu-latest", hosted)
-        self.assertIn("validate-job-scout-artifacts.sh", hosted)
-        self.assertIn("job-scout-candidate.tar", self.workflow)
-        self.assertIn("Safely extract hosted-validated candidate", self.workflow)
-        validator = (ROOT / "deploy/github-actions/validate-job-scout-artifacts.sh").read_text(encoding="utf-8")
-        self.assertIn('python3 "$consumer" validate "$candidate_dir/bundle"', validator)
-        self.assertLess(validator.index("verify-request"), validator.index('python3 "$consumer" validate'))
-
-    def test_manual_rollback_has_no_artifact_digest_inputs(self) -> None:
+    def test_workflow_only_runs_on_pull_request_and_main_push(self) -> None:
         on_section = self.workflow[: self.workflow.index("permissions:")]
-        self.assertIn("rollback_manifest_hash:", on_section)
-        for forbidden in ("bundleDigest:", "browserDigest:", "listenerDigest:"):
-            self.assertNotIn(forbidden, on_section)
-        self.assertIn("job-scout-production-", self.workflow)
-        self.assertIn("needs.job-scout-deploy.result == 'success'", self.workflow)
+        self.assertIn("pull_request:", on_section)
+        self.assertIn("push:", on_section)
+        self.assertIn("- main", on_section)
 
     def test_root_wrapper_is_the_only_privileged_deploy_entrypoint(self) -> None:
-        sudo_lines = [line.strip() for line in self.workflow.splitlines() if "sudo " in line]
-        self.assertTrue(sudo_lines)
-        self.assertTrue(all("/usr/local/sbin/openclaw-prod-deploy" in line for line in sudo_lines))
+        # The workflow no longer invokes any privileged deploy step; the
+        # constrained root wrapper remains the sole privileged entrypoint for
+        # the retained manual/self-hosted deploy path.
+        self.assertNotIn("sudo ", self.workflow)
         self.assertIn("--job-scout-request", self.wrapper)
         self.assertIn("JOB_SCOUT_BUNDLE_DIR=\"$bundle_dir\"", self.wrapper)
         self.assertIn("verify-request", self.wrapper)

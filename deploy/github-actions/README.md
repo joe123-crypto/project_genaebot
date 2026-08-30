@@ -18,7 +18,25 @@ The workflow is:
 .github/workflows/deploy-main.yml
 ```
 
-## One-Time Receiver Bootstrap
+## Retired: Job Scout Release Receiver
+
+The dispatched Job Scout release receiver jobs (`job-scout-release`,
+`job-scout-deploy`, `record-job-scout-release`) and their `repository_dispatch`
+(`job_scout_release`) and `workflow_dispatch` (rollback) triggers have been
+**removed** from `.github/workflows/deploy-main.yml`. They ran on the self-hosted
+`openclaw-prod` runner, whose `openclaw-gateway` host was stopped at the
+2026-08-20 Railway cutover, and the upstream `genaie-job-scout` repository no
+longer dispatches releases, so the jobs were unreachable.
+
+The underlying helpers are **retained but unused (pending removal)**:
+`deploy/openclaw-deploy.sh`, `deploy/job_scout_consumer.py`,
+`deploy/job_scout_release.py`, the `openclaw-prod-deploy` wrapper, and
+`deploy/github-actions/validate-job-scout-artifacts.sh`. Their unit tests still
+run in CI. The bootstrap, receiver, and self-hosted deploy sections below are
+retained as historical reference for that machinery and no longer describe a
+wired workflow path.
+
+## One-Time Receiver Bootstrap (historical)
 
 Before enabling `job_scout_release` dispatches, install the request-aware
 wrapper from a reviewed `main` checkout. The workflow never replaces its own
@@ -92,29 +110,24 @@ runner.
 
 ## CI Gates
 
-Pull requests, `main` pushes, and manual workflow runs validate on GitHub-hosted
-Ubuntu runners. Required checks cover repository/staging structure,
-documentation contracts, syntax, all discovered Python and Node tests,
-ShellCheck, actionlint, locked npm dependencies, high-severity production npm
-advisories, secret/private-state scanning, and Docker Compose rendering. The
-Job Scout and ZimLinks listener dependency sets are installed from their
-respective lockfiles before Node tests run, then both production dependency
-sets are audited. The dispatched Job Scout release deploy (self-hosted) installs
-the same locked dependencies before handing off to `openclaw-prod-deploy`,
-because that wrapper re-runs `deploy/ci-check.sh` on the production host and its
-Node tests import `playwright` and `baileys` from those trees. `actions/checkout`
-wipes untracked paths, so a previous run's `node_modules` never carries over. The
-production Job Scout browser image is built when one of its inputs changes.
+Pull requests and `main` pushes validate on GitHub-hosted Ubuntu runners.
+Required checks cover repository/staging structure, documentation contracts,
+syntax, all discovered Python and Node tests, ShellCheck, actionlint, locked npm
+dependencies, high-severity production npm advisories, secret/private-state
+scanning, and Docker Compose rendering. The Job Scout and ZimLinks listener
+dependency sets are installed from their respective lockfiles before Node tests
+run, then both production dependency sets are audited. The production Job Scout
+browser image is built when one of its inputs changes.
 
-The former gateway `main` deploy job has been **retired**: the gateway now
-deploys via Railway's GitHub integration (`deploy/railway/Dockerfile`), not this
-workflow. See `deploy/railway/README.md`. Job Scout releases additionally
-use a read-only Actions permission to correlate the dispatch; the release images
-are public and pulled anonymously, so no package grant or registry login is
-used. Actions are pinned to commit revisions; containerized validation tools are
-pinned to versions.
+The former gateway `main` deploy job and the dispatched Job Scout release
+receiver jobs have both been **retired**: the gateway now deploys via Railway's
+GitHub integration (`deploy/railway/Dockerfile`), not this workflow, and the
+`repository_dispatch` / `workflow_dispatch` receiver path was removed with the
+self-hosted `openclaw-prod` host. See `deploy/railway/README.md`. Actions are
+pinned to commit revisions; containerized validation tools are pinned to
+versions.
 
-## Job Scout Release Receiver
+## Job Scout Release Receiver (historical, unwired)
 
 The receiver accepts only `job_scout_release`. Its payload has exactly these
 string fields:
@@ -193,10 +206,12 @@ auto-builds `deploy/railway/Dockerfile` and redeploys the container. The
 gate merges. See `deploy/railway/README.md` for the one-time wiring and the
 break-glass `railway up` path.
 
-### Job Scout release (self-hosted)
+### Job Scout release (self-hosted, retired)
 
-For a hosted-validated Job Scout release, the workflow uses the constrained
-request form:
+This path is no longer wired into any workflow (see "Retired: Job Scout Release
+Receiver" above); the wrapper and helpers remain only as the supported manual
+fallback and pending-removal machinery. For a hosted-validated Job Scout
+release, the workflow used the constrained request form:
 
 ```bash
 sudo /usr/local/sbin/openclaw-prod-deploy "$GITHUB_WORKSPACE" \
