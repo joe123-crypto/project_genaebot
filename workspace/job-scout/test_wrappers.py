@@ -9,7 +9,12 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parent
+# In the standalone checkout the wrappers sit in a sibling ``bin/`` directory.
+# In the deployed workspace overlay the package lives under ``workspace/job-scout``
+# while the wrappers are staged one level up in ``workspace/bin``.
 BIN = ROOT / "bin"
+if not BIN.is_dir():
+  BIN = ROOT.parent / "bin"
 
 
 class WrapperTests(unittest.TestCase):

@@ -3,6 +3,20 @@ set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 repo_root="$(cd -- "$script_dir/.." && pwd -P)"
+# The Python package sits directly under repo_root in a standalone checkout and
+# under repo_root/job-scout in the deployed workspace overlay. Resolve it the
+# same way the job-scout and job-scout-channel-health wrappers do so the
+# model-auth preflight can import jobscout in either layout.
+source_root="${JOB_SCOUT_SOURCE_ROOT:-}"
+if [ -z "$source_root" ]; then
+  if [ -f "$repo_root/jobscout/model_auth.py" ]; then
+    source_root="$repo_root"
+  elif [ -f "$repo_root/job-scout/jobscout/model_auth.py" ]; then
+    source_root="$repo_root/job-scout"
+  else
+    source_root="$repo_root"
+  fi
+fi
 job_scout_bin="${JOB_SCOUT_BIN:-$script_dir/job-scout}"
 [ -x "$job_scout_bin" ] || {
   printf 'Job Scout command is not executable: %s\n' "$job_scout_bin" >&2
@@ -201,7 +215,7 @@ for claim in data.get("claims", []):
 }
 
 if ! env -u OPENCLAW_HOME OPENCLAW_GATEWAY_TOKEN="${GATEWAY_AUTH_TOKEN:?missing gateway token}" \
-  PYTHONPATH="$repo_root${PYTHONPATH:+:$PYTHONPATH}" python3 -m jobscout.model_auth --agent main; then
+  PYTHONPATH="$source_root${PYTHONPATH:+:$PYTHONPATH}" python3 -m jobscout.model_auth --agent main; then
   cleanup_failed_dispatch "Job Scout model auth preflight failed"
   printf 'Job Scout model auth preflight failed for runId %s; dispatch marked failed\n' "$run_id" >&2
   exit 1

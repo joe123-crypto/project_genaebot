@@ -81,6 +81,8 @@
 !workspace/job-scout/scrapers/*.py
 !workspace/job-scout/jobscout/
 !workspace/job-scout/jobscout/*.py
+!workspace/job-scout/jobscout/integrations/
+!workspace/job-scout/jobscout/integrations/*.py
 
 # Custom skills that are not purely reinstallable from package metadata.
 !workspace/skills/

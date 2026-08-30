@@ -11,6 +11,11 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parent
+# The wrappers sit in a sibling ``bin/`` in the standalone checkout, and one
+# level up (``workspace/bin``) in the deployed workspace overlay.
+BIN = ROOT / "bin"
+if not BIN.is_dir():
+  BIN = ROOT.parent / "bin"
 WRAPPERS = (
   "job-scout",
   "job-scout-agent",
@@ -121,7 +126,7 @@ print(json.dumps({"commands": sorted(subparsers.choices)}))
   def test_wrappers_remain_executable_and_job_scout_can_use_a_temp_workspace(self) -> None:
     for name in WRAPPERS:
       with self.subTest(name=name):
-        self.assertTrue(stat.S_IMODE((ROOT / "bin" / name).stat().st_mode) & stat.S_IXUSR)
+        self.assertTrue(stat.S_IMODE((BIN / name).stat().st_mode) & stat.S_IXUSR)
 
     with tempfile.TemporaryDirectory() as tmp:
       temp_root = Path(tmp)
@@ -136,7 +141,7 @@ print(json.dumps({"commands": sorted(subparsers.choices)}))
         "OPENCLAW_PENDING_LINKS_PATH": str(temp_root / "account-link" / "pending.json"),
       })
       result = subprocess.run(
-        [str(ROOT / "bin" / "job-scout"), "--help"],
+        [str(BIN / "job-scout"), "--help"],
         cwd=temp_root,
         env=env,
         capture_output=True,
@@ -185,7 +190,7 @@ printf '%s\n' "$*" > "$OPENCLAW_CAPTURE"
       explicit_capture = temp_root / "explicit.args"
       explicit_env = {**base_env, "OPENCLAW_BIN": str(explicit_openclaw), "OPENCLAW_CAPTURE": str(explicit_capture)}
       explicit_result = subprocess.run(
-        [str(ROOT / "bin" / "job-scout-agent"), "--all", "--preview"],
+        [str(BIN / "job-scout-agent"), "--all", "--preview"],
         cwd=temp_root,
         env=explicit_env,
         capture_output=True,
@@ -198,7 +203,7 @@ printf '%s\n' "$*" > "$OPENCLAW_CAPTURE"
       path_env = {**base_env, "OPENCLAW_CAPTURE": str(path_capture)}
       path_env.pop("OPENCLAW_BIN", None)
       path_result = subprocess.run(
-        [str(ROOT / "bin" / "job-scout-agent"), "--all", "--preview"],
+        [str(BIN / "job-scout-agent"), "--all", "--preview"],
         cwd=temp_root,
         env=path_env,
         capture_output=True,
@@ -210,7 +215,7 @@ printf '%s\n' "$*" > "$OPENCLAW_CAPTURE"
         (temp_root / ".openclaw" / "agents" / "main" / "agent" / "openclaw-agent.sqlite").is_file()
       )
 
-      source = (ROOT / "bin" / "job-scout-agent").read_text(encoding="utf-8")
+      source = (BIN / "job-scout-agent").read_text(encoding="utf-8")
       self.assertLess(source.index("command -v openclaw"), source.index("/usr/local/bin/openclaw"))
       self.assertLess(source.index("/usr/local/bin/openclaw"), source.index("/home/joseph/.npm-global/bin/openclaw"))
       self.assertLess(source.index("jobscout.model_auth --agent main"), source.index("agent --agent main"))
