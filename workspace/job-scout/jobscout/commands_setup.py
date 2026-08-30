@@ -15,15 +15,14 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from genaie_env import agent_base_url, agent_base_url_source, api_key, endpoint, env_default
-from pending_cache import (
-  remove_pending_links,
-)
-
 from . import api
-from .constants import DEFAULT_JSEARCH_COUNTRY, DEFAULT_JSEARCH_LANGUAGE, DEFAULT_WEB_APPLY_URL, RUNTIME_ROOT
+from . import config
+from .config import env_default
+from .constants import DEFAULT_JSEARCH_COUNTRY, DEFAULT_JSEARCH_LANGUAGE, RUNTIME_ROOT
 from .cv_safety import validate_cv_html_source, visible_lines_from_html
 from .jsearch import fetch_jsearch_candidates, fetch_scraped_candidates, fetch_zimlinks_candidates, filter_candidates, jsearch_provider
+from .integrations.agent_genaie import agent_base_url, agent_base_url_source, api_key, endpoint
+from .integrations.pending_links import remove_pending_links
 from .profile import (
   clean_items,
   load_profile_json,
@@ -163,7 +162,7 @@ def cmd_check_runtime(args: argparse.Namespace) -> dict:
 
   browser_ok = None
   if getattr(args, "check_browser", False):
-    apply_url = env_default("JOB_SCOUT_WEB_APPLY_URL", DEFAULT_WEB_APPLY_URL)
+    apply_url = config.web_apply_url(env_default)
     parsed = urllib.parse.urlsplit(apply_url)
     health_url = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, "/ready", "", ""))
     try:
@@ -224,11 +223,16 @@ def cmd_check_runtime(args: argparse.Namespace) -> dict:
   return result
 
 
-def resolve_cv_ref(user_id: str, cv_arg: str, do_upload: bool) -> str:
-  """`--cv` may be a local PDF (upload it to R2) or this user's already-staged R2 key."""
+def resolve_cv_ref(user_id: str, cv_arg: str | None, do_upload: bool) -> str | None:
+  """`--cv` may be a local PDF (upload it to R2), this user's already-staged R2 key, or None.
+
+  Returns None when cv_arg is absent and the caller should retain whatever CV
+  is already stored in R2 for this user. Raises SystemExit if a non-empty value
+  is provided that cannot be resolved to a valid staged key or local file.
+  """
   text = str(cv_arg or "").strip()
   if not text:
-    raise SystemExit("--cv is required")
+    return None  # no new CV supplied; caller retains the existing one in R2
   expected_keys = {
     f"{user_id}/cv/cv.pdf",
     f"{user_id}/cv/pending/original.pdf",
@@ -244,6 +248,35 @@ def resolve_cv_ref(user_id: str, cv_arg: str, do_upload: bool) -> str:
 
 def cmd_stage_cv(args: argparse.Namespace) -> dict:
   return api.stage_cv(args.phone, args.cv)
+
+
+def cmd_build_cv(args: argparse.Namespace) -> dict:
+  """Build a canonical HTML CV from interview facts and upload it to R2.
+
+  The WhatsApp analogue of the web app's "AI interview -> Create CV" flow: the
+  agent collects the facts conversationally, and this turns them into the same
+  semantic professional-v2 document the PDF path produces, then commits it to
+  the canonical CV key (<uid>/cv/base/cv.html) via the shared upload seam. A
+  --dry-run returns the HTML without touching storage so the agent can preview
+  it with the user before saving.
+  """
+  phone = normalize_phone(args.phone)
+  user_id = str(args.user_id or "").strip() or api.linked_user_id(phone)
+  facts = load_profile_json(args.facts)
+  html_source = validate_cv_html_source(cv_html_from_facts(facts))
+  cv_html_ref = f"{user_id}/cv/base/cv.html"
+  if args.dry_run:
+    return {"dryRun": True, "userId": user_id, "cvHtmlRef": cv_html_ref, "html": html_source}
+  with tempfile.TemporaryDirectory(prefix="job-scout-build-cv-") as tmp:
+    html_path = Path(tmp) / "cv.html"
+    html_path.write_text(html_source, encoding="utf-8")
+    upload = api.upload_cv_html(user_id, html_path)
+  return {
+    "ok": True,
+    "userId": user_id,
+    "cvHtmlRef": cv_html_ref,
+    "ready": bool(upload.get("ready")),
+  }
 
 
 def cmd_save_profile(args: argparse.Namespace) -> dict:
@@ -283,26 +316,32 @@ def cmd_save_profile(args: argparse.Namespace) -> dict:
     "maxApplicationsPerRun": max_applications,
   }
   if args.dry_run:
-    return {
+    dry_ref = resolve_cv_ref(user_id, args.cv, do_upload=False)
+    result: dict = {
       "dryRun": True,
       "phoneHash": phone_hash(phone),
       "userId": user_id,
-      "cvFileRef": resolve_cv_ref(user_id, args.cv, do_upload=False),
       "preferences": preferences,
       "profileConfirmed": profile_confirmed,
       "safetyAcknowledged": safety_acknowledged,
       "uploadEndpoint": endpoint("/internal/job-scout/cv"),
       "endpoint": endpoint("/internal/job-scout/profile"),
     }
+    if dry_ref is not None:
+      result["cvFileRef"] = dry_ref
+    return result
   cv_file_ref = resolve_cv_ref(user_id, args.cv, do_upload=True)
-  payload = {
+  payload: dict = {
     "phone": phone,
     "userId": user_id,
     "preferences": preferences,
-    "cvFileRef": cv_file_ref,
     "profileConfirmed": profile_confirmed,
     "safetyAcknowledged": safety_acknowledged,
   }
+  # Only include cvFileRef when a new CV was supplied. Omitting it tells the
+  # backend to retain the existing CV on file for this user.
+  if cv_file_ref is not None:
+    payload["cvFileRef"] = cv_file_ref
   result = api.request_json("POST", endpoint("/internal/job-scout/profile"), payload)
   remove_pending_links(phone=phone, service="job-scout")
   return result
@@ -320,60 +359,36 @@ def cmd_list_ready(args: argparse.Namespace) -> dict:
 # still produce a clean, semantic, standalone page — not a positional dump of
 # the source PDF.
 #
-# Small inline SVG data-URI icons for the CONTACT lines. Data-URI backgrounds
-# render reliably in headless Chromium PDF output, unlike webfont glyphs.
-_CV_ICON_LOCATION = (
-  "data:image/svg+xml;utf8,"
-  "%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23405a78'%3E"
-  "%3Cpath d='M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5"
-  "a2.5 2.5 0 110-5 2.5 2.5 0 010 5z'/%3E%3C/svg%3E"
-)
-_CV_ICON_PHONE = (
-  "data:image/svg+xml;utf8,"
-  "%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23405a78'%3E"
-  "%3Cpath d='M6.62 10.79a15.53 15.53 0 006.59 6.59l2.2-2.2a1 1 0 011.02-.24 11.36 11.36 0 003.56.57"
-  " 1 1 0 011 1V20a1 1 0 01-1 1A17 17 0 013 4a1 1 0 011-1h3.5a1 1 0 011 1 11.36 11.36 0 00.57 3.56"
-  " 1 1 0 01-.24 1.02l-2.21 2.21z'/%3E%3C/svg%3E"
-)
-_CV_ICON_EMAIL = (
-  "data:image/svg+xml;utf8,"
-  "%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23405a78'%3E"
-  "%3Cpath d='M20 4H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V6a2 2 0 00-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z'/%3E"
-  "%3C/svg%3E"
-)
+# The house style is deliberately PLAIN: a white background, black text, a
+# single column, and no colours, icons, photos, or boxed chips. This matches the
+# plain-CV contract enforced on AI-designed CVs (see CV_DESIGN_GUIDANCE and
+# _validate_personalized_html in agent_dispatch), so a rejected personalized CV
+# falls back to a deterministic plain document with the same look.
 CV_HTML_STYLE = """\
   @page { size: A4; margin: 0; }
   * { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; background: #fff; color: #202b3c; font-family: Arial, Helvetica, sans-serif; font-size: 10pt; line-height: 1.4; }
-  main.cv { width: 210mm; min-height: 297mm; margin: 0 auto; padding: 12mm 14mm 11mm; }
-  .cv-header { margin: 0 0 7mm; }
-  h1 { margin: 0; color: #101826; font-size: 23pt; line-height: 1.08; font-weight: 700; }
-  .headline { margin: 2mm 0 0; color: #405a78; font-size: 11pt; text-transform: uppercase; letter-spacing: 0.6pt; }
-  .cv-grid { display: grid; grid-template-columns: 55mm minmax(0, 1fr); gap: 9mm; align-items: start; }
-  .sidebar { min-width: 0; padding-right: 7mm; border-right: 1px solid #d7e0ea; }
-  .main-column { min-width: 0; }
-  section { break-inside: avoid; margin: 0 0 5.5mm; }
-  h2 { margin: 0 0 4mm; padding: 0 0 2.5mm; color: #175ec8; font-size: 8.5pt; line-height: 1.2; font-weight: 700; text-transform: uppercase; letter-spacing: 1pt; border-bottom: 1px solid #cbdcf3; }
-  .sidebar h2 { border-bottom: 0; padding-bottom: 0; }
+  html, body { margin: 0; padding: 0; background: #fff; color: #000; font-family: Arial, Helvetica, sans-serif; font-size: 10.5pt; line-height: 1.45; }
+  main.cv { width: 210mm; min-height: 297mm; margin: 0 auto; padding: 14mm 18mm 13mm; }
+  .cv-header { margin: 0 0 6mm; padding: 0 0 4mm; border-bottom: 1px solid #000; }
+  h1 { margin: 0; font-size: 22pt; line-height: 1.1; font-weight: 700; }
+  .headline { margin: 1.5mm 0 0; font-size: 12pt; text-transform: uppercase; letter-spacing: 0.4pt; }
+  .cv-body { display: block; }
+  section { break-inside: avoid; margin: 0 0 6mm; }
+  h2 { margin: 0 0 3mm; padding: 0 0 1.5mm; font-size: 11pt; line-height: 1.2; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6pt; border-bottom: 1px solid #000; }
   p { margin: 0 0 3mm; }
   .entry { margin: 0 0 3.5mm; }
   .entry-head { display: flex; justify-content: space-between; align-items: baseline; gap: 4mm; }
-  .entry-meta { flex: none; color: #6b7a8d; font-size: 9pt; }
-  ul { margin: 0; padding: 0; list-style: none; }
-  li { position: relative; margin: 0 0 1.5mm; padding-left: 4mm; }
-  li::before { content: '\\25b8'; position: absolute; left: 0; color: #175ec8; font-weight: 700; }
-  .skills { display: flex; flex-wrap: wrap; gap: 2mm; }
-  .skill { padding: 1.2mm 2.2mm; border: 1px solid #d7e0ea; border-radius: 2mm; font-size: 9pt; }
-  .contact-line { position: relative; margin: 0 0 3mm; padding-left: 6mm; overflow-wrap: anywhere; }
-  .contact-line::before { content: ''; position: absolute; left: 0; top: 0.3mm; width: 3.6mm; height: 3.6mm; background-repeat: no-repeat; background-position: center; background-size: contain; }
-  .contact-line.location::before { background-image: url("%s"); }
-  .contact-line.phone::before { background-image: url("%s"); }
-  .contact-line.email::before { background-image: url("%s"); }
-  .language { display: flex; justify-content: space-between; gap: 3mm; margin: 0 0 1.5mm; }
-  .language .level { flex: none; color: #6b7a8d; }
-  .sidebar p, .sidebar li { overflow-wrap: anywhere; }
+  .entry-meta { flex: none; font-size: 9.5pt; }
+  ul { margin: 0; padding: 0 0 0 5mm; list-style: disc; }
+  li { margin: 0 0 1.5mm; }
+  .skills { }
+  .skill:not(:last-child)::after { content: ', '; }
+  .contact-line { margin: 0 0 2mm; overflow-wrap: anywhere; }
+  .language { display: flex; justify-content: space-between; gap: 3mm; margin: 0 0 1.5mm; max-width: 90mm; }
+  .language .level { flex: none; }
+  p, li { overflow-wrap: anywhere; }
   @media print { main.cv { margin: 0; } }
-""" % (_CV_ICON_LOCATION, _CV_ICON_PHONE, _CV_ICON_EMAIL)
+"""
 
 
 SIDE_SECTION_TITLES = {"CONTACT", "SKILLS", "LANGUAGES", "REFERENCES"}
@@ -545,7 +560,7 @@ def _render_language_line(line: str) -> str:
   )
 
 
-def _render_cv_section(title: str, blocks: list[list[str]], sidebar: bool) -> str:
+def _render_cv_section(title: str, blocks: list[list[str]]) -> str:
   title_attr = html_module.escape(title.title(), quote=True)
   immutable = f' data-cv-immutable="section-{title_attr}"' if title in IMMUTABLE_SECTION_TITLES else ""
   lines: list[str] = []
@@ -573,9 +588,8 @@ def _render_cv_section(title: str, blocks: list[list[str]], sidebar: bool) -> st
         lines.append(rendered)
   if not lines:
     return ""
-  section_class = " side-section" if sidebar else ""
   return (
-    f'      <section class="cv-section{section_class}" data-cv-section="{title_attr}"{immutable}>\n'
+    f'      <section class="cv-section" data-cv-section="{title_attr}"{immutable}>\n'
     f"        <h2>{html_module.escape(title.title())}</h2>\n"
     + "\n".join(lines)
     + "\n      </section>"
@@ -611,16 +625,31 @@ def cv_html_document(text: str, styled: bool = False) -> str:
   if current_title and current_blocks:
     sections.append((current_title, current_blocks))
 
-  sidebar_sections = [_render_cv_section(name, values, True) for name, values in sections if name in SIDE_SECTION_TITLES]
-  main_sections = [_render_cv_section(name, values, False) for name, values in sections if name not in SIDE_SECTION_TITLES]
-  if not main_sections and sidebar_sections:
-    main_sections, sidebar_sections = sidebar_sections, []
+  # A single-column CV: every section is stacked in one column in document
+  # order (no sidebar/main divide), so the page parses cleanly for applicant
+  # tracking systems and reads as one unified column.
+  return _assemble_cv_html(title, headline, sections, styled=styled)
+
+
+def _assemble_cv_html(
+  title: str,
+  headline: str,
+  sections: list[tuple[str, list[list[str]]]],
+  styled: bool = False,
+) -> str:
+  """Wrap rendered sections in the canonical professional-v2 document shell.
+
+  Shared by the PDF-text path (cv_html_document) and the interview-facts path
+  (cv_html_from_facts) so both emit byte-identical structure: the same
+  data-cv-template header, data-cv-section/data-cv-immutable markers, and
+  single-column body. The base CV is stored UNSTYLED (no <style> block); the
+  modern stylesheet is injected at render time by style_cv_html(). A styled
+  document is still available via styled=True for any caller that wants a
+  standalone page.
+  """
+  rendered_sections = [_render_cv_section(name, values) for name, values in sections]
   headline_html = f'\n      <p class="headline">{html_module.escape(headline)}</p>' if headline else ""
-  sidebar_html = "\n".join(section for section in sidebar_sections if section)
-  main_html = "\n".join(section for section in main_sections if section)
-  # The base CV is stored UNSTYLED (no <style> block); the modern stylesheet is
-  # injected at render time by style_cv_html(). A styled document is still
-  # available via styled=True for any caller that wants a standalone page.
+  body_html = "\n".join(section for section in rendered_sections if section)
   style_html = f"<style>\n{CV_HTML_STYLE}</style>\n" if styled else ""
   return (
     "<!doctype html>\n"
@@ -635,14 +664,141 @@ def cv_html_document(text: str, styled: bool = False) -> str:
     "    <header class=\"cv-header\">\n"
     f"      <h1 data-cv-field=\"identity\">{html_module.escape(title)}</h1>{headline_html}\n"
     "    </header>\n"
-    "    <div class=\"cv-grid\">\n"
-    f"      <aside class=\"sidebar\">\n{sidebar_html}\n      </aside>\n"
-    f"      <div class=\"main-column\">\n{main_html}\n      </div>\n"
-    "    </div>\n"
+    f"    <div class=\"cv-body\">\n{body_html}\n    </div>\n"
     "  </main>\n"
     "</body>\n"
     "</html>\n"
   )
+
+
+def _fact_str(value: object) -> str:
+  """A single normalized line from an interview fact value."""
+  return " ".join(str(value if value is not None else "").split())
+
+
+def _date_line(start: object, end: object) -> str:
+  """Render an entry's date range the way the CV builder does elsewhere.
+
+  A start with no end reads as ongoing; an end alone is shown as-is. Years are
+  preserved verbatim so the atomic-fact check in dispatch keeps matching them.
+  """
+  start_text = _fact_str(start)
+  end_text = _fact_str(end)
+  if start_text and end_text:
+    return f"{start_text} – {end_text}"
+  if start_text:
+    return f"{start_text} – Present"
+  return end_text
+
+
+def _entry_block(*lines: str) -> list[str]:
+  """One CV entry as a block of non-empty text lines.
+
+  _render_cv_block joins these with <br> inside a single <p class="entry">, so
+  an entry's heading, dates, and description stay visually grouped — the same
+  shape a PDF-extracted entry block takes.
+  """
+  return [line for line in (_fact_str(line) for line in lines) if line]
+
+
+def _fact_list(value: object) -> list[str]:
+  """Coerce a skills-style fact into a clean list.
+
+  Accepts a list, or a string with comma/newline/semicolon separators, matching
+  the InterviewData contract the web app collects.
+  """
+  if isinstance(value, (list, tuple)):
+    items = [_fact_str(item) for item in value]
+  else:
+    items = [_fact_str(part) for part in re.split(r"[,\n;]", str(value or ""))]
+  seen: set[str] = set()
+  output: list[str] = []
+  for item in items:
+    key = item.casefold()
+    if item and key not in seen:
+      seen.add(key)
+      output.append(item)
+  return output
+
+
+def _fact_rows(value: object) -> list[dict]:
+  return [row for row in value if isinstance(row, dict)] if isinstance(value, list) else []
+
+
+def cv_html_from_facts(facts: dict) -> str:
+  """Build the canonical semantic CV HTML from structured interview facts.
+
+  This is the WhatsApp analogue of the web app's buildCvHtml + create route:
+  the agent collects the same InterviewData shape conversationally, and this
+  turns it into the identical professional-v2 semantic document the PDF-convert
+  path produces (so a WhatsApp-built CV and a PDF-uploaded CV are the same shape
+  for the personalization agent). Presentation stays decoupled — the document is
+  stored unstyled and styled on render.
+
+  Only the full name is required; every other section is optional and omitted
+  when empty. Skills, the summary, and per-entry descriptions are left to the
+  user: dispatch fills a tailored summary per application.
+  """
+  source = facts if isinstance(facts, dict) else {}
+  full_name = _fact_str(source.get("fullName"))
+  if not full_name:
+    raise SystemExit("fullName is required to build a CV")
+
+  sections: list[tuple[str, list[list[str]]]] = []
+
+  contact_lines = [
+    line for line in (
+      _fact_str(source.get("email")),
+      _fact_str(source.get("phone")),
+      _fact_str(source.get("location")),
+    ) if line
+  ]
+  if contact_lines:
+    sections.append(("CONTACT", [contact_lines]))
+
+  summary = _fact_str(source.get("summary"))
+  if summary:
+    sections.append(("PROFESSIONAL SUMMARY", [[summary]]))
+
+  skills = _fact_list(source.get("skills"))
+  if skills:
+    sections.append(("SKILLS", [skills]))
+
+  experience_blocks = [
+    block for row in _fact_rows(source.get("experience"))
+    if (block := _entry_block(
+      ", ".join(part for part in (_fact_str(row.get("title")), _fact_str(row.get("company"))) if part),
+      _date_line(row.get("start"), row.get("end")),
+      _fact_str(row.get("description")),
+    ))
+  ]
+  if experience_blocks:
+    sections.append(("WORK EXPERIENCE", experience_blocks))
+
+  education_blocks = [
+    block for row in _fact_rows(source.get("education"))
+    if (block := _entry_block(
+      ", ".join(part for part in (_fact_str(row.get("degree")), _fact_str(row.get("institution"))) if part),
+      _date_line(row.get("start"), row.get("end")),
+      _fact_str(row.get("description")),
+    ))
+  ]
+  if education_blocks:
+    sections.append(("EDUCATION", education_blocks))
+
+  referee_blocks = [
+    block for row in _fact_rows(source.get("referees"))
+    if (block := _entry_block(
+      _fact_str(row.get("name")),
+      ", ".join(part for part in (_fact_str(row.get("position")), _fact_str(row.get("company"))) if part),
+      _fact_str(row.get("email")),
+      _fact_str(row.get("phone")),
+    ))
+  ]
+  if referee_blocks:
+    sections.append(("REFERENCES", referee_blocks))
+
+  return _assemble_cv_html(full_name, "", sections)
 
 
 def style_cv_html(html: str) -> str:

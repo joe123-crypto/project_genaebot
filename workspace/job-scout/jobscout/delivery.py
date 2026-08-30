@@ -20,11 +20,11 @@ import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 
-from genaie_env import env_default
-
 from jobscout import api
+from . import config
+from .config import env_default
 from .commands_setup import convert_pdf_to_cv_html, style_cv_html
-from .constants import DEFAULT_WEB_APPLY_URL, GENAIE_MAIL_BIN, UNKNOWN_EMPLOYER, WHATSAPP_CHANNEL_SOURCES
+from .constants import GENAIE_MAIL_BIN, UNKNOWN_EMPLOYER, WHATSAPP_CHANNEL_SOURCES
 from .cv_safety import BROWSER_TIMESTAMP, PAGE_COUNTER, validate_cv_html_source
 from .profile import subscriber_user_id
 from .subscriber import display_name, document_filename, subscriber_cv_file, subscriber_sender_email
@@ -77,13 +77,7 @@ MAX_RENDER_HTML_BYTES = 512 * 1024
 
 
 def render_pdf_url() -> str:
-  configured = env_default("JOB_SCOUT_RENDER_PDF_URL", "").strip()
-  if configured:
-    return configured
-  apply_url = env_default("JOB_SCOUT_WEB_APPLY_URL", DEFAULT_WEB_APPLY_URL).strip()
-  if not apply_url:
-    return ""
-  return urllib.parse.urljoin(apply_url, "/render-pdf")
+  return config.render_pdf_url(env_default)
 
 
 def _html_source(value: str | Path) -> str:
@@ -162,6 +156,9 @@ def pdf_page_count(pdf_path: str | Path) -> int:
 
 
 MIN_CV_PAGE_FILL_RATIO = 0.85
+# Zimbabwean employers accept a CV of up to two pages, so the render pipeline
+# allows a second page rather than shrinking every CV onto one.
+MAX_CV_PAGES = 2
 
 
 def pdf_text_fill_ratio(pdf_path: str | Path) -> float:
@@ -196,8 +193,9 @@ def pdf_text_fill_ratio(pdf_path: str | Path) -> float:
 
 def validate_rendered_cv_pdf(pdf_path: str | Path) -> Path:
   path = Path(pdf_path)
-  if pdf_page_count(path) != 1:
-    raise RuntimeError("rendered CV must fit on exactly one page")
+  pages = pdf_page_count(path)
+  if pages > MAX_CV_PAGES:
+    raise RuntimeError(f"rendered CV must fit within {MAX_CV_PAGES} pages")
   try:
     completed = subprocess.run(
       ["pdftotext", str(path), "-"], check=True, capture_output=True, text=True, timeout=30,
@@ -209,17 +207,20 @@ def validate_rendered_cv_pdf(pdf_path: str | Path) -> Path:
     raise RuntimeError("rendered CV contains browser print chrome")
   if any(BROWSER_TIMESTAMP.fullmatch(line) or PAGE_COUNTER.fullmatch(line) for line in lines):
     raise RuntimeError("rendered CV contains browser print chrome")
-  fill_ratio = pdf_text_fill_ratio(path)
-  if fill_ratio < MIN_CV_PAGE_FILL_RATIO:
-    raise RuntimeError(
-      f"rendered CV uses only {fill_ratio:.1%} of the page height; "
-      f"it must use at least {MIN_CV_PAGE_FILL_RATIO:.1%}"
-    )
+  # A one-page CV must not look sparse. A two-page CV fills the first page by
+  # construction, so the fill-ratio guard only applies to single-page output.
+  if pages == 1:
+    fill_ratio = pdf_text_fill_ratio(path)
+    if fill_ratio < MIN_CV_PAGE_FILL_RATIO:
+      raise RuntimeError(
+        f"rendered CV uses only {fill_ratio:.1%} of the page height; "
+        f"it must use at least {MIN_CV_PAGE_FILL_RATIO:.1%}"
+      )
   return path
 
 
-# Progressive scale-to-fit steps for the one-page guarantee. The floor keeps the
-# text readable; content that still overflows at the floor is rejected.
+# Progressive scale-to-fit steps for the page-limit guarantee. The floor keeps
+# the text readable; content that still overflows at the floor is rejected.
 _CV_ZOOM_STEPS = (1.0, 0.92, 0.85, 0.78, 0.7)
 
 
@@ -231,18 +232,18 @@ def _apply_print_zoom(html: str, zoom: float) -> str:
   return tag + html
 
 
-def render_one_page_cv(html_or_path: str | Path, output: str | Path) -> Path:
-  """Render a CV to PDF, scaling it down until it fits on a single page.
+def render_cv_pdf(html_or_path: str | Path, output: str | Path) -> Path:
+  """Render a CV to PDF, scaling it down until it fits within the page limit.
 
   The modern stylesheet is applied when the source is unstyled (a no-op for an
-  AI-designed CV that carries its own <style>). If the CV overflows one page it
-  is re-rendered at progressively smaller zoom, so a long CV shrinks to one page
-  rather than spilling onto a second.
+  AI-designed CV that carries its own <style>). Zimbabwean CVs may run to two
+  pages, so a CV is accepted as-is at up to MAX_CV_PAGES; only one that overflows
+  that limit is re-rendered at progressively smaller zoom until it fits.
   """
   styled = style_cv_html(validate_cv_html_source(_html_source(html_or_path)))
   pdf = render_html_to_pdf(styled, output)
   for zoom in _CV_ZOOM_STEPS[1:]:
-    if pdf_page_count(pdf) <= 1:
+    if pdf_page_count(pdf) <= MAX_CV_PAGES:
       break
     pdf = render_html_to_pdf(_apply_print_zoom(styled, zoom), output)
   return validate_rendered_cv_pdf(pdf)
@@ -282,7 +283,7 @@ def _rebuild_stored_pdf_cv(pdf_path: Path, subscriber: dict) -> Path:
   """
   with tempfile.TemporaryDirectory() as tmp:
     semantic = convert_pdf_to_cv_html(pdf_path, Path(tmp) / "cv.html")
-    return render_one_page_cv(semantic.read_text(encoding="utf-8"), pdf_path.with_name(document_filename(subscriber, "cv")))
+    return render_cv_pdf(semantic.read_text(encoding="utf-8"), pdf_path.with_name(document_filename(subscriber, "cv")))
 
 
 _SOURCE_LABELS = {
@@ -345,8 +346,8 @@ def send_application_email(
   attachment = Path(cv_pdf) if cv_pdf is not None else Path(subscriber_cv_file(subscriber))
   if attachment.suffix.casefold() != ".pdf":
     # The stored base CV is unstyled semantic HTML; style it and render to a
-    # single-page PDF for the employer.
-    attachment = render_one_page_cv(attachment.read_text(encoding="utf-8"), attachment.with_name(document_filename(subscriber, "cv")))
+    # page-limited PDF for the employer.
+    attachment = render_cv_pdf(attachment.read_text(encoding="utf-8"), attachment.with_name(document_filename(subscriber, "cv")))
   elif cv_pdf is None:
     # A stored legacy PDF must never be emailed verbatim: it may be a browser
     # "print to PDF" artifact carrying print chrome (timestamps, page counters,
@@ -399,34 +400,6 @@ def send_whatsapp_message(target: str, message: str) -> dict:
   ], env=command_env)
 
 
-def send_whatsapp_document(target: str, document_path: str | Path, message: str = "") -> dict:
-  """Send a document (e.g. a rendered CV PDF) to a WhatsApp user as media.
-
-  Mirrors send_whatsapp_message but attaches a file via --media, the same way
-  cron/cv-promo posts its ad image. Used by the standalone CV maker to deliver
-  the finished CV straight back to the requester.
-  """
-  command_env = os.environ.copy()
-  command_env.pop("OPENCLAW_HOME", None)
-  gateway_token = command_env.get("GATEWAY_AUTH_TOKEN", "").strip()
-  if gateway_token:
-    command_env["OPENCLAW_GATEWAY_TOKEN"] = gateway_token
-  return run_json_command([
-    str(api.OPENCLAW_BIN),
-    "message",
-    "send",
-    "--channel",
-    "whatsapp",
-    "--target",
-    target,
-    "--message",
-    message,
-    "--media",
-    str(document_path),
-    "--json",
-  ], env=command_env)
-
-
 def send_whatsapp_summary(phone: str, message: str) -> dict:
   return send_whatsapp_message(phone, message)
 
@@ -446,7 +419,7 @@ def result_message_id(result: dict) -> str | None:
 
 
 def request_web_application(payload: dict, timeout: int = 180) -> dict:
-  url = env_default("JOB_SCOUT_WEB_APPLY_URL", DEFAULT_WEB_APPLY_URL).strip()
+  url = config.web_apply_url(env_default)
   token = env_default("JOB_SCOUT_BROWSER_TOKEN", "").strip()
   if not url:
     raise RuntimeError("website application worker is not configured")

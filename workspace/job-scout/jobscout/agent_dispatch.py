@@ -39,6 +39,7 @@ from .commands_dispatch import (
 )
 from .commands_group_feed import maybe_write_group_feed_cache
 from .commands_setup import cmd_list_applications, cmd_list_ready, convert_pending_cvs_best_effort
+from .config import personalization_enabled
 from .constants import DEFAULT_AGENT_MATCH_THRESHOLD, UNKNOWN_EMPLOYER, UNKNOWN_ROLE, WHATSAPP_CHANNEL_SOURCES
 from .formality import employer_formality
 from .delivery import (
@@ -110,23 +111,57 @@ COVER_LETTER_GUIDANCE = (
   "register, so preserve it while tailoring."
 )
 # The agent's in-repo contract for the CV: it owns the whole design. Its output is
-# validated for safe, self-contained HTML, fact preservation, and one-page fit
-# (see _validate_personalized_html and the page-count guard at render time).
+# validated for safe, self-contained HTML, fact preservation, and the two-page
+# limit (see _validate_personalized_html and the page-count guard at render time).
 CV_DESIGN_GUIDANCE = (
-  "Redesign baseCvHtml into a complete, self-contained, professional CV as a single "
-  "standalone HTML document. You own the layout, structure, and CSS: put all styling in "
-  "an inline <style>, and use no scripts and no external resources (no remote fonts, "
-  "images, or stylesheets; inline SVG/data: URIs are fine). Reorganise the content into "
-  "clear, sensibly-ordered sections even if the source text is jumbled, and make it "
-  "visually polished (for example a clean two-column layout). The entire CV MUST fit on "
-  "a single A4 page and its substantive text must extend through at least 85% of the "
-  "page height. For a sparse CV, use larger readable typography, balanced line height, "
-  "section spacing, and well-proportioned columns to use the available space instead of "
-  "cramming everything at the top. For a dense CV, achieve one-page fit through layout "
-  "density and concise wording, NEVER by dropping facts. Do not add filler or invented "
-  "details merely to occupy space. Preserve every factual detail exactly: the applicant's "
-  "name, every email and phone number, education, employers, and dates. Never invent "
-  "contact details, qualifications, or dates that are not in the source."
+  "Redesign baseCvHtml into a complete, self-contained CV as a single standalone HTML "
+  "document, tailored to THIS specific job. Keep the design PLAIN and SIMPLE: put all "
+  "styling in an inline <style>, and use no scripts and no external resources (no remote "
+  "fonts, images, or stylesheets). "
+  "The CV must be visually plain: a plain WHITE background everywhere and black text, with "
+  "NO colours, no shading, no coloured or grey background bands or boxes, and no coloured "
+  "borders or rules of any kind. Do NOT use any images whatsoever -- no profile photos, "
+  "avatars, monograms, initials circles, logos, decorative icons, background images, inline "
+  "SVG, or data: image URIs. If baseCvHtml carries any of these -- any coloured background, "
+  "sidebar, column layout, icon, or image CSS -- strip it out entirely rather than keeping it. "
+  "Use a strictly SINGLE-COLUMN layout in which every section runs the full page width and "
+  "the sections are stacked one below another from top to bottom. Do NOT place any content "
+  "in a side column, sidebar, side panel, or vertical band, and do NOT split the page into "
+  "left and right areas: contact details, skills, education, and references all belong in "
+  "the same single column as work experience, not in a separate side strip. Use no tables, "
+  "text boxes, multi-column grids, CSS columns, or floated columns for layout. The document "
+  "must OPEN with the applicant's full name as the top heading (an <h1>), immediately "
+  "followed by their profession or professional title as a subheading, and then the "
+  "sections. Do NOT include any placeholder text such as \"[Name]\", \"lorem ipsum\", "
+  "\"Your Name Here\", or \"xxxx\"; every field must contain the applicant's real details. "
+  "Use a standard font (Arial, Calibri, or Helvetica) sized 10-12pt and standard section "
+  "headings such as \"Professional Summary\", \"Work Experience\", \"Education\", and "
+  "\"Skills\" rather than clever custom labels. Tailor the content to the job that travels "
+  "with this candidate (its role, employer, and description): rewrite the professional "
+  "summary and the skills section so they match the job's stated requirements, weaving the "
+  "advert's own terms and keywords in naturally and spelling out each acronym once (for "
+  "example \"Monitoring and Evaluation (M&E)\"); never keyword-stuff. In Work Experience, "
+  "make every bullet about RESULTS and impact rather than duties performed or skills gained. "
+  "Lead each bullet with the outcome achieved, then, where it helps, how it was achieved -- "
+  "for example \"Increased sales by 50% by understanding customer needs and communicating "
+  "with them on a deeper level\" or \"Cut monthly reporting time by 30% by streamlining the "
+  "workflow\". Prefer concrete, quantified impact (percentages, figures, time saved, volumes "
+  "handled), and favour a vivid estimated result over a vague duty: you may reasonably "
+  "estimate and modestly exaggerate the results to make the impact compelling, as long as "
+  "each bullet stays believable for the role. Recast duty- or skill-listing phrasings such as "
+  "\"Provided attentive customer service\", \"Communicated effectively with customers\", or "
+  "\"Developed strong multitasking skills\" into concrete outcomes. Use short bullet points "
+  "and a consistent order per entry: job title, organisation, location, dates. "
+  "Reorganise the content into clear, sensibly-ordered sections even if the source text is "
+  "jumbled. The CV may run to at most TWO A4 pages. For a shorter history, produce one "
+  "well-spaced page whose substantive text extends through at least 85% of the page height "
+  "-- use larger readable typography, balanced line height, and section spacing rather than "
+  "cramming everything at the top; only use a second page when the content genuinely needs "
+  "it. Do not add filler or invented details merely to occupy space. Preserve every factual "
+  "detail exactly: the applicant's name, every email and phone number, education, employers, "
+  "and dates. Never invent contact details, qualifications, dates, or job titles; the "
+  "results and metrics in Work Experience bullets are the one place where a plausible "
+  "estimate or modest exaggeration is acceptable."
 )
 TERMINAL_CLAIM_STATUSES = {"completed", "failed", "fallback_completed"}
 # html.parser never emits an endtag for a bare void element, so these tags
@@ -364,6 +399,13 @@ def _cmd_agent_prepare_unprotected(args: argparse.Namespace) -> dict:
     if not getattr(args, "dry_run", False) and not approved_only:
       maybe_write_group_feed_cache(args, run_id)
 
+    if not personalization_enabled():
+      # Feature disabled: the group feed cache is already refreshed above; build
+      # no personalization/apply claims. The wrapper then finishes with
+      # claimCount == 0 and never spawns the model, disabling automatic apply,
+      # user-approved submission, and manual dispatch alike.
+      subscribers = []
+
     prepared: list[dict] = []
     raw_pool: list[dict] = []
     for subscriber in subscribers:
@@ -506,6 +548,7 @@ def _cmd_agent_prepare_unprotected(args: argparse.Namespace) -> dict:
     "terminalCount": 0,
     "claims": claim_summaries,
     "cvConversion": cv_conversion,
+    "personalizationDisabled": not personalization_enabled(),
   }
 
 
@@ -760,21 +803,102 @@ def _cv_atomic_facts(text: str) -> tuple[set[str], set[str], set[str]]:
   return emails, phones, years
 
 
+# Plain-CV enforcement: the agent owns the design but the CV must stay plain and
+# ATS-friendly -- a white background, no colours, no images, a single column, and
+# no placeholder text (see CV_DESIGN_GUIDANCE). These scan the raw HTML so they
+# catch styling in both <style> blocks and inline style="" attributes.
+_CV_IMAGE_RE = re.compile(r"<img\b|<svg\b|<picture\b|background-image|image-set\s*\(|data:image", re.IGNORECASE)
+_CV_BG_DECL_RE = re.compile(r"background(?:-color)?\s*:\s*([^;{}]+)", re.IGNORECASE)
+_CV_GRID_COLS_RE = re.compile(r"grid-template-columns\s*:\s*([^;{}]+)", re.IGNORECASE)
+_CV_COLUMN_COUNT_RE = re.compile(r"column-count\s*:\s*(\d+)", re.IGNORECASE)
+_CV_COLUMNS_RE = re.compile(r"(?:^|[^-\w])columns\s*:\s*([^;{}]+)", re.IGNORECASE)
+_CV_FLOAT_RE = re.compile(r"float\s*:\s*(?:left|right)", re.IGNORECASE)
+_CV_SIDEBAR_RE = re.compile(r"sidebar|side-panel|left-column|right-column|two-column|col-left|col-right", re.IGNORECASE)
+_CV_PLACEHOLDER_RE = re.compile(
+  r"lorem ipsum|your name here|xxxx|\[(?:name|address|email|phone|date|company|title|role|insert|placeholder)\b[^\]]*\]",
+  re.IGNORECASE,
+)
+# A colour signal in a background value (white/transparent are handled separately).
+_CV_COLOUR_SIGNAL_RE = re.compile(
+  r"#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(|gradient|"
+  r"\b(?:navy|blue|red|green|teal|gr[ae]y|silver|maroon|olive|purple|orange|yellow|"
+  r"black|aqua|cyan|magenta|pink|brown|gold|beige|ivory|khaki|coral|salmon|"
+  r"lightgr[ae]y|whitesmoke|gainsboro|steelblue|slategr[ae]y)\b",
+  re.IGNORECASE,
+)
+_CV_PLAIN_BG = frozenset({
+  "", "none", "transparent", "inherit", "initial", "unset", "currentcolor",
+  "white", "#fff", "#ffffff", "rgb(255,255,255)", "rgba(255,255,255,1)", "rgba(0,0,0,0)",
+})
+
+
+def _cv_bg_is_coloured(css: str) -> bool:
+  """Whether any background declaration paints a visible (non-white) fill."""
+  for match in _CV_BG_DECL_RE.finditer(css):
+    value = match.group(1)
+    normalized = re.sub(r"\s+", "", value).casefold()
+    if normalized in _CV_PLAIN_BG:
+      continue
+    if _CV_COLOUR_SIGNAL_RE.search(value):
+      return True
+  return False
+
+
+def _cv_grid_track_count(value: str) -> int:
+  """How many column tracks a grid-template-columns value defines."""
+  text = value.strip().casefold()
+  if not text or text in {"none", "inherit", "initial", "unset", "auto"}:
+    return 0
+  repeats = [int(count) for count in re.findall(r"repeat\(\s*(\d+)", text)]
+  if repeats:
+    return max(repeats)
+  stripped = re.sub(r"\([^()]*\)", "", text)  # drop minmax()/fit-content() groups
+  stripped = re.sub(r"\[[^\]]*\]", "", stripped)  # drop [line-name] labels
+  return len([token for token in stripped.split() if token])
+
+
+def _cv_plainness_violation(raw_html: str, visible_text: str) -> str | None:
+  """A human-readable reason the CV breaks the plain, single-column contract, or None."""
+  if _CV_IMAGE_RE.search(raw_html):
+    return "personalized CV must not contain photos, icons, or images"
+  if _cv_bg_is_coloured(raw_html):
+    return "personalized CV must use a plain white background with no colours"
+  if any(_cv_grid_track_count(value) >= 2 for value in _CV_GRID_COLS_RE.findall(raw_html)):
+    return "personalized CV must use a single-column layout (no grid columns)"
+  if any(int(count) >= 2 for count in _CV_COLUMN_COUNT_RE.findall(raw_html)):
+    return "personalized CV must use a single-column layout (no CSS columns)"
+  if any(re.search(r"\b([2-9]|\d\d)\b", value) or "em" in value.casefold() or "px" in value.casefold()
+         for value in _CV_COLUMNS_RE.findall(raw_html)):
+    return "personalized CV must use a single-column layout (no CSS columns)"
+  if _CV_FLOAT_RE.search(raw_html):
+    return "personalized CV must use a single-column layout (no floated columns)"
+  if _CV_SIDEBAR_RE.search(raw_html):
+    return "personalized CV must use a single-column layout (no sidebar)"
+  if _CV_PLACEHOLDER_RE.search(visible_text):
+    return "personalized CV must not contain placeholder text"
+  return None
+
+
 def _validate_personalized_html(base_path: Path, personalized_path: Path, expected_name: str = "") -> None:
   """Validate an AI-redesigned CV.
 
-  The agent now owns layout and CSS, so stylesheet/marker equality is no longer
-  required. Instead the output must be safe and self-contained, and must preserve
+  The agent owns layout and CSS, but the design must stay plain and ATS-friendly:
+  safe and self-contained, a strictly single-column layout with a plain white
+  background and no images, colours, or placeholder text, and it must preserve
   every atomic fact (name, emails, phones, dates) without fabricating new ones.
   """
   base = _inspect_html(base_path)
   personalized = _inspect_html(personalized_path)
   if personalized.unsafe:
     raise AgentResultError("personalized CV contains unsafe or non-self-contained HTML")
+  raw_html = personalized_path.read_text(encoding="utf-8")
   try:
-    validate_cv_html_source(personalized_path.read_text(encoding="utf-8"))
+    validate_cv_html_source(raw_html)
   except RuntimeError as err:
     raise AgentResultError(str(err)) from err
+  plainness_error = _cv_plainness_violation(raw_html, personalized.text)
+  if plainness_error:
+    raise AgentResultError(plainness_error)
   base_emails, base_phones, base_years = _cv_atomic_facts(base.text)
   new_emails, new_phones, new_years = _cv_atomic_facts(personalized.text)
   if base_emails - new_emails:
@@ -1102,7 +1226,7 @@ def dispatch_agent_user(args: argparse.Namespace, work: dict, selected: list[dic
       }
       if not approval_required:
         personalized_html = Path(item["cvHtmlPath"])
-        preview_pdf = application.render_one_page_cv(personalized_html, personalized_html.with_name("preview-cv.pdf"))
+        preview_pdf = application.render_cv_pdf(personalized_html, personalized_html.with_name("preview-cv.pdf"))
         preview.update({
           "cvPdfPath": str(preview_pdf),
           "cvSource": "agent",
@@ -1495,7 +1619,7 @@ def cmd_agent_validate(args: argparse.Namespace) -> dict:
   if selected and not work.get("approvalRequired"):
     with tempfile.TemporaryDirectory(prefix="job-scout-cv-preflight-") as tmp:
       for index, item in enumerate(selected, start=1):
-        application.render_one_page_cv(
+        application.render_cv_pdf(
           item["cvHtmlPath"],
           Path(tmp) / f"candidate-{index:02d}.pdf",
         )

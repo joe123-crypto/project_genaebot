@@ -14,8 +14,10 @@ from unittest import mock
 import urllib.error
 
 import job_scout
+import jobscout.agent_dispatch
 import jobscout.api
 import jobscout.constants
+import jobscout.cv_safety
 import jobscout.delivery
 import jobscout.dispatch_store
 import jobscout.group_feed
@@ -150,6 +152,47 @@ class CvStagingTests(unittest.TestCase):
           jobscout.api.stage_cv("+263785632943", str(source))
       upload.assert_not_called()
 
+  def test_build_cv_uploads_html_to_canonical_key(self) -> None:
+    args = argparse.Namespace(
+      phone="+263785632943",
+      user_id="user-1",
+      facts='{"fullName": "Jane Doe", "email": "jane@x.com"}',
+      dry_run=False,
+    )
+    uploaded: dict = {}
+
+    def capture(user_id, path):
+      # The temp file is deleted when cmd_build_cv returns, so read it now.
+      uploaded["userId"] = user_id
+      uploaded["html"] = Path(path).read_text(encoding="utf-8")
+      return {"ok": True, "ready": True}
+
+    with mock.patch("jobscout.api.upload_cv_html", side_effect=capture):
+      result = job_scout.cmd_build_cv(args)
+
+    self.assertTrue(result["ok"])
+    self.assertTrue(result["ready"])
+    self.assertEqual(result["userId"], "user-1")
+    self.assertEqual(result["cvHtmlRef"], "user-1/cv/base/cv.html")
+    # The canonical HTML CV is committed through the shared upload seam.
+    self.assertEqual(uploaded["userId"], "user-1")
+    self.assertIn('data-cv-template="professional-v2"', uploaded["html"])
+
+  def test_build_cv_dry_run_returns_html_without_uploading(self) -> None:
+    args = argparse.Namespace(
+      phone="+263785632943",
+      user_id="user-1",
+      facts='{"fullName": "Jane Doe"}',
+      dry_run=True,
+    )
+    with mock.patch("jobscout.api.upload_cv_html") as upload:
+      result = job_scout.cmd_build_cv(args)
+
+    upload.assert_not_called()
+    self.assertTrue(result["dryRun"])
+    self.assertEqual(result["cvHtmlRef"], "user-1/cv/base/cv.html")
+    self.assertIn("<title>Jane Doe - CV</title>", result["html"])
+
   def test_save_profile_dry_run_reports_r2_key(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
       source = self._pdf(Path(tmp))
@@ -192,6 +235,12 @@ class CvStagingTests(unittest.TestCase):
       "user-1/cv/cv.pdf",
     )
 
+  def test_resolve_cv_ref_returns_none_when_no_cv_supplied(self) -> None:
+    # When --cv is omitted (user already has a CV in R2), resolve_cv_ref
+    # returns None so the caller can retain the existing stored CV.
+    self.assertIsNone(job_scout.resolve_cv_ref("user-1", None, do_upload=True))
+    self.assertIsNone(job_scout.resolve_cv_ref("user-1", "", do_upload=False))
+
   def test_resolve_cv_ref_rejects_missing_local_path(self) -> None:
     # A nonexistent local path must never be persisted as an R2 key.
     with self.assertRaises(SystemExit):
@@ -200,6 +249,37 @@ class CvStagingTests(unittest.TestCase):
   def test_resolve_cv_ref_rejects_foreign_key(self) -> None:
     with self.assertRaises(SystemExit):
       job_scout.resolve_cv_ref("user-1", "other-user/cv/cv.pdf", do_upload=False)
+
+  def test_save_profile_dry_run_without_cv_omits_cv_file_ref(self) -> None:
+    # When no --cv is given (user already has a CV in R2), save-profile dry-run
+    # must not include cvFileRef so the backend retains the existing one.
+    args = argparse.Namespace(
+      phone="+263785632943",
+      user_id="user-1",
+      cv=None,
+      storage_root=None,
+      profile_json=None,
+      target_role=["General worker"],
+      location=["Harare, Zimbabwe"],
+      country=None,
+      language=None,
+      qualification=None,
+      experience=None,
+      skill=None,
+      exclusion=None,
+      prompt_note=None,
+      max_applications_per_run=None,
+      no_auto_apply=False,
+      profile_confirmed=True,
+      safety_acknowledged=True,
+      dry_run=True,
+    )
+
+    result = job_scout.cmd_save_profile(args)
+
+    self.assertTrue(result["dryRun"])
+    self.assertNotIn("cvFileRef", result)
+    self.assertEqual(result["preferences"]["targetRoles"], ["General worker"])
 
 
 class CheckRuntimeTests(unittest.TestCase):
@@ -482,8 +562,10 @@ class CvConversionTests(unittest.TestCase):
     self.assertIn("<h2>Skills</h2>", html)
     self.assertIn("Driver at Acme", html)
     self.assertIn("<title>Jane Doe - CV</title>", html)
-    self.assertIn('class="cv-grid"', html)
-    self.assertIn('class="sidebar"', html)
+    # A single-column layout: no sidebar/main split, every section in one column.
+    self.assertIn('class="cv-body"', html)
+    self.assertNotIn('class="cv-grid"', html)
+    self.assertNotIn('class="sidebar"', html)
 
   def test_cv_html_document_drops_browser_print_headers_and_footers(self) -> None:
     text = "5/19/26, 3:47 PM\nJane Doe\n\nPROFILE\n\nReliable worker.\nfile:///home/jane/cv.html\n1/2\n"
@@ -503,6 +585,62 @@ class CvConversionTests(unittest.TestCase):
     with self.assertRaises(RuntimeError):
       jobscout.commands_setup.cv_html_document("  \n\n  ")
 
+  def test_cv_html_from_facts_builds_semantic_page(self) -> None:
+    facts = {
+      "fullName": "Jane Doe",
+      "email": "jane.doe@gmail.com",
+      "phone": "+263 77 123 4567",
+      "location": "Bindura, Zimbabwe",
+      "skills": ["Computer literacy", "Customer service", "Computer literacy"],
+      "experience": [
+        {"title": "Shop Assistant", "company": "ABC Stores", "start": "Jan 2020", "end": "Present", "description": "Served customers."},
+      ],
+      "education": [{"degree": "O Level", "institution": "Bindura High", "start": "2015", "end": "2018"}],
+      "referees": [{"name": "John Smith", "position": "Manager", "company": "ABC Stores", "email": "john@abc.co.zw", "phone": "+263 77 000 1111"}],
+    }
+    html = jobscout.commands_setup.cv_html_from_facts(facts)
+    # Same professional-v2 shell as the PDF path, so both CV sources look alike.
+    self.assertIn('data-cv-template="professional-v2"', html)
+    self.assertIn('<h1 data-cv-field="identity">Jane Doe</h1>', html)
+    self.assertIn("<title>Jane Doe - CV</title>", html)
+    self.assertNotIn("<style>", html)  # stored unstyled; styled at render time
+    # Contact, Education and References carry the immutable marker; Skills/Experience do not.
+    self.assertIn('data-cv-section="Contact" data-cv-immutable="section-Contact"', html)
+    self.assertIn('data-cv-section="Education" data-cv-immutable="section-Education"', html)
+    self.assertIn('data-cv-section="References" data-cv-immutable="section-References"', html)
+    self.assertIn('data-cv-section="Skills"', html)
+    self.assertNotIn('data-cv-section="Skills" data-cv-immutable', html)
+    # Contact lines are content-tagged so the stylesheet can add an icon.
+    self.assertIn('<p class="contact-line email">jane.doe@gmail.com</p>', html)
+    self.assertIn('<p class="contact-line phone">+263 77 123 4567</p>', html)
+    # Skills are de-duplicated case-insensitively and rendered as chips.
+    self.assertEqual(html.count('<span class="skill">'), 2)
+    # An entry groups heading, dates and description into one block.
+    self.assertIn("Shop Assistant, ABC Stores<br>", html)
+    self.assertIn("Jan 2020 – Present", html)
+    # A single-column layout with no sidebar/main split.
+    self.assertIn('class="cv-body"', html)
+    self.assertNotIn('class="sidebar"', html)
+    # The output passes the shared canonical-CV validator.
+    jobscout.commands_setup.validate_cv_html_source(html)
+
+  def test_cv_html_from_facts_requires_full_name(self) -> None:
+    with self.assertRaises(SystemExit):
+      jobscout.commands_setup.cv_html_from_facts({"email": "x@y.com"})
+
+  def test_cv_html_from_facts_omits_empty_sections(self) -> None:
+    html = jobscout.commands_setup.cv_html_from_facts({"fullName": "Solo Name"})
+    self.assertIn('<h1 data-cv-field="identity">Solo Name</h1>', html)
+    self.assertNotIn("<h2>", html)  # no name-only sections rendered
+    self.assertNotIn("data-cv-section", html)
+
+  def test_cv_html_from_facts_accepts_comma_separated_skills(self) -> None:
+    html = jobscout.commands_setup.cv_html_from_facts(
+      {"fullName": "Jane Doe", "skills": "Typing, Filing, Typing"}
+    )
+    self.assertEqual(html.count('<span class="skill">'), 2)
+    self.assertIn("<span class=\"skill\">Typing</span>", html)
+
   def test_base_cv_is_unstyled_and_style_helper_adds_one_stylesheet(self) -> None:
     text = "Jane Doe\nHarare, Zimbabwe\n\nSKILLS\n\nDefensive driving\n"
     base = jobscout.commands_setup.cv_html_document(text)
@@ -517,8 +655,44 @@ class CvConversionTests(unittest.TestCase):
     base = jobscout.commands_setup.cv_html_document("Jane Doe\n\nSKILLS\n\nDriving\n")
     styled = jobscout.commands_setup.style_cv_html(base)
     self.assertIn(".skill", styled)
-    self.assertIn("\\25b8", styled)  # blue arrow bullet character in CSS
+    # The house style is plain: a white background, black text, and no colours.
+    self.assertIn("background: #fff", styled)
+    self.assertIn("color: #000", styled)
+    self.assertNotIn("175ec8", styled)  # no blue accent colour
     self.assertIn("</head>", styled.split("<body>", 1)[0])
+
+  def test_uploaded_cv_is_normalized_to_the_plain_single_column_form(self) -> None:
+    # An uploaded CV is reduced to its TEXT (two-column layouts are de-interleaved
+    # in reading order) and rebuilt in the plain house style, so whatever style the
+    # original had -- sidebars, colours, photos -- cannot survive conversion.
+    rows = [
+      ("CONTACT", "PROFESSIONAL SUMMARY"),
+      ("449 Village Road", "Reliable administrator with"),
+      ("Harare Zimbabwe", "strong records and filing"),
+      ("+263 78 000 111", "experience across offices."),
+      ("me@example.com", ""),
+      ("SKILLS", "EXPERIENCE"),
+      ("Filing", "Clerk at Acme"),
+      ("Records management", "2019 to 2024"),
+      ("Data entry", "Handled daily correspondence"),
+      ("Communication", "and document retrieval."),
+    ]
+    two_column_text = "\n".join(f"{left:<31}{right}".rstrip() for left, right in rows)
+    single = jobscout.commands_setup._decolumn_layout_text(two_column_text)
+    self.assertIsNotNone(single)
+    # The name is a full-width line above the columns on a real CV.
+    base = jobscout.commands_setup.cv_html_document(f"Jane Doe\n\n{single}")
+    styled = jobscout.commands_setup.style_cv_html(base)
+    # The rebuilt document is a plain, single-column page: no carried-over style,
+    # no columns, no images, and it satisfies the plain-CV enforcement contract.
+    self.assertNotIn("<style>", base)
+    for banned in ("grid-template", "column-count", "<img", "background-image", "sidebar", "175ec8"):
+      self.assertNotIn(banned, styled)
+    text = " ".join(jobscout.cv_safety.visible_lines_from_html(styled))
+    self.assertIsNone(jobscout.agent_dispatch._cv_plainness_violation(styled, text))
+    # Every fact from the two-column source survives the flattening.
+    for fact in ("Jane Doe", "me@example.com", "+263 78 000 111", "Filing", "Clerk at Acme"):
+      self.assertIn(fact, styled)
 
   def test_decolumn_reorders_two_column_layout_into_per_column_reading_order(self) -> None:
     rows = [

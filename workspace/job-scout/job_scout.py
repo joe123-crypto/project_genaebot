@@ -9,7 +9,6 @@ import json
 import os
 from pathlib import Path
 import re
-import sys
 import time
 import urllib.error
 import urllib.parse
@@ -49,26 +48,14 @@ from jobscout.constants import (
   WORKSPACE,
 )
 
-os.environ.setdefault(
-  "OPENCLAW_PENDING_LINKS_PATH",
-  "/home/joseph/.openclaw/runtime/account-link/pending-links.json",
-)
-ACCOUNT_LINK_DIR = WORKSPACE / "account-link"
-if str(ACCOUNT_LINK_DIR) not in sys.path:
-  sys.path.insert(0, str(ACCOUNT_LINK_DIR))
-
-LIB_DIR = str(WORKSPACE / "lib")
-if LIB_DIR not in sys.path:
-  sys.path.insert(0, LIB_DIR)
-
-from genaie_env import (
+from jobscout.integrations.agent_genaie import (
   agent_base_url,
   agent_base_url_source,
   api_key,
   endpoint,
-  env_default,
 )
-from pending_cache import (
+from jobscout.config import env_default
+from jobscout.integrations.pending_links import (
   criteria as pending_criteria,
   get_pending_link,
   remove_pending_links,
@@ -176,6 +163,7 @@ from jobscout.jsearch import (
 # operator scripts, and existing integrations. Command implementations live in
 # focused jobscout modules.
 from jobscout.commands_setup import (
+  cmd_build_cv,
   cmd_check_runtime,
   cmd_fetch_candidates,
   cmd_list_applications,

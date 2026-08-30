@@ -6,14 +6,15 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import json
-import os
 from pathlib import Path
 import sqlite3
 import sys
 
+from jobscout.config import CHANNEL_DB_PATH, CHANNEL_HEALTH_PATH
 
-DEFAULT_HEALTH = Path("/home/joseph/.openclaw/runtime/job-scout-channel/health.json")
-DEFAULT_DB = Path("/home/joseph/.openclaw/runtime/job-scout-channel/posts.sqlite3")
+
+DEFAULT_HEALTH = CHANNEL_HEALTH_PATH
+DEFAULT_DB = CHANNEL_DB_PATH
 
 
 def parse_time(value: object) -> datetime | None:
@@ -83,9 +84,7 @@ def main(argv: list[str] | None = None) -> int:
   parser = argparse.ArgumentParser(prog="job-scout-channel-health")
   parser.add_argument("--max-age-seconds", type=int, default=120)
   args = parser.parse_args(argv)
-  health_path = Path(os.environ.get("JOB_SCOUT_CHANNEL_HEALTH", str(DEFAULT_HEALTH)))
-  database = Path(os.environ.get("JOB_SCOUT_CHANNEL_DB", str(DEFAULT_DB)))
-  result = check(health_path, database, max(1, args.max_age_seconds))
+  result = check(DEFAULT_HEALTH, DEFAULT_DB, max(1, args.max_age_seconds))
   print(json.dumps(result, indent=2, sort_keys=True))
   return 0 if result["ok"] else 1
 

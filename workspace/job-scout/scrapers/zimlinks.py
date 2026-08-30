@@ -17,9 +17,10 @@ import sqlite3
 
 from . import base
 from . import post_classifier
+from jobscout.config import CHANNEL_DB_PATH
 
 
-DEFAULT_DB = Path("/home/joseph/.openclaw/runtime/job-scout-channel/posts.sqlite3")
+DEFAULT_DB = CHANNEL_DB_PATH
 MAX_MODEL_POSTS_PER_FETCH = 10
 MAX_PARSE_ATTEMPTS = 3
 TOMBSTONE_DAYS = 30

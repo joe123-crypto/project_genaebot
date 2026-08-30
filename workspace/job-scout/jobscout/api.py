@@ -18,13 +18,13 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from genaie_env import api_key, endpoint
-
 from .constants import (
   CV_URL_LOOKUP_ATTEMPTS,
   CV_URL_LOOKUP_RETRY_SECONDS,
   OPENCLAW_BIN_FALLBACKS,
 )
+from .config import PENDING_LINKS_PATH
+from .integrations.agent_genaie import api_key, endpoint
 from .textutil import public_text
 from .util import normalize_phone, phone_hash, utc_now
 
@@ -94,7 +94,7 @@ def pending_links_path() -> Path:
   return Path(
     os.environ.get(
       "OPENCLAW_PENDING_LINKS_PATH",
-      "/home/joseph/.openclaw/runtime/account-link/pending-links.json",
+      str(PENDING_LINKS_PATH),
     )
   ).expanduser()
 

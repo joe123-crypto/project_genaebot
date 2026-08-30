@@ -14,6 +14,7 @@ from jobscout.application import (
   web_apply_payload,
 )
 from jobscout.delivery import (
+  MAX_CV_PAGES,
   MIN_CV_PAGE_FILL_RATIO,
   application_email_body,
   cover_letter_html,
@@ -157,11 +158,23 @@ class CvPdfValidationTests(unittest.TestCase):
     ):
       self.assertEqual(validate_rendered_cv_pdf("/tmp/cv.pdf"), Path("/tmp/cv.pdf"))
 
-  def test_rejects_multi_page_cv_before_fill_inspection(self) -> None:
+  def test_accepts_two_page_cv_without_fill_inspection(self) -> None:
+    # A two-page CV is allowed for the Zimbabwean market; the sparse-page fill
+    # guard only applies to single-page output, so it must not run here.
     with mock.patch("jobscout.delivery.pdf_page_count", return_value=2), mock.patch(
+      "jobscout.delivery.subprocess.run",
+      return_value=mock.Mock(stdout="Valid CV text\n"),
+    ), mock.patch(
       "jobscout.delivery.pdf_text_fill_ratio",
     ) as fill:
-      with self.assertRaisesRegex(RuntimeError, "exactly one page"):
+      self.assertEqual(validate_rendered_cv_pdf("/tmp/cv.pdf"), Path("/tmp/cv.pdf"))
+    fill.assert_not_called()
+
+  def test_rejects_cv_over_page_limit_before_fill_inspection(self) -> None:
+    with mock.patch("jobscout.delivery.pdf_page_count", return_value=MAX_CV_PAGES + 1), mock.patch(
+      "jobscout.delivery.pdf_text_fill_ratio",
+    ) as fill:
+      with self.assertRaisesRegex(RuntimeError, "within 2 pages"):
         validate_rendered_cv_pdf("/tmp/cv.pdf")
     fill.assert_not_called()
 
@@ -219,7 +232,7 @@ class ApplicationDocumentTests(unittest.TestCase):
         return output
 
       with mock.patch("jobscout.application.application_artifact_dir", return_value=root / "attempt"), mock.patch(
-        "jobscout.application.render_one_page_cv",
+        "jobscout.application.render_cv_pdf",
         side_effect=render,
       ) as cv_renderer, mock.patch(
         "jobscout.application.render_html_to_pdf",
@@ -237,12 +250,12 @@ class ApplicationDocumentTests(unittest.TestCase):
       self.assertEqual(documents["coverLetterText"], letter)
       self.assertEqual(documents["cvPdf"].read_bytes(), b"%PDF-1.7 rendered")
       self.assertEqual(documents["coverLetterPdf"].read_bytes(), b"%PDF-1.7 rendered")
-      # The CV goes through the single-page render helper with the tailored source.
+      # The CV goes through the page-limited render helper with the tailored source.
       self.assertEqual(Path(cv_renderer.call_args.args[0]), tailored)
       letter_html = letter_renderer.call_args.args[0]
       self.assertIn("Tailored letter.", letter_html)
 
-  def test_render_one_page_cv_styles_and_scales_until_it_fits(self) -> None:
+  def test_render_cv_pdf_styles_and_scales_until_within_page_limit(self) -> None:
     from jobscout import delivery
     with tempfile.TemporaryDirectory() as tmp:
       out = Path(tmp) / "cv.pdf"
@@ -253,18 +266,18 @@ class ApplicationDocumentTests(unittest.TestCase):
         Path(output).write_bytes(b"%PDF-1.7")
         return Path(output)
 
-      # Two pages, still two, then one: it scales down until it fits.
+      # Three pages, still three, then two: it scales down only until it is within
+      # the two-page limit -- a two-page CV is acceptable and needs no fill check.
       with mock.patch("jobscout.delivery.render_html_to_pdf", side_effect=render), mock.patch(
         "jobscout.delivery.pdf_page_count",
-        side_effect=[2, 2, 1, 1],
+        side_effect=[3, 3, 2, 2],
       ), mock.patch(
         "jobscout.delivery.pdf_text_fill_ratio",
-        return_value=0.9,
-      ), mock.patch(
+      ) as fill, mock.patch(
         "jobscout.delivery.subprocess.run",
         return_value=mock.Mock(stdout="Fits me@example.com\n"),
       ):
-        delivery.render_one_page_cv("<html><head></head><body>Fits me@example.com</body></html>", out)
+        delivery.render_cv_pdf("<html><head></head><body>Fits me@example.com</body></html>", out)
 
       self.assertEqual(len(rendered), 3)
       # The unstyled source is styled on the first render, then zoomed down.
@@ -272,6 +285,9 @@ class ApplicationDocumentTests(unittest.TestCase):
       self.assertIn(".skill", rendered[0])
       self.assertNotIn("zoom", rendered[0])
       self.assertIn("zoom: 0.92", rendered[1])
+      self.assertIn("zoom: 0.85", rendered[2])
+      # A two-page result skips the single-page sparse-fill guard.
+      fill.assert_not_called()
       self.assertIn("zoom: 0.85", rendered[2])
 
   def test_web_payload_separates_text_and_file_cover_letters(self) -> None:

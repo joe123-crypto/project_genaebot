@@ -17,8 +17,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from genaie_env import env_default
-
+from .config import env_default
 from .constants import (
   CANDIDATE_DESCRIPTION_CHAR_LIMIT,
   DEFAULT_JSEARCH_COUNTRY,

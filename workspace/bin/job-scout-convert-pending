@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-runtime_root="${JOB_SCOUT_RUNTIME_ROOT:-/home/joseph/.openclaw/runtime/job-scout}"
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+job_scout_bin="${JOB_SCOUT_BIN:-$script_dir/job-scout}"
+[ -x "$job_scout_bin" ] || {
+  printf 'Job Scout command is not executable: %s\n' "$job_scout_bin" >&2
+  exit 1
+}
+
+openclaw_home="${OPENCLAW_HOME:-${HOME:?HOME must be set}/.openclaw}"
+runtime_root="${JOB_SCOUT_RUNTIME_ROOT:-$openclaw_home/runtime/job-scout}"
 mkdir -p "$runtime_root"
 
 # A large PDF can take longer than the scheduler interval. Skip overlapping
@@ -12,4 +20,4 @@ if ! flock -n 9; then
   exit 0
 fi
 
-exec /home/joseph/.openclaw/workspace/bin/job-scout convert-pending-cvs --limit 100
+exec "$job_scout_bin" convert-pending-cvs --limit 100
