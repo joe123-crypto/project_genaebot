@@ -859,6 +859,14 @@ def format_group_feed_message(candidate: dict, invite_url: str = DEFAULT_GROUP_F
   for link in links:
     if link != source and not _description_has(description, link):
       application_lines.append(f"Apply: {link}")
+  # Fallback: board sources (e.g. VacancyMail, iHarare) often carry no email and
+  # only the listing page itself as an apply link -- which is skipped above as it
+  # equals the source. That page IS the apply mechanism there, so surface it when
+  # nothing else gives the reader a way to apply. Channel sources never reach here
+  # with an actionable source (their sourceUrl is a whatsapp.com/channel link).
+  has_external_link = any(link != source for link in links)
+  if not emails and not has_external_link and is_actionable_application_url(source) and not _description_has(description, source):
+    application_lines.append(f"Apply: {source}")
   if application_lines:
     lines.extend(["Application", "", *application_lines])
   _append_group_join_link(lines, invite_url)

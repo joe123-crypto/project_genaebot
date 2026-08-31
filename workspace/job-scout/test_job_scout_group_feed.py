@@ -346,6 +346,70 @@ class GroupFeedTests(unittest.TestCase):
     self.assertEqual(stats["unactionableCount"], 1)
     self.assertEqual(stats["eligibleCount"], 0)
 
+  def test_group_feed_message_falls_back_to_source_page_when_only_apply_method(self) -> None:
+    # VacancyMail/iHarare board jobs frequently have no email and only the listing
+    # page as an apply link (== sourceUrl, which the formatter otherwise hides).
+    # That page IS the apply mechanism, so it must be surfaced as Apply.
+    message = jobscout.group_feed.format_group_feed_message(self.candidate(
+      candidateId="human-capital-officer",
+      source="vacancymail",
+      sourceUrl="https://vacancymail.co.zw/jobs/human-capital-officer-69048/",
+      applyLinks=["https://vacancymail.co.zw/jobs/human-capital-officer-69048/"],
+      applicationEmails=[],
+      applicationEmail=None,
+      company="Rainbow Tourism Group",
+      role="Human Capital Officer",
+      location="Victoria Falls",
+      closing=FUTURE_CLOSING,
+      description=(
+        "About Us Rainbow Tourism Group seeks a Human Capital Officer. "
+        "Key Responsibilities Oversee end-to-end recruitment and onboarding."
+      ),
+    ))
+
+    self.assertIn("Apply: https://vacancymail.co.zw/jobs/human-capital-officer-69048/", message)
+
+  def test_group_feed_message_prefers_external_link_over_source_fallback(self) -> None:
+    # When a real external apply link exists, the source page must NOT be added.
+    message = jobscout.group_feed.format_group_feed_message(self.candidate(
+      candidateId="client-service-consultant",
+      source="iharare",
+      sourceUrl="https://ihararejobs.com/job/client-service-consultant-6275/",
+      applyLinks=[
+        "https://ihararejobs.com/job/client-service-consultant-6275/",
+        "https://oldmutual.wd3.myworkdayjobs.com/en-US/Careers/details/Funeral-Consultant_JR-83163",
+      ],
+      applicationEmails=[],
+      applicationEmail=None,
+      company="Old Mutual",
+      role="Client Service Consultant",
+      location="Harare",
+      closing=FUTURE_CLOSING,
+      description="About Us Old Mutual seeks a Client Service Consultant for its funeral services team.",
+    ))
+
+    self.assertIn("Apply: https://oldmutual.wd3.myworkdayjobs.com/en-US/Careers/details/Funeral-Consultant_JR-83163", message)
+    self.assertNotIn("Apply: https://ihararejobs.com/job/client-service-consultant-6275/", message)
+
+  def test_group_feed_message_omits_source_fallback_when_email_present(self) -> None:
+    # An email is the apply method; do not add a redundant source page link.
+    message = jobscout.group_feed.format_group_feed_message(self.candidate(
+      candidateId="accounting-officer",
+      source="vacancymail",
+      sourceUrl="https://vacancymail.co.zw/jobs/accounting-officer-69045/",
+      applyLinks=["https://vacancymail.co.zw/jobs/accounting-officer-69045/"],
+      applicationEmails=["recruitment@cakefairy1.com"],
+      applicationEmail="recruitment@cakefairy1.com",
+      company="Cake Fairy",
+      role="Accounting Officer",
+      location="Bulawayo",
+      closing=FUTURE_CLOSING,
+      description="Job Description Oversee general accounting operations and verify financial transactions.",
+    ))
+
+    self.assertIn("Email: recruitment@cakefairy1.com", message)
+    self.assertNotIn("Apply: https://vacancymail.co.zw/jobs/accounting-officer-69045/", message)
+
   def test_deliver_group_feed_reads_cache_and_marks_success_only(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
       root = Path(tmp)
