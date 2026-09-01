@@ -28,18 +28,14 @@ import {
 } from "./services/greeting.js";
 import {
   DEFAULT_ALLOW_FAILED,
-  isUnlockedMember,
   isWhatsAppAdmin,
   isWhatsAppPublicUser,
-  loadPendingAckText,
   memberGateEnabled,
-  memberStatus,
-  notifyAdminOfLead,
   notifyMemberAllowed,
   parseAllowCommand,
-  recordLead,
   runMemberStoreScript,
 } from "./services/membership.js";
+import { handleIntake } from "./services/intake.js";
 import {
   handleReservationStatus,
   handleWebetuOnboardingStart,
@@ -292,34 +288,27 @@ export default {
         }
       }
 
-      const status = gateOn && !admin ? await memberStatus(api, sender) : null;
-      const configuredMember = !gateOn && isWhatsAppPublicUser(api, event, ctx);
-      const unlockedMember = gateOn && !admin && isUnlockedMember(status);
-      const member = configuredMember || unlockedMember;
-
-      // Membership gate. Only the admin can unlock a user. Everyone else is
-      // captured as a pending lead: their first message records a "pending"
-      // record, alerts the admin (who can reply "allow +<number>"), and they get
-      // an acknowledgement instead of silence. Admins fall through to the agent.
-      if (!member) {
+      // Open-DM intake mode. Everyone who DMs gets the greeting + service menu,
+      // has their request captured as a lead, and is handed off to the admin for
+      // manual follow-up. No automated onboarding runs. Admins fall through to the
+      // agent so they are never trapped in the intake flow.
+      if (gateOn) {
         if (admin) return;
-        if (!gateOn) return; // classic allowlist mode: leave to core access control
-        if (isDisabledServiceRequestText(api, text)) {
-          return { handled: true, text: serviceDisabledReply(api) };
-        }
         try {
-          const res = await recordLead(api, sender, text);
-          if (res?.isNew) await notifyAdminOfLead(api, sender, text);
+          return await handleIntake(api, sender, text);
         } catch (err) {
           if (isQueueFullError(err)) return busyReply();
-          api.logger?.warn?.(`public-service-gate: failed to record lead (${String(err)})`);
+          api.logger?.warn?.(`public-service-gate: intake failed (${String(err)})`);
+          return { handled: true };
         }
-        return { handled: true, text: loadPendingAckText(api) };
       }
 
-      // From here on, sender is a member. Do not short-circuit service UX:
-      // greetings, menu digits, setup continuations, and service requests all
-      // fall through to the agent, which has the public-service docs and tools.
+      // Classic allowlist mode (gate off): only configured public users reach the
+      // agent; everyone else is left to core access control. Members must not have
+      // their service UX short-circuited, so greetings, menu digits, and service
+      // requests fall through to the agent (which has the public-service tools).
+      const member = isWhatsAppPublicUser(api, event, ctx);
+      if (!member) return; // leave to core access control
       if (isDisabledServiceRequestText(api, text)) {
         return { handled: true, text: serviceDisabledReply(api) };
       }
