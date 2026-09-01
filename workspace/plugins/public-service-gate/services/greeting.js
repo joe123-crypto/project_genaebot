@@ -3,12 +3,14 @@ import fs from "node:fs";
 import { expandHome, getPluginConfig } from "../lib/config.js";
 
 const DEFAULT_GREETING_TEMPLATE_PATH = "~/.openclaw/workspace/docs/public-greeting.txt";
-const DEFAULT_GREETING = `Hi! I can help with:
+const DEFAULT_GREETING = `Hi 👋 Welcome to Genae. What do you need?
 
-1. Job, scholarship, and internship scouting
-2. CV writing and revamping
+1. Automatic Job & Internship searching
+2. CV writing & revamping
+3. Digital marketing (posters, WhatsApp ads)
+4. WhatsApp customer-service bots
 
-Which one do you need?`;
+Reply with a number.`;
 
 const GREETING_PATTERNS = [
   /^(?:hi|hello|hey|hie|yo|salam|salaam|bonjour|good\s+(?:morning|afternoon|evening)|gm|morning|afternoon|evening)[\s!.?]*$/i,

@@ -161,3 +161,30 @@ export async function notifyAdminOfLead(api, phone, text) {
     api.logger?.warn?.(`public-service-gate: failed to notify admin of lead (${String(err)})`);
   }
 }
+
+// Best-effort WhatsApp alert to each admin when a DM user picks a service and says
+// what they need, so the admin can follow up by hand. Includes the chosen service.
+export async function notifyAdminOfIntake(api, phone, serviceLabel, text) {
+  try {
+    const target = normalizePhone(phone || "");
+    if (!target) return;
+    const admins = getAdminUsers(api);
+    if (!admins.size) {
+      api.logger?.warn?.("public-service-gate: intake captured but no whatsappAdminUsers configured to notify");
+      return;
+    }
+    const snippet = leadSnippet(text);
+    const body = `New service request from ${target}:\nService: ${serviceLabel}\n"${snippet}"`;
+    for (const admin of admins) {
+      await helperLimiter(() =>
+        runTextCommand(
+          "openclaw",
+          ["message", "send", "--channel", "whatsapp", "--target", admin, "--message", body],
+          { timeoutMs: HELPER_TIMEOUT_MS },
+        ),
+      );
+    }
+  } catch (err) {
+    api.logger?.warn?.(`public-service-gate: failed to notify admin of intake (${String(err)})`);
+  }
+}

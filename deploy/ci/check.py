@@ -265,7 +265,7 @@ def check_service_catalog(checks: Checks) -> None:
         "Webetu": (public_gate.get("webetuEnabled") is not False, ("webetu",)),
         "personalized news": (public_gate.get("newsEnabled") is not False, ("personalized news",)),
         "event scouting": (public_gate.get("eventScoutEnabled") is not False, ("event scout", "local event")),
-        "Job Scout": (public_gate.get("jobScoutOnboardingEnabled") is True, ("job scout", "job, scholarship")),
+        "Job Scout": (public_gate.get("jobScoutOnboardingEnabled") is True, ("job scout", "job, scholarship", "job & internship")),
     }
     for label, (enabled, terms) in services.items():
         if not enabled:
