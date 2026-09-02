@@ -819,6 +819,7 @@ class CliSettlementTests(StoreTestCase):
         "ok": True,
         "orderId": order_id,
         "status": orders.STATUS_SENT,
+        "phone": "+263700000001",
         "delivered": True,
         "filename": "Joseph-Munemo-CV.pdf",
       },
@@ -874,6 +875,19 @@ class CliSettlementTests(StoreTestCase):
   def test_approving_an_unknown_order_is_refused(self) -> None:
     self.assertFalse(run_cli("approve", "--order", "nosuchid")["ok"])
 
+  def test_minted_order_ids_never_start_with_a_dash(self) -> None:
+    # token_urlsafe draws from [A-Za-z0-9_-], so roughly one id in 64 would begin
+    # with "-". Passed as an argv value that reads as a flag, and the order could
+    # never be approved: a buyer would pay and never receive their CV.
+    for _ in range(400):
+      order = orders.create_order("+263700000001")
+      self.assertRegex(order["orderId"], r"^[A-Za-z0-9]")
+
+  def test_a_dash_leading_order_argument_is_not_read_as_a_flag(self) -> None:
+    result = run_cli("approve", "--order=-notanid")
+    self.assertFalse(result["ok"])
+    self.assertNotIn("usage:", result["error"])
+
   def test_deny_settles_and_purges(self) -> None:
     order_id = self._awaiting_approval()
     result = run_cli("deny", "--order", order_id)
@@ -882,7 +896,47 @@ class CliSettlementTests(StoreTestCase):
 
   def test_deny_is_idempotent(self) -> None:
     order_id = self._awaiting_approval()
-    self.assertEqual(run_cli("deny", "--order", order_id), run_cli("deny", "--order", order_id))
+    with mock.patch("cvmaker.delivery.send_whatsapp_message", return_value={"messageId": "wamid.9"}):
+      first = run_cli("deny", "--order", order_id)
+      second = run_cli("deny", "--order", order_id)
+    self.assertEqual(first["status"], second["status"])
+    self.assertEqual(first["orderId"], second["orderId"])
+
+  def test_deny_tells_the_buyer_once(self) -> None:
+    # Someone who says they paid must never be met with silence, but a second
+    # deny is an admin double tap and must not message them again.
+    order_id = self._awaiting_approval()
+    with mock.patch(
+      "cvmaker.delivery.send_whatsapp_message", return_value={"messageId": "wamid.9"}
+    ) as send:
+      first = run_cli("deny", "--order", order_id)
+      second = run_cli("deny", "--order", order_id)
+    self.assertTrue(first["notified"])
+    self.assertFalse(second["notified"])
+    self.assertEqual(send.call_count, 1)
+    self.assertEqual(send.call_args.args[0], "+263700000001")
+
+  def test_deny_reports_the_phone_so_the_gate_can_clear_state(self) -> None:
+    order_id = self._awaiting_approval()
+    with mock.patch("cvmaker.delivery.send_whatsapp_message", return_value={}):
+      self.assertEqual(run_cli("deny", "--order", order_id)["phone"], "+263700000001")
+
+  def test_deny_still_settles_when_the_notice_cannot_be_sent(self) -> None:
+    # The admin has decided and the order is already settled by this point, so a
+    # WhatsApp outage must not make the command look like it failed.
+    order_id = self._awaiting_approval()
+    with mock.patch(
+      "cvmaker.delivery.send_whatsapp_message", side_effect=RuntimeError("gateway down")
+    ):
+      result = run_cli("deny", "--order", order_id)
+    self.assertTrue(result["ok"])
+    self.assertEqual(result["status"], orders.STATUS_REJECTED)
+    self.assertFalse(result["notified"])
+
+  def test_decline_message_has_no_em_dash(self) -> None:
+    from cvmaker import cli as cli_module
+    for bar in "\u2012\u2013\u2014\u2015":
+      self.assertNotIn(bar, cli_module.DECLINED_MESSAGE)
 
   def test_denying_a_sent_order_keeps_it_sent(self) -> None:
     order_id = self._awaiting_approval()

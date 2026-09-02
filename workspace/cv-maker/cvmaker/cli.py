@@ -22,7 +22,7 @@ from jobscout.textutil import public_text
 from jobscout.util import normalize_phone
 
 from . import CvMakerError
-from . import build, orders
+from . import build, delivery, orders
 
 
 MAX_ERROR_CHARS = 240
@@ -189,6 +189,7 @@ def cmd_approve(args: argparse.Namespace) -> dict:
       "ok": True,
       "orderId": order_id,
       "status": status,
+      "phone": str(order.get("phone") or ""),
       "delivered": bool(order.get("delivered")),
       "filename": str(order.get("filename") or ""),
     }
@@ -206,19 +207,56 @@ def cmd_approve(args: argparse.Namespace) -> dict:
     "ok": True,
     "orderId": order_id,
     "status": orders.set_status(order_id, orders.STATUS_SENT),
+    "phone": str(order.get("phone") or ""),
     "delivered": result["delivered"],
     "filename": result["filename"],
   }
 
 
+# Sent to the buyer when an admin declines their order. They told us they had
+# paid, so silence is the one outcome we must not leave them with. It states the
+# outcome without accusing them and leaves the conversation open.
+DECLINED_MESSAGE = (
+  "Thanks for waiting. We could not confirm your payment, so your CV has not "
+  "been sent. Reply here if you think that is wrong and we will take another look."
+)
+
+
+def _notify_declined(phone: str) -> bool:
+  """Best effort decline notice. A send failure never fails the admin command.
+
+  The admin has already made the decision and the order is settled by the time
+  this runs, so a WhatsApp outage must not make the command look like it failed
+  and tempt a second deny.
+  """
+  target = normalize_phone(phone)
+  if not target:
+    return False
+  try:
+    delivery.send_whatsapp_message(target, DECLINED_MESSAGE)
+    return True
+  except (RuntimeError, OSError):
+    return False
+
+
 def cmd_deny(args: argparse.Namespace) -> dict:
   order_id = orders.safe_order_id(getattr(args, "order", ""))
-  if not orders.load_order(order_id):
+  order = orders.load_order(order_id)
+  if not order:
     raise CvMakerError("that CV order was not found")
+  # Read the phone before settling: set_status purges the order's contents.
+  phone = str(order.get("phone") or "")
+  already_settled = str(order.get("status") or "") in orders.TERMINAL_STATUSES
+  status = orders.set_status(order_id, orders.STATUS_REJECTED)
+  # Only tell the buyer on the transition, so a repeated deny does not message
+  # them twice.
+  notified = False if already_settled else _notify_declined(phone)
   return {
     "ok": True,
     "orderId": order_id,
-    "status": orders.set_status(order_id, orders.STATUS_REJECTED),
+    "status": status,
+    "phone": phone,
+    "notified": notified,
   }
 
 

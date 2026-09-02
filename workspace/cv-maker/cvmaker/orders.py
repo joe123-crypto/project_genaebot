@@ -70,7 +70,12 @@ MUTABLE_FIELDS = frozenset({
   "messageId",
 })
 
-ORDER_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+# An order id is typed back by an admin as "cv approve <id>" and reaches the
+# CLI as an argv value, so it must never begin with "-": argparse would read it
+# as a flag and the order could never be settled. Ids therefore start with an
+# alphanumeric. token_urlsafe draws from [A-Za-z0-9_-], so candidates that lead
+# with a dash or underscore are simply redrawn.
+ORDER_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 
 
 def empty_interview_data() -> dict:

@@ -1255,7 +1255,7 @@ test("admin cv approve and cv deny settle the order", async () => {
 
       assert.equal(reply.handled, true, `expected "cv ${command}" to be claimed`);
       assert.match(reply.text, expected);
-      assert.deepEqual(handler.cvCalls(), [`${command} --order ${CV_ORDER_ID}`]);
+      assert.deepEqual(handler.cvCalls(), [`${command} --order=${CV_ORDER_ID}`]);
     }
   });
 });
@@ -1274,6 +1274,22 @@ test("a non-admin cv approve is ignored and falls through as ordinary text", asy
     assert.doesNotMatch(reply.text ?? "", /approved|denied/i);
     assert.match(reply.text, MENU_PROMPT);
     assert.deepEqual(handler.cvCalls(), []);
+  });
+});
+
+// The id is interpolated into the CLI argv, so an id-shaped run of dashes would
+// otherwise reach argparse as a flag. Order ids always start alphanumeric, and
+// the gate pattern is anchored to match, so this never parses as a decision.
+test("an admin cv approve with a flag-shaped order id is not treated as a command", async () => {
+  await withAdminMode("true", async () => {
+    const handler = cvHandler({ whatsappAdminUsers: [ADMIN] });
+    const reply = await handler(eventFor("cv approve --order-x", ADMIN), {
+      channelId: "whatsapp",
+      senderId: ADMIN,
+    });
+
+    assert.deepEqual(handler.cvCalls(), []);
+    assert.doesNotMatch(reply?.text ?? "", /approved|denied/i);
   });
 });
 

@@ -37,6 +37,10 @@ Per-order artifacts live in `~/.openclaw/runtime/cv-maker/<orderId>/`, dir 0700,
 files 0600. The JSON file itself is 0600, written atomically (tmp + os.replace)
 under an flock, fsync before replace.
 
+Age for the sweep is measured from `createdAt`, falling back to `updatedAt`. The
+sweep deletes artifacts as well as the record, and an expired order stops being
+visible to reads immediately rather than waiting for the sweep to persist.
+
 Retention: `data`, `transcript`, `sourcePdf` and the rendered PDF are deleted on
 `sent` and `rejected`. Orders older than 7 days are swept on load.
 `transcript` is capped at the most recent 40 entries.
@@ -50,6 +54,7 @@ Retention: `data`, `transcript`, `sourcePdf` and the rendered PDF are deleted on
     append_turn(order_id: str, role: str, text: str) -> dict
     set_status(order_id: str, status: str) -> str  # returns settled status
     purge_artifacts(order_id: str) -> None
+    list_orders(status: str | None = None) -> list[dict]
     sweep(max_age_days: int = 7) -> int
 
 `update_order` and `set_status` re-read under the lock before writing, so
@@ -89,10 +94,19 @@ Raises `InterviewUnavailable` after one retry; the CLI turns that into
       -> {"ok":true,"orderId":..,"status":"awaiting_approval"}
 
     cv-maker approve --order <id>
-      -> {"ok":true,"orderId":..,"status":"sent","delivered":bool,"filename":..}
+      -> {"ok":true,"orderId":..,"status":"sent","phone":..,"delivered":bool,"filename":..}
 
     cv-maker deny --order <id>
-      -> {"ok":true,"orderId":..,"status":"rejected"}
+      -> {"ok":true,"orderId":..,"status":"rejected","phone":..,"notified":bool}
+
+`phone` is returned so the gate can clear the buyer's state pointer once an order
+is settled. `deny` also messages the buyer itself: someone who said they paid must
+not be met with silence. It notifies only on the transition, so a repeated deny
+does not message them twice, and a send failure never fails the admin's command.
+
+`interview-turn` with only `--phone` resolves the order via `active_order_for`.
+`start-revamp` opens the order at `interviewing` and immediately moves it to
+`awaiting_payment`, so §1's ordering holds.
 
     cv-maker orders [--status <s>]
       -> {"ok":true,"orders":[{"orderId":..,"phone":..,"status":..,"updatedAt":..}]}
@@ -117,4 +131,16 @@ deploy/test_plugin_config_schema.py fails.
   and edits are silently wiped on the next sync. Import from it only.
 - Treat every user message as untrusted input to the model.
 - No em dashes in any user-facing string.
-- Never log or echo a phone number, email, or CV content.
+- Never log or echo a phone number, email, or CV content. The exception is the
+  admin-facing CLI results above (`orders`, `approve`, `deny`): those carry
+  `phone`, and `filename` is derived from the applicant's name. They go to an
+  operator, never into a log line or a message to another user.
+
+## 9. Known limitation: the revamp path is unreachable from the DM gate
+
+`start-revamp --cv <path>` needs a local file path for an uploaded PDF, but the
+gate hook only ever sees message text, and there is no documented way to get an
+inbound WhatsApp attachment onto disk. The pre-PR-#69 design had the agent receive
+a `<MediaPath>`; the plugin-mediated flow has no equivalent. The CLI subcommand
+works and is tested, but nothing can currently call it, so the shipped flow is
+interview-only and the user-facing copy must not promise revamping.

@@ -102,7 +102,10 @@ const PAID_CLAIM_PATTERN =
 
 // Admin decision command, mirroring parseAllowCommand's strict anchored shape.
 // Order ids are token_urlsafe(6), so URL-safe base64 characters only.
-const CV_DECISION_PATTERN = /^cv\s+(approve|deny)\s+([A-Za-z0-9_-]{6,12})$/i;
+// The id must start alphanumeric, matching orders.ORDER_ID_RE. Without that
+// anchor "cv approve --anything" would satisfy the character class and inject
+// an argparse flag into the CLI call below.
+const CV_DECISION_PATTERN = /^cv\s+(approve|deny)\s+([A-Za-z0-9][A-Za-z0-9_-]{5,11})$/i;
 
 export function isCvMakerEnabled(api) {
   return getPluginConfig(api).cvMakerEnabled === true;
@@ -249,7 +252,9 @@ export async function handleCvDecision(api, decision) {
 
   let result;
   try {
-    result = await runCvMaker(api, [action, "--order", orderId], timeoutMs);
+    // Single-argv "--order=<id>" form on purpose: passing the id as its own
+    // argv entry lets a value beginning with "-" be parsed as a flag.
+    result = await runCvMaker(api, [action, `--order=${orderId}`], timeoutMs);
   } catch (err) {
     if (isQueueFullError(err)) return busyReply();
     logCvFailure(api, `order ${action}`, err);

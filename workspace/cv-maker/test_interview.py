@@ -214,11 +214,11 @@ class MergeTests(unittest.TestCase):
     )
 
   def test_a_dropped_field_is_restored_from_what_was_already_collected(self) -> None:
-    forgetful = dict(interview.empty_data(), fullName="Joseph Munemo", phone="+263783496308")
+    forgetful = dict(interview.empty_data(), fullName="Joseph Munemo", phone="+263700000001")
     merged = interview.merge_data(self.collected, forgetful)
     self.assertEqual(merged["email"], "joseph@example.com")
     self.assertEqual(merged["location"], "Harare")
-    self.assertEqual(merged["phone"], "+263783496308")
+    self.assertEqual(merged["phone"], "+263700000001")
     self.assertEqual(len(merged["experience"]), 1)
 
   def test_a_non_empty_list_replaces_so_entries_can_be_corrected(self) -> None:
@@ -239,11 +239,11 @@ class MergeTests(unittest.TestCase):
     self.assertEqual(merged["education"], [])
 
   def test_run_turn_returns_the_complete_cv_not_just_the_new_field(self) -> None:
-    turn_data = dict(interview.empty_data(), phone="+263783496308")
-    result, _post = run(order(data=self.collected), "+263783496308", [completion(data=turn_data)])
+    turn_data = dict(interview.empty_data(), phone="+263700000001")
+    result, _post = run(order(data=self.collected), "+263700000001", [completion(data=turn_data)])
     self.assertEqual(result["data"]["fullName"], "Joseph Munemo")
     self.assertEqual(result["data"]["email"], "joseph@example.com")
-    self.assertEqual(result["data"]["phone"], "+263783496308")
+    self.assertEqual(result["data"]["phone"], "+263700000001")
     self.assertEqual(result["data"]["experience"][0]["company"], "Acme")
 
   def test_unknown_keys_and_wrong_types_are_normalized_away(self) -> None:

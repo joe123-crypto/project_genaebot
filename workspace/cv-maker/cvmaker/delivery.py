@@ -16,10 +16,10 @@ import os
 from pathlib import Path
 
 from jobscout import api
-from jobscout.delivery import result_message_id, run_json_command
+from jobscout.delivery import result_message_id, run_json_command, send_whatsapp_message
 
 
-__all__ = ["result_message_id", "send_whatsapp_document"]
+__all__ = ["result_message_id", "send_whatsapp_document", "send_whatsapp_message"]
 
 
 def send_whatsapp_document(target: str, document_path: str | Path, message: str = "") -> dict:

@@ -344,12 +344,12 @@ test("handleCvDecision approves and denies through the CLI", async () => {
   const approved = await handleCvDecision(approveApi, { action: "approve", orderId: "abc123" });
   assert.equal(approved.handled, true);
   assert.match(approved.text, /approved and sent/i);
-  assert.deepEqual(approveApi.cvCalls(), ["approve --order abc123"]);
+  assert.deepEqual(approveApi.cvCalls(), ["approve --order=abc123"]);
 
   const denyApi = cvApi({ deny: { ok: true, orderId: "abc123", status: "rejected" } });
   const denied = await handleCvDecision(denyApi, { action: "deny", orderId: "abc123" });
   assert.match(denied.text, /denied/i);
-  assert.deepEqual(denyApi.cvCalls(), ["deny --order abc123"]);
+  assert.deepEqual(denyApi.cvCalls(), ["deny --order=abc123"]);
 });
 
 test("handleCvDecision reports an undelivered approval and CLI errors", async () => {
