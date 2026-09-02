@@ -76,6 +76,13 @@
 !workspace/public-events/*.py
 !workspace/webetu-preferences/
 !workspace/webetu-preferences/*.py
+# Standalone CV maker service (project-owned; NOT part of the job-scout overlay).
+!workspace/cv-maker/
+!workspace/cv-maker/*.md
+!workspace/cv-maker/*.py
+!workspace/cv-maker/cvmaker/
+!workspace/cv-maker/cvmaker/*.py
+
 !workspace/job-scout/
 !workspace/job-scout/*.py
 !workspace/job-scout/*.mjs
