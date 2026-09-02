@@ -54,7 +54,12 @@ import {
 } from "./services/news.js";
 import { handleJobScoutRequest, isJobScoutRequest } from "./services/job-scout.js";
 import { handleEventScoutRequest, isEventScoutRequest } from "./services/event-scout.js";
-import { handleCvMakerRequest, isCvMakerRequest } from "./services/cv-maker.js";
+import {
+  handleCvDecision,
+  handleCvMakerRequest,
+  isCvMakerRequest,
+  parseCvDecisionCommand,
+} from "./services/cv-maker.js";
 
 const PUBLIC_SERVICE_ACTIONS = [
   { name: "webetu_start", service: "webetu" },
@@ -266,6 +271,24 @@ export default {
 
       const admin = isWhatsAppAdmin(api, sender);
       const gateOn = memberGateEnabled(api);
+
+      // Admin-only CV order settlement from chat: "cv approve <id>" / "cv deny
+      // <id>". This is the whole payment control, so it is gated on
+      // isWhatsAppAdmin: for anyone else the text is never parsed as a command
+      // and falls through to the normal DM handling below.
+      if (admin && isServiceEnabled(api, "cvMaker")) {
+        const decision = parseCvDecisionCommand(text);
+        if (decision) {
+          try {
+            api.logger?.info?.(`public-service-gate: admin cv ${decision.action} handled deterministically`);
+            return await handleCvDecision(api, decision);
+          } catch (err) {
+            if (isQueueFullError(err)) return busyReply();
+            api.logger?.warn?.(`public-service-gate: failed to settle cv order (${String(err)})`);
+            return { handled: true, text: "That CV order couldn't be updated. Try again later." };
+          }
+        }
+      }
 
       // Admin-only unlock from chat: "allow +263...". Claimed here so the
       // command never reaches the agent or the relevance gate.

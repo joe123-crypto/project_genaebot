@@ -1002,6 +1002,7 @@ test("public canned replies use the concise style", () => {
     "services/news.js",
     "services/event-scout.js",
     "services/job-scout.js",
+    "services/cv-maker.js",
   ];
   for (const file of files) {
     const source = fs.readFileSync(new URL(file, import.meta.url), "utf8");
@@ -1087,4 +1088,205 @@ test("createLimiter caps concurrency and rejects when the queue is full", async 
   assert.equal(await first, "first");
   assert.equal(await second, "second");
   assert.equal(maxActive, 1);
+});
+
+// ---------------------------------------------------------------------------
+// Paid CV order flow (menu option 2)
+// ---------------------------------------------------------------------------
+
+const CV_ORDER_ID = "Ab3-_x";
+
+function cvMakerCli() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-cv-"));
+  const script = path.join(dir, "cv-maker");
+  const log = path.join(dir, "cv-calls.log");
+  writeExecutable(
+    script,
+    `#!/usr/bin/env bash
+set -eu
+printf '%s\\n' "$*" >> "${log}"
+case "$1" in
+  interview-turn)
+    if [ "$5" = "done" ]; then
+      printf '{"ok":true,"orderId":"${CV_ORDER_ID}","status":"awaiting_payment","reply":"All set.","complete":true}\\n'
+    else
+      printf '{"ok":true,"orderId":"${CV_ORDER_ID}","status":"interviewing","reply":"What is your full name?","complete":false}\\n'
+    fi
+    ;;
+  paid) printf '{"ok":true,"orderId":"${CV_ORDER_ID}","status":"awaiting_approval"}\\n' ;;
+  approve) printf '{"ok":true,"orderId":"${CV_ORDER_ID}","status":"sent","delivered":true,"filename":"cv.pdf"}\\n' ;;
+  deny) printf '{"ok":true,"orderId":"${CV_ORDER_ID}","status":"rejected"}\\n' ;;
+  *) exit 2 ;;
+esac
+`,
+  );
+  return {
+    dir,
+    script,
+    calls: () => (fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim().split("\n").filter(Boolean) : []),
+  };
+}
+
+function cvHandler(extraConfig = {}) {
+  const cli = cvMakerCli();
+  const serviceStatePath = path.join(cli.dir, "state.json");
+  const memberStoreScript = path.join(cli.dir, "whatsapp-invite");
+  writeExecutable(memberStoreScript, intakeStore(path.join(cli.dir, "member-args.txt")));
+  const handler = registerHandler({
+    cvMakerEnabled: true,
+    cvMakerScript: cli.script,
+    memberStoreScript,
+    serviceStatePath,
+    greetingTemplatePath: GREETING_FILE,
+    ...extraConfig,
+  });
+  handler.cvCalls = cli.calls;
+  handler.serviceStatePath = serviceStatePath;
+  return handler;
+}
+
+test("menu option 2 branches into the automated CV flow instead of the manual handoff", async () => {
+  const handler = cvHandler();
+  const ctx = { channelId: "whatsapp", senderId: UNKNOWN };
+
+  const menu = await handler(eventFor("hi", UNKNOWN), ctx);
+  assert.match(menu.text, MENU_PROMPT);
+
+  const started = await handler(eventFor("2", UNKNOWN), ctx);
+  assert.equal(started.handled, true);
+  assert.doesNotMatch(started.text, HANDOFF);
+  assert.match(started.text, /CV/);
+  // The order itself is created by the first relayed turn, not by the digit.
+  assert.deepEqual(handler.cvCalls(), []);
+  const saved = JSON.parse(fs.readFileSync(handler.serviceStatePath, "utf8"));
+  assert.equal(saved.states[UNKNOWN]?.service, "cv");
+});
+
+test("a free-text CV request also branches into the CV flow", async () => {
+  const handler = cvHandler();
+  const ctx = { channelId: "whatsapp", senderId: UNKNOWN };
+
+  await handler(eventFor("hi", UNKNOWN), ctx);
+  const started = await handler(eventFor("please revamp my cv", UNKNOWN), ctx);
+
+  assert.doesNotMatch(started.text, HANDOFF);
+  const saved = JSON.parse(fs.readFileSync(handler.serviceStatePath, "utf8"));
+  assert.equal(saved.states[UNKNOWN]?.service, "cv");
+});
+
+test("menu options 1, 3 and 4 keep the manual handoff while the CV flow is live", async () => {
+  for (const digit of ["1", "3", "4"]) {
+    const handler = cvHandler();
+    const ctx = { channelId: "whatsapp", senderId: UNKNOWN };
+
+    await handler(eventFor("hi", UNKNOWN), ctx);
+    const done = await handler(eventFor(digit, UNKNOWN), ctx);
+
+    assert.equal(done.handled, true, `expected "${digit}" to be handled`);
+    assert.match(done.text, HANDOFF, `expected "${digit}" to hand off`);
+    assert.deepEqual(handler.cvCalls(), [], `expected "${digit}" not to touch the CV maker`);
+    // State is cleared once the manual order is captured, exactly as before.
+    const saved = JSON.parse(fs.readFileSync(handler.serviceStatePath, "utf8"));
+    assert.deepEqual(saved.states, {});
+  }
+});
+
+test("menu option 2 still hands off while the CV maker is disabled", async () => {
+  const handler = cvHandler({ cvMakerEnabled: false });
+  const ctx = { channelId: "whatsapp", senderId: UNKNOWN };
+
+  await handler(eventFor("hi", UNKNOWN), ctx);
+  const done = await handler(eventFor("2", UNKNOWN), ctx);
+
+  assert.match(done.text, HANDOFF);
+  assert.deepEqual(handler.cvCalls(), []);
+});
+
+test("CV flow turns relay to the CLI and the payment message uses the configured values", async () => {
+  const handler = cvHandler({
+    cvMakerPriceText: "US$9",
+    cvMakerPaymentDetails: "TestCash 0000 (Test Payee)",
+  });
+  const ctx = { channelId: "whatsapp", senderId: UNKNOWN };
+
+  await handler(eventFor("hi", UNKNOWN), ctx);
+  await handler(eventFor("2", UNKNOWN), ctx);
+
+  const turn = await handler(eventFor("Jane", UNKNOWN), ctx);
+  assert.equal(turn.text, "What is your full name?");
+
+  const priced = await handler(eventFor("done", UNKNOWN), ctx);
+  assert.match(priced.text, /All set\./);
+  assert.match(priced.text, /US\$9/);
+  assert.match(priced.text, /TestCash 0000 \(Test Payee\)/);
+
+  const paid = await handler(eventFor("paid", UNKNOWN), ctx);
+  assert.match(paid.text, /confirming your payment/i);
+
+  assert.deepEqual(handler.cvCalls(), [
+    `interview-turn --phone ${UNKNOWN} --message Jane`,
+    `interview-turn --phone ${UNKNOWN} --message done`,
+    `paid --phone ${UNKNOWN}`,
+  ]);
+  const saved = JSON.parse(fs.readFileSync(handler.serviceStatePath, "utf8"));
+  assert.equal(saved.states[UNKNOWN]?.step, "cv.awaiting_approval");
+});
+
+test("menu escapes the CV flow back to the service menu", async () => {
+  const handler = cvHandler();
+  const ctx = { channelId: "whatsapp", senderId: UNKNOWN };
+
+  await handler(eventFor("hi", UNKNOWN), ctx);
+  await handler(eventFor("2", UNKNOWN), ctx);
+  const back = await handler(eventFor("menu", UNKNOWN), ctx);
+
+  assert.match(back.text, MENU_PROMPT);
+  assert.deepEqual(handler.cvCalls(), []);
+});
+
+test("admin cv approve and cv deny settle the order", async () => {
+  await withAdminMode("true", async () => {
+    for (const [command, expected] of [["approve", /approved and sent/i], ["deny", /denied/i]]) {
+      const handler = cvHandler({ whatsappAdminUsers: [ADMIN] });
+      const reply = await handler(eventFor(`cv ${command} ${CV_ORDER_ID}`, ADMIN), {
+        channelId: "whatsapp",
+        senderId: ADMIN,
+      });
+
+      assert.equal(reply.handled, true, `expected "cv ${command}" to be claimed`);
+      assert.match(reply.text, expected);
+      assert.deepEqual(handler.cvCalls(), [`${command} --order ${CV_ORDER_ID}`]);
+    }
+  });
+});
+
+// This is the whole payment control: anyone could otherwise approve their own
+// order for free, so a non-admin must never reach the CLI.
+test("a non-admin cv approve is ignored and falls through as ordinary text", async () => {
+  await withAdminMode("true", async () => {
+    const handler = cvHandler({ whatsappAdminUsers: [ADMIN] });
+    const reply = await handler(eventFor(`cv approve ${CV_ORDER_ID}`, UNKNOWN), {
+      channelId: "whatsapp",
+      senderId: UNKNOWN,
+    });
+
+    assert.equal(reply.handled, true);
+    assert.doesNotMatch(reply.text ?? "", /approved|denied/i);
+    assert.match(reply.text, MENU_PROMPT);
+    assert.deepEqual(handler.cvCalls(), []);
+  });
+});
+
+test("an admin cv command is not honored while WhatsApp admin mode is disabled", async () => {
+  await withAdminMode("false", async () => {
+    const handler = cvHandler({ whatsappAdminUsers: [ADMIN] });
+    const reply = await handler(eventFor(`cv approve ${CV_ORDER_ID}`, ADMIN), {
+      channelId: "whatsapp",
+      senderId: ADMIN,
+    });
+
+    assert.equal(reply.handled, true);
+    assert.doesNotMatch(reply.text ?? "", /approved/i);
+    assert.deepEqual(handler.cvCalls(), []);
+  });
 });

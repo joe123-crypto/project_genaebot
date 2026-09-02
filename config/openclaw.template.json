@@ -134,7 +134,9 @@
           "newsEnabled": false,
           "eventScoutEnabled": false,
           "jobScoutOnboardingEnabled": true,
-          "cvMakerEnabled": true
+          "cvMakerEnabled": true,
+          "cvMakerPriceText": "US$5",
+          "cvMakerPaymentDetails": "EcoCash +263783496308 (Charlene Anika)"
         }
       },
       "whatsapp-relevance-gate": {
