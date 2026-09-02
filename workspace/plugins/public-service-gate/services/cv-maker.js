@@ -173,15 +173,55 @@ function cliErrorText(result, fallback = CV_MAKER_FAILED) {
 
 // Entry point for menu option 2 / a CV request. Only pins the sender to the CV
 // flow; the order itself is created by the first relayed interview turn.
-export function startCvOrder(api, sender) {
-  saveServiceState(api, sender, CV_SERVICE, CV_STEP_INTERVIEW);
+// Which step a status belongs to. The order store is the source of truth; the
+// state slot is only a hint, and it expires in 30 minutes while a payment takes
+// hours or days.
+const STEP_FOR_STATUS = {
+  awaiting_payment: CV_STEP_PAYMENT,
+  awaiting_approval: CV_STEP_APPROVAL,
+};
+
+// Read the sender's live order so a returning buyer resumes where they actually
+// are. Without this a buyer whose pointer lapsed while paying is put back into
+// an interview, and the CLI then refuses every message because their order has
+// moved past that stage: they have paid and can never say so.
+async function resolveCvStep(api, sender) {
+  try {
+    const result = await runCvMaker(api, ["status", `--phone=${sender}`], HELPER_TIMEOUT_MS);
+    if (result?.ok !== true) return CV_STEP_INTERVIEW;
+    return STEP_FOR_STATUS[String(result.status ?? "")] ?? CV_STEP_INTERVIEW;
+  } catch (err) {
+    if (isQueueFullError(err)) throw err;
+    logCvFailure(api, "status lookup", err);
+    return CV_STEP_INTERVIEW;
+  }
+}
+
+export async function startCvOrder(api, sender) {
+  let step = CV_STEP_INTERVIEW;
+  try {
+    step = await resolveCvStep(api, sender);
+  } catch (err) {
+    if (isQueueFullError(err)) return busyReply();
+    throw err;
+  }
+  saveServiceState(api, sender, CV_SERVICE, step);
+  if (step === CV_STEP_PAYMENT) return { handled: true, text: cvPaymentText(api) };
+  if (step === CV_STEP_APPROVAL) return { handled: true, text: CV_REVIEW_PENDING };
   return { handled: true, text: CV_INTRO };
 }
 
 async function relayInterviewTurn(api, sender, text) {
   let result;
   try {
-    result = await runCvMaker(api, ["interview-turn", "--phone", sender, "--message", String(text ?? "")], CV_TURN_TIMEOUT_MS);
+    result = await runCvMaker(
+      api,
+      // Single-argv "--opt=value" form: the message is whatever the user typed,
+      // and argparse reads an option-lookalike token ("--skip", "-n/a") as a flag
+      // when it arrives as its own argv entry, breaking the turn.
+      ["interview-turn", `--phone=${sender}`, `--message=${String(text ?? "")}`],
+      CV_TURN_TIMEOUT_MS,
+    );
   } catch (err) {
     if (isQueueFullError(err)) return busyReply();
     logCvFailure(api, "interview turn", err);
@@ -203,7 +243,7 @@ async function relayInterviewTurn(api, sender, text) {
 async function claimCvPayment(api, sender) {
   let result;
   try {
-    result = await runCvMaker(api, ["paid", "--phone", sender], HELPER_TIMEOUT_MS);
+    result = await runCvMaker(api, ["paid", `--phone=${sender}`], HELPER_TIMEOUT_MS);
   } catch (err) {
     if (isQueueFullError(err)) return busyReply();
     logCvFailure(api, "payment claim", err);
@@ -231,7 +271,21 @@ export async function handleCvOrder(api, sender, text = "", state = null) {
     clearServiceState(api, sender);
     return { handled: true, text: CV_MAKER_UNAVAILABLE };
   }
-  const step = state?.step ?? CV_STEP_INTERVIEW;
+  let step = state?.step ?? CV_STEP_INTERVIEW;
+
+  // A claim of payment is judged against the order, never against the pointer.
+  // The pointer expires in 30 minutes and paying takes longer, so a buyer who
+  // comes back is otherwise put into a fresh interview and can never tell us
+  // they paid. Resolving here costs one lookup and only on a paid claim.
+  if (step === CV_STEP_INTERVIEW && isCvPaidClaim(text)) {
+    try {
+      step = await resolveCvStep(api, sender);
+    } catch (err) {
+      if (isQueueFullError(err)) return busyReply();
+      throw err;
+    }
+    saveServiceState(api, sender, CV_SERVICE, step);
+  }
 
   if (step === CV_STEP_APPROVAL) return { handled: true, text: CV_REVIEW_PENDING };
   if (step === CV_STEP_PAYMENT) {

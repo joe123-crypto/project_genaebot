@@ -628,7 +628,17 @@ class CliContractTests(StoreTestCase):
   def test_unknown_command_is_json_not_a_crash(self) -> None:
     result = run_cli("frobnicate")
     self.assertFalse(result["ok"])
-    self.assertIn("usage", result["error"])
+    self.assertTrue(result["error"])
+
+  def test_cli_errors_never_leak_usage_or_subcommand_names(self) -> None:
+    # The gate relays an ok:false error straight to the WhatsApp user, so a usage
+    # string would publish the internal command list to a public chat while
+    # telling that user nothing they can act on.
+    for argv in (["frobnicate"], [], ["approve"], ["interview-turn", "--phone=+263700000001"]):
+      error = run_cli(*argv)["error"].lower()
+      self.assertNotIn("usage", error)
+      for name in ("interview-turn", "start-revamp", "approve", "deny", "orders"):
+        self.assertNotIn(name, error)
 
   def test_no_command_is_json(self) -> None:
     self.assertFalse(run_cli()["ok"])
@@ -887,6 +897,54 @@ class CliSettlementTests(StoreTestCase):
     result = run_cli("approve", "--order=-notanid")
     self.assertFalse(result["ok"])
     self.assertNotIn("usage:", result["error"])
+
+  def test_an_unconfirmed_send_leaves_the_order_approvable_with_its_data(self) -> None:
+    # Settling purges the answers and the PDF, so a send with no message id must
+    # not settle: the buyer has paid, and without this the CV is deleted having
+    # never arrived, with a retry replaying delivered:false instead of resending.
+    order_id = self._awaiting_approval()
+    with mock.patch("cvmaker.render.render_cv_pdf", side_effect=lambda html, out: Path(out)), \
+      mock.patch("cvmaker.delivery.send_whatsapp_document", return_value={}):
+      result = run_cli("approve", f"--order={order_id}")
+    self.assertFalse(result["ok"])
+    stored = orders.load_order(order_id)
+    self.assertEqual(stored["status"], orders.STATUS_AWAITING_APPROVAL)
+    self.assertTrue(stored["data"])
+
+  def test_a_confirmed_send_settles_and_purges(self) -> None:
+    order_id = self._awaiting_approval()
+    with mock.patch("cvmaker.render.render_cv_pdf", side_effect=lambda html, out: Path(out)), \
+      mock.patch("cvmaker.delivery.send_whatsapp_document", return_value={"messageId": "wamid.1"}):
+      result = run_cli("approve", f"--order={order_id}")
+    self.assertTrue(result["ok"])
+    self.assertEqual(orders.load_order(order_id)["status"], orders.STATUS_SENT)
+
+  def test_a_paid_order_survives_the_retention_sweep(self) -> None:
+    # An order awaiting approval is one the buyer has already paid for. Ageing it
+    # out would take the money and leave "cv approve" answering "not found".
+    order_id = self._awaiting_approval()
+    self.force_age(order_id, "2020-01-01T00:00:00Z")
+    self.assertEqual(orders.sweep(), 0)
+    self.assertIsNotNone(orders.load_order(order_id))
+    self.assertEqual(orders.active_order_for(PHONE)["orderId"], order_id)
+
+  def test_an_abandoned_interview_is_still_swept(self) -> None:
+    order = orders.create_order("+263700000002")
+    self.force_age(order["orderId"], "2020-01-01T00:00:00Z")
+    self.assertEqual(orders.sweep(), 1)
+    self.assertIsNone(orders.load_order(order["orderId"]))
+
+  def test_status_reports_the_active_order_so_the_gate_can_resync(self) -> None:
+    order_id = self._awaiting_approval()
+    result = run_cli("status", f"--phone={PHONE}")
+    self.assertEqual(result["orderId"], order_id)
+    self.assertEqual(result["status"], orders.STATUS_AWAITING_APPROVAL)
+
+  def test_status_is_empty_when_there_is_no_active_order(self) -> None:
+    result = run_cli("status", "--phone=+263700000009")
+    self.assertTrue(result["ok"])
+    self.assertEqual(result["orderId"], "")
+    self.assertEqual(result["status"], "")
 
   def test_deny_settles_and_purges(self) -> None:
     order_id = self._awaiting_approval()

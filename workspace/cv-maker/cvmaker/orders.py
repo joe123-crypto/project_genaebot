@@ -193,7 +193,18 @@ def _parse_time(value: object) -> datetime | None:
   return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
+# Retention applies to orders that are finished or abandoned. An order in
+# awaiting_payment or awaiting_approval is one the business still owes something
+# on: the buyer has completed an interview, and in the approval case has told us
+# they paid and is waiting on a human. Ageing those out would delete a paid order
+# and leave the admin's "cv approve" answering "not found", with the money taken
+# and no record to reconcile against. They are kept until they are settled.
+RETAINED_STATUSES = frozenset({STATUS_AWAITING_PAYMENT, STATUS_AWAITING_APPROVAL})
+
+
 def _is_expired(order: dict, max_age_days: int = RETENTION_DAYS) -> bool:
+  if str(order.get("status") or "") in RETAINED_STATUSES:
+    return False
   stamp = _parse_time(order.get("createdAt")) or _parse_time(order.get("updatedAt"))
   if stamp is None:
     return False

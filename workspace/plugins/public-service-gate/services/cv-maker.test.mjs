@@ -163,9 +163,9 @@ async function withFakeOpenclaw(fn) {
   }
 }
 
-test("startCvOrder pins the sender to the CV flow and introduces it", () => {
+test("startCvOrder pins the sender to the CV flow and introduces it", async () => {
   const api = apiFor();
-  const reply = startCvOrder(api, USER);
+  const reply = await startCvOrder(api, USER);
 
   assert.equal(reply.handled, true);
   assert.match(reply.text, /CV/);
@@ -179,13 +179,16 @@ test("a CV flow turn is relayed to the CLI and answers with its reply", async ()
   const api = cvApi({
     "interview-turn": { ok: true, orderId: "abc123", status: "interviewing", reply: "What is your full name?", complete: false },
   });
-  startCvOrder(api, USER);
+  await startCvOrder(api, USER);
 
   const reply = await handleCvOrder(api, USER, "Ready", loadServiceState(api, USER));
 
   assert.equal(reply.handled, true);
   assert.equal(reply.text, "What is your full name?");
-  assert.deepEqual(api.cvCalls(), [`interview-turn --phone ${USER} --message Ready`]);
+  assert.deepEqual(api.cvCalls(), [
+    `status --phone=${USER}`,
+    `interview-turn --phone=${USER} --message=Ready`,
+  ]);
   assert.equal(stepFor(api), CV_STEP_INTERVIEW);
 });
 
@@ -196,7 +199,7 @@ test("awaiting_payment appends the configured price and payment details", async 
     },
     { cvMakerPriceText: "US$7", cvMakerPaymentDetails: "TestCash 0000 (Test Payee)" },
   );
-  startCvOrder(api, USER);
+  await startCvOrder(api, USER);
 
   const reply = await handleCvOrder(api, USER, "done", loadServiceState(api, USER));
 
@@ -236,7 +239,7 @@ test('"paid" claims the payment, moves to approval, and alerts the admin', async
 
     assert.equal(reply.handled, true);
     assert.match(reply.text, /confirming your payment/i);
-    assert.deepEqual(api.cvCalls(), [`paid --phone ${USER}`]);
+    assert.deepEqual(api.cvCalls(), [`paid --phone=${USER}`]);
     assert.equal(stepFor(api), CV_STEP_APPROVAL);
 
     const adminMessage = sent();
@@ -268,11 +271,58 @@ test("messages after payment is claimed get the review notice, not another CLI c
 
 test("a CLI ok:false error is shown as-is", async () => {
   const api = cvApi({ "interview-turn": { ok: false, error: "The CV interview is busy. Try again in a minute." } });
-  startCvOrder(api, USER);
+  await startCvOrder(api, USER);
 
   const reply = await handleCvOrder(api, USER, "hello", loadServiceState(api, USER));
 
   assert.equal(reply.text, "The CV interview is busy. Try again in a minute.");
+});
+
+// The buyer's pointer expires in 30 minutes; paying takes longer. Without the
+// status lookup they come back, are put into a fresh interview, and the CLI then
+// refuses every message: they have paid and can never tell us so.
+test("a returning buyer whose pointer lapsed resumes at payment, not a new interview", async () => {
+  const api = cvApi({ status: { ok: true, orderId: "abc123", status: "awaiting_payment" } });
+
+  const reply = await startCvOrder(api, USER);
+
+  assert.equal(stepFor(api), CV_STEP_PAYMENT);
+  assert.match(reply.text, /US\$/);
+});
+
+test("a paid claim is honoured when the cached step is stale", async () => {
+  const api = cvApi({
+    status: { ok: true, orderId: "abc123", status: "awaiting_payment" },
+    paid: { ok: true, orderId: "abc123", status: "awaiting_approval" },
+  });
+  // Simulate the lapsed pointer: the sender is back on the interview step while
+  // the order itself is already waiting for payment.
+  saveServiceState(api, USER, CV_SERVICE, CV_STEP_INTERVIEW);
+
+  const reply = await handleCvOrder(api, USER, "paid", loadServiceState(api, USER));
+
+  assert.equal(stepFor(api), CV_STEP_APPROVAL);
+  assert.match(reply.text, /confirming your payment/i);
+  assert.ok(api.cvCalls().some((line) => line.startsWith("paid ")));
+});
+
+// argparse reads an option-lookalike token as a flag when it arrives as its own
+// argv entry, so a user answering "--skip" would break the turn and be shown the
+// CLI's usage string. The single-argv form keeps the answer a literal value.
+test("a flag-shaped answer is passed through as a literal message", async () => {
+  for (const answer of ["--skip", "-n/a", "--help", "-none"]) {
+    const api = cvApi({
+      "interview-turn": { ok: true, orderId: "abc123", status: "interviewing", reply: "Next?" },
+    });
+    await startCvOrder(api, USER);
+    const reply = await handleCvOrder(api, USER, answer, loadServiceState(api, USER));
+
+    assert.equal(reply.text, "Next?", `expected ${answer} to reach the CLI as a message`);
+    assert.ok(
+      api.cvCalls().includes(`interview-turn --phone=${USER} --message=${answer}`),
+      `expected single-argv form for ${answer}`,
+    );
+  }
 });
 
 test("a crashing CLI produces a friendly message and never leaks stderr", async () => {
@@ -282,20 +332,24 @@ test("a crashing CLI produces a friendly message and never leaks stderr", async 
   const warnings = [];
   const api = apiFor({ cvMakerScript: script });
   api.logger.warn = (line) => warnings.push(line);
-  startCvOrder(api, USER);
+  await startCvOrder(api, USER);
 
   const reply = await handleCvOrder(api, USER, "hello", loadServiceState(api, USER));
 
   assert.equal(reply.handled, true);
   assert.equal(reply.text, "I couldn't reach the CV maker. Try again later.");
   assert.doesNotMatch(reply.text, /secret|boom/);
-  assert.equal(warnings.length, 1);
-  assert.doesNotMatch(warnings[0], new RegExp(USER.replace("+", "\\+")));
+  // Two warnings now: the status lookup on entry and the relayed turn. The
+  // operator log is allowed to carry stderr; the phone is what must be scrubbed.
+  assert.equal(warnings.length, 2);
+  for (const line of warnings) {
+    assert.doesNotMatch(line, new RegExp(USER.replace("+", "\\+")));
+  }
 });
 
 test("a full helper queue answers with the busy reply", async () => {
   const api = cvApi({ "interview-turn": { ok: true, orderId: "abc123", status: "interviewing", reply: "hi" } });
-  startCvOrder(api, USER);
+  await startCvOrder(api, USER);
   const state = loadServiceState(api, USER);
 
   // helperLimiter is maxConcurrent 4 / maxQueue 40, and every call reaches the

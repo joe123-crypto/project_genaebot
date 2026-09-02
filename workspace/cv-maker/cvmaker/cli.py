@@ -29,10 +29,6 @@ MAX_ERROR_CHARS = 240
 MAX_MESSAGE_CHARS = 4000
 MAX_SOURCE_PDF_BYTES = 10 * 1024 * 1024
 GENERIC_ERROR = "the CV service could not handle that right now"
-USAGE = (
-  "usage: cv-maker "
-  "{interview-turn,start-revamp,paid,approve,deny,orders}"
-)
 
 # public_text only redacts the production home directory. Anything else that
 # looks like a path is scrubbed too, so a temp file or a container path from an
@@ -49,13 +45,20 @@ def _error_text(value: object) -> str:
 
 
 class _Parser(argparse.ArgumentParser):
-  """An argument parser that never writes to stdout or exits the process."""
+  """An argument parser that never writes to stdout or exits the process.
+
+  The error text is deliberately generic. This CLI is only ever invoked by the
+  WhatsApp gate, which relays an "ok": false error straight to the user, so a
+  usage string would put the internal subcommand list in a public chat while
+  telling that user nothing they can act on. A malformed call is a bug on our
+  side, not something the sender can fix by rephrasing.
+  """
 
   def error(self, message: str) -> None:  # type: ignore[override]
-    raise CvMakerError(f"{USAGE} ({public_text(message, 120)})")
+    raise CvMakerError(GENERIC_ERROR)
 
   def exit(self, status: int = 0, message: str | None = None) -> None:  # type: ignore[override]
-    raise CvMakerError(f"{USAGE} ({public_text(message, 120)})" if message else USAGE)
+    raise CvMakerError(GENERIC_ERROR)
 
 
 def _clean_message(value: object) -> str:
@@ -177,6 +180,26 @@ def cmd_paid(args: argparse.Namespace) -> dict:
   }
 
 
+def cmd_status(args: argparse.Namespace) -> dict:
+  """Report the active order for a number, so the gate can resync.
+
+  The gate keeps only a short-lived pointer to which flow a sender is in, and
+  that pointer expires well before a payment does. Without a way to read the real
+  status back, a buyer who returns after the pointer lapses is treated as a fresh
+  interview and can never signal that they paid. This is the read that lets the
+  order store stay the source of truth.
+  """
+  phone = normalize_phone(args.phone)
+  order = orders.active_order_for(phone)
+  if not order:
+    return {"ok": True, "orderId": "", "status": ""}
+  return {
+    "ok": True,
+    "orderId": str(order.get("orderId") or ""),
+    "status": str(order.get("status") or ""),
+  }
+
+
 def cmd_approve(args: argparse.Namespace) -> dict:
   order_id = orders.safe_order_id(getattr(args, "order", ""))
   order = orders.load_order(order_id)
@@ -203,12 +226,19 @@ def cmd_approve(args: argparse.Namespace) -> dict:
     filename=result["filename"],
     messageId=result["messageId"],
   )
+  # Settling is destructive: it purges the answers, the transcript and the PDF,
+  # so the CV can never be rebuilt afterwards. Only a confirmed message id is
+  # evidence the document actually reached the buyer. Without one the order stays
+  # approvable with its data intact, so the admin can simply try again, rather
+  # than the buyer having paid for something that was silently thrown away.
+  if not result["delivered"]:
+    raise CvMakerError("the CV was built but could not be delivered, try approving again")
   return {
     "ok": True,
     "orderId": order_id,
     "status": orders.set_status(order_id, orders.STATUS_SENT),
     "phone": str(order.get("phone") or ""),
-    "delivered": result["delivered"],
+    "delivered": True,
     "filename": result["filename"],
   }
 
@@ -284,6 +314,10 @@ def build_parser() -> _Parser:
   paid.add_argument("--phone", required=True)
   paid.set_defaults(handler=cmd_paid)
 
+  status = sub.add_parser("status", add_help=False)
+  status.add_argument("--phone", required=True)
+  status.set_defaults(handler=cmd_status)
+
   approve = sub.add_parser("approve", add_help=False)
   approve.add_argument("--order", required=True)
   approve.set_defaults(handler=cmd_approve)
@@ -304,7 +338,7 @@ def run(argv: list[str]) -> dict:
   args = parser.parse_args(list(argv))
   handler = getattr(args, "handler", None)
   if handler is None:
-    raise CvMakerError(USAGE)
+    raise CvMakerError(GENERIC_ERROR)
   orders.sweep()
   return handler(args)
 

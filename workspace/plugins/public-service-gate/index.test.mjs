@@ -1106,12 +1106,14 @@ function cvMakerCli() {
 set -eu
 printf '%s\\n' "$*" >> "${log}"
 case "$1" in
+  status) printf '{"ok":true,"orderId":"","status":""}\\n' ;;
   interview-turn)
-    if [ "$5" = "done" ]; then
-      printf '{"ok":true,"orderId":"${CV_ORDER_ID}","status":"awaiting_payment","reply":"All set.","complete":true}\\n'
-    else
-      printf '{"ok":true,"orderId":"${CV_ORDER_ID}","status":"interviewing","reply":"What is your full name?","complete":false}\\n'
-    fi
+    case "$*" in
+      *--message=done*)
+        printf '{"ok":true,"orderId":"${CV_ORDER_ID}","status":"awaiting_payment","reply":"All set.","complete":true}\\n' ;;
+      *)
+        printf '{"ok":true,"orderId":"${CV_ORDER_ID}","status":"interviewing","reply":"What is your full name?","complete":false}\\n' ;;
+    esac
     ;;
   paid) printf '{"ok":true,"orderId":"${CV_ORDER_ID}","status":"awaiting_approval"}\\n' ;;
   approve) printf '{"ok":true,"orderId":"${CV_ORDER_ID}","status":"sent","delivered":true,"filename":"cv.pdf"}\\n' ;;
@@ -1157,7 +1159,9 @@ test("menu option 2 branches into the automated CV flow instead of the manual ha
   assert.doesNotMatch(started.text, HANDOFF);
   assert.match(started.text, /CV/);
   // The order itself is created by the first relayed turn, not by the digit.
-  assert.deepEqual(handler.cvCalls(), []);
+  // Entering the flow resolves the sender's real order status before deciding
+  // where to resume them.
+  assert.deepEqual(handler.cvCalls(), [`status --phone=${UNKNOWN}`]);
   const saved = JSON.parse(fs.readFileSync(handler.serviceStatePath, "utf8"));
   assert.equal(saved.states[UNKNOWN]?.service, "cv");
 });
@@ -1224,9 +1228,10 @@ test("CV flow turns relay to the CLI and the payment message uses the configured
   assert.match(paid.text, /confirming your payment/i);
 
   assert.deepEqual(handler.cvCalls(), [
-    `interview-turn --phone ${UNKNOWN} --message Jane`,
-    `interview-turn --phone ${UNKNOWN} --message done`,
-    `paid --phone ${UNKNOWN}`,
+    `status --phone=${UNKNOWN}`,
+    `interview-turn --phone=${UNKNOWN} --message=Jane`,
+    `interview-turn --phone=${UNKNOWN} --message=done`,
+    `paid --phone=${UNKNOWN}`,
   ]);
   const saved = JSON.parse(fs.readFileSync(handler.serviceStatePath, "utf8"));
   assert.equal(saved.states[UNKNOWN]?.step, "cv.awaiting_approval");
@@ -1241,7 +1246,7 @@ test("menu escapes the CV flow back to the service menu", async () => {
   const back = await handler(eventFor("menu", UNKNOWN), ctx);
 
   assert.match(back.text, MENU_PROMPT);
-  assert.deepEqual(handler.cvCalls(), []);
+  assert.deepEqual(handler.cvCalls(), [`status --phone=${UNKNOWN}`]);
 });
 
 test("admin cv approve and cv deny settle the order", async () => {
