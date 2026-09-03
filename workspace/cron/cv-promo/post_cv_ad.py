@@ -18,6 +18,12 @@ resolved to group JIDs via `openclaw channels resolve`; the bot must already be 
 MEMBER of each group for resolution and sending to work. Resolved JIDs are cached
 in the state file to avoid re-resolving every day.
 
+Most groups (the flat "groups" list) get the ad every day. A group may instead be
+given a reduced cadence by listing it under "weekly_groups" in targets.json, which
+maps a group JID to the weekdays it should be posted to (e.g. Vacancy Lamp twice a
+week). The cron still runs daily; a weekly-limited group is simply skipped on days
+outside its configured weekdays, so no second cron is needed.
+
 Usage:
   post_cv_ad.py            normal run (resolve, skip groups already sent today, send)
   post_cv_ad.py --dry-run  show resolved targets + the message; no send, no state
@@ -102,6 +108,69 @@ def load_targets():
     for g in groups or []:
         if isinstance(g, str) and g.strip():
             out.append(g.strip())
+    return out
+
+
+# ---------------------------------------------------------- weekly cadence ----
+# Some groups get the ad only on specific weekdays (e.g. twice a week) instead of
+# daily. weekday() uses Mon=0 .. Sun=6. Weekday tokens in targets.json may be
+# names ("mon", "monday", "thu", ...) or ints (0-6).
+_WEEKDAY_NAMES = {
+    "mon": 0, "monday": 0,
+    "tue": 1, "tues": 1, "tuesday": 1,
+    "wed": 2, "weds": 2, "wednesday": 2,
+    "thu": 3, "thur": 3, "thurs": 3, "thursday": 3,
+    "fri": 4, "friday": 4,
+    "sat": 5, "saturday": 5,
+    "sun": 6, "sunday": 6,
+}
+_WEEKDAY_ABBR = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+def _parse_weekday(token):
+    """Return a weekday int 0-6 for a name or int token, else None."""
+    if isinstance(token, bool):
+        return None
+    if isinstance(token, int):
+        return token if 0 <= token <= 6 else None
+    if isinstance(token, str):
+        t = token.strip().casefold()
+        if t in _WEEKDAY_NAMES:
+            return _WEEKDAY_NAMES[t]
+        if t.isdigit():
+            n = int(t)
+            return n if 0 <= n <= 6 else None
+    return None
+
+
+def load_weekly_targets():
+    """Return {jid: frozenset(weekday ints)} for groups posted to only on certain
+    weekdays. A JID listed here is posted to ONLY on its weekdays; a JID absent
+    from this map (i.e. only in "groups") is posted to every day. Entries with no
+    valid weekday, or a bad JID, are ignored."""
+    try:
+        with open(TARGETS_FILE) as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    raw = data.get("weekly_groups") or {}
+    out = {}
+    if isinstance(raw, dict):
+        for jid, days in raw.items():
+            jid = str(jid).strip()
+            if not jid.endswith("@g.us"):
+                continue
+            if isinstance(days, (str, int)) and not isinstance(days, bool):
+                days = [days]
+            parsed = set()
+            for token in days or []:
+                d = _parse_weekday(token)
+                if d is not None:
+                    parsed.add(d)
+            if parsed:
+                out[jid] = frozenset(parsed)
     return out
 
 
@@ -298,31 +367,56 @@ def main():
         return 1
 
     entries = load_targets()
-    if not entries:
+    weekly = load_weekly_targets()
+    # Weekly-limited groups are valid send targets too; fold them into the entry
+    # list (so they get resolved/deduped), then gate them by weekday below.
+    all_entries = entries + [j for j in weekly if j not in entries]
+    if not all_entries:
         print("NO_REPLY")  # nothing configured -> stay silent
         return 0
 
     st = load_state()
-    jids = resolve_targets(entries, st, dry=dry)
+    jids = resolve_targets(all_entries, st, dry=dry)
 
     if not jids:
         sys.stderr.write("No resolvable group targets.\n")
         print("NO_REPLY")
         return 0
 
+    weekday = date.today().weekday()
+
+    def eligible_today(jid):
+        """A weekly-limited group is only eligible on its configured weekdays;
+        every other group is eligible every day."""
+        allowed = weekly.get(jid)
+        return allowed is None or weekday in allowed
+
+    eligible = [j for j in jids if eligible_today(j)]
+
     sent_map = st["sent"]
-    pending = [j for j in jids if sent_map.get(j) != today]
+    pending = [j for j in eligible if sent_map.get(j) != today]
 
     if dry:
         print("Targets (resolved JIDs): %d" % len(jids))
         for j in jids:
-            mark = "already sent today" if sent_map.get(j) == today else "would send"
+            allowed = weekly.get(j)
+            if allowed is not None and weekday not in allowed:
+                days = ",".join(_WEEKDAY_ABBR[d] for d in sorted(allowed))
+                mark = "skipped today (weekly: %s)" % days
+            elif sent_map.get(j) == today:
+                mark = "already sent today"
+            elif allowed is not None:
+                days = ",".join(_WEEKDAY_ABBR[d] for d in sorted(allowed))
+                mark = "would send (weekly: %s)" % days
+            else:
+                mark = "would send"
             print("  - %s  [%s]" % (j, mark))
         print("Image: %s" % IMAGE_PATH)
         print("\n----- message -----")
         print(POST_TEXT)
         print("-------------------")
-        print("\n[dry-run] resolved=%d pending=%d" % (len(jids), len(pending)))
+        print("\n[dry-run] resolved=%d eligible=%d pending=%d"
+              % (len(jids), len(eligible), len(pending)))
         return 0
 
     if not pending:

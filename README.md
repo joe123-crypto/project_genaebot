@@ -365,7 +365,10 @@ The deploy script used by both paths:
   `install-cv-promo.sh` at 10:00 `Africa/Algiers`; it runs
   `workspace/cron/cv-promo/post_cv_ad.py`, a deterministic (no-agent) job that
   posts the fixed CV-service ad to the WhatsApp group JIDs listed in
-  `workspace/cron/cv-promo/targets.json`
+  `workspace/cron/cv-promo/targets.json`. Most groups get the ad daily; groups
+  under the file's `weekly_groups` map are posted to only on their configured
+  weekdays (the cron still runs daily and simply skips them on other days), which
+  is how Vacancy Lamp advertises CV making twice a week (Mon and Thu)
 - registers or reconciles the daily `building-materials-promo` command cron via
   `install-building-materials-promo.sh` at 12:00 `Africa/Harare`; it runs
   `workspace/cron/building-materials-promo/post_ad.py`, a deterministic (no-agent)
