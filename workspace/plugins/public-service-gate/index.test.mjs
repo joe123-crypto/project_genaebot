@@ -668,7 +668,7 @@ test("menu selection captures the request under the chosen service and hands off
   assert.match(done.text, HANDOFF);
 
   // The second turn records the picked service so the admin sees it in the store.
-  assert.match(fs.readFileSync(argsLog, "utf-8"), /request --phone \+19995550123 --message \[CV writing & revamping\] 2/);
+  assert.match(fs.readFileSync(argsLog, "utf-8"), /request --phone \+19995550123 --message \[Professional CV writing\] 2/);
   // State is cleared once the order is captured.
   const saved = JSON.parse(fs.readFileSync(serviceStatePath, "utf8"));
   assert.deepEqual(saved.states, {});

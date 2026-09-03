@@ -117,11 +117,18 @@ Tracked categories:
   `webetu-preferences/`, and `job-scout/` (including its `scrapers/`,
   `jobscout/`, and `channel-listener/` helper packages). Each service folder is
   staged whole by a per-service recursive glob in
-  `deploy/stage-workspace.rsync` (e.g. `+ /job-scout/***`), so adding or
-  splitting an internal module ships automatically without editing the deploy
-  allowlist; the global runtime/state/cache excludes at the top of that filter
-  still keep `__pycache__/`, `node_modules/`, `*.log`, and `*.json` state files
-  out of the deployable source.
+  `deploy/stage-workspace.rsync` (e.g. `+ /job-scout/***`, `+ /cv-maker/***`), so
+  adding or splitting an internal module ships automatically without editing the
+  deploy allowlist; the global runtime/state/cache excludes at the top of that
+  filter still keep `__pycache__/`, `node_modules/`, `*.log`, and `*.json` state
+  files out of the deployable source. A **new** service folder is a different
+  matter: the filter ends in `- /**`, and the repository `.gitignore` is
+  default-deny, so a new tree has to be allowlisted in both or it will neither
+  commit nor deploy. `workspace/cv-maker/` is listed in each for that reason. It
+  is deliberately outside `workspace/job-scout/`, which the upstream
+  `genaie-job-scout` overlay owns (`deploy/parity/job-scout-owned-paths.json`):
+  an earlier CV maker implementation lived there and was silently deleted by a
+  sync.
 - selected custom skills plus `workspace/skills.lock.json`. Unlike the service
   folders above, skills are **not** covered by a recursive glob: each one is
   listed explicitly in `deploy/stage-workspace.rsync` (e.g. `+ /skills/cv-maker/`

@@ -18,7 +18,7 @@ import { CV_SERVICE, handleCvOrder, isCvMakerEnabled, isCvMakerRequest, startCvO
 // sender's state slot carries while the automated CV order is in flight.
 export const INTAKE_SERVICES = [
   { key: "job-scout", label: "Automatic Job & Internship searching" },
-  { key: CV_SERVICE, label: "CV writing & revamping" },
+  { key: CV_SERVICE, label: "Professional CV writing" },
   { key: "genaie-marketing", label: "Digital marketing (posters, WhatsApp ads)" },
   { key: "cs-bot", label: "WhatsApp customer-service bots" },
 ];

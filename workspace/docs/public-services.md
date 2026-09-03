@@ -37,11 +37,12 @@ model-visible operational tool is `public_service`, declared by the
    - Follow `/home/joseph/.openclaw/workspace/docs/job-scout-onboarding.md` exactly for setup, profile updates, and safety rules.
 
 2. CV maker
-   - Active.
-   - For users who just want a professional CV made, without enrolling in Job Scout. No account link, Gmail, saved profile, or payment.
-   - Two paths: revamp an uploaded CV (PDF), or build one from a few short questions.
-   - The finished one-page CV is rendered and sent back here in this WhatsApp chat; nothing is stored.
-   - Follow `/home/joseph/.openclaw/workspace/docs/cv-maker-onboarding.md` and the cv-maker skill exactly.
+   - Active. Paid: US$5, payable before the CV is released.
+   - For users who just want a professional CV made, without enrolling in Job Scout. No account link, Gmail, or saved profile is needed.
+   - The gate interviews the user and collects their details, then asks for payment. Once an admin confirms the payment the CV is built and sent back here as a PDF.
+   - Their answers are held only until the order is settled, then deleted along with the rendered CV. Nothing is kept afterwards.
+   - Menu option 2 runs this automatically. Options 1, 3 and 4 remain manual handoffs.
+   - Follow `/home/joseph/.openclaw/workspace/docs/cv-maker-onboarding.md` exactly.
 
 ## Agent-Handled Prompts
 
@@ -57,7 +58,7 @@ setup from context. Never construct shell commands or pass identity fields.
 
 - Job Scout: ask web app or WhatsApp first, before creating or sending a link. Both choices use the canonical WhatsApp-link page. Web setup then continues normal Agent Genaie onboarding with only service selection skipped. WhatsApp setup connects Gmail in the app, returns to chat, offers guided questions or CV autofill, stages the CV, confirms the profile, requires scam-safety acknowledgement, then saves it.
 - Short replies such as "1", "2", "Done", "yes", "no", "web", and "WhatsApp" are normal onboarding replies. Interpret them from the recent conversation and service state; ask one short clarifying question only when the next step is genuinely unclear.
-- CV maker: when a user just wants a CV made or revamped (not job applications), follow `/home/joseph/.openclaw/workspace/docs/cv-maker-onboarding.md`. Offer to revamp an uploaded CV or build one from a few questions, then use the cv-maker skill's `make-cv` command, which renders and sends the finished CV back here. No sign-in, Gmail, or payment.
+- CV maker: when a user just wants a CV made (not job applications), the gate handles it end to end from menu option 2. It interviews them, asks for US$5, and sends the finished CV once an admin confirms payment. No sign-in or Gmail. See `/home/joseph/.openclaw/workspace/docs/cv-maker-onboarding.md`.
 
 ## Request Handling
 
@@ -98,10 +99,10 @@ setup from context. Never construct shell commands or pass identity fields.
 
 ## CV Maker
 
-- The CV maker is for users who just want a professional CV made, separate from Job Scout. No account link, Gmail, saved profile, or payment is required or requested, and nothing is stored.
-- Treat `/home/joseph/.openclaw/workspace/docs/cv-maker-onboarding.md` and the cv-maker skill as the exact source of truth.
-- Offer two paths: revamp an uploaded CV (PDF), or build one from a few short questions. Pass the user's current message to `cv_maker_start` so a short reply such as `1`, `2`, `revamp`, or `from scratch` continues the flow.
-- Read or extract details from an uploaded CV only after the user gives permission.
+- The CV maker is for users who just want a professional CV made, separate from Job Scout. No account link, Gmail, or saved profile is required. It costs US$5, and the CV is released only after an admin confirms the payment.
+- Treat `/home/joseph/.openclaw/workspace/docs/cv-maker-onboarding.md` as the exact source of truth.
+- The service runs deterministically inside the gate from menu option 2. There is nothing for the agent to drive, so do not try to conduct the interview or run any command yourself.
+- The user's answers are held until their order is settled and then deleted with the rendered CV.
 - Never invent facts; if a detail is missing, ask a short question or leave it out.
 - The finished one-page CV is rendered and sent back here in this WhatsApp chat automatically. Confirm briefly once done, and do not narrate steps, page counts, or file paths.
 
