@@ -43,10 +43,18 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 TARGETS_FILE = os.environ.get(
     "CV_PROMO_TARGETS", os.path.join(HERE, "targets.json")
 )
+# Two bundled ad images that alternate daily: today's ordinal parity picks one, so
+# a group never sees the same image two days running. CV_PROMO_IMAGE overrides both
+# (a single explicit path) for testing. Add more assets to lengthen the rotation.
 _IMAGE_ASSETS = [
     os.path.join(HERE, "assets", "cv-ad.png"),
     os.path.join(HERE, "assets", "cv-ad-2.png"),
 ]
+STATE_FILE = os.environ.get(
+    "CV_PROMO_STATE",
+    "/home/joseph/.openclaw/runtime/cron-state/cv-promo/state.json",
+)
+SEND_DELAY_SECONDS = float(os.environ.get("CV_PROMO_SEND_DELAY", "3"))
 
 
 def pick_image():
@@ -54,11 +62,6 @@ def pick_image():
     if override:
         return override
     return _IMAGE_ASSETS[date.today().toordinal() % len(_IMAGE_ASSETS)]
-STATE_FILE = os.environ.get(
-    "CV_PROMO_STATE",
-    "/home/joseph/.openclaw/runtime/cron-state/cv-promo/state.json",
-)
-SEND_DELAY_SECONDS = float(os.environ.get("CV_PROMO_SEND_DELAY", "3"))
 
 
 def openclaw_env():
