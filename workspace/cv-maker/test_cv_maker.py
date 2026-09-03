@@ -24,6 +24,15 @@ import types
 import unittest
 from unittest import mock
 
+# CI runs this file as ``python3 <file>`` with a PYTHONPATH that includes
+# workspace/lib and workspace/account-link but not workspace/job-scout (see
+# deploy/ci-check.sh). The cvmaker package imports jobscout (build.py), so make
+# the sibling job-scout tree importable here, mirroring what bin/cv-maker does at
+# runtime. Append (never insert) so nothing already on the path is shadowed.
+_JOB_SCOUT_ROOT = Path(__file__).resolve().parent.parent / "job-scout"
+if (_JOB_SCOUT_ROOT / "jobscout").is_dir() and str(_JOB_SCOUT_ROOT) not in sys.path:
+    sys.path.append(str(_JOB_SCOUT_ROOT))
+
 from cvmaker import CvMakerError
 from cvmaker import build, cli, delivery, orders, render
 
@@ -137,6 +146,20 @@ class StoreTestCase(unittest.TestCase):
     store["orders"][order_id]["createdAt"] = timestamp
     store["orders"][order_id]["updatedAt"] = timestamp
     orders.orders_path().write_text(json.dumps(store), encoding="utf-8")
+
+
+# ------------------------------------------------------------- importability
+
+
+class ImportBootstrapTests(unittest.TestCase):
+  def test_jobscout_is_importable_under_ci_pythonpath(self) -> None:
+    # The cvmaker package depends on jobscout (build.py). CI runs this file
+    # without job-scout on PYTHONPATH, so the bootstrap at the top of this
+    # module must keep it importable. If this fails, the whole suite would fail
+    # to import in CI; asserting it explicitly makes the cause obvious.
+    import importlib
+
+    self.assertIsNotNone(importlib.import_module("jobscout.commands_setup"))
 
 
 # ---------------------------------------------------------------- identity
