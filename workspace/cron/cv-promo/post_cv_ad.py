@@ -43,14 +43,25 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 TARGETS_FILE = os.environ.get(
     "CV_PROMO_TARGETS", os.path.join(HERE, "targets.json")
 )
-IMAGE_PATH = os.environ.get(
-    "CV_PROMO_IMAGE", os.path.join(HERE, "assets", "cv-ad.png")
-)
+# Two bundled ad images that alternate daily: today's ordinal parity picks one, so
+# a group never sees the same image two days running. CV_PROMO_IMAGE overrides both
+# (a single explicit path) for testing. Add more assets to lengthen the rotation.
+_IMAGE_ASSETS = [
+    os.path.join(HERE, "assets", "cv-ad.png"),
+    os.path.join(HERE, "assets", "cv-ad-2.png"),
+]
 STATE_FILE = os.environ.get(
     "CV_PROMO_STATE",
     "/home/joseph/.openclaw/runtime/cron-state/cv-promo/state.json",
 )
 SEND_DELAY_SECONDS = float(os.environ.get("CV_PROMO_SEND_DELAY", "3"))
+
+
+def pick_image():
+    override = os.environ.get("CV_PROMO_IMAGE")
+    if override:
+        return override
+    return _IMAGE_ASSETS[date.today().toordinal() % len(_IMAGE_ASSETS)]
 
 
 def openclaw_env():
@@ -84,7 +95,7 @@ POST_TEXT = (
     "\U0001F504 CV Revamping\n"
     "\U0001F4BC Professional presentation\n"
     "\n"
-    "\U0001F4F2 +213563719936\n"
+    "\U0001F4F2 +263785632943\n"
     "\U0001F310 genaie.site\n"
     "\n"
     "*Your next opportunity starts with a better CV.*"
@@ -342,11 +353,11 @@ def is_permission_error(out):
     return any(marker in low for marker in PERMISSION_MARKERS)
 
 
-def send_ad(target):
+def send_ad(target, image_path):
     """Send the ad (caption + image) to one group. Returns (ok, combined_output)."""
     cmd = ["openclaw", "message", "send", "--channel", "whatsapp",
            "--target", target, "--message", POST_TEXT,
-           "--media", IMAGE_PATH, "--json"]
+           "--media", image_path, "--json"]
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=180,
                            env=openclaw_env())
@@ -361,9 +372,10 @@ def send_ad(target):
 def main():
     dry = "--dry-run" in sys.argv[1:]
     today = date.today().isoformat()
+    image_path = pick_image()
 
-    if not os.path.exists(IMAGE_PATH):
-        sys.stderr.write("ERROR: promo image missing: %s\n" % IMAGE_PATH)
+    if not os.path.exists(image_path):
+        sys.stderr.write("ERROR: promo image missing: %s\n" % image_path)
         return 1
 
     entries = load_targets()
@@ -411,7 +423,7 @@ def main():
             else:
                 mark = "would send"
             print("  - %s  [%s]" % (j, mark))
-        print("Image: %s" % IMAGE_PATH)
+        print("Image (today): %s" % image_path)
         print("\n----- message -----")
         print(POST_TEXT)
         print("-------------------")
@@ -427,7 +439,7 @@ def main():
     skipped = 0
     sent = 0
     for i, jid in enumerate(pending):
-        ok, out = send_ad(jid)
+        ok, out = send_ad(jid, image_path)
         if ok:
             sent_map[jid] = today
             save_state(st)  # commit per group: crash/retry never double-posts
