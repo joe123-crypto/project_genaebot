@@ -8,15 +8,17 @@ import {
 } from "./greeting.js";
 import { notifyAdminOfIntake, notifyAdminOfLead, recordLead } from "./membership.js";
 import { isJobScoutRequest } from "./job-scout.js";
-import { isCvMakerRequest } from "./cv-maker.js";
+import { CV_SERVICE, handleCvOrder, isCvMakerEnabled, isCvMakerRequest, startCvOrder } from "./cv-maker.js";
 
 // The DM menu shown to everyone who reaches out. This array is the single source
 // of truth for the digit -> service mapping; the visible menu text lives in the
 // greeting template (docs/public-greeting.txt / DEFAULT_GREETING) and must stay in
 // the same order.
+// The CV menu key deliberately matches CV_SERVICE, the service name this
+// sender's state slot carries while the automated CV order is in flight.
 export const INTAKE_SERVICES = [
   { key: "job-scout", label: "Automatic Job & Internship searching" },
-  { key: "cv", label: "CV writing & revamping" },
+  { key: CV_SERVICE, label: "Professional CV writing" },
   { key: "genaie-marketing", label: "Digital marketing (posters, WhatsApp ads)" },
   { key: "cs-bot", label: "WhatsApp customer-service bots" },
 ];
@@ -37,18 +39,18 @@ function labelForKey(key) {
 }
 
 // Best-effort classification of the user's request into one of the menu services.
-// Falls back to a generic label rather than re-prompting, so the bot never nags.
-function resolveServiceLabel(text) {
+// Falls back to a generic key rather than re-prompting, so the bot never nags.
+function resolveServiceKey(text) {
   const digit = getServiceMenuSelection(text);
   if (digit) {
     const service = INTAKE_SERVICES[Number(digit) - 1];
-    if (service) return service.label;
+    if (service) return service.key;
   }
-  if (isJobScoutRequest(text)) return labelForKey("job-scout");
-  if (isCvMakerRequest(text)) return labelForKey("cv");
-  if (CS_BOT_PATTERN.test(text)) return labelForKey("cs-bot");
-  if (MARKETING_PATTERN.test(text)) return labelForKey("genaie-marketing");
-  return GENERAL_REQUEST_LABEL;
+  if (isJobScoutRequest(text)) return "job-scout";
+  if (isCvMakerRequest(text)) return CV_SERVICE;
+  if (CS_BOT_PATTERN.test(text)) return "cs-bot";
+  if (MARKETING_PATTERN.test(text)) return "genaie-marketing";
+  return "";
 }
 
 // Deterministic DM intake: greet + menu on first touch, then capture whatever the
@@ -57,6 +59,13 @@ export async function handleIntake(api, sender, text) {
   const state = loadServiceState(api, sender);
   const awaitingSelection = state?.service === INTAKE_SERVICE && state?.step === AWAITING_SELECTION;
   const wantsMenu = isGreetingOrServiceMenuRequest(text) || isStateResetRequest(text);
+
+  // Menu option 2 is the one automated service: once a sender is pinned to the CV
+  // flow every turn is relayed to the CV maker CLI instead of being captured as a
+  // manual lead. "menu"/"cancel" still escapes back to the greeting below.
+  if (state?.service === CV_SERVICE && !wantsMenu) {
+    return handleCvOrder(api, sender, text, state);
+  }
 
   // Entry / re-greet branch: record the cold lead, alert the admin once, show the
   // menu. This is the only branch that does not complete the order.
@@ -72,9 +81,14 @@ export async function handleIntake(api, sender, text) {
     return { handled: true, text: loadGreeting(api) };
   }
 
-  // Second turn: the user told us what they want. Capture it against the resolved
-  // service, alert the admin with the detail, and confirm the handoff.
-  const label = resolveServiceLabel(text);
+  // Second turn: the user told us what they want. Options 1, 3 and 4 are captured
+  // against the resolved service, the admin is alerted with the detail, and the
+  // handoff is confirmed. Option 2 branches into the automated CV order instead.
+  const serviceKey = resolveServiceKey(text);
+  if (serviceKey === CV_SERVICE && isCvMakerEnabled(api)) {
+    return startCvOrder(api, sender);
+  }
+  const label = serviceKey ? labelForKey(serviceKey) : GENERAL_REQUEST_LABEL;
   try {
     await recordLead(api, sender, `[${label}] ${text}`);
     await notifyAdminOfIntake(api, sender, label, text);

@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Wrapper for the standalone CV maker engine. Mirrors bin/job-scout: locate the
+# source tree, make the Job Scout package importable, then hand over to Python.
+# Failures here still print one JSON object on stdout and exit 0, because the
+# plugin parses stdout unconditionally.
+set -uo pipefail
+
+fail_json() {
+  printf '{"ok":false,"error":"%s"}\n' "$1"
+  exit 0
+}
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)" || fail_json "the CV service is not installed correctly"
+repo_root="$(cd -- "$script_dir/.." && pwd -P)" || fail_json "the CV service is not installed correctly"
+
+source_root="${CV_MAKER_SOURCE_ROOT:-}"
+if [ -z "$source_root" ]; then
+  if [ -f "$repo_root/cv_maker.py" ]; then
+    source_root="$repo_root"
+  elif [ -f "$repo_root/cv-maker/cv_maker.py" ]; then
+    source_root="$repo_root/cv-maker"
+  fi
+fi
+[ -n "$source_root" ] && [ -f "$source_root/cv_maker.py" ] || fail_json "the CV service is not installed correctly"
+
+job_scout_root="${JOB_SCOUT_SOURCE_ROOT:-}"
+if [ -z "$job_scout_root" ]; then
+  if [ -f "$repo_root/job-scout/job_scout.py" ]; then
+    job_scout_root="$repo_root/job-scout"
+  elif [ -f "$repo_root/job_scout.py" ]; then
+    job_scout_root="$repo_root"
+  fi
+fi
+[ -n "$job_scout_root" ] && [ -d "$job_scout_root/jobscout" ] || fail_json "the CV service is not installed correctly"
+export JOB_SCOUT_SOURCE_ROOT="$job_scout_root"
+
+if [ -n "${PYTHONPATH:-}" ]; then
+  export PYTHONPATH="$source_root:$job_scout_root:$PYTHONPATH"
+else
+  export PYTHONPATH="$source_root:$job_scout_root"
+fi
+
+openclaw_home="${OPENCLAW_HOME:-${HOME:?HOME must be set}/.openclaw}"
+export CV_MAKER_RUNTIME_ROOT="${CV_MAKER_RUNTIME_ROOT:-$openclaw_home/runtime/cv-maker}"
+mkdir -p "$CV_MAKER_RUNTIME_ROOT" 2>/dev/null || true
+chmod 0700 "$CV_MAKER_RUNTIME_ROOT" 2>/dev/null || true
+
+exec python3 "$source_root/cv_maker.py" "$@"

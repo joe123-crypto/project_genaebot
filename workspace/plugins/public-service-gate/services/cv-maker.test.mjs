@@ -4,7 +4,23 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { handleCvMakerRequest, isCvMakerRequest } from "./cv-maker.js";
+import { loadServiceState, saveServiceState } from "../lib/state.js";
+import {
+  CV_SERVICE,
+  CV_STEP_APPROVAL,
+  CV_STEP_INTERVIEW,
+  CV_STEP_PAYMENT,
+  cvPaymentText,
+  handleCvDecision,
+  handleCvMakerRequest,
+  handleCvOrder,
+  isCvMakerRequest,
+  isCvPaidClaim,
+  parseCvDecisionCommand,
+  startCvOrder,
+} from "./cv-maker.js";
+
+const USER = "+263700000001";
 
 function apiFor(config = {}) {
   const serviceStatePath = path.join(
@@ -91,4 +107,319 @@ test("handleCvMakerRequest reports unavailable when disabled", async () => {
   const reply = await handleCvMakerRequest(api, "+263700000001", "make me a cv");
   assert.equal(reply.handled, true);
   assert.match(reply.text, /isn't available here right now/i);
+});
+
+// ---------------------------------------------------------------------------
+// Paid CV order flow
+// ---------------------------------------------------------------------------
+
+// A stand-in for bin/cv-maker: logs the argv it was given and prints the canned
+// stdout for each subcommand. A string payload is emitted verbatim so the
+// invalid-JSON path can be exercised too.
+function writeCvScript(responses) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cv-maker-cli-"));
+  const script = path.join(dir, "cv-maker");
+  const log = path.join(dir, "calls.log");
+  const lines = ["#!/usr/bin/env bash", "set -eu", `printf '%s\\n' "$*" >> ${JSON.stringify(log)}`, 'case "$1" in'];
+  for (const [command, payload] of Object.entries(responses)) {
+    const body = typeof payload === "string" ? payload : JSON.stringify(payload);
+    lines.push(`  ${command})`, "cat <<'CVJSONEOF'", body, "CVJSONEOF", "    ;;");
+  }
+  lines.push(`  *) printf '%s\\n' '{"ok":false,"error":"unsupported command"}' ;;`, "esac", "");
+  fs.writeFileSync(script, lines.join("\n"), { mode: 0o755 });
+  return {
+    script,
+    calls: () => (fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim().split("\n").filter(Boolean) : []),
+  };
+}
+
+function cvApi(responses, config = {}) {
+  const { script, calls } = writeCvScript(responses);
+  const api = apiFor({ cvMakerScript: script, ...config });
+  api.cvCalls = calls;
+  return api;
+}
+
+function stepFor(api, phone = USER) {
+  return loadServiceState(api, phone)?.step ?? null;
+}
+
+// Runs fn with a fake `openclaw` binary first on PATH, so the best-effort admin
+// WhatsApp send in notifyAdminOfIntake is captured instead of failing silently.
+async function withFakeOpenclaw(fn) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cv-maker-openclaw-"));
+  const log = path.join(dir, "openclaw.log");
+  fs.writeFileSync(
+    path.join(dir, "openclaw"),
+    `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> ${JSON.stringify(log)}\n`,
+    { mode: 0o755 },
+  );
+  const previous = process.env.PATH;
+  process.env.PATH = `${dir}${path.delimiter}${previous}`;
+  try {
+    return await fn(() => (fs.existsSync(log) ? fs.readFileSync(log, "utf8") : ""));
+  } finally {
+    process.env.PATH = previous;
+  }
+}
+
+test("startCvOrder pins the sender to the CV flow and introduces it", async () => {
+  const api = apiFor();
+  const reply = await startCvOrder(api, USER);
+
+  assert.equal(reply.handled, true);
+  assert.match(reply.text, /CV/);
+  assert.doesNotMatch(reply.text, /—/);
+  const state = loadServiceState(api, USER);
+  assert.equal(state.service, CV_SERVICE);
+  assert.equal(state.step, CV_STEP_INTERVIEW);
+});
+
+test("a CV flow turn is relayed to the CLI and answers with its reply", async () => {
+  const api = cvApi({
+    "interview-turn": { ok: true, orderId: "abc123", status: "interviewing", reply: "What is your full name?", complete: false },
+  });
+  await startCvOrder(api, USER);
+
+  const reply = await handleCvOrder(api, USER, "Ready", loadServiceState(api, USER));
+
+  assert.equal(reply.handled, true);
+  assert.equal(reply.text, "What is your full name?");
+  assert.deepEqual(api.cvCalls(), [
+    `status --phone=${USER}`,
+    `interview-turn --phone=${USER} --message=Ready`,
+  ]);
+  assert.equal(stepFor(api), CV_STEP_INTERVIEW);
+});
+
+test("awaiting_payment appends the configured price and payment details", async () => {
+  const api = cvApi(
+    {
+      "interview-turn": { ok: true, orderId: "abc123", status: "awaiting_payment", reply: "Your CV is ready.", complete: true },
+    },
+    { cvMakerPriceText: "US$7", cvMakerPaymentDetails: "TestCash 0000 (Test Payee)" },
+  );
+  await startCvOrder(api, USER);
+
+  const reply = await handleCvOrder(api, USER, "done", loadServiceState(api, USER));
+
+  assert.match(reply.text, /Your CV is ready\./);
+  assert.match(reply.text, /US\$7/);
+  assert.match(reply.text, /TestCash 0000 \(Test Payee\)/);
+  assert.match(reply.text, /reply "paid"/i);
+  assert.equal(stepFor(api), CV_STEP_PAYMENT);
+});
+
+test("cvPaymentText falls back to the shipped defaults", () => {
+  const text = cvPaymentText(apiFor());
+  assert.match(text, /US\$5/);
+  assert.match(text, /EcoCash/);
+});
+
+test("chatter in the payment step re-sends the details without calling the CLI", async () => {
+  const api = cvApi({ "interview-turn": { ok: true, orderId: "abc123", status: "interviewing", reply: "no" } });
+  saveServiceState(api, USER, CV_SERVICE, CV_STEP_PAYMENT);
+
+  const reply = await handleCvOrder(api, USER, "how much again?", loadServiceState(api, USER));
+
+  assert.match(reply.text, /US\$5/);
+  assert.deepEqual(api.cvCalls(), []);
+  assert.equal(stepFor(api), CV_STEP_PAYMENT);
+});
+
+test('"paid" claims the payment, moves to approval, and alerts the admin', async () => {
+  await withFakeOpenclaw(async (sent) => {
+    const api = cvApi(
+      { paid: { ok: true, orderId: "Ab3-_x", status: "awaiting_approval" } },
+      { whatsappAdminUsers: ["+263700000009"] },
+    );
+    saveServiceState(api, USER, CV_SERVICE, CV_STEP_PAYMENT);
+
+    const reply = await handleCvOrder(api, USER, "paid", loadServiceState(api, USER));
+
+    assert.equal(reply.handled, true);
+    assert.match(reply.text, /confirming your payment/i);
+    assert.deepEqual(api.cvCalls(), [`paid --phone=${USER}`]);
+    assert.equal(stepFor(api), CV_STEP_APPROVAL);
+
+    const adminMessage = sent();
+    assert.match(adminMessage, /--target \+263700000009/);
+    assert.match(adminMessage, /Ab3-_x/);
+    assert.match(adminMessage, /cv approve Ab3-_x/);
+    assert.match(adminMessage, /cv deny Ab3-_x/);
+  });
+});
+
+test("isCvPaidClaim only accepts a short unambiguous claim", () => {
+  for (const text of ["paid", "Paid!", "i have paid", "I've paid", "payment sent", "money sent"]) {
+    assert.equal(isCvPaidClaim(text), true, `expected paid claim: ${text}`);
+  }
+  for (const text of ["", "how do i pay", "i will pay tomorrow", "not paid", "paid?? what is the number for paying"]) {
+    assert.equal(isCvPaidClaim(text), false, `expected not a paid claim: ${text}`);
+  }
+});
+
+test("messages after payment is claimed get the review notice, not another CLI call", async () => {
+  const api = cvApi({ "interview-turn": { ok: true, orderId: "abc123", status: "interviewing", reply: "no" } });
+  saveServiceState(api, USER, CV_SERVICE, CV_STEP_APPROVAL);
+
+  const reply = await handleCvOrder(api, USER, "any update?", loadServiceState(api, USER));
+
+  assert.match(reply.text, /once it's approved/i);
+  assert.deepEqual(api.cvCalls(), []);
+});
+
+test("a CLI ok:false error is shown as-is", async () => {
+  const api = cvApi({ "interview-turn": { ok: false, error: "The CV interview is busy. Try again in a minute." } });
+  await startCvOrder(api, USER);
+
+  const reply = await handleCvOrder(api, USER, "hello", loadServiceState(api, USER));
+
+  assert.equal(reply.text, "The CV interview is busy. Try again in a minute.");
+});
+
+// The buyer's pointer expires in 30 minutes; paying takes longer. Without the
+// status lookup they come back, are put into a fresh interview, and the CLI then
+// refuses every message: they have paid and can never tell us so.
+test("a returning buyer whose pointer lapsed resumes at payment, not a new interview", async () => {
+  const api = cvApi({ status: { ok: true, orderId: "abc123", status: "awaiting_payment" } });
+
+  const reply = await startCvOrder(api, USER);
+
+  assert.equal(stepFor(api), CV_STEP_PAYMENT);
+  assert.match(reply.text, /US\$/);
+});
+
+test("a paid claim is honoured when the cached step is stale", async () => {
+  const api = cvApi({
+    status: { ok: true, orderId: "abc123", status: "awaiting_payment" },
+    paid: { ok: true, orderId: "abc123", status: "awaiting_approval" },
+  });
+  // Simulate the lapsed pointer: the sender is back on the interview step while
+  // the order itself is already waiting for payment.
+  saveServiceState(api, USER, CV_SERVICE, CV_STEP_INTERVIEW);
+
+  const reply = await handleCvOrder(api, USER, "paid", loadServiceState(api, USER));
+
+  assert.equal(stepFor(api), CV_STEP_APPROVAL);
+  assert.match(reply.text, /confirming your payment/i);
+  assert.ok(api.cvCalls().some((line) => line.startsWith("paid ")));
+});
+
+// argparse reads an option-lookalike token as a flag when it arrives as its own
+// argv entry, so a user answering "--skip" would break the turn and be shown the
+// CLI's usage string. The single-argv form keeps the answer a literal value.
+test("a flag-shaped answer is passed through as a literal message", async () => {
+  for (const answer of ["--skip", "-n/a", "--help", "-none"]) {
+    const api = cvApi({
+      "interview-turn": { ok: true, orderId: "abc123", status: "interviewing", reply: "Next?" },
+    });
+    await startCvOrder(api, USER);
+    const reply = await handleCvOrder(api, USER, answer, loadServiceState(api, USER));
+
+    assert.equal(reply.text, "Next?", `expected ${answer} to reach the CLI as a message`);
+    assert.ok(
+      api.cvCalls().includes(`interview-turn --phone=${USER} --message=${answer}`),
+      `expected single-argv form for ${answer}`,
+    );
+  }
+});
+
+test("a crashing CLI produces a friendly message and never leaks stderr", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cv-maker-cli-"));
+  const script = path.join(dir, "cv-maker");
+  fs.writeFileSync(script, "#!/usr/bin/env bash\necho '/home/secret/order.pdf boom' >&2\nexit 3\n", { mode: 0o755 });
+  const warnings = [];
+  const api = apiFor({ cvMakerScript: script });
+  api.logger.warn = (line) => warnings.push(line);
+  await startCvOrder(api, USER);
+
+  const reply = await handleCvOrder(api, USER, "hello", loadServiceState(api, USER));
+
+  assert.equal(reply.handled, true);
+  assert.equal(reply.text, "I couldn't reach the CV maker. Try again later.");
+  assert.doesNotMatch(reply.text, /secret|boom/);
+  // Two warnings now: the status lookup on entry and the relayed turn. The
+  // operator log is allowed to carry stderr; the phone is what must be scrubbed.
+  assert.equal(warnings.length, 2);
+  for (const line of warnings) {
+    assert.doesNotMatch(line, new RegExp(USER.replace("+", "\\+")));
+  }
+});
+
+test("a full helper queue answers with the busy reply", async () => {
+  const api = cvApi({ "interview-turn": { ok: true, orderId: "abc123", status: "interviewing", reply: "hi" } });
+  await startCvOrder(api, USER);
+  const state = loadServiceState(api, USER);
+
+  // helperLimiter is maxConcurrent 4 / maxQueue 40, and every call reaches the
+  // limiter synchronously, so the 45th is rejected before any can drain.
+  const pending = [];
+  for (let i = 0; i < 44; i += 1) pending.push(handleCvOrder(api, USER, "hi", state));
+  const reply = await handleCvOrder(api, USER, "hi", state);
+
+  assert.equal(reply.handled, true);
+  assert.equal(reply.text, "I'm busy right now. Try again shortly.");
+  await Promise.allSettled(pending);
+});
+
+test("handleCvOrder clears the flow when the CV maker is switched off", async () => {
+  const api = cvApi({ "interview-turn": { ok: true, orderId: "abc123", status: "interviewing", reply: "hi" } }, { cvMakerEnabled: false });
+  saveServiceState(api, USER, CV_SERVICE, CV_STEP_INTERVIEW);
+
+  const reply = await handleCvOrder(api, USER, "hello", loadServiceState(api, USER));
+
+  assert.match(reply.text, /isn't available here right now/i);
+  assert.equal(loadServiceState(api, USER), null);
+  assert.deepEqual(api.cvCalls(), []);
+});
+
+test("parseCvDecisionCommand matches only the exact admin command shape", () => {
+  assert.deepEqual(parseCvDecisionCommand("cv approve Ab3-_x"), { action: "approve", orderId: "Ab3-_x" });
+  assert.deepEqual(parseCvDecisionCommand("CV Deny  abc123"), { action: "deny", orderId: "abc123" });
+  for (const text of [
+    "",
+    "cv approve",
+    "cv approve abc",
+    "cv approve abc123456789012",
+    "cv approve abc123 please",
+    "please cv approve abc123",
+    "cv approve abc 123",
+    "cv approve abc12$",
+    "approve abc123",
+    "cv revamp abc123",
+  ]) {
+    assert.equal(parseCvDecisionCommand(text), null, `expected no match: ${text}`);
+  }
+});
+
+test("handleCvDecision approves and denies through the CLI", async () => {
+  const approveApi = cvApi({ approve: { ok: true, orderId: "abc123", status: "sent", delivered: true, filename: "cv.pdf" } });
+  const approved = await handleCvDecision(approveApi, { action: "approve", orderId: "abc123" });
+  assert.equal(approved.handled, true);
+  assert.match(approved.text, /approved and sent/i);
+  assert.deepEqual(approveApi.cvCalls(), ["approve --order=abc123"]);
+
+  const denyApi = cvApi({ deny: { ok: true, orderId: "abc123", status: "rejected" } });
+  const denied = await handleCvDecision(denyApi, { action: "deny", orderId: "abc123" });
+  assert.match(denied.text, /denied/i);
+  assert.deepEqual(denyApi.cvCalls(), ["deny --order=abc123"]);
+});
+
+test("handleCvDecision reports an undelivered approval and CLI errors", async () => {
+  const undelivered = cvApi({ approve: { ok: true, orderId: "abc123", status: "sent", delivered: false } });
+  const reply = await handleCvDecision(undelivered, { action: "approve", orderId: "abc123" });
+  assert.match(reply.text, /could not be sent/i);
+
+  const failing = cvApi({ approve: { ok: false, error: "No order abc123." } });
+  const failed = await handleCvDecision(failing, { action: "approve", orderId: "abc123" });
+  assert.equal(failed.text, "No order abc123.");
+});
+
+test("handleCvDecision survives invalid CLI output", async () => {
+  const api = cvApi({ approve: "not json at all" });
+  api.logger.warn = () => {};
+  const reply = await handleCvDecision(api, { action: "approve", orderId: "abc123" });
+  assert.equal(reply.handled, true);
+  assert.match(reply.text, /couldn't be updated/i);
 });

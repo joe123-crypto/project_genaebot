@@ -75,6 +75,15 @@
       "cvMakerEnabled": {
         "type": "boolean"
       },
+      "cvMakerPriceText": {
+        "type": "string"
+      },
+      "cvMakerPaymentDetails": {
+        "type": "string"
+      },
+      "cvMakerScript": {
+        "type": "string"
+      },
       "workerSudoCommand": {
         "type": "string"
       },
