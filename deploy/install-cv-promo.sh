@@ -7,6 +7,7 @@ set -euo pipefail
 # WhatsApp channel. Idempotent: edits the job if it already exists, else adds it.
 # Registration logic is shared in install-promo.sh.
 
+# shellcheck disable=SC1091  # sourced at runtime from the same deploy/ directory
 source "$(dirname "${BASH_SOURCE[0]}")/install-promo.sh"
 
 register_promo_cron \
