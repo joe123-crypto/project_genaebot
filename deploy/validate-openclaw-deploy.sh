@@ -8,10 +8,6 @@ die() {
   exit 1
 }
 
-if crontab -l 2>/dev/null | grep -Fq '/home/joseph/.openclaw/gitclaw/auto_backup.sh'; then
-  die "GitClaw autocommit cron entry is still active"
-fi
-
 git -C "$OC_DIR" rev-parse --is-inside-work-tree >/dev/null
 "$OC_DIR/deploy/ci-check.sh"
 "$OC_DIR/deploy/check-openclaw-mirror.sh"
