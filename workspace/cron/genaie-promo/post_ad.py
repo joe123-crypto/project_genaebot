@@ -69,25 +69,19 @@ def openclaw_env():
 # Fixed advert. Verbatim marketing copy supplied by the operator. Emoji are kept
 # as explicit \U escapes so the source stays ASCII-safe.
 POST_TEXT = (
-    "Get Your Business Seen. Get More Customers.\n"
+    "\U0001F4E2 Get Your Business Noticed\n"
+    "Get Customers Ready To Buy\n"
+    "Get 24/7 Customer Service For Your Business\n"
     "\n"
-    "A great business means nothing if people don't know it exists.\n"
+    "Great products go unnoticed when nobody knows they exist. "
+    "Genaie fixes that.\n"
     "\n"
-    "Genaie helps businesses become more visible and reach the right people "
-    "through practical digital marketing and creative services.\n"
+    "\U0001F9F2 Lead Generation\n"
+    "\U0001F7E2 WhatsApp Group Ads\n"
+    "\U0001F3A8 Poster Design\n"
+    "\U0001F916 Customer Service WhatsApp Bots\n"
     "\n"
-    "What we do:\n"
-    "\n"
-    "\U0001F4E2 WhatsApp Group Advertising — Put your business in front of "
-    "active, targeted audiences.\n"
-    "\U0001F3A8 Professional Poster Design — Turn your offer into visuals "
-    "people notice and remember.\n"
-    "\U0001F916 WhatsApp Bots — Automate customer interactions and make it "
-    "easier to serve your customers.\n"
-    "\n"
-    "\U0001F4DE Message us on WhatsApp: +213563719936\n"
-    "\n"
-    "Genaie — helping you get noticed."
+    "\U0001F4DE WhatsApp us: +263785632943"
 )
 
 
