@@ -28,13 +28,16 @@ The dispatched Job Scout release receiver jobs (`job-scout-release`,
 2026-08-20 Railway cutover, and the upstream `genaie-job-scout` repository no
 longer dispatches releases, so the jobs were unreachable.
 
-The underlying helpers are **retained but unused (pending removal)**:
-`deploy/openclaw-deploy.sh`, `deploy/job_scout_consumer.py`,
-`deploy/job_scout_release.py`, the `openclaw-prod-deploy` wrapper, and
-`deploy/github-actions/validate-job-scout-artifacts.sh`. Their unit tests still
-run in CI. The bootstrap, receiver, and self-hosted deploy sections below are
-retained as historical reference for that machinery and no longer describe a
-wired workflow path.
+The underlying implementation has now also been **removed**: the
+`--job-scout-request` branch of the `openclaw-prod-deploy` wrapper, the
+`deploy/job_scout_release.py` and `deploy/job_scout_consumer.py` helpers (with
+their unit tests), and `deploy/github-actions/validate-job-scout-artifacts.sh`.
+The planned `genaie-job-scout` repository split was abandoned, so this machinery
+will not return. The bootstrap, receiver, and self-hosted deploy sections below
+are kept only as a historical description; the helper files and the
+`--job-scout-request` wrapper form they reference no longer exist in this
+repository. `deploy/openclaw-deploy.sh` and the plain single-argument
+`openclaw-prod-deploy` wrapper remain the live deploy path.
 
 ## One-Time Receiver Bootstrap (historical)
 

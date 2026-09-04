@@ -34,6 +34,15 @@ import html
 import subprocess
 import urllib.request
 from datetime import datetime, date, timedelta
+from pathlib import Path
+
+# workspace/lib is a sibling; make it importable for the shared gateway-client env
+# helper and the atomic JSON-state writer.
+_LIB_DIR = str(Path(__file__).resolve().parents[2] / "lib")
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+import promo_broadcast
+import json_store
 
 API_BASE = "https://www.algeriaexhibitions.dz/en/wp-json/wp/v2/event"
 EVENT_PAGE = "https://www.algeriaexhibitions.dz/en/event/{slug}/"
@@ -199,11 +208,7 @@ def load_state():
 def save_state(st, total):
     st["last_total"] = total
     st["checked_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
-    os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
-    tmp = STATE_FILE + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(st, f, indent=2)
-    os.replace(tmp, STATE_FILE)
+    json_store.write_json_atomic(STATE_FILE, st)
 
 
 def within_interval(last_sent_at, days):
@@ -222,7 +227,8 @@ def send_message(text):
     cmd = ["openclaw", "message", "send", "--channel", "whatsapp",
            "--target", GROUP_TARGET, "--message", text, "--json"]
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=120,
+                           env=promo_broadcast.gateway_env())
     except Exception as ex:
         return (False, f"exec error: {ex}")
     out = (p.stdout or "") + (p.stderr or "")

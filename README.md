@@ -188,13 +188,14 @@ host is under pressure.
 The cross-repository Job Scout release receiver that used to run in this
 workflow (a hosted validation gate plus a self-hosted `openclaw-prod` apply and
 ledger job, triggered by `repository_dispatch: job_scout_release` and a manual
-`workflow_dispatch` rollback) has been **removed**. It ran on the self-hosted
-host that was stopped at the 2026-08-20 Railway cutover, and the upstream
-`genaie-job-scout` repository no longer dispatches releases. The request-aware
-root wrapper and the `deploy/job_scout_release.py` helpers are retained (pending
-removal) but are no longer wired into any workflow. The historical payload,
-GHCR access, validation, and rollback contracts remain documented in
-`deploy/github-actions/README.md`.
+`workflow_dispatch` rollback) has been **removed**, along with its whole
+implementation: the `--job-scout-request` branch of the `openclaw-prod-deploy`
+root wrapper and the `deploy/job_scout_release.py` / `deploy/job_scout_consumer.py`
+helpers. The planned `genaie-job-scout` repository split was abandoned, the
+self-hosted release host was stopped at the 2026-08-20 Railway cutover, and Job
+Scout still runs inside this repository, so no release-delivery path remains. The
+historical payload, GHCR access, validation, and rollback contracts are described
+for reference only in `deploy/github-actions/README.md`.
 
 Validate without deploying:
 
@@ -205,8 +206,7 @@ cd /home/joseph/.openclaw
 ```
 
 `ci-check.sh` is host-independent. The deployment validator adds host-only
-checks for retired GitClaw automation, ignored private paths, and generated
-mirror state. CI also applies `deploy/ci/docs-contract.json`: changes to a
+checks for ignored private paths and generated mirror state. CI also applies `deploy/ci/docs-contract.json`: changes to a
 declared public, onboarding, or operations interface must update the mapped
 documentation in the same pull request or push.
 
@@ -313,7 +313,6 @@ version deliberately does not perform OCR.
 
 The deploy script used by both paths:
 
-- verifies GitClaw autocommit is disabled
 - shows Git status and diff stats
 - rejects staged runtime/secret files
 - runs syntax and JSON checks

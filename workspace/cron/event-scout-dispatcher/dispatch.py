@@ -39,6 +39,12 @@ GENAIE_CALENDAR = WORKSPACE / "bin" / "genaie-calendar"
 # file's directory to sys.path).
 if str(Path(__file__).resolve().parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
+# workspace/lib is a sibling; make it importable for the shared gateway-client env
+# helper (a bare `openclaw message send` cannot reach the live WhatsApp channel).
+_LIB_DIR = str(WORKSPACE / "lib")
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+import promo_broadcast  # noqa: E402
 from event_catalog import (  # noqa: E402
     SOURCE_PREFIX,
     build_upcoming_events,
@@ -111,6 +117,7 @@ def send_whatsapp(phone: str, message: str) -> bool:
             capture_output=True,
             text=True,
             timeout=30,
+            env=promo_broadcast.gateway_env(),
         )
     except Exception:
         return False

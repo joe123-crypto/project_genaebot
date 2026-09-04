@@ -152,12 +152,6 @@ EOF
   done
 }
 
-check_gitclaw_disabled() {
-  if crontab -l 2>/dev/null | grep -Fq '/home/joseph/.openclaw/gitclaw/auto_backup.sh'; then
-    die "GitClaw autocommit cron entry is still active"
-  fi
-}
-
 check_staged_files() {
   if ! git_cmd rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     die "$OC_DIR is not a Git worktree"
@@ -785,7 +779,6 @@ PY
 
 main() {
   parse_args "$@"
-  check_gitclaw_disabled
   check_staged_files
   check_docker_access
   syntax_checks

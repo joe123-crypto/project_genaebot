@@ -1,7 +1,9 @@
 import importlib.util
 import io
 import json
+import os
 import re
+import sys
 from contextlib import redirect_stdout
 from datetime import date
 from pathlib import Path
@@ -12,6 +14,15 @@ ROOT = Path(__file__).resolve().parents[1]
 CRON_DIR = ROOT / "workspace/cron/cv-promo"
 TARGETS = CRON_DIR / "targets.json"
 MODULE = CRON_DIR / "post_cv_ad.py"
+LIB_DIR = ROOT / "workspace/lib"
+
+# The cv-promo delivery engine (gateway env, invite/JID resolution, weekly
+# cadence, dry-run) now lives in the shared workspace/lib/promo_broadcast.py; the
+# cv-promo script only supplies text/image/paths and calls broadcast(). These
+# tests target that shared module plus the cv-promo wiring end-to-end.
+if str(LIB_DIR) not in sys.path:
+    sys.path.insert(0, str(LIB_DIR))
+import promo_broadcast  # noqa: E402
 
 GROUP_JID = re.compile(r"^\d+@g\.us$")
 
@@ -62,8 +73,7 @@ class WeeklyConfigTests(unittest.TestCase):
         )
 
     def test_vacancy_lamp_posts_exactly_twice_a_week(self):
-        module = load_module()
-        weekly = module.load_weekly_targets()
+        weekly = promo_broadcast.load_weekly_targets(str(TARGETS))
         self.assertIn(VACANCY_LAMP_JID, weekly)
         self.assertEqual(
             len(weekly[VACANCY_LAMP_JID]), 2,
@@ -72,11 +82,8 @@ class WeeklyConfigTests(unittest.TestCase):
 
 
 class WeekdayParsingTests(unittest.TestCase):
-    def setUp(self):
-        self.module = load_module()
-
     def test_parse_weekday_names_and_ints(self):
-        p = self.module._parse_weekday
+        p = promo_broadcast._parse_weekday
         self.assertEqual(p("mon"), 0)
         self.assertEqual(p("Monday"), 0)
         self.assertEqual(p("THU"), 3)
@@ -84,7 +91,7 @@ class WeekdayParsingTests(unittest.TestCase):
         self.assertEqual(p("6"), 6)
 
     def test_parse_weekday_rejects_bad_tokens(self):
-        p = self.module._parse_weekday
+        p = promo_broadcast._parse_weekday
         self.assertIsNone(p("someday"))
         self.assertIsNone(p(9))
         self.assertIsNone(p(-1))
@@ -92,22 +99,29 @@ class WeekdayParsingTests(unittest.TestCase):
 
 
 class WeekdayGatingTests(unittest.TestCase):
-    """Drive main() in --dry-run to confirm the weekly group is only eligible on
-    its configured weekdays while daily groups are eligible every day."""
+    """Drive cv-promo's main() in --dry-run to confirm the weekly group is only
+    eligible on its configured weekdays while daily groups are eligible every day.
+    Weekday gating is computed in promo_broadcast, so pin its date there."""
 
     def _run_dry_on(self, weekday_date):
         module = load_module()
-        module.date = type(
-            "PinnedDate", (_FakeDate,), {"_pinned": weekday_date}
-        )
-        old_argv = module.sys.argv
-        module.sys.argv = ["post_cv_ad.py", "--dry-run"]
+        saved_date = promo_broadcast.date
+        saved_argv = sys.argv
+        saved_state = os.environ.get("CV_PROMO_STATE")
+        promo_broadcast.date = type("PinnedDate", (_FakeDate,), {"_pinned": weekday_date})
+        sys.argv = ["post_cv_ad.py", "--dry-run"]
+        os.environ["CV_PROMO_STATE"] = str(ROOT / "nonexistent-test-state.json")
         buf = io.StringIO()
         try:
             with redirect_stdout(buf):
                 rc = module.main()
         finally:
-            module.sys.argv = old_argv
+            promo_broadcast.date = saved_date
+            sys.argv = saved_argv
+            if saved_state is None:
+                os.environ.pop("CV_PROMO_STATE", None)
+            else:
+                os.environ["CV_PROMO_STATE"] = saved_state
         return rc, buf.getvalue()
 
     def test_weekly_group_skipped_off_day(self):
