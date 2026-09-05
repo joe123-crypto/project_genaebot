@@ -13,9 +13,11 @@ describes the flow so an operator can reason about it; it is not a script for th
 1. The user picks option 2 from the DM menu, or asks for a CV in their own words.
 2. The gate resolves whether they already have an order in flight and resumes them at the right
    point. A returning user is never restarted from scratch.
-3. It interviews them one field at a time, collecting name, contact, skills, a short summary, work
-   experience, education and referees. The interview is model-driven, so it copes with answers given
-   out of order or several at once.
+3. It interviews them one field at a time, collecting name, contact, skills, work experience,
+   education and referees. It does not ask for a professional summary or job descriptions: the model
+   writes those itself from the facts given (with a confident, embellished framing), then shows them
+   to the user to approve or edit. The interview is model-driven, so it copes with answers given out
+   of order or several at once.
 4. When the interview is complete the order moves to awaiting payment and the user is given the
    price and the payment details.
 5. The user pays out of band and replies "paid". The order moves to awaiting approval and the

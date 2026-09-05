@@ -107,14 +107,19 @@ class SystemPromptTests(unittest.TestCase):
     self.assertIn("must ALWAYS be the COMPLETE CV collected so far", prompt)
     self.assertIn("NEVER invent an employer", prompt)
 
-  def test_prompt_collects_skills_and_summary_and_never_names_job_scout(self) -> None:
+  def test_prompt_collects_skills_writes_the_summary_and_never_names_job_scout(self) -> None:
     prompt = interview.SYSTEM_PROMPT
     self.assertNotIn("Job Scout", prompt)
     self.assertNotIn("job scout", prompt.casefold())
     self.assertNotIn("Do NOT ask for skills", prompt)
     self.assertIn("skills", prompt)
-    self.assertIn("professional summary", prompt)
-    self.assertIn("you must collect both", prompt)
+    # Skills are still collected from the user...
+    self.assertIn("you must collect them", prompt)
+    # ...but the summary and role descriptions are written by the model, not
+    # asked for, then shown back for the user to approve or edit.
+    self.assertIn("NEVER ask the user to write their own professional summary", prompt)
+    self.assertIn("write a professional summary", prompt)
+    self.assertIn("happy with them or want to add or change anything", prompt)
 
   def test_prompt_carries_the_tone_rules_and_no_dash_of_its_own(self) -> None:
     prompt = interview.SYSTEM_PROMPT
