@@ -380,6 +380,14 @@ The deploy script used by both paths:
   bots) to the WhatsApp group JIDs listed in
   `workspace/cron/genaie-promo/targets.json` (every group the bot is in except
   Vacancy Lamp)
+- registers or reconciles the daily `genaie-leads-promo` command cron via
+  `install-genaie-leads-promo.sh` at 17:00 `Africa/Harare`; it runs
+  `workspace/cron/genaie-leads-promo/post_ad.py`, a deterministic (no-agent) job
+  that posts the fixed Genaie lead-generation ad ("we generate potential customers;
+  you choose how you pay" — pay per lead, fixed monthly, or a % of revenue) to the
+  WhatsApp group JIDs listed in `workspace/cron/genaie-leads-promo/targets.json`.
+  This is a separate campaign from `genaie-promo` above (later slot, own image and
+  copy), reusing the same shared `promo_broadcast` delivery engine
 - writes `/home/joseph/openclaw-deploy/.last-successful-deploy.json` only after all
   required readiness, health, and reconciliation steps finish successfully
 

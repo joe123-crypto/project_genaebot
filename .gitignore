@@ -65,6 +65,13 @@
 !workspace/cron/genaie-promo/assets/
 !workspace/cron/genaie-promo/assets/*.png
 
+# Genaie lead-generation promo campaign: editable target list + the ad image
+# (developer-owned, deployed with the workspace). Separate 17:00 cron from
+# genaie-promo above.
+!workspace/cron/genaie-leads-promo/targets.json
+!workspace/cron/genaie-leads-promo/assets/
+!workspace/cron/genaie-leads-promo/assets/*.png
+
 # Service docs and source helpers.
 !workspace/docs/
 !workspace/docs/**
