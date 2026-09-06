@@ -119,7 +119,12 @@ so the plugin's runJsonCommand always parses. Errors go through
 
     cvMakerPriceText        default "US$5"
     cvMakerPaymentDetails   default "EcoCash +263783496308 (Charlene Anika)"
+    cvMakerPaymentMethod    default "EcoCash"
     cvMakerScript           default "~/.openclaw/workspace/bin/cv-maker"
+
+`cvMakerPaymentMethod` is the method alone (no account number), disclosed in the
+intro before the interview so a buyer knows the price and how they pay early.
+`cvMakerPaymentDetails` (the full payee) is still only shown at the payment step.
 
 configSchema has additionalProperties:false, so every key must be declared or
 deploy/test_plugin_config_schema.py fails.

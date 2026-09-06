@@ -163,16 +163,35 @@ async function withFakeOpenclaw(fn) {
   }
 }
 
-test("startCvOrder pins the sender to the CV flow and introduces it", async () => {
+test("startCvOrder pins the sender to the CV flow and introduces it with price and method", async () => {
   const api = apiFor();
   const reply = await startCvOrder(api, USER);
 
   assert.equal(reply.handled, true);
   assert.match(reply.text, /CV/);
+  // Price and payment method are disclosed up front, before the interview.
+  assert.match(reply.text, /US\$5/);
+  assert.match(reply.text, /EcoCash/i);
   assert.doesNotMatch(reply.text, /—/);
   const state = loadServiceState(api, USER);
   assert.equal(state.service, CV_SERVICE);
   assert.equal(state.step, CV_STEP_INTERVIEW);
+});
+
+test("the intro reflects configured price and method but withholds the account", async () => {
+  const api = apiFor({
+    cvMakerPriceText: "US$7",
+    cvMakerPaymentMethod: "TestCash",
+    cvMakerPaymentDetails: "TestCash 0000 (Test Payee)",
+  });
+
+  const reply = await startCvOrder(api, USER);
+
+  assert.match(reply.text, /US\$7/);
+  assert.match(reply.text, /TestCash/);
+  // The full payee (account number and name) is held back to the payment step.
+  assert.doesNotMatch(reply.text, /0000/);
+  assert.doesNotMatch(reply.text, /Test Payee/);
 });
 
 test("a CV flow turn is relayed to the CLI and answers with its reply", async () => {

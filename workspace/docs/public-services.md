@@ -39,7 +39,7 @@ model-visible operational tool is `public_service`, declared by the
 2. CV maker
    - Active. Paid: US$5, payable before the CV is released.
    - For users who just want a professional CV made, without enrolling in Job Scout. No account link, Gmail, or saved profile is needed.
-   - The gate interviews the user and collects their details, then asks for payment. Once an admin confirms the payment the CV is built and sent back here as a PDF.
+   - The gate states the price and the payment method up front, before interviewing, so a user who does not want to pay bounces early. It then collects their details and sends the full payment details once the interview is done. Once an admin confirms the payment the CV is built and sent back here as a PDF.
    - Their answers are held only until the order is settled, then deleted along with the rendered CV. Nothing is kept afterwards.
    - Menu option 2 runs this automatically. Options 1, 3 and 4 remain manual handoffs.
    - Follow `/home/joseph/.openclaw/workspace/docs/cv-maker-onboarding.md` exactly.
