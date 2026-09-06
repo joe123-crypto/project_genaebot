@@ -311,6 +311,33 @@ configured channels. The script verifies every channel identity, starts the list
 installs a 15-minute health check. Media-only posts are discarded because this
 version deliberately does not perform OCR.
 
+### Group job feeds (Vacancy Lamp and Hustlers Marketplace)
+
+The daily dispatch also writes a broad, deduplicated cache of Zimbabwe job
+adverts (VacancyMail, iHarare, the WhatsApp Channels above, and the other broad
+sources), and a separate delivery-only cron posts from that cache to a WhatsApp
+group — the source is discovery; delivery just reads the cache. Two standalone
+installers register these delivery crons (they are not part of the automatic
+gateway deploy):
+
+- `./deploy/install-job-scout-group-feed.sh` — posts the full daily feed (up to
+  15 jobs) to the main jobs group (Vacancy Lamp) at `09:20 Africa/Harare`. Set
+  `JOB_SCOUT_GROUP_FEED_TARGET` to the group JID (`120…@g.us`), or
+  `JOB_SCOUT_GROUP_FEED_GROUP_QUERY` once the bot is a member and the group
+  appears in the OpenClaw WhatsApp directory.
+- `./deploy/install-job-scout-hustlers-feed.sh` — posts **one job per day** from
+  the same cache to the **Hustlers Marketplace** group at `09:40 Africa/Harare`,
+  alongside the jobs-group invite link so members can join for more. Set
+  `JOB_SCOUT_HUSTLERS_FEED_TARGET` to its group JID, or leave
+  `JOB_SCOUT_HUSTLERS_FEED_GROUP_QUERY` (default `Hustlers Marketplace`) to
+  resolve it from the directory. Override the appended invite with
+  `JOB_SCOUT_HUSTLERS_FEED_INVITE_URL` (defaults to the main
+  `JOB_SCOUT_GROUP_FEED_INVITE_URL`), and the daily cap with
+  `JOB_SCOUT_HUSTLERS_FEED_MAX_MESSAGES` (default `1`).
+
+Delivery is tracked per target, so a job posted to one group is still eligible
+for the other; each group only ever receives a given advert once.
+
 The deploy script used by both paths:
 
 - shows Git status and diff stats
