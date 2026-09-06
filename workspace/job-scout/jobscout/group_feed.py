@@ -269,19 +269,60 @@ def load_latest_cache(
   return data
 
 
-def load_delivered_state(root: Path = DEFAULT_GROUP_FEED_ROOT) -> dict:
-  path = delivered_state_path(root)
-  if not path.exists():
-    return {"schemaVersion": 1, "updatedAt": None, "delivered": {}}
-  data = _load_json(path)
+# Schema 1 tracked delivery as a single flat {candidateKey: record} map, which is
+# only correct for one group. Schema 2 nests delivery per target
+# ({target: {candidateKey: record}}) so the same cached feed can be delivered
+# independently to more than one group (e.g. the main jobs group plus Hustlers
+# Marketplace) without a send to one group suppressing the same job in another.
+DELIVERED_STATE_SCHEMA_VERSION = 2
+
+
+def _migrate_delivered_state(data: dict) -> dict:
+  """Return the state with a per-target ``delivered`` map, migrating schema 1.
+
+  A schema-1 file stores ``{candidateKey: record}``; each record already carries
+  its own ``target``, so a legacy entry is re-filed under that target. State that
+  is already schema 2 (or empty) is returned unchanged apart from the version bump.
+  """
   delivered = data.get("delivered")
   if not isinstance(delivered, dict):
     raise SystemExit("Job Scout group-feed delivered state has no delivered object")
+  if data.get("schemaVersion") == DELIVERED_STATE_SCHEMA_VERSION:
+    return data
+  migrated: dict[str, dict] = {}
+  for key, record in delivered.items():
+    if not isinstance(record, dict):
+      continue
+    target = str(record.get("target") or "").strip()
+    migrated.setdefault(target, {})[key] = record
+  data["delivered"] = migrated
+  data["schemaVersion"] = DELIVERED_STATE_SCHEMA_VERSION
   return data
 
 
+def load_delivered_state(root: Path = DEFAULT_GROUP_FEED_ROOT) -> dict:
+  path = delivered_state_path(root)
+  if not path.exists():
+    return {"schemaVersion": DELIVERED_STATE_SCHEMA_VERSION, "updatedAt": None, "delivered": {}}
+  return _migrate_delivered_state(_load_json(path))
+
+
+def delivered_keys_for_target(state: dict, target: str) -> dict:
+  """Return the live per-target delivery map for ``target`` inside ``state``.
+
+  Mutating the returned dict updates ``state`` in place, so a caller can record
+  new deliveries and then persist them with :func:`save_delivered_state`.
+  """
+  delivered = state.setdefault("delivered", {})
+  bucket = delivered.get(target)
+  if not isinstance(bucket, dict):
+    bucket = {}
+    delivered[target] = bucket
+  return bucket
+
+
 def save_delivered_state(root: Path, state: dict) -> None:
-  state["schemaVersion"] = 1
+  state["schemaVersion"] = DELIVERED_STATE_SCHEMA_VERSION
   state["updatedAt"] = utc_now()
   if not isinstance(state.get("delivered"), dict):
     state["delivered"] = {}

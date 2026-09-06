@@ -79,7 +79,10 @@ def cmd_deliver_group_feed(args: argparse.Namespace) -> dict:
       cache = group_feed.load_latest_cache(root, args.cache_max_age_seconds)
       cache_refreshed = True
     state = group_feed.load_delivered_state(root)
-    delivered = state.setdefault("delivered", {})
+    # Track delivery per target so the same cached feed can be posted
+    # independently to more than one group (e.g. the main jobs group and Hustlers
+    # Marketplace); a send to one group must not mark the job delivered for another.
+    delivered = group_feed.delivered_keys_for_target(state, target)
     candidates = cache.get("candidates") if isinstance(cache.get("candidates"), list) else []
     pending = [
       candidate

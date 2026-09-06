@@ -137,6 +137,23 @@ class JobScoutDeploymentTests(unittest.TestCase):
     self.assertIn("@g.us", installer)
     self.assertNotIn("deliver-group-feed", main_installer)
 
+  def test_hustlers_feed_scheduler_posts_one_job_per_day_from_shared_cache(self) -> None:
+    installer = (ROOT / "deploy/install-job-scout-hustlers-feed.sh").read_text(encoding="utf-8")
+
+    self.assertIn('NAME="job-scout-hustlers-feed"', installer)
+    self.assertIn('CRON_EXPR="40 9 * * *"', installer)
+    self.assertIn('"deliver-group-feed"', installer)
+    self.assertIn('"--refresh-if-stale"', installer)
+    self.assertIn('"--max-messages"', installer)
+    # One job per day is the whole point of this cron.
+    self.assertIn('MAX_MESSAGES="${JOB_SCOUT_HUSTLERS_FEED_MAX_MESSAGES:-1}"', installer)
+    self.assertIn("JOB_SCOUT_HUSTLERS_FEED_TARGET", installer)
+    self.assertIn("directory groups list --channel whatsapp", installer)
+    self.assertIn("@g.us", installer)
+    # The appended invite link defaults to the shared main jobs-group invite.
+    self.assertIn('INVITE_URL="${JOB_SCOUT_HUSTLERS_FEED_INVITE_URL:-$MAIN_INVITE_URL}"', installer)
+    self.assertIn('"--invite-url"', installer)
+
   def test_installer_adds_new_cron_before_removing_old_ones(self) -> None:
     installer = (ROOT / "deploy/install-job-scout.sh").read_text(encoding="utf-8")
 

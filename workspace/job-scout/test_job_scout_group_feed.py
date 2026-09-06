@@ -440,13 +440,92 @@ class GroupFeedTests(unittest.TestCase):
       channel_fetch.assert_not_called()
       board_fetch.assert_not_called()
       state = json.loads((root / "delivered.json").read_text(encoding="utf-8"))
-      self.assertEqual(len(state["delivered"]), 1)
+      self.assertEqual(state["schemaVersion"], 2)
+      self.assertEqual(len(state["delivered"]["120363000000000000@g.us"]), 1)
 
       with mock.patch.object(jobscout.commands_group_feed, "send_whatsapp_message") as send_again:
         second = job_scout.cmd_deliver_group_feed(args)
       self.assertEqual(second["sentCount"], 0)
       self.assertEqual(second["skippedCount"], 1)
       send_again.assert_not_called()
+
+  def test_delivered_state_is_tracked_per_target(self) -> None:
+    # The same cached job must be deliverable to two groups independently: a send
+    # to the first group must not suppress it for the second (Hustlers Marketplace).
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      candidate = self.candidate()
+      jobscout.group_feed.write_group_feed_cache("cache-run", [candidate], {}, root)
+
+      def args_for(target: str) -> argparse.Namespace:
+        return argparse.Namespace(
+          target=target,
+          invite_url="https://chat.whatsapp.com/example",
+          group_feed_root=root,
+          cache_max_age_seconds=3600,
+          max_messages=1,
+          send_delay_seconds=0,
+          dry_run=False,
+        )
+
+      primary = "120363000000000000@g.us"
+      hustlers = "120363111111111111@g.us"
+      with mock.patch.object(jobscout.commands_group_feed, "send_whatsapp_message", return_value={"messageId": "wa"}) as send:
+        first = job_scout.cmd_deliver_group_feed(args_for(primary))
+        second = job_scout.cmd_deliver_group_feed(args_for(hustlers))
+
+      self.assertEqual(first["sentCount"], 1)
+      self.assertEqual(second["sentCount"], 1)
+      self.assertEqual(send.call_count, 2)
+      state = json.loads((root / "delivered.json").read_text(encoding="utf-8"))
+      key = jobscout.group_feed.candidate_delivery_key(candidate)
+      self.assertIn(key, state["delivered"][primary])
+      self.assertIn(key, state["delivered"][hustlers])
+
+      # A repeat run for either target now skips (already delivered to that group).
+      with mock.patch.object(jobscout.commands_group_feed, "send_whatsapp_message") as send_again:
+        repeat = job_scout.cmd_deliver_group_feed(args_for(hustlers))
+      self.assertEqual(repeat["sentCount"], 0)
+      self.assertEqual(repeat["skippedCount"], 1)
+      send_again.assert_not_called()
+
+  def test_delivered_state_migrates_legacy_flat_schema(self) -> None:
+    # A schema-1 file stored delivery as a flat {candidateKey: record} map. It must
+    # migrate to the per-target shape, preserving which jobs each group already got.
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      candidate = self.candidate()
+      key = jobscout.group_feed.candidate_delivery_key(candidate)
+      target = "120363000000000000@g.us"
+      legacy = {
+        "schemaVersion": 1,
+        "updatedAt": "2026-01-01T00:00:00+00:00",
+        "delivered": {
+          key: {"deliveredAt": "2026-01-01T00:00:00+00:00", "target": target, "role": "Poultry Supervisor"},
+        },
+      }
+      (root / "delivered.json").write_text(json.dumps(legacy), encoding="utf-8")
+
+      state = jobscout.group_feed.load_delivered_state(root)
+      self.assertEqual(state["schemaVersion"], 2)
+      self.assertIn(key, state["delivered"][target])
+
+      # The migrated legacy entry means the primary group skips this job, while a
+      # different group (Hustlers Marketplace) still receives it.
+      jobscout.group_feed.write_group_feed_cache("cache-run", [candidate], {}, root)
+      with mock.patch.object(jobscout.commands_group_feed, "send_whatsapp_message", return_value={"messageId": "wa"}) as send:
+        primary = job_scout.cmd_deliver_group_feed(argparse.Namespace(
+          target=target, invite_url="https://chat.whatsapp.com/example", group_feed_root=root,
+          cache_max_age_seconds=3600, max_messages=1, send_delay_seconds=0, dry_run=False,
+        ))
+        hustlers = job_scout.cmd_deliver_group_feed(argparse.Namespace(
+          target="120363111111111111@g.us", invite_url="https://chat.whatsapp.com/example", group_feed_root=root,
+          cache_max_age_seconds=3600, max_messages=1, send_delay_seconds=0, dry_run=False,
+        ))
+      self.assertEqual(primary["sentCount"], 0)
+      self.assertEqual(primary["skippedCount"], 1)
+      self.assertEqual(hustlers["sentCount"], 1)
+      send.assert_called_once()
 
   def test_deliver_group_feed_does_not_mark_failed_send(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
