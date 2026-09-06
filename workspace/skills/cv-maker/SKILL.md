@@ -13,9 +13,10 @@ This skill exists only to stop the agent trying to run a flow that is no longer 
 
 ## What the gate does
 
-Menu option 2 pins the sender to the CV flow. The gate then interviews them, asks for US$5, notifies
-an admin when they say they have paid, and sends the finished PDF once that admin approves. The
-order and every answer live in the gate's own store.
+Menu option 2 pins the sender to the CV flow. The gate tells the user the price and payment method up
+front, then interviews them, sends the full payment details (US$5), notifies an admin when they say
+they have paid, and sends the finished PDF once that admin approves. The order and every answer live
+in the gate's own store.
 
 ## What you must not do
 

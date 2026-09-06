@@ -81,6 +81,9 @@
       "cvMakerPaymentDetails": {
         "type": "string"
       },
+      "cvMakerPaymentMethod": {
+        "type": "string"
+      },
       "cvMakerScript": {
         "type": "string"
       },

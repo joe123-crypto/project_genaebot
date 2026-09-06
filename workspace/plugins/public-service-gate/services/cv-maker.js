@@ -16,6 +16,11 @@ const CV_MAKER_UNAVAILABLE = "The CV maker isn't available here right now. Try a
 // payment destination is configuration, so it is never written anywhere else.
 const DEFAULT_CV_PRICE_TEXT = "US$5";
 const DEFAULT_CV_PAYMENT_DETAILS = "EcoCash +263783496308 (Charlene Anika)";
+// The method alone (no account number), disclosed up front in the intro so a
+// buyer knows the price and how they will pay before investing time in the
+// interview. The full destination stays in cvMakerPaymentDetails for the payment
+// step.
+const DEFAULT_CV_PAYMENT_METHOD = "EcoCash";
 
 // Intent to have a CV/résumé created or revamped. This is about the CV DOCUMENT
 // itself, distinct from Job Scout (which is about finding and applying to jobs),
@@ -89,11 +94,19 @@ const CV_DECISION_FAILED = "That CV order couldn't be updated. Try again later."
 const CV_REVIEW_PENDING = "Your payment is with our team. You'll get your CV here once it's approved.";
 const CV_PAID_ACK = "Thanks 🙏 We're confirming your payment. Your CV will arrive here once it's approved.";
 
-const CV_INTRO = `Great, let's build your CV 📄
+// Shown before the interview starts. The price and the payment method are stated
+// up front, so a buyer who does not want to pay, or cannot use the method, bounces
+// now rather than after answering every question. The full payee (account number
+// and name) is still held back to the payment step, in cvPaymentText.
+function cvIntroText(api) {
+  const price = configText(api, "cvMakerPriceText", DEFAULT_CV_PRICE_TEXT);
+  const method = cvPaymentMethod(api);
+  return `Great, let's build your CV 📄
 
-I'll ask you a few quick questions, then send you the price and payment details.
+It costs ${price}, paid by ${method}. I'll ask you a few quick questions, then send you the exact payment details.
 
 Reply with your full name to begin.`;
+}
 
 // Deliberately narrow: only a short, unambiguous "I have paid" claim moves the
 // order on. Anything else in the payment step gets the details re-sent.
@@ -131,6 +144,13 @@ export function cvPaymentText(api) {
 Pay to: ${configText(api, "cvMakerPaymentDetails", DEFAULT_CV_PAYMENT_DETAILS)}
 
 Reply "paid" once you've sent it.`;
+}
+
+// Just the method (EcoCash), no account number: disclosed in the intro so the
+// buyer knows how they will pay before the interview, while the full payee stays
+// in cvPaymentText for the payment step.
+export function cvPaymentMethod(api) {
+  return configText(api, "cvMakerPaymentMethod", DEFAULT_CV_PAYMENT_METHOD);
 }
 
 export function isCvPaidClaim(text) {
@@ -208,7 +228,7 @@ export async function startCvOrder(api, sender) {
   saveServiceState(api, sender, CV_SERVICE, step);
   if (step === CV_STEP_PAYMENT) return { handled: true, text: cvPaymentText(api) };
   if (step === CV_STEP_APPROVAL) return { handled: true, text: CV_REVIEW_PENDING };
-  return { handled: true, text: CV_INTRO };
+  return { handled: true, text: cvIntroText(api) };
 }
 
 async function relayInterviewTurn(api, sender, text) {

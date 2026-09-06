@@ -13,23 +13,29 @@ describes the flow so an operator can reason about it; it is not a script for th
 1. The user picks option 2 from the DM menu, or asks for a CV in their own words.
 2. The gate resolves whether they already have an order in flight and resumes them at the right
    point. A returning user is never restarted from scratch.
-3. It interviews them one field at a time, collecting name, contact, skills, work experience,
+3. The intro message states the price and the payment method (for example "US$5, paid by EcoCash")
+   before any questions are asked, so a user who does not want to pay, or cannot use the method,
+   bounces up front rather than after answering the whole interview. The full payee (account number
+   and name) is not shown yet.
+4. It interviews them one field at a time, collecting name, contact, skills, work experience,
    education and referees. It does not ask for a professional summary or job descriptions: the model
    writes those itself from the facts given (with a confident, embellished framing), then shows them
    to the user to approve or edit. The interview is model-driven, so it copes with answers given out
    of order or several at once.
-4. When the interview is complete the order moves to awaiting payment and the user is given the
-   price and the payment details.
-5. The user pays out of band and replies "paid". The order moves to awaiting approval and the
+6. When the interview is complete the order moves to awaiting payment and the user is given the
+   full payment details.
+7. The user pays out of band and replies "paid". The order moves to awaiting approval and the
    configured admins are notified with the order id and the exact command to reply with.
-6. An admin replies `cv approve <id>` or `cv deny <id>` in their own chat. Approval builds the CV,
+8. An admin replies `cv approve <id>` or `cv deny <id>` in their own chat. Approval builds the CV,
    renders it to PDF and sends it to the user. A denial tells the user their payment could not be
    confirmed and leaves the conversation open.
 
 ## Payment
 
-- Price and payee are configuration, not code: `cvMakerPriceText` and `cvMakerPaymentDetails` on the
-  public-service-gate plugin. Change them there, never in a message.
+- Price and payee are configuration, not code: `cvMakerPriceText`, `cvMakerPaymentMethod` (the method
+  alone, shown up front) and `cvMakerPaymentDetails` (the full payee, shown at the payment step) on
+  the public-service-gate plugin. Change them there, never in a message. Keep `cvMakerPaymentMethod`
+  consistent with the method named in `cvMakerPaymentDetails`.
 - Payment is recorded by an admin. There is no gateway and no automatic verification, so approving
   an order is the only thing that releases a CV. Approve only after checking the money arrived.
 - Nothing is built or rendered before approval, so an unpaid order costs nothing.
