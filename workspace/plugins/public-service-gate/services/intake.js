@@ -9,6 +9,12 @@ import {
 import { notifyAdminOfIntake, notifyAdminOfLead, recordLead } from "./membership.js";
 import { isJobScoutRequest } from "./job-scout.js";
 import { CV_SERVICE, handleCvOrder, isCvMakerEnabled, isCvMakerRequest, startCvOrder } from "./cv-maker.js";
+import {
+  SELLER_SERVICE,
+  handleSellerReferral,
+  isSellerReferralRequest,
+  startSellerReferral,
+} from "./seller-referral.js";
 
 // The DM menu shown to everyone who reaches out. This array is the single source
 // of truth for the digit -> service mapping; the visible menu text lives in the
@@ -21,6 +27,7 @@ export const INTAKE_SERVICES = [
   { key: CV_SERVICE, label: "Professional CV writing" },
   { key: "genaie-marketing", label: "Digital marketing (posters, WhatsApp ads)" },
   { key: "cs-bot", label: "WhatsApp customer-service bots" },
+  { key: SELLER_SERVICE, label: "Buy a product we advertise (e.g. quarry stones)" },
 ];
 
 const GENERAL_REQUEST_LABEL = "General request";
@@ -48,6 +55,7 @@ function resolveServiceKey(text) {
   }
   if (isJobScoutRequest(text)) return "job-scout";
   if (isCvMakerRequest(text)) return CV_SERVICE;
+  if (isSellerReferralRequest(text)) return SELLER_SERVICE;
   if (CS_BOT_PATTERN.test(text)) return "cs-bot";
   if (MARKETING_PATTERN.test(text)) return "genaie-marketing";
   return "";
@@ -67,6 +75,13 @@ export async function handleIntake(api, sender, text) {
     return handleCvOrder(api, sender, text, state);
   }
 
+  // Menu option 5: the seller-referral interview is likewise a multi-turn flow.
+  // Once a sender is pinned to it, each turn is gathered here until the referral
+  // is forwarded to the seller. "menu"/"cancel" still escapes to the greeting.
+  if (state?.service === SELLER_SERVICE && !wantsMenu) {
+    return handleSellerReferral(api, sender, text, state);
+  }
+
   // Entry / re-greet branch: record the cold lead, alert the admin once, show the
   // menu. This is the only branch that does not complete the order.
   if (!awaitingSelection || wantsMenu) {
@@ -83,10 +98,14 @@ export async function handleIntake(api, sender, text) {
 
   // Second turn: the user told us what they want. Options 1, 3 and 4 are captured
   // against the resolved service, the admin is alerted with the detail, and the
-  // handoff is confirmed. Option 2 branches into the automated CV order instead.
+  // handoff is confirmed. Option 2 branches into the automated CV order, and
+  // option 5 into the automated seller-referral flow, instead.
   const serviceKey = resolveServiceKey(text);
   if (serviceKey === CV_SERVICE && isCvMakerEnabled(api)) {
     return startCvOrder(api, sender);
+  }
+  if (serviceKey === SELLER_SERVICE) {
+    return startSellerReferral(api, sender);
   }
   const label = serviceKey ? labelForKey(serviceKey) : GENERAL_REQUEST_LABEL;
   try {
