@@ -674,6 +674,47 @@ test("menu selection captures the request under the chosen service and hands off
   assert.deepEqual(saved.states, {});
 });
 
+test("menu option 5 runs the seller referral flow and forwards the lead to the seller", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-referral-"));
+  const memberStoreScript = path.join(dir, "whatsapp-invite");
+  const serviceStatePath = path.join(dir, "state.json");
+  const openclawLog = path.join(dir, "openclaw.log");
+  writeExecutable(memberStoreScript, intakeStore(path.join(dir, "member-args.txt")));
+  writeExecutable(path.join(dir, "openclaw"), `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> ${JSON.stringify(openclawLog)}\n`);
+
+  const handler = registerHandler({ memberStoreScript, serviceStatePath, greetingTemplatePath: GREETING_FILE });
+  const ctx = { channelId: "whatsapp", senderId: UNKNOWN };
+
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${dir}${path.delimiter}${previousPath}`;
+  try {
+    const menu = await handler(eventFor("hi", UNKNOWN), ctx);
+    assert.match(menu.text, MENU_PROMPT);
+
+    const intro = await handler(eventFor("5", UNKNOWN), ctx);
+    assert.match(intro.text, /what exactly/i);
+
+    const source = await handler(eventFor("20 tonnes of quarry stones", UNKNOWN), ctx);
+    assert.match(source.text, /where did you see/i);
+
+    const done = await handler(eventFor("Facebook", UNKNOWN), ctx);
+    assert.match(done.text, /seller will contact you/i);
+
+    const sent = fs.readFileSync(openclawLog, "utf8");
+    assert.match(sent, /--target \+263775489417/);
+    assert.match(sent, /Quarry stones/);
+    assert.match(sent, /20 tonnes of quarry stones/);
+    assert.match(sent, /Facebook/);
+    assert.doesNotMatch(sent, /\$|price|cost/i);
+
+    // State is cleared once the referral is handed off.
+    const saved = JSON.parse(fs.readFileSync(serviceStatePath, "utf8"));
+    assert.deepEqual(saved.states, {});
+  } finally {
+    process.env.PATH = previousPath;
+  }
+});
+
 test("free-text request is captured under the matched service label", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-intake-"));
   const memberStoreScript = path.join(dir, "whatsapp-invite");

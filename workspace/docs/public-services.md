@@ -44,6 +44,19 @@ model-visible operational tool is `public_service`, declared by the
    - Menu option 2 runs this automatically. Options 1, 3 and 4 remain manual handoffs.
    - Follow `/home/joseph/.openclaw/workspace/docs/cv-maker-onboarding.md` exactly.
 
+3. Seller referral (products Genaie advertises)
+   - Active. Menu option 5.
+   - Genaie also advertises other people's products. A customer who saw an advert
+     is asked what exactly they want and where they saw the advert, told the
+     seller will contact them soon, and their details are forwarded to the seller
+     so the seller reaches out. The current advertised product is quarry stones.
+   - The gate runs this deterministically from menu option 5. There is nothing for
+     the agent to drive, so do not interview or run any command yourself.
+   - Never quote or invent a price, and never invent any detail about the product.
+     Only relay what the customer said and the product name. If a customer asks
+     the price or product specifics, do not guess: say the seller will share those
+     when they get in touch.
+
 ## Agent-Handled Prompts
 
 Answer supported Job Scout and CV maker requests:

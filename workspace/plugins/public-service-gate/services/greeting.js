@@ -9,6 +9,7 @@ const DEFAULT_GREETING = `Hi 👋 Welcome to Genae. What do you need?
 2. CV writing & revamping
 3. Digital marketing (posters, WhatsApp ads)
 4. WhatsApp customer-service bots
+5. Buy a product we advertise (e.g. quarry stones)
 
 Reply with a number.`;
 
@@ -27,7 +28,7 @@ export function isGreetingOrServiceMenuRequest(text) {
 
 export function getServiceMenuSelection(text) {
   const compact = String(text ?? "").trim().replace(/\s+/g, " ");
-  const match = /^([1-4])[\s.)-]*$/.exec(compact);
+  const match = /^([1-5])[\s.)-]*$/.exec(compact);
   return match ? match[1] : "";
 }
 
