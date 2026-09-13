@@ -15,6 +15,18 @@ export function isWhatsAppChannel(value) {
   return channel === "whatsapp" || channel.startsWith("whatsapp:");
 }
 
+// True when an inbound message originates from a group chat rather than a 1:1 DM.
+// Keys off the core-provided `isGroup` flag (set whether or not the bot is
+// @-mentioned), with defensive fallbacks on peer.kind and a group JID (@g.us) so
+// the check holds even if field naming shifts across openclaw versions.
+export function isGroupEvent(event = {}, ctx = {}) {
+  if (event.isGroup === true || ctx.isGroup === true) return true;
+  const kind = event.peer?.kind ?? ctx.peer?.kind;
+  if (kind === "group") return true;
+  const jid = event.conversationId ?? ctx.conversationId ?? event.chatId ?? event.remoteJid ?? "";
+  return typeof jid === "string" && jid.endsWith("@g.us");
+}
+
 export function textCandidate(value) {
   if (typeof value === "string") return value;
   if (Array.isArray(value)) {
