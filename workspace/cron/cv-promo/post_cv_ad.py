@@ -47,13 +47,14 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 TARGETS_FILE = os.environ.get(
     "CV_PROMO_TARGETS", os.path.join(HERE, "targets.json")
 )
-# Two bundled ad images that alternate daily: the shared engine picks one by
-# today's ordinal parity, so a group never sees the same image two days running.
-# CV_PROMO_IMAGE overrides both (a single explicit path) for testing. Add more
-# assets to lengthen the rotation.
+# Bundled ad images that rotate daily: the shared engine picks one by today's
+# ordinal modulo the list length, so a group never sees the same image two days
+# running. CV_PROMO_IMAGE overrides the whole list (a single explicit path) for
+# testing. Add more assets to lengthen the rotation.
 _IMAGE_ASSETS = [
     os.path.join(HERE, "assets", "cv-ad.png"),
     os.path.join(HERE, "assets", "cv-ad-2.png"),
+    os.path.join(HERE, "assets", "cv-ad-3.jpg"),
 ]
 IMAGE = os.environ.get("CV_PROMO_IMAGE") or _IMAGE_ASSETS
 STATE_FILE = os.environ.get(
@@ -74,6 +75,9 @@ POST_TEXT = (
     "\U0001F4C4 CV Writing\n"
     "\U0001F504 CV Revamping\n"
     "\U0001F4BC Professional presentation\n"
+    "\n"
+    "\U0001F4B5 Only $5 (EcoCash)\n"
+    "\U0001F4C1 For samples, see the catalogue\n"
     "\n"
     "\U0001F4F2 +263785632943\n"
     "\U0001F310 genaie.site\n"
