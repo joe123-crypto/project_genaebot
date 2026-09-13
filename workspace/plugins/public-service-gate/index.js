@@ -4,6 +4,7 @@ import {
   getEventSender,
   getEventText,
   getOutboundRecipient,
+  isGroupEvent,
   isWhatsAppChannel,
   normalizePhone,
 } from "./lib/events.js";
@@ -179,6 +180,28 @@ export default {
   description: "Handles WhatsApp public-user safety and admin-managed member access control before agent dispatch.",
   version: "0.1.0",
   register(api) {
+    // Hard block: the bot never replies in group chats. Group messages are
+    // claimed and dropped before any agent dispatch, so no AI reply is ever
+    // generated — including when the bot is @-mentioned (the mention still lands
+    // in a group, and this fires first). The rule is blanket: it applies to every
+    // group, so any group the bot is later added to is covered automatically.
+    // Intentionally NOT gated on isEnabled(api): flipping the plugin config off
+    // must not re-open group replies. Proactive/CLI sends (e.g. promo broadcasts)
+    // are unaffected — this only claims inbound messages before dispatch.
+    api.on(
+      "before_dispatch",
+      async (event, ctx) => {
+        const channel = getEventChannel(event, ctx);
+        if (!isWhatsAppChannel(channel)) return;
+        if (!isGroupEvent(event, ctx)) return;
+        api.logger?.info?.(
+          "public-service-gate: group message dropped before dispatch (groups are reply-disabled)",
+        );
+        return { handled: true }; // claim + no reply + no agent dispatch
+      },
+      { priority: FAILSAFE_STOP_PRIORITY },
+    );
+
     api.registerTool(
       (ctx) => {
         if (ctx.agentId !== "public") return null;

@@ -89,14 +89,6 @@
         "accountId": "*",
         "peer": { "kind": "direct", "id": "*" }
       }
-    },
-    {
-      "agentId": "main",
-      "match": {
-        "channel": "whatsapp",
-        "accountId": "*",
-        "peer": { "kind": "group", "id": "*" }
-      }
     }
   ],
   "plugins": {
