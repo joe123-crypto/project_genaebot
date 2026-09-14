@@ -5,7 +5,8 @@
     "120363364576432272@g.us",
     "120363400161887838@g.us",
     "120363175904566195@g.us",
-    "120363428165196397@g.us"
+    "120363428165196397@g.us",
+    "120363417642755000@g.us"
   ],
   "_weekly_comment": "Groups posted to only on specific weekdays instead of daily (the cron still runs every day; these are skipped on other days). Weekdays may be names (mon, tue, wed, thu, fri, sat, sun) or ints (Mon=0 .. Sun=6). MUTANDIRI VILLAGE RESIDENTS (120363166672509962@g.us) gets the building-materials ad three times a week, on Monday, Wednesday and Friday.",
   "weekly_groups": {
