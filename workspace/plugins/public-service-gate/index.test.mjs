@@ -18,7 +18,6 @@ const ADMIN = "+213563719936";
 // The real deployed greeting/menu, so intake tests assert the wired copy.
 const GREETING_FILE = fileURLToPath(new URL("../../docs/public-greeting.txt", import.meta.url));
 const MENU_PROMPT = /reply with a number/i;
-const MENU_SERVICE = /Automatic Job & Internship searching/;
 const HANDOFF = /a team member will contact you soon/i;
 
 function registerHandler(config = {}, complete, relevanceConfig = {}) {
@@ -536,7 +535,7 @@ test("classic mode: failsafe stop command requires a one-word stop message", asy
   assert.equal(await handler(eventFor("unstoppable"), { channelId: "whatsapp", senderId: MEMBER }), undefined);
 });
 
-test("unknown sender first message shows the service menu without an LLM call", async () => {
+test("unknown sender first message is held silently for approval without an LLM call", async () => {
   let calls = 0;
   const handler = registerHandler({ greetingTemplatePath: GREETING_FILE }, async () => {
     calls += 1;
@@ -544,14 +543,13 @@ test("unknown sender first message shows the service menu without an LLM call", 
   });
   const reply = await handler(eventFor("hi", UNKNOWN), { channelId: "whatsapp", senderId: UNKNOWN });
 
+  // New (unapproved) user: message is claimed but no reply is sent — no menu.
   assert.equal(reply.handled, true);
-  assert.match(reply.text, MENU_PROMPT);
-  assert.match(reply.text, MENU_SERVICE);
-  assert.doesNotMatch(reply.text, /waiting for review/i);
+  assert.equal(reply.text, undefined);
   assert.equal(calls, 0);
 });
 
-test("unknown sender service keyword also lands on the menu", async () => {
+test("unknown sender service keyword is also held silently", async () => {
   let calls = 0;
   const handler = registerHandler({ greetingTemplatePath: GREETING_FILE }, async () => {
     calls += 1;
@@ -560,11 +558,11 @@ test("unknown sender service keyword also lands on the menu", async () => {
   const reply = await handler(eventFor("webetu", UNKNOWN), { channelId: "whatsapp", senderId: UNKNOWN });
 
   assert.equal(reply.handled, true);
-  assert.match(reply.text, MENU_PROMPT);
+  assert.equal(reply.text, undefined);
   assert.equal(calls, 0);
 });
 
-test("unknown sender unrelated text lands on the menu instead of silence", async () => {
+test("unknown sender unrelated text is held silently for approval", async () => {
   let calls = 0;
   const handler = registerHandler({ greetingTemplatePath: GREETING_FILE }, async () => {
     calls += 1;
@@ -576,7 +574,7 @@ test("unknown sender unrelated text lands on the menu instead of silence", async
   });
 
   assert.equal(reply.handled, true);
-  assert.match(reply.text, MENU_PROMPT);
+  assert.equal(reply.text, undefined);
   assert.equal(calls, 0);
 });
 
@@ -604,13 +602,14 @@ esac
     senderId: UNKNOWN,
   });
 
+  // Held silently for approval, but the cold message is still recorded as a lead.
   assert.equal(reply.handled, true);
-  assert.match(reply.text, MENU_PROMPT);
+  assert.equal(reply.text, undefined);
   const logged = fs.readFileSync(argsLog, "utf-8");
   assert.match(logged, /request --phone \+19995550123 --message hello I'm interested how do I apply/);
 });
 
-test("join codes are no longer special and just land on the menu", async () => {
+test("join codes are no longer special and are held silently for approval", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
   const memberStoreScript = path.join(dir, "whatsapp-invite");
   const argsLog = path.join(dir, "member-args.txt");
@@ -634,21 +633,77 @@ esac
   });
 
   assert.equal(reply.handled, true);
-  assert.match(reply.text ?? "", MENU_PROMPT);
+  assert.equal(reply.text, undefined);
   assert.doesNotMatch(fs.readFileSync(argsLog, "utf-8"), /redeem/);
 });
 
+// The intake menu-flow tests below model an already-approved (unlocked) member
+// walking the service menu, so this stub reports the sender as unlocked. Pending
+// non-members are exercised separately by the access-gate tests.
 function intakeStore(argsLog) {
   return `#!/usr/bin/env bash
 set -eu
 printf '%s\\n' "$*" >> "${argsLog}"
 case "$1" in
-  status) printf '{"phone":"%s","status":"unknown","unlocked":false}\\n' "$3" ;;
+  status) printf '{"phone":"%s","status":"unlocked","unlocked":true}\\n' "$3" ;;
+  request) printf '{"ok":true,"phone":"%s","status":"unlocked","changed":true,"isNew":false}\\n' "$3" ;;
+  *) exit 2 ;;
+esac
+`;
+}
+
+// Store stub for pending (not-yet-approved) users: status is pending/unlocked=false
+// and the first `request` is a new lead, so the access gate stays closed.
+function pendingIntakeStore(argsLog) {
+  return `#!/usr/bin/env bash
+set -eu
+printf '%s\\n' "$*" >> "${argsLog}"
+case "$1" in
+  status) printf '{"phone":"%s","status":"pending","unlocked":false}\\n' "$3" ;;
   request) printf '{"ok":true,"phone":"%s","status":"pending","changed":true,"isNew":true}\\n' "$3" ;;
   *) exit 2 ;;
 esac
 `;
 }
+
+test("new user gets no reply and is held for admin approval", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-intake-"));
+  const memberStoreScript = path.join(dir, "whatsapp-invite");
+  const argsLog = path.join(dir, "member-args.txt");
+  const serviceStatePath = path.join(dir, "state.json");
+  writeExecutable(memberStoreScript, pendingIntakeStore(argsLog));
+
+  const handler = registerHandler({ memberStoreScript, serviceStatePath, greetingTemplatePath: GREETING_FILE });
+  const ctx = { channelId: "whatsapp", senderId: UNKNOWN };
+
+  const reply = await handler(eventFor("hi", UNKNOWN), ctx);
+
+  // Message is claimed (agent never runs) but nothing is sent back — no menu.
+  assert.equal(reply.handled, true);
+  assert.equal(reply.text, undefined);
+
+  // The cold message is recorded as a lead so the admin can approve it.
+  const args = fs.readFileSync(argsLog, "utf-8");
+  assert.match(args, /request --phone \+19995550123/);
+  // No intake state is stored for an unapproved user.
+  assert.equal(fs.existsSync(serviceStatePath), false);
+});
+
+test("repeat message from a pending user stays silent", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-intake-"));
+  const memberStoreScript = path.join(dir, "whatsapp-invite");
+  const serviceStatePath = path.join(dir, "state.json");
+  writeExecutable(memberStoreScript, pendingIntakeStore(path.join(dir, "member-args.txt")));
+
+  const handler = registerHandler({ memberStoreScript, serviceStatePath, greetingTemplatePath: GREETING_FILE });
+  const ctx = { channelId: "whatsapp", senderId: UNKNOWN };
+
+  await handler(eventFor("hi", UNKNOWN), ctx);
+  const again = await handler(eventFor("please help", UNKNOWN), ctx);
+
+  assert.equal(again.handled, true);
+  assert.equal(again.text, undefined);
+});
 
 test("menu selection captures the request under the chosen service and hands off", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-intake-"));
@@ -739,17 +794,19 @@ test("greeting again re-shows the menu instead of completing the order", async (
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-intake-"));
   const serviceStatePath = path.join(dir, "state.json");
 
+  // An approved (unlocked) member re-showing the menu — the default store reports
+  // MEMBER as unlocked, so it clears the access gate.
   const handler = registerHandler({ serviceStatePath, greetingTemplatePath: GREETING_FILE });
-  const ctx = { channelId: "whatsapp", senderId: UNKNOWN };
+  const ctx = { channelId: "whatsapp", senderId: MEMBER };
 
-  await handler(eventFor("hi", UNKNOWN), ctx);
-  const again = await handler(eventFor("menu", UNKNOWN), ctx);
+  await handler(eventFor("hi", MEMBER), ctx);
+  const again = await handler(eventFor("menu", MEMBER), ctx);
 
   assert.match(again.text, MENU_PROMPT);
   assert.doesNotMatch(again.text, HANDOFF);
   // Still awaiting a selection, not cleared.
   const saved = JSON.parse(fs.readFileSync(serviceStatePath, "utf8"));
-  assert.equal(saved.states[UNKNOWN]?.step, "intake.awaiting_selection");
+  assert.equal(saved.states[MEMBER]?.step, "intake.awaiting_selection");
 });
 
 test("invite link requests are no longer handled deterministically", async () => {
@@ -930,13 +987,15 @@ test("admin sender still bypasses public-service gate", async () => {
   });
 });
 
-test("admin sender follows the public intake when WhatsApp admin mode is disabled", async () => {
+test("admin sender is treated as a normal unapproved user when WhatsApp admin mode is disabled", async () => {
   await withAdminMode("false", async () => {
     const handler = registerHandler({ whatsappAdminUsers: [ADMIN], greetingTemplatePath: GREETING_FILE });
     const reply = await handler(eventFor("hi", ADMIN), { channelId: "whatsapp", senderId: ADMIN });
 
+    // With admin mode off, ADMIN is not special: it flows through the public gate
+    // and, being unapproved, is held silently for approval.
     assert.equal(reply.handled, true);
-    assert.match(reply.text, MENU_PROMPT);
+    assert.equal(reply.text, undefined);
   });
 });
 
@@ -946,6 +1005,7 @@ test("admin allow command unlocks the target and is claimed", async () => {
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
       const memberStoreScript = path.join(dir, "whatsapp-invite");
       const argsLog = path.join(dir, "allow-args.txt");
+      const serviceStatePath = path.join(dir, "state.json");
       writeExecutable(
         memberStoreScript,
         `#!/usr/bin/env bash
@@ -960,7 +1020,7 @@ esac
 `,
       );
 
-      const handler = registerHandler({ whatsappAdminUsers: [ADMIN], memberStoreScript });
+      const handler = registerHandler({ whatsappAdminUsers: [ADMIN], memberStoreScript, serviceStatePath });
       const reply = await handler(eventFor(`${command} +263788390903`, ADMIN), {
         channelId: "whatsapp",
         senderId: ADMIN,
@@ -969,6 +1029,10 @@ esac
       assert.equal(reply.handled, true, `expected "${command}" to be claimed`);
       assert.match(reply.text, /Allowed \+263788390903: unlocked/);
       assert.equal(fs.readFileSync(argsLog, "utf-8").trim(), "grandfather --phone +263788390903");
+      // The approved user's intake slot is primed so their next reply lands as a
+      // menu selection (the menu itself is sent by notifyMemberAllowed).
+      const saved = JSON.parse(fs.readFileSync(serviceStatePath, "utf8"));
+      assert.equal(saved.states["+263788390903"]?.step, "intake.awaiting_selection");
     }
   });
 });
