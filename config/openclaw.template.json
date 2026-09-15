@@ -217,7 +217,7 @@
     "whatsapp": {
       "dmPolicy": "open",
       "groupPolicy": "disabled",
-      "selfChatMode": false,
+      "selfChatMode": true,
       "sendReadReceipts": false,
       "blockStreaming": true,
       "blockStreamingCoalesce": {
