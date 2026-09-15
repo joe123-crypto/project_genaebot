@@ -6,7 +6,13 @@ import {
   isStateResetRequest,
   loadGreeting,
 } from "./greeting.js";
-import { notifyAdminOfIntake, notifyAdminOfLead, recordLead } from "./membership.js";
+import {
+  isUnlockedMember,
+  memberStatus,
+  notifyAdminOfIntake,
+  notifyAdminOfLead,
+  recordLead,
+} from "./membership.js";
 import { isJobScoutRequest } from "./job-scout.js";
 import { CV_SERVICE, handleCvOrder, isCvMakerEnabled, isCvMakerRequest, startCvOrder } from "./cv-maker.js";
 import {
@@ -61,9 +67,43 @@ function resolveServiceKey(text) {
   return "";
 }
 
+// Prime the intake slot so a freshly-approved user's next reply is treated as a
+// menu selection rather than a fresh greeting. Called from the admin "allow"
+// handler right after the newly-approved user is sent the menu.
+export function primeIntakeSelection(api, sender) {
+  saveServiceState(api, sender, INTAKE_SERVICE, AWAITING_SELECTION);
+}
+
 // Deterministic DM intake: greet + menu on first touch, then capture whatever the
 // user asks for as a lead and hand off to the admin. No automated onboarding runs.
 export async function handleIntake(api, sender, text) {
+  // Access gate: only approved (unlocked) members reach the service menu. A
+  // brand-new or still-pending user gets no reply at all. The message is recorded
+  // as a lead, the admin is asked to approve them once, and the message is claimed
+  // so neither the agent, the relevance gate, nor the menu runs. The user stays
+  // silent until an admin runs "allow +<number>", which sends them the menu.
+  let status;
+  try {
+    status = await memberStatus(api, sender);
+  } catch (err) {
+    // Store overloaded: fail closed to silence; never leak the menu to a
+    // possibly-new user just because the status check couldn't complete.
+    if (isQueueFullError(err)) return { handled: true };
+    throw err;
+  }
+  if (!isUnlockedMember(status)) {
+    try {
+      const res = await recordLead(api, sender, text);
+      if (res?.isNew) await notifyAdminOfLead(api, sender, text);
+    } catch (err) {
+      if (!isQueueFullError(err)) {
+        api.logger?.warn?.(`public-service-gate: failed to record pending lead (${String(err)})`);
+      }
+      // Stay silent and claimed regardless of any lead/alert failure.
+    }
+    return { handled: true };
+  }
+
   const state = loadServiceState(api, sender);
   const awaitingSelection = state?.service === INTAKE_SERVICE && state?.step === AWAITING_SELECTION;
   const wantsMenu = isGreetingOrServiceMenuRequest(text) || isStateResetRequest(text);

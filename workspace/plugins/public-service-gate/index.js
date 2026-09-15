@@ -36,7 +36,7 @@ import {
   parseAllowCommand,
   runMemberStoreScript,
 } from "./services/membership.js";
-import { handleIntake } from "./services/intake.js";
+import { handleIntake, primeIntakeSelection } from "./services/intake.js";
 import {
   handleReservationStatus,
   handleWebetuOnboardingStart,
@@ -320,7 +320,12 @@ export default {
         if (allowTarget) {
           try {
             const res = await runMemberStoreScript(api, ["grandfather", "--phone", allowTarget]);
-            if (res.changed) await notifyMemberAllowed(api, allowTarget);
+            if (res.changed) {
+              // Send the newly-approved user the menu, then prime their intake slot
+              // so their next reply (a digit) is handled as a menu selection.
+              await notifyMemberAllowed(api, allowTarget);
+              primeIntakeSelection(api, allowTarget);
+            }
             api.logger?.info?.("public-service-gate: admin allow handled deterministically");
             return {
               handled: true,
