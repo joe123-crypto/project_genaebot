@@ -73,6 +73,12 @@
 !workspace/cron/genaie-leads-promo/assets/
 !workspace/cron/genaie-leads-promo/assets/*.png
 
+# Fruit-trees promo campaign: editable target list + the ad image (developer-owned,
+# deployed with the workspace). Daily 09:00 Africa/Harare cron.
+!workspace/cron/fruit-trees-promo/targets.json
+!workspace/cron/fruit-trees-promo/assets/
+!workspace/cron/fruit-trees-promo/assets/*.jpg
+
 # Service docs and source helpers.
 !workspace/docs/
 !workspace/docs/**
