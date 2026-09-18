@@ -415,6 +415,13 @@ The deploy script used by both paths:
   WhatsApp group JIDs listed in `workspace/cron/genaie-leads-promo/targets.json`.
   This is a separate campaign from `genaie-promo` above (later slot, own image and
   copy), reusing the same shared `promo_broadcast` delivery engine
+- registers or reconciles the daily `fruit-trees-promo` command cron via
+  `install-fruit-trees-promo.sh` at 09:00 `Africa/Harare`; it runs
+  `workspace/cron/fruit-trees-promo/post_ad.py`, a deterministic (no-agent) job that
+  posts the fixed grafted-fruit-tree for-sale ad (mango, pawpaw, orange, naartjie,
+  lemon; retail/wholesale pricing) to the WhatsApp group JIDs listed in
+  `workspace/cron/fruit-trees-promo/targets.json`, reusing the same shared
+  `promo_broadcast` delivery engine
 - writes `/home/joseph/openclaw-deploy/.last-successful-deploy.json` only after all
   required readiness, health, and reconciliation steps finish successfully
 
