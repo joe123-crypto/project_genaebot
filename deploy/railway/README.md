@@ -94,4 +94,4 @@ railway logs        # expect: [whatsapp] ... starting provider, [gateway] ready,
 ```
 
 Do **not** trigger a manual ad send to test — the CV-promo campaign delivers on its own
-cron at 10:00 Africa/Algiers.
+cron at 11:00 Africa/Harare.

@@ -79,6 +79,12 @@
 !workspace/cron/fruit-trees-promo/assets/
 !workspace/cron/fruit-trees-promo/assets/*.jpg
 
+# Borehole-drilling promo campaign: editable target list + the rotating ad images
+# (developer-owned, deployed with the workspace). Daily 08:00 Africa/Harare cron.
+!workspace/cron/borehole-drilling-promo/targets.json
+!workspace/cron/borehole-drilling-promo/assets/
+!workspace/cron/borehole-drilling-promo/assets/*.jpg
+
 # Service docs and source helpers.
 !workspace/docs/
 !workspace/docs/**
