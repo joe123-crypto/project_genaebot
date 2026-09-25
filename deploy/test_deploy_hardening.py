@@ -45,7 +45,7 @@ class ResourcePreflightTests(unittest.TestCase):
 
 
 class HealthCheckTests(unittest.TestCase):
-    def run_health(self, webetu_enabled: str, worker_mode: str = "healthy", status: str = "running") -> subprocess.CompletedProcess[str]:
+    def run_health(self, status: str = "running") -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             calls = tmp_path / "calls.log"
@@ -64,13 +64,6 @@ case "$1" in
     ;;
   exec)
     case "$*" in
-      *webetu-worker-safe*list-registrations*)
-        case "$FAKE_WORKER_MODE" in
-          healthy) printf '%s\\n' '{"status":"ok","count":0}'; exit 0 ;;
-          quota) printf '%s\\n' 'google.api_core.exceptions.ResourceExhausted: 429 Quota exceeded.' >&2; exit 1 ;;
-          failed) printf '%s\\n' 'worker unavailable' >&2; exit 1 ;;
-        esac
-        ;;
       *python3*) printf '%s\\n' '[OK] publicUsers count=0'; exit 0 ;;
       *) printf '%s\\n' '1M /home/joseph/.openclaw'; exit 0 ;;
     esac
@@ -107,9 +100,7 @@ exit 0
                         "DOCKER": str(fake_docker),
                         "FAKE_DOCKER_CALLS": str(calls),
                         "FAKE_CONTAINER_STATUS": status,
-                        "FAKE_WORKER_MODE": worker_mode,
                         "GATEWAY_PORT": str(port),
-                        "OPENCLAW_WEBETU_ENABLED_OVERRIDE": webetu_enabled,
                     },
                     capture_output=True,
                     text=True,
@@ -120,20 +111,13 @@ exit 0
                 thread.join()
                 listener.close()
 
-    def test_disabled_webetu_is_not_probed(self) -> None:
-        completed = self.run_health("false")
+    def test_healthy_container_passes(self) -> None:
+        completed = self.run_health()
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertIn("[SKIP] Webetu disabled", completed.stdout)
-        self.assertNotIn("list-registrations", completed.stdout)
-
-    def test_firestore_quota_is_a_concise_advisory(self) -> None:
-        completed = self.run_health("true", worker_mode="quota")
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertIn("[WARN] Webetu Firestore quota is exhausted", completed.stdout)
-        self.assertNotIn("Traceback", completed.stdout + completed.stderr)
+        self.assertIn("[OK] container openclaw-gateway is running", completed.stdout)
 
     def test_core_container_failure_is_hard(self) -> None:
-        completed = self.run_health("false", status="exited")
+        completed = self.run_health(status="exited")
         self.assertEqual(completed.returncode, 1)
         self.assertIn("[FAIL] container openclaw-gateway status is exited", completed.stdout)
 

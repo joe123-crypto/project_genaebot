@@ -2,7 +2,7 @@
 
 Purpose: define the central Firestore data model for Agent Genaie/OpenClaw services.
 
-The user signs in once with Google/Firebase Auth. That login creates the canonical app user. Every service subscription, credential reference, job application, Gmail connection, Webetu setup, and news preference attaches to that same user record.
+The user signs in once with Google/Firebase Auth. That login creates the canonical app user. Every service subscription, credential reference, job application, Gmail connection, and news preference attaches to that same user record.
 
 Firestore is the operational database. Firebase Auth remains the authentication provider. Credential storage is pluggable and must not be tied to Passbolt.
 
@@ -15,7 +15,7 @@ Implementation status on 2026-06-03: Agent Genaie now writes Firebase users and 
 - Do not ask a signed-in user for name or email again. Read these from `users/{userId}.profile`.
 - Store service-specific choices in subscription/service documents, not repeated user identity fields.
 - If a service needs credentials or external account access, create a `credentialRef` linked to the same `userId`.
-- Do not make Webetu, Gmail, Job Scout, or News code depend directly on Passbolt. They should depend on `credentialRefs` and a provider adapter.
+- Do not make Gmail, Job Scout, or News code depend directly on Passbolt. They should depend on `credentialRefs` and a provider adapter.
 - Never store plaintext passwords, OAuth tokens, API keys, recovery codes, or private keys in Firestore.
 - Secret material may be stored only as encrypted blobs or by reference to an external vault provider.
 
@@ -51,7 +51,6 @@ Canonical user profile. `userId` is the Firebase UID.
   serviceStatus: {
     gmail: "not_connected" | "connected" | "revoked",
     jobs: "not_subscribed" | "active" | "paused" | "disabled",
-    webetu: "not_subscribed" | "pending" | "active" | "disabled",
     news: "not_subscribed" | "active" | "paused" | "disabled"
   }
 }
@@ -80,7 +79,7 @@ Generic subscription record. Use deterministic ID: `${userId}_${service}`.
 {
   subscriptionId: string,
   userId: string,
-  service: "jobs" | "webetu" | "news" | "gmail" | string,
+  service: "jobs" | "news" | "gmail" | string,
   status: "pending" | "active" | "paused" | "disabled",
   createdAt: Timestamp,
   updatedAt: Timestamp,
@@ -129,7 +128,7 @@ Provider-independent credential reference. Services read credentials through a p
 {
   credentialRefId: string,
   userId: string,
-  service: "gmail" | "webetu" | "jobs" | string,
+  service: "gmail" | "jobs" | string,
   purpose: "oauth_token" | "username_password" | "api_key" | "session" | string,
 
   provider: {
@@ -164,7 +163,7 @@ Provider reference examples:
 // Infisical
 {
   type: "infisical",
-  ref: "secretPath:/users/<userId>/webetu",
+  ref: "secretPath:/users/<userId>/jobs",
   project: "genaie",
   environment: "prod"
 }
@@ -180,7 +179,7 @@ Provider reference examples:
 // Custom vault
 {
   type: "custom_vault",
-  ref: "vault://users/<userId>/webetu",
+  ref: "vault://users/<userId>/jobs",
   project: "genaie",
   environment: "prod"
 }
@@ -195,7 +194,7 @@ Tracks user-facing setup requests for credentials or OAuth permissions.
   requestId: string,
   userId: string,
   credentialRefId: string,
-  service: "webetu" | "gmail" | "jobs" | string,
+  service: "gmail" | "jobs" | string,
   channel: "whatsapp" | "web" | "admin",
   status: "created" | "sent" | "accepted" | "completed" | "expired" | "failed",
   setupUrl: string | null,
@@ -257,127 +256,6 @@ Rules:
 - Job Scout can use `users/{userId}.profile.email` automatically for applicant identity.
 - Job Scout can send from Gmail only when `gmailConnections/{userId}.connected === true`.
 - The Gmail OAuth token is stored through `credentialRefs`, not directly in service code.
-
-## Webetu
-
-### `webetuUsers/{userId}`
-
-Webetu service setup for a user.
-
-```ts
-{
-  userId: string,
-  webetuUserId: string,
-  credentialRefId: string,
-  status: "pending" | "credential_requested" | "credential_ready" | "active" | "disabled",
-  preferences: {
-    defaultRestaurant?: {
-      catalogId: string,
-      name: string,
-      nameAR: string | null,
-      nameFR: string | null,
-      idDepot: number,
-      residence: number | null,
-      wilaya: string | null,
-      breakfast: boolean | null,
-      lunch: boolean | null,
-      dinner: boolean | null,
-      source: string,
-      selectedAt: Timestamp,
-      lastVerifiedAt: Timestamp,
-      updatedAt: Timestamp
-    }
-  },
-  createdAt: Timestamp,
-  updatedAt: Timestamp
-}
-```
-
-### `webetuRestaurantCatalog/{catalogId}`
-
-Legacy/fallback restaurant catalog. New restaurant selection is user-scoped and fetched live from ONOU `/api/getdepotres` after the user has saved Webetu credentials. The database stores the confirmed selected restaurant, not a full per-user catalog.
-
-```ts
-{
-  catalogId: string,
-  name: string,
-  searchName: string,
-  idDepot: number,
-  residence: number | null,
-  wilaya: string | null,
-  active: boolean,
-  updatedAt: Timestamp
-}
-```
-
-Seeded fallback:
-
-```ts
-{
-  catalogId: "bab-ezzouar-03",
-  name: "الإقامة الجامعية 03 باب الزوار",
-  idDepot: 190,
-  residence: 5185801
-}
-```
-
-### `webetuRestaurantOverrides/{userId_YYYY-MM-DD}`
-
-One-day restaurant override requested by the user.
-
-```ts
-{
-  overrideId: string,
-  userId: string,
-  date: "YYYY-MM-DD",
-  restaurant: {
-    catalogId: string,
-    name: string,
-    nameAR: string | null,
-    nameFR: string | null,
-    idDepot: number,
-    residence: number | null,
-    wilaya: string | null,
-    breakfast: boolean | null,
-    lunch: boolean | null,
-    dinner: boolean | null,
-    source: string,
-    selectedAt: Timestamp,
-    lastVerifiedAt: Timestamp,
-    updatedAt: Timestamp
-  },
-  status: "active" | "disabled",
-  source: string,
-  createdAt: Timestamp,
-  updatedAt: Timestamp
-}
-```
-
-### `webetuState/{userId}`
-
-Webetu reservation and metadata state.
-
-```ts
-{
-  userId: string,
-  webetuUserId: string,
-  metadata: object,
-  metadataUpdatedAt: Timestamp | null,
-  lastResult: object | null,
-  history: object[],
-  updatedAt: Timestamp
-}
-```
-
-Rules:
-
-- Webetu credentials are reached through `credentialRefId`.
-- Agent Genaie dashboard saves Webetu username/password as `credentialRefs/{webetu_username_password_<userId>}` with `provider.type === "firestore_encrypted"`.
-- Webetu runtime uses Firestore encrypted credential refs; Passbolt references are historical migration/rollback records only.
-- Webetu service logic should not know whether a future credential adapter is Firestore encrypted storage, Infisical, a custom vault, or another supported provider.
-- New users choose a default restaurant after saving Webetu credentials; the helper fetches the live ONOU restaurant list through the isolated worker, and the agent stores only the confirmed selected restaurant.
-- If `preferences.defaultRestaurant` is missing, the worker must not reject the user. It falls back to `الإقامة الجامعية 03 باب الزوار` / `idDepot: 190` for backward compatibility.
-- For each reservation date, Webetu uses `webetuRestaurantOverrides` first, then `webetuUsers.preferences.defaultRestaurant`, then the fallback restaurant.
 
 ## Personalized News
 
@@ -558,11 +436,6 @@ gmailConnections.senderEmail ASC
 gmailConnections.connected ASC
 gmailConnections.userId ASC
 
-webetuUsers.userId ASC
-webetuUsers.webetuUserId ASC
-webetuUsers.status ASC
-webetuUsers.credentialRefId ASC
-
 newsSubscriptions.enabled ASC
 newsSubscriptions.userId ASC
 
@@ -583,8 +456,6 @@ cronRuns.jobId ASC, startedAt DESC
 Current local sources to migrate:
 
 - Agent Genaie Gmail tokens: `/home/joseph/projects/agent_genaie/data/tokens.json`
-- Webetu user registry: `/var/lib/webetu-worker/users.sqlite`
-- Webetu per-user state: `/var/lib/webetu-worker/wa-*.json`
 - Public news subscriptions: `/home/joseph/.openclaw/runtime/public-news/subscriptions.json`
 - Job tracker: `/home/joseph/.openclaw/workspace/jobs/tracker.json`
 - Cron jobs/state/runs: `/home/joseph/.openclaw/cron/jobs.json`, `jobs-state.json`, `runs/*.jsonl`

@@ -1,7 +1,7 @@
 // Keyword-based relevance classifier — the default gate mode (see index.js),
 // the fast, free counterpart to lib/embedding-classifier.js. It normalizes the
-// message and matches it against curated keyword/example/allow-phrase lists plus
-// the Webetu restaurant-name heuristics, all read from plugin config.
+// message and matches it against curated keyword/example/allow-phrase lists,
+// all read from plugin config.
 //
 // Design notes (same contract as embedding-classifier.js):
 //   * Pure: no dependency back on index.js. It reads plugin config off `api`
@@ -29,24 +29,6 @@ const DEFAULT_SHORT_CONTINUATION_KEYWORDS = [
   "thanks",
   "thank you",
 ];
-const DEFAULT_RESTAURANT_NAME_KEYWORDS = [
-  "مطعم",
-  "اقامة",
-  "إقامة",
-  "الإقامة",
-  "الاقامة",
-  "جامعية",
-  "جامعي",
-  "سرير",
-  "restaurant",
-  "resto",
-  "residence",
-  "résidence",
-  "cite",
-  "cité",
-  "universitaire",
-];
-const DEFAULT_RESTAURANT_NAME_MAX_LENGTH = 180;
 // Generic acknowledgements / fillers that appear in the curated allow-list but
 // must never allow a message as a substring (e.g. "ok so what's the weather"
 // contains "ok"). They are kept in the list but only match an exact whole
@@ -158,30 +140,6 @@ export function keywordMatch(api, normalized) {
     if (!e) continue;
     // Match either direction so short user messages still hit longer examples.
     if (normalized.includes(e) || e.includes(normalized)) return true;
-  }
-  return false;
-}
-
-function getRestaurantNameKeywords(api) {
-  const cfg = getPluginConfig(api);
-  const configured = Array.isArray(cfg.restaurantNameKeywords)
-    ? cfg.restaurantNameKeywords.map(normalizeText).filter(Boolean)
-    : [];
-  return configured.length > 0 ? configured : DEFAULT_RESTAURANT_NAME_KEYWORDS.map(normalizeText);
-}
-
-export function restaurantNameMatch(api, text, normalized) {
-  const compact = String(text ?? "").trim().replace(/\s+/g, " ");
-  if (!compact || compact.length > DEFAULT_RESTAURANT_NAME_MAX_LENGTH) return false;
-  if (getRestaurantNameKeywords(api).some((kw) => kw && normalized.includes(kw))) return true;
-
-  // Algerian Webetu restaurant names are often sent as residence shorthand,
-  // e.g. "RU 2000 Lits Tipaza" for "Residence Universitaire ...".
-  if (/\br\.?\s*u\.?\b/i.test(compact) && (/\d/.test(compact) || /\b(?:lit|lits|bed|beds)\b/i.test(compact))) {
-    return true;
-  }
-  if (/\b(?:lits?|beds?)\b/i.test(compact) && /\b(?:tipaza|kolea|koléa|alger|bab\s*ezzouar|oued\s*smar)\b/i.test(compact)) {
-    return true;
   }
   return false;
 }

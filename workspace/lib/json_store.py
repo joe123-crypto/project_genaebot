@@ -10,10 +10,7 @@ Std-lib only, so it is importable from the OpenClaw ``--command`` cron scripts
 under ``workspace/cron/`` (which are std-lib only by contract).
 
 This is deliberately minimal: it owns the read + atomic-write primitive, not any
-particular state *shape*. The hardened private-data writer in
-``cron/webetu-meals/delivery_journal.py`` keeps its own implementation because it
-needs stronger guarantees (0600 permissions, ``fsync`` durability, exclusive
-create) that would bloat a shared helper.
+particular state *shape*.
 """
 
 import json

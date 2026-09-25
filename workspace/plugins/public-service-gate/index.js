@@ -38,16 +38,6 @@ import {
 } from "./services/membership.js";
 import { handleIntake, primeIntakeSelection } from "./services/intake.js";
 import {
-  handleReservationStatus,
-  handleWebetuOnboardingStart,
-  handleWebetuRestaurantChoice,
-  handleWebetuSetupDone,
-  isReservationStatusRequest,
-  isWebetuGuideRequest,
-  isWebetuOnboardingStartRequest,
-  isWebetuSetupDoneRequest,
-} from "./services/webetu.js";
-import {
   handleNewsRequest,
   handleNewsTopicsContinuation,
   isNewsRequest,
@@ -63,10 +53,6 @@ import {
 } from "./services/cv-maker.js";
 
 const PUBLIC_SERVICE_ACTIONS = [
-  { name: "webetu_start", service: "webetu" },
-  { name: "webetu_setup_done", service: "webetu" },
-  { name: "webetu_restaurant_choice", service: "webetu" },
-  { name: "webetu_reservation_status", service: "webetu" },
   { name: "news_start_or_update", service: "news" },
   { name: "news_topics", service: "news" },
   { name: "event_scout_start", service: "eventScout" },
@@ -88,8 +74,6 @@ function serviceDisabledReply(api) {
 function isServiceEnabled(api, service) {
   const pluginCfg = getPluginConfig(api);
   switch (service) {
-    case "webetu":
-      return pluginCfg.webetuEnabled !== false;
     case "news":
       return pluginCfg.newsEnabled !== false;
     case "eventScout":
@@ -122,10 +106,6 @@ async function runPublicServiceAction(api, sender, action, text) {
   const service = actionService(action);
   if (!service || !isServiceEnabled(api, service)) return toolText({ text: serviceDisabledReply(api) });
   switch (action) {
-    case "webetu_start": return toolText(await handleWebetuOnboardingStart(api, sender));
-    case "webetu_setup_done": return toolText(await handleWebetuSetupDone(api, sender));
-    case "webetu_restaurant_choice": return toolText(await handleWebetuRestaurantChoice(api, sender, text));
-    case "webetu_reservation_status": return toolText(await handleReservationStatus(api, sender));
     case "news_start_or_update": return toolText(await handleNewsRequest(api, sender, text));
     case "news_topics": return toolText(await handleNewsTopicsContinuation(api, sender, text));
     case "event_scout_start": return toolText(await handleEventScoutRequest(api, sender));
@@ -138,12 +118,6 @@ async function runPublicServiceAction(api, sender, action, text) {
 function isEnabled(api) {
   const pluginCfg = getPluginConfig(api);
   return pluginCfg.enabled !== false;
-}
-
-function isWebetuRequestText(text) {
-  const compact = String(text ?? "").trim().replace(/\s+/g, " ");
-  if (!compact || compact.length > 360) return false;
-  return /\b(?:webetu|meal|meals|reservation|reservations|restaurant)\b/i.test(compact);
 }
 
 function isCalendarSaveRequestText(text) {
@@ -161,14 +135,7 @@ function isDisabledServiceRequestText(api, text) {
   if (isServiceEnabled(api, "jobScout") && isJobScoutRequest(text)) return false;
   if (isServiceEnabled(api, "cvMaker") && isCvMakerRequest(text)) return false;
   return Boolean(
-    (!isServiceEnabled(api, "webetu") && (
-      isWebetuRequestText(text) ||
-      isWebetuOnboardingStartRequest(text) ||
-      isWebetuGuideRequest(text) ||
-      isWebetuSetupDoneRequest(text) ||
-      isReservationStatusRequest(text)
-    )) ||
-      (!isServiceEnabled(api, "news") && (isNewsStopRequest(text) || isNewsRequest(text))) ||
+    (!isServiceEnabled(api, "news") && (isNewsStopRequest(text) || isNewsRequest(text))) ||
       (!isServiceEnabled(api, "eventScout") && (isEventScoutRequest(text) || isCalendarSaveRequestText(text))) ||
       (!isServiceEnabled(api, "cvMaker") && isCvMakerRequest(text)),
   );

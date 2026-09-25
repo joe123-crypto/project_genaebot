@@ -143,7 +143,7 @@ test("embedding mode (config): off-topic message is rejected through the handler
     senderId: MEMBER,
   });
   assert.equal(reply.handled, true);
-  assert.match(reply.text, /Webetu meal reservations/);
+  assert.match(reply.text, /personalized news/);
 });
 
 test("embedding mode (config): service message passes through the handler", async () => {

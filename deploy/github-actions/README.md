@@ -238,10 +238,8 @@ cd /home/joseph/projects/genaebot
 sudo /usr/local/sbin/openclaw-prod-deploy "$PWD"
 ```
 
-The source-controlled health check skips Webetu entirely when its public
-feature flag is disabled. When Webetu is enabled, its external dependency
-health remains advisory and Firestore quota exhaustion is reported concisely.
-Core gateway/container/API failures remain hard failures.
+The source-controlled health check treats optional integrations as advisory
+only. Core gateway/container/API failures remain hard failures.
 
 Only a fully completed deploy updates:
 

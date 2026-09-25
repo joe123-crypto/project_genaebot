@@ -157,8 +157,8 @@ def cmd_start_onboarding(args: argparse.Namespace) -> dict:
   phone = normalize_phone(args.phone)
   service = str(args.service or "").strip().lower()
   channel = str(args.channel or "").strip().lower()
-  if service not in {"jobs", "webetu"}:
-    raise SystemExit("service must be jobs or webetu")
+  if service not in {"jobs"}:
+    raise SystemExit("service must be jobs")
   if channel not in {"web", "chat"}:
     raise SystemExit("channel must be web or chat")
   route = endpoint("/internal/onboarding/start")
@@ -203,7 +203,7 @@ def build_parser() -> argparse.ArgumentParser:
 
   invite = subparsers.add_parser("create-invite", help="Create a WhatsApp-to-login link invite")
   invite.add_argument("--phone", required=True, help="WhatsApp phone number")
-  invite.add_argument("--purpose", default="account", help="Service purpose label, e.g. webetu, jobs, news")
+  invite.add_argument("--purpose", default="account", help="Service purpose label, e.g. jobs, news")
   invite.add_argument("--next-path", default="/", help="Signed-in path to open after linking")
   invite.add_argument("--ttl-seconds", type=int, default=24 * 60 * 60)
   invite.add_argument("--dry-run", action="store_true")
@@ -216,7 +216,7 @@ def build_parser() -> argparse.ArgumentParser:
 
   onboarding = subparsers.add_parser("start-onboarding", help="Start or resume one service onboarding route")
   onboarding.add_argument("--phone", required=True, help="WhatsApp phone number")
-  onboarding.add_argument("--service", required=True, choices=["jobs", "webetu"])
+  onboarding.add_argument("--service", required=True, choices=["jobs"])
   onboarding.add_argument("--channel", required=True, choices=["web", "chat"])
   onboarding.add_argument("--dry-run", action="store_true")
   onboarding.set_defaults(func=cmd_start_onboarding)

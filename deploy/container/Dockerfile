@@ -1,8 +1,7 @@
 # OpenClaw gateway - sandboxed container image.
 #
 # Contains only the immutable runtime: OS packages, Node, the global OpenClaw
-# CLI, Python, and the isolated webetu-worker. Durable OpenClaw state is mounted
-# at /home/joseph/.openclaw.
+# CLI, and Python. Durable OpenClaw state is mounted at /home/joseph/.openclaw.
 
 FROM node:22-bookworm-slim
 
@@ -29,13 +28,6 @@ RUN userdel -r node 2>/dev/null || true \
 
 RUN npm install -g openclaw@2026.6.34 \
  && npm cache clean --force
-
-COPY webetu-worker /tmp/webetu-worker-src
-RUN SOURCE_DIR=/tmp/webetu-worker-src \
-    OPENCLAW_USER=joseph \
-    WORKER_USER=webetu-worker \
-    bash /tmp/webetu-worker-src/scripts/install-worker-isolation.sh \
- && rm -rf /tmp/webetu-worker-src
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod 0755 /usr/local/bin/entrypoint.sh

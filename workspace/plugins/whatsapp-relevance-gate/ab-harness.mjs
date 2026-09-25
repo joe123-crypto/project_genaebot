@@ -45,10 +45,6 @@ function loadRelevanceConfig() {
 // label: "relevant" = a real service request that SHOULD pass.
 //        "irrelevant" = off-topic noise that SHOULD be blocked.
 const DEFAULT_FIXTURE = [
-  { text: "can you reserve me a meal at webetu tomorrow", label: "relevant" },
-  { text: "I'd like lunch booked at the resto u", label: "relevant" },
-  { text: "réserve-moi un repas pour demain", label: "relevant" },
-  { text: "احجز لي وجبة الغداء", label: "relevant" },
   { text: "sign me up for daily news please", label: "relevant" },
   { text: "stop sending me the news", label: "relevant" },
   { text: "what jobs are available for students", label: "relevant" },
@@ -57,9 +53,7 @@ const DEFAULT_FIXTURE = [
   { text: "what events are happening this weekend near me", label: "relevant" },
   { text: "how do I get started with this", label: "relevant" },
   { text: "i need to set up my account", label: "relevant" },
-  { text: "is there food available today", label: "relevant" },
   { text: "i am looking for work", label: "relevant" },
-  { text: "RU 2000 Lits Tipaza", label: "relevant" },
   // off-topic noise
   { text: "what's the weather like today", label: "irrelevant" },
   { text: "tell me a joke about cats", label: "irrelevant" },

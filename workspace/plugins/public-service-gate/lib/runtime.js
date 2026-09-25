@@ -3,7 +3,6 @@ import { execFile } from "node:child_process";
 export const DEFAULT_COMMAND_MAX_BUFFER = 1024 * 1024;
 export const HELPER_TIMEOUT_MS = 15000;
 export const NEWS_HELPER_TIMEOUT_MS = 10000;
-export const WEBETU_TIMEOUT_MS = 30000;
 
 const DEFAULT_BUSY_MESSAGE = `I'm busy right now. Try again shortly.`;
 
@@ -45,7 +44,6 @@ export function createLimiter({ name, maxConcurrent, maxQueue }) {
 }
 
 export const helperLimiter = createLimiter({ name: "helper", maxConcurrent: 4, maxQueue: 40 });
-export const webetuLimiter = createLimiter({ name: "webetu", maxConcurrent: 2, maxQueue: 20 });
 
 export function isQueueFullError(err) {
   return err?.name === "QueueFullError";

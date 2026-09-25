@@ -67,23 +67,17 @@ esac
             config: {
               enabled: true,
               serviceKeywords: [
-                "webetu",
-                "meal",
-                "reserve",
-                "reservation",
                 "news",
                 "job",
                 "event",
               ],
               serviceExamples: [
-                "reserve a meal",
-                "book a meal at webetu",
                 "subscribe me to news",
                 "find me a job",
                 "any scholarships",
                 "what events are near me",
               ],
-              serviceSummary: "Webetu meals, personalized news, local events, and job scouting",
+              serviceSummary: "personalized news, local events, and job scouting",
               useLlmFallback: true,
               ...relevanceConfig,
             },
@@ -142,12 +136,12 @@ test("public service tool is exposed only to the public WhatsApp agent with a tr
 });
 
 test("disabled public services are omitted from the public service tool schema", async () => {
-  const handler = registerHandler({ webetuEnabled: false, newsEnabled: false, eventScoutEnabled: false });
+  const handler = registerHandler({ newsEnabled: false, eventScoutEnabled: false });
   const tool = handler.publicTool({ agentId: "public", requesterSenderId: MEMBER, messageChannel: "whatsapp" });
 
   assert.deepEqual(tool.parameters.properties.action.enum, ["job_scout_start_or_status"]);
 
-  const result = await tool.execute("test", { action: "webetu_start" });
+  const result = await tool.execute("test", { action: "news_start_or_update" });
   assert.match(result.content[0].text, /isn't available here right now/i);
   assert.match(result.content[0].text, /Job Scout/);
 });
@@ -157,13 +151,11 @@ test("classic mode: member disabled-service requests return unavailable", async 
   // the disabled-service guard only fires there now.
   const handler = registerHandler({
     memberGateEnabled: false,
-    webetuEnabled: false,
     newsEnabled: false,
     eventScoutEnabled: false,
   });
 
   for (const text of [
-    "webetu",
     "start personalized news",
     "setup event scouting",
     "add this event to my calendar",
@@ -179,7 +171,7 @@ test("classic mode: member disabled-service requests return unavailable", async 
 });
 
 test("classic mode: member Job Scout messages with stray disabled-service keywords reach the agent", async () => {
-  const handler = registerHandler({ memberGateEnabled: false, webetuEnabled: false, newsEnabled: false, eventScoutEnabled: false });
+  const handler = registerHandler({ memberGateEnabled: false, newsEnabled: false, eventScoutEnabled: false });
 
   for (const text of [
     "any news on my job applications?",
@@ -422,7 +414,7 @@ function writeServiceState(filePath, phone, service, step, options = {}) {
 test("failsafe stop command silently clears active service state before dispatch", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
   const serviceStatePath = path.join(dir, "state.json");
-  writeServiceState(serviceStatePath, MEMBER, "webetu", "webetu.awaiting_restaurant");
+  writeServiceState(serviceStatePath, MEMBER, "news", "news.awaiting_topics");
 
   const handler = registerHandler({ serviceStatePath });
   const reply = await handler(eventFor("stop!"), { channelId: "whatsapp", senderId: MEMBER });
@@ -452,7 +444,7 @@ test("failsafe stop command accepts transcript variants before dispatch", async 
 test("failsafe stop command handles nested live-style event fields", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
   const serviceStatePath = path.join(dir, "state.json");
-  writeServiceState(serviceStatePath, MEMBER, "webetu", "webetu.awaiting_restaurant");
+  writeServiceState(serviceStatePath, MEMBER, "news", "news.awaiting_topics");
 
   let calls = 0;
   const handler = registerHandler({ serviceStatePath }, async () => {
@@ -480,7 +472,7 @@ test("failsafe stop command suppresses late WhatsApp outbound until next inbound
 
   const stopReply = await handler(eventFor("stop"), { channelId: "whatsapp", senderId: MEMBER });
   const suppressed = await handler.messageSending(
-    { to: MEMBER, content: "Your default restaurant is Test Residence." },
+    { to: MEMBER, content: "Here is your personalized news update." },
     { channelId: "whatsapp", senderId: MEMBER },
   );
 
@@ -555,7 +547,7 @@ test("unknown sender service keyword is also held silently", async () => {
     calls += 1;
     return "IRRELEVANT";
   });
-  const reply = await handler(eventFor("webetu", UNKNOWN), { channelId: "whatsapp", senderId: UNKNOWN });
+  const reply = await handler(eventFor("job scout", UNKNOWN), { channelId: "whatsapp", senderId: UNKNOWN });
 
   assert.equal(reply.handled, true);
   assert.equal(reply.text, undefined);
@@ -899,10 +891,6 @@ raise SystemExit(2)
     "3",
     "4",
     "Done",
-    "I'm done saving credentials for webetu",
-    "start webetu",
-    "visual guide for webetu",
-    "check my reservation status",
     "stop news",
     "personalized news about AI",
     "setup event scouting",
@@ -959,15 +947,15 @@ esac
 test("classic mode: active service state no longer short-circuits member continuations", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
   const serviceStatePath = path.join(dir, "state.json");
-  writeServiceState(serviceStatePath, MEMBER, "webetu", "webetu.awaiting_restaurant");
+  writeServiceState(serviceStatePath, MEMBER, "news", "news.awaiting_topics");
 
   const handler = registerHandler({ memberGateEnabled: false, serviceStatePath });
-  for (const text of ["2", "menu", "Residence Test Restaurant", "RU 2000 Lits Tipaza"]) {
+  for (const text of ["2", "menu", "tell me more", "continue please"]) {
     const reply = await handler(eventFor(text), { channelId: "whatsapp", senderId: MEMBER });
     assert.equal(reply, undefined, `expected "${text}" to reach the agent`);
   }
   const saved = JSON.parse(fs.readFileSync(serviceStatePath, "utf8"));
-  assert.equal(saved.states[MEMBER]?.step, "webetu.awaiting_restaurant");
+  assert.equal(saved.states[MEMBER]?.step, "news.awaiting_topics");
 });
 
 test("WhatsApp message without a sender fails closed before agent dispatch", async () => {
@@ -1103,7 +1091,6 @@ test("public canned replies use the concise style", () => {
     "services/membership.js",
     "services/greeting.js",
     "services/intake.js",
-    "services/webetu.js",
     "services/news.js",
     "services/event-scout.js",
     "services/job-scout.js",
@@ -1123,7 +1110,6 @@ test("public canned replies use the concise style", () => {
     "gmail-onboarding.md",
     "job-scout-onboarding.md",
     "personalized-news-onboarding.md",
-    "webetu-onboarding.md",
   ];
   for (const file of docs) {
     const source = fs.readFileSync(new URL(`../../docs/${file}`, import.meta.url), "utf8");

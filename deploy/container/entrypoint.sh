@@ -10,7 +10,6 @@ unset OPENCLAW_HOME
 OC_DIR="/home/joseph/.openclaw"
 PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
 ENV_FILE="$OC_DIR/.env"
-WORKER_CONFIG="/etc/webetu-worker/config.json"
 export OPENCLAW_TRAJECTORY="${OPENCLAW_TRAJECTORY:-0}"
 export PYTHONDONTWRITEBYTECODE="${PYTHONDONTWRITEBYTECODE:-1}"
 
@@ -149,11 +148,6 @@ database.close()
 os.chmod(database_path, 0o600)
 PY
   log "provisioned public agent model authentication (openrouter)"
-fi
-
-# 4. Warn if the webetu worker config is still the blank template (worker won't work).
-if [ ! -f "$WORKER_CONFIG" ] || ! grep -q '[^[:space:]]' <(sed -n 's/.*firebase_project_id" *: *"\([^"]*\)".*/\1/p' "$WORKER_CONFIG" 2>/dev/null); then
-  log "WARNING: $WORKER_CONFIG looks unset — mount the real config to enable Webetu."
 fi
 
 # If a command was passed (e.g. `docker compose run --rm openclaw openclaw channels

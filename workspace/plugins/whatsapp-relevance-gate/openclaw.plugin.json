@@ -77,12 +77,6 @@
           "type": "string"
         }
       },
-      "restaurantNameKeywords": {
-        "type": "array",
-        "items": {
-          "type": "string"
-        }
-      },
       "rejectionMessage": {
         "type": "string"
       },

@@ -134,33 +134,6 @@ When Joe/admin asks to add, remove, list, sync, or check public WhatsApp users, 
 
 Do not edit repeated WhatsApp prompt entries by hand. Public WhatsApp members live in `runtime/public-service-gate/invites.json` under `members`, admin DM users stay in `plugins.entries.public-service-gate.config.whatsappAdminUsers`, and the shared prompt lives in `workspace/docs/public-whatsapp-system-prompt.txt`.
 
-### Admin: Check a User's Webetu Reservation State
-
-When Joe asks to check the reservation state or Webetu status of a user, use the **elevated exec tool** to run the worker safe wrapper. Do not guess, inspect config files, read admin.json, look in /var/lib/webetu-worker, or try to run the worker binary directly.
-
-The exec tool without elevation cannot sudo. Always use the elevated exec tool for these commands. Run in order (substitute the user's WhatsApp phone):
-
-```bash
-# 1. Verify the user is linked and get their internal user_id
-sudo -u webetu-worker /usr/local/bin/webetu-worker-safe \
-  lookup-user --phone "+263..."
-
-# 2. Confirm their credentials are stored
-sudo -u webetu-worker /usr/local/bin/webetu-worker-safe \
-  check-credentials --phone "+263..."
-
-# 3. Check their next reservation state (dry-run — no booking is made)
-sudo -u webetu-worker /usr/local/bin/webetu-worker-safe \
-  reserve --phone "+263..." --dry-run
-```
-
-Report back:
-- Whether the user is linked (`registration_status`)
-- Whether credentials are present (`has_username`, `has_password`)
-- What the next reservation would look like (`restaurant`, `meals_reserved`, `message`)
-
-Do not expose `user_id`, `source`, `provider`, or internal fields to Joe — summarise in plain language.
-
 **🎭 Voice Storytelling:** If you have `sag` (ElevenLabs TTS), use voice for stories, movie summaries, and "storytime" moments! Way more engaging than walls of text. Surprise people with funny voices.
 
 **📝 Platform Formatting:**

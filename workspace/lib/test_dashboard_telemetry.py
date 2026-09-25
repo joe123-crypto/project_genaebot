@@ -95,7 +95,7 @@ class PublishTaskStatusTests(unittest.TestCase):
             redirect_stderr(io.StringIO()) as stderr,
         ):
             ok = dashboard_telemetry.publish_task_status(
-                user_id="user-1", task_id="reserve_meals", service="webetu", status="paused",
+                user_id="user-1", task_id="search_apply_jobs", service="job_scout", status="paused",
             )
         self.assertFalse(ok)
         self.assertIn("dashboard telemetry skipped", stderr.getvalue())
@@ -123,7 +123,7 @@ class PublishTaskStatusTests(unittest.TestCase):
             redirect_stderr(io.StringIO()),
         ):
             ok = dashboard_telemetry.publish_task_status(
-                user_id="user-1", task_id="reserve_meals", service="webetu", status="paused",
+                user_id="user-1", task_id="search_apply_jobs", service="job_scout", status="paused",
             )
         self.assertFalse(ok)
         urlopen.assert_not_called()
@@ -139,7 +139,7 @@ class PublishTaskStatusTests(unittest.TestCase):
             redirect_stderr(io.StringIO()),
         ):
             ok = dashboard_telemetry.publish_task_status(
-                user_id="user-1", task_id="reserve_meals", service="webetu", status="paused",
+                user_id="user-1", task_id="search_apply_jobs", service="job_scout", status="paused",
             )
         self.assertFalse(ok)
 
@@ -174,14 +174,14 @@ class CliTests(unittest.TestCase):
             code = dashboard_telemetry.main([
                 "publish",
                 "--user-id", "user-1",
-                "--task-id", "reserve_meals",
-                "--service", "webetu",
+                "--task-id", "search_apply_jobs",
+                "--service", "job_scout",
                 "--status", "paused",
                 "--schedule-label", "Automatic runs paused",
                 "--last-run-status", "failed",
             ])
         self.assertEqual(code, 0)
-        self.assertEqual(json.loads(stdout.getvalue()), {"ok": False, "taskId": "reserve_meals"})
+        self.assertEqual(json.loads(stdout.getvalue()), {"ok": False, "taskId": "search_apply_jobs"})
 
     def test_cli_defaults_last_run_at_to_now(self):
         urlopen = mock.Mock(return_value=FakeResponse({"ok": True}))
@@ -197,7 +197,7 @@ class CliTests(unittest.TestCase):
                 "--service", "delivery",
                 "--status", "active",
                 "--last-run-status", "success",
-                "--last-run-summary", "Webetu summary delivered",
+                "--last-run-summary", "Results delivered",
             ])
         self.assertEqual(code, 0)
         payload = json.loads(urlopen.call_args.args[0].data.decode("utf-8"))

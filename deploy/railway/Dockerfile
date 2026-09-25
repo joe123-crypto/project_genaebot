@@ -11,9 +11,6 @@
 # deploy/railway/README.md for the wiring and the break-glass `railway up` path.
 #
 # Differences vs. the Compose image:
-#   * The webetu-worker isolation block is removed (Webetu is dormant here); a
-#     blank /etc/webetu-worker/config.json placeholder is baked so nothing points
-#     at a missing file.
 #   * live-source is assembled in-build instead of bind-mounted.
 #
 # Durable OpenClaw state is a Railway volume mounted at /home/joseph/.openclaw
@@ -74,12 +71,6 @@ RUN npm install -g openclaw@2026.6.34 \
 # onto the state volume on every boot (source of truth for workspace/ and the
 # agent-workspace-*/*.md context files).
 COPY --from=stage /opt/live-source /opt/live-source
-
-# Blank Webetu config so the (dormant) feature has a target and no code points at
-# a missing file. Replace with a real Firestore config only if Webetu is enabled.
-RUN mkdir -p /etc/webetu-worker \
- && printf '%s\n' '{"credential_provider":"firestore","firebase_project_id":"","firebase_service_account_json_base64":"","central_data_encryption_secret":"","central_data_key_version":"v1","firestore_webetu_ready_statuses":["active","credential_ready"],"state_dir":"/var/lib/webetu-worker","user_db_path":"/var/lib/webetu-worker/users.sqlite"}' > /etc/webetu-worker/config.json \
- && chmod 0644 /etc/webetu-worker/config.json
 
 COPY deploy/railway/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod 0755 /usr/local/bin/entrypoint.sh

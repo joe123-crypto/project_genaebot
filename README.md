@@ -114,7 +114,7 @@ Tracked categories:
 - `workspace/cron/**/*.py` and `workspace/cron/**/*.sh`
 - `workspace/docs/**`
 - custom source folders such as `account-link/`, `public-news/`,
-  `webetu-preferences/`, and `job-scout/` (including its `scrapers/`,
+  and `job-scout/` (including its `scrapers/`,
   `jobscout/`, and `channel-listener/` helper packages). Each service folder is
   staged whole by a per-service recursive glob in
   `deploy/stage-workspace.rsync` (e.g. `+ /job-scout/***`, `+ /cv-maker/***`), so
@@ -280,8 +280,8 @@ dispatcher sends email applications or submits supported website forms.
 
 ### Dashboard task telemetry
 
-After each per-user run, the Job Scout dispatch and the Webetu meals notifier
-publish a live task snapshot to Agent Genaie's `POST /internal/dashboard/tasks`
+After each per-user run, the Job Scout dispatch publishes a live task snapshot
+to Agent Genaie's `POST /internal/dashboard/tasks`
 (rendered by the signed-in dashboard) through
 `workspace/lib/dashboard_telemetry.py`. Publishing is best-effort: failures log
 one stderr warning and never change the run outcome. It reuses `APP_BASE_URL`
@@ -368,9 +368,8 @@ The deploy script used by both paths:
   with bounded retries while a changed container stabilizes
 - reconciles `openclaw-gateway-container.service` without forcing container
   recreation; unchanged inputs do not restart the gateway
-- installs and runs the source-controlled deployment health check; when Webetu is
-  disabled it does not contact the worker or Firestore, and quota exhaustion from
-  an enabled Webetu probe is an isolated warning rather than a gateway failure
+- installs and runs the source-controlled deployment health check; optional
+  integration probes are advisory warnings rather than gateway failures
 - waits for two consecutive authenticated gateway API status probes before any
   cron reconciliation, preventing transient WebSocket startup closures from
   interrupting deployment after a successful container restart
@@ -538,13 +537,7 @@ sudo /snap/bin/docker exec -u joseph openclaw-gateway \
   /home/joseph/.openclaw/workspace/bin/openclaw-cap account-link status --phone +213...
 
 sudo /snap/bin/docker exec -u joseph openclaw-gateway \
-  /home/joseph/.openclaw/workspace/bin/openclaw-cap cron run webetu-meals --dry-run
-
-  # Inspect private pending summaries without exposing phone numbers or message bodies.
-  /home/joseph/.openclaw/workspace/bin/openclaw-cap cron run webetu-meals --list-failed
-
-  # Explicitly retry one audited delivery; retries are never automatic.
-  /home/joseph/.openclaw/workspace/bin/openclaw-cap cron run webetu-meals --retry-failed <delivery-id>
+  /home/joseph/.openclaw/workspace/bin/openclaw-cap cron run algeria-exhibitions --dry-run
 ```
 
 Rule of thumb:
@@ -567,8 +560,7 @@ runtime/
 ├── public-service-gate/state.json
 └── cron-state/
     ├── algeria-exhibitions-listener/state.json
-    ├── github-issue-tracker/state.json
-    └── webetu-meals/notification.log
+    └── github-issue-tracker/state.json
 ```
 
 These files are ignored by Git and excluded from deployment staging. Under the

@@ -7,7 +7,6 @@
 #   * Adds a source-overlay sync (step 1.5) that reproduces the Compose
 #     bind-mounts (live-source/workspace + agent-workspace-*/*.md) from the image
 #     baked at /opt/live-source, because Railway has no host bind-mounts.
-#   * Drops the Webetu worker-config warning (Webetu is dormant here).
 set -euo pipefail
 
 # IMPORTANT: openclaw treats OPENCLAW_HOME as the BASE dir and appends "/.openclaw".
