@@ -7,8 +7,8 @@ agent's schedule and last-run outcomes. Telemetry must never break a run:
 every failure path logs one warning to stderr and reports False.
 
 Importable from Python (job-scout dispatch) and runnable as a CLI from bash
-cron scripts (webetu meals). Both callers resolve the server and API key via
-genaie_env, so no new configuration is required.
+cron scripts. Both callers resolve the server and API key via genaie_env, so no
+new configuration is required.
 """
 
 from __future__ import annotations
@@ -24,7 +24,6 @@ from genaie_env import api_key, endpoint
 
 
 TASK_SERVICES = {
-    "reserve_meals": "webetu",
     "search_apply_jobs": "job_scout",
     "deliver_results": "delivery",
 }

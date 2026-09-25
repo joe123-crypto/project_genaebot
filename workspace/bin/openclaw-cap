@@ -13,9 +13,7 @@ Usage:
   openclaw-cap public-news <register|disable|list-enabled|record-delivery> [args...]
   openclaw-cap public-events <register|disable|get|list-enabled|mark-synced|record-offers|clear-pending|record-delivery> [args...]
   openclaw-cap job-scout <resolve-location|stage-cv|save-profile|list-ready> [args...]
-  openclaw-cap cron run <algeria-exhibitions|github-issue-tracker|webetu-meals> [--dry-run|--list-failed|--retry-failed <delivery-id>]
-  openclaw-cap webetu <lookup-user|check-credentials|reserve> --phone <phone> [--dry-run]
-  openclaw-cap webetu-preferences <list-restaurants|get|set-default|set-override> [args...]
+  openclaw-cap cron run <algeria-exhibitions|github-issue-tracker> [--dry-run]
 EOF
 }
 
@@ -29,7 +27,6 @@ ensure_runtime() {
     "$RUNTIME/account-link" \
     "$RUNTIME/cron-state/algeria-exhibitions-listener" \
     "$RUNTIME/cron-state/github-issue-tracker" \
-    "$RUNTIME/cron-state/webetu-meals" \
     "$RUNTIME/public-events" \
     "$RUNTIME/public-news" \
     "$RUNTIME/public-service-gate"
@@ -119,61 +116,8 @@ cmd_cron() {
       export OPENCLAW_GITHUB_ISSUE_TRACKER_STATE="$RUNTIME/cron-state/github-issue-tracker/state.json"
       exec "$WORKSPACE/cron/github-issue-tracker/check_issue.sh" "$@"
       ;;
-    webetu-meals)
-      local dry_run=0
-      if [ "${1:-}" = "--dry-run" ]; then
-        dry_run=1
-        shift
-      fi
-      if [ "${1:-}" = "--list-failed" ]; then
-        [ "$#" -eq 1 ] || die "--list-failed does not accept additional arguments"
-      elif [ "${1:-}" = "--retry-failed" ]; then
-        [ "$#" -eq 2 ] || die "--retry-failed requires exactly one delivery id"
-      else
-        [ "$#" -eq 0 ] || die "unsupported webetu-meals args: $*"
-      fi
-      export WEBETU_NOTIFY_DRY_RUN="$dry_run"
-      export WEBETU_NOTIFY_LOG_FILE="$RUNTIME/cron-state/webetu-meals/notification.log"
-      exec "$WORKSPACE/cron/webetu-meals/notify-reservations.sh" "$@"
-      ;;
     *)
       die "unsupported cron job: $job"
-      ;;
-  esac
-}
-
-cmd_webetu() {
-  [ "$#" -ge 1 ] || die "webetu requires a subcommand"
-  local sub="$1"
-  shift
-  case "$sub" in
-    lookup-user|check-credentials)
-      exec sudo -n -u webetu-worker /usr/local/bin/webetu-worker-safe "$sub" "$@"
-      ;;
-    reserve)
-      local has_dry_run=0
-      for arg in "$@"; do
-        if [ "$arg" = "--dry-run" ]; then
-          has_dry_run=1
-        fi
-      done
-      [ "$has_dry_run" = "1" ] || die "direct webetu reserve requires --dry-run"
-      exec sudo -n -u webetu-worker /usr/local/bin/webetu-worker-safe reserve "$@"
-      ;;
-    *)
-      die "unsupported webetu subcommand: $sub"
-      ;;
-  esac
-}
-
-cmd_webetu_preferences() {
-  [ "$#" -ge 1 ] || die "webetu-preferences requires a subcommand"
-  case "$1" in
-    list-restaurants|get|set-default|set-override)
-      exec "$WORKSPACE/bin/webetu-preferences" "$@"
-      ;;
-    *)
-      die "unsupported webetu-preferences subcommand: $1"
       ;;
   esac
 }
@@ -208,14 +152,6 @@ main() {
     cron)
       shift
       cmd_cron "$@"
-      ;;
-    webetu)
-      shift
-      cmd_webetu "$@"
-      ;;
-    webetu-preferences)
-      shift
-      cmd_webetu_preferences "$@"
       ;;
     -h|--help|help)
       usage

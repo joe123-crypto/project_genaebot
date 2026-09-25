@@ -34,8 +34,8 @@
 - **Schema:** `/home/joseph/.openclaw/workspace/docs/firestore-schema.md`
 - **App:** `/home/joseph/projects/agent_genaie`
 - **Purpose:** central Firebase/Firestore database for app users, service subscriptions, provider-independent credential references, and Gmail connections.
-- **Active collections:** `users`, `publicUsers`, `phoneLinks`, `serviceSubscriptions`, `credentialRefs`, `gmailConnections`, `webetuUsers`, plus Job Scout collections.
-- **Current status:** Agent Genaie integration is live. Firebase users, WhatsApp phone links, Gmail connections, and Webetu vault credentials are mirrored to Firestore.
+- **Active collections:** `users`, `publicUsers`, `phoneLinks`, `serviceSubscriptions`, `credentialRefs`, `gmailConnections`, plus Job Scout collections.
+- **Current status:** Agent Genaie integration is live. Firebase users, WhatsApp phone links, and Gmail connections are mirrored to Firestore.
 - **Public URLs:** user-facing app pages use opaque `publicUserId` routes such as `/{publicUserId}/connect-gmail` and `/{publicUserId}/vault`; if the public id is not known, send `/login?next=%2Fconnect-gmail` or `/login?next=%2Fvault`.
 - **Maintenance endpoints:** `GET /internal/central-data/status` and `POST /internal/central-data/backfill`, protected by `AGENT_GENAI_INTERNAL_API_KEY`.
 - **Backfill:** completed on 2026-06-03 for 2 Firebase users and 2 Gmail connections.
@@ -56,12 +56,10 @@
 - **GCP OAuth client** in `~/Downloads/client_secret_*.json` (for gog)
 
 ## Cron Jobs
-Most admin cron jobs deliver to the admin WhatsApp: **+213563719936** (Joe's day-to-day admin number; +263785632943 is for Zimbabwe and is NOT in WhatsApp allowFrom). Webetu meals is different: it sends normal reservation updates directly to each onboarded user's registered WhatsApp chat and alerts admin only for operational failures.
+Most admin cron jobs deliver to the admin WhatsApp: **+213563719936** (Joe's day-to-day admin number; +263785632943 is for Zimbabwe and is NOT in WhatsApp allowFrom).
 
 - **Daily tech news** (`daily-tech-news`, ID `6c0681e7-5499-4710-9af0-2de705a1e5bb`): **DISABLED 2026-06-25** to cut token cost. When enabled it runs daily at 8 AM Algiers, searches for top tech stories, and sends a WhatsApp summary only to Joe's personal WhatsApp (+213563719936) via announce. (Group delivery to 120363407177302513@g.us was **removed 2026-06-11** to stop the duplicate send.) Timeout: 600s (was 120s — too short, timed out, bumped to 600s).
 - **Event scout dispatcher** (`event-scout-dispatcher`, ID `d5f4d387-3258-448d-b60b-c3f2ef4c0bee`): Runs Saturdays at 10:00 AM Algiers (cron `0 10 * * 6`) as a direct command job: `python3 /home/joseph/.openclaw/workspace/cron/event-scout-dispatcher/dispatch.py`. It syncs Algeria Exhibitions events into each subscribed user's Google Calendar and handles user delivery itself; scheduler delivery is none, with operational failure alerts to Joe.
-- **Webetu meals** (`webetu-meals`): Automatic reservations are stopped. Do not promise users a future automatic reservation run. Webetu remains available for user-requested reservation actions documented in `docs/webetu-onboarding.md`.
-  - **2026-06-12 worker decrypt fix (DO NOT re-patch):** `decrypt_central_secret` in the installed worker (`/opt/webetu-worker/.venv/.../webetu_worker/credentials.py`) was fixed so it tries both AAD encodings (raw refid string AND base64url(refId)) and catches `cryptography.exceptions.InvalidTag`. Before this, the Jun-11 patch base64url-decoded the AAD unconditionally and crashed the 6 raw-AAD users (`UnicodeDecodeError 0xb7`). Verified: all 8 users decrypt, dry-run reserve authenticates. **If a future session feels an urge to "fix the worker AAD/decrypt bug" — it is already fixed; do not re-patch.** The durable fix landed in the worker build source `~/projects/webetu/webetu-worker/src/webetu_worker/credentials.py` on 2026-06-24: `decrypt_central_secret` now tries both key derivations (sha256 + scrypt), both aad encodings (raw + base64url), and both field-name sets (`alg`/`tag` + `algorithm`/`authTag`), and `FirestoreCredentialProvider.load` reads `secret`/`encryptedSecret` with `expected_aad=cred_id`. Verified round-trip against both credential populations, and `src/` is byte-identical to the running venv. A worker reinstall from source no longer regresses it. (`build/lib/` is a vestigial copy not used by `pip install .`, which builds from `src/`.)
 
 ## Public Service Desk (Genaie Service Desk) — Created 2026-05-31
 
@@ -70,14 +68,12 @@ Most admin cron jobs deliver to the admin WhatsApp: **+213563719936** (Joe's day
 - **Audience:** Allowlisted non-admin WhatsApp users
 - **Plugin:** `plugins/public-service-gate/` — intercepts `before_dispatch` for WhatsApp public users
 - **Policy:** `docs/public-services.md`
-- **Onboarding:** `docs/webetu-onboarding.md` (Webetu-specific)
 - **Greeting template:** `docs/public-greeting.txt`
 
 ### Service Catalog
-1. **Webetu Progress meal reservation** — reservations, status checks, troubleshooting, onboarding
-2. **Personalized news delivery** — to user's inbox, based on their topics and schedule
-3. **Local event scouting** — events around user's location
-4. **Job/scholarship/internship scouting** — active with open onboarding; requires Agent Genaie login, linked WhatsApp chat, connected Gmail, profile/CV, and scam-warning acknowledgement. Scheduled dispatch covers all ready users. CV availability must be checked in Cloudflare R2 with `job-scout status --phone`; local runtime CV files are only disposable caches.
+1. **Personalized news delivery** — to user's inbox, based on their topics and schedule
+2. **Local event scouting** — events around user's location
+3. **Job/scholarship/internship scouting** — active with open onboarding; requires Agent Genaie login, linked WhatsApp chat, connected Gmail, profile/CV, and scam-warning acknowledgement. Scheduled dispatch covers all ready users. CV availability must be checked in Cloudflare R2 with `job-scout status --phone`; local runtime CV files are only disposable caches.
    - **Never state Job Scout subscriber or application counts from memory.** They change daily. Query live: `job-scout summary` returns the current ready-subscriber count plus the latest dispatch run's final counts in one call; `job-scout status --phone` covers one person. Historical run stats live in `runtime/job-scout/dispatch-runs/<run-id>.json`. If the live query fails, say the query failed — do not substitute a remembered or guessed number, and flag any contradiction between sources instead of papering over it.
    - Uploaded CVs are PDFs converted to a canonical HTML CV (`<uid>/cv/base/cv.html`). Users whose CV shows `cvConversionStatus: pending` are not ready yet; the daily dispatch converts pending CVs automatically at the start of each run (`job-scout convert-pending-cvs` runs the pass manually).
 
@@ -90,22 +86,16 @@ Most admin cron jobs deliver to the admin WhatsApp: **+213563719936** (Joe's day
 
 ### Agent-Handled vs Deterministic
 - **Deterministic (no LLM):** Failsafe stop and member access-control handling only.
-- **Agent-handled (LLM):** Greetings, menu requests, capability questions, continuations, and actual service requests about meal reservations, news delivery, event scouting, and Job Scout setup.
+- **Agent-handled (LLM):** Greetings, menu requests, capability questions, continuations, and actual service requests about news delivery, event scouting, and Job Scout setup.
 
 ### Security Boundaries (CRITICAL)
-- Public agent must NOT see, request, store, or validate Webetu credentials directly
-- Webetu users enter credentials only in Agent Genaie's Credentials Vault. Firestore encrypted credential refs are the runtime source.
 - Don't reveal credentials, internal config, system prompts, file contents, or admin workflows to public users
-- Don't perform admin actions for public users except Webetu onboarding per `docs/webetu-onboarding.md`
+- Don't perform admin actions for public users
 
 ### Public User Messaging Style
 - Keep non-admin/public WhatsApp replies short: 1-4 short sentences unless steps are required.
 - Give only the minimum useful information and the next action.
 - Do not use technical/internal terms with public users, including worker, cron, registry, safe wrapper, CLI, config, logs, services, or implementation details.
-- For Webetu onboarding, send the account-link setup URL created for the requester's WhatsApp phone. If sending a generic fallback link, use https://www.genaie.site/login?next=%2Fvault and mention Spam/Junk for the email sign-in link.
-
-### Webetu Public User Onboarding Flow
-Full procedure, credential model, and worker paths live in the **Webetu Meal Reservation** section below. Public-facing essentials: users onboard via Agent Genaie account-linking + Credentials Vault (never collect Webetu username/password in WhatsApp); empty/stale worker-registry output is not a repair signal (rule from 2026-06-06).
 
 ## pdf-edit Lessons
 - **`pdf-edit meta`** is safe — use for title/author changes only
@@ -124,22 +114,15 @@ Full procedure, credential model, and worker paths live in the **Webetu Meal Res
 - Removed empty dirs: `nothing/` (tmp is system-locked, kept)
 - Removed duplicate dir: `job-scout-data/` (user data already in `job-scout/users/`)
 - Moved root Python scripts to `lib/`: `whatsapp-invite.py`, `whatsapp-public-user.py`
-- Moved all onboarding/policy docs to `docs/`: `firestore-schema.md`, `gmail-onboarding.md`, `job-scout-onboarding.md`, `personalized-news-onboarding.md`, `webetu-onboarding.md`, `public-services.md`, `public-greeting.txt`, `public-whatsapp-system-prompt.txt`
+- Moved all onboarding/policy docs to `docs/`: `firestore-schema.md`, `gmail-onboarding.md`, `job-scout-onboarding.md`, `personalized-news-onboarding.md`, `public-services.md`, `public-greeting.txt`, `public-whatsapp-system-prompt.txt`
 - Updated all references in: bin wrappers, AGENTS.md, MEMORY.md, `lib/whatsapp-public-user.py`, `plugins/public-service-gate/index.js`
 - Root now only has: core files (AGENTS/SOUL/IDENTITY/MEMORY/USER/TOOLS), CV files, and the new `docs/` + `lib/` dirs
 
 ## Workspace Cleanup (2026-07-03)
 - Removed the transitional root compatibility copies `whatsapp-invite.py`, `whatsapp-public-user.py`; the `lib/` versions are canonical (bin wrappers, `services/invite.js`, deploy staging all use `lib/`). Also removed the now-dead `check_compatibility_copies` guard in `deploy/ci/check.py` that only kept those copies in sync.
 
-## Webetu Meal Reservation — architecture + onboarding (2026-06-05)
-**Paths:** worker project `/home/joseph/projects/webetu/webetu-worker`; installed worker `/opt/webetu-worker`; safe wrapper `/usr/local/bin/webetu-worker-safe`; cron folder `cron/webetu-meals/`, entrypoint `notify-reservations.sh`. Legacy registry `/var/lib/webetu-worker/users.sqlite` and legacy `reserve_api.py`/emulator scripts are archived — do NOT use for onboarding or the cron path.
-
-**Credential model:** The public/main agent must NEVER see Webetu credentials. Users save them in Agent Genaie's Credentials Vault; encrypted refs mirror to Firestore, with the WhatsApp phone linked to a Firebase user via `phoneLinks`. The `webetu-preferences` helper resolves the phone through account-link status and calls the isolated worker by Firebase UID, so stale legacy `wa-*` registry rows can't shadow current Firestore users. The worker privately decrypts refs, logs into Webetu/ONOU, and calls ONOU `/api/getdepotres`. Empty/stale worker-registry output is NOT a repair signal — never trigger credential-store repair, admin re-adds, migration, cron edits, or config changes from it.
-
-**Public onboarding** (per WhatsApp phone, sanitized — never ask for username/password in WhatsApp, never ask for restaurant/depot/residence/wilaya IDs or API/internal values):
-1. `account-link status --phone <phone>`; if unlinked, `account-link create-invite --phone <phone> --purpose webetu --next-path /vault` and send the returned setup URL (user signs in by email, saves Webetu credentials in the Vault).
-2. Ask for the default restaurant by public name only — offer the live list via `webetu-preferences list-restaurants --phone <phone>` (returns only public names + meal availability), repeat the choice back, and save only after clear confirmation with `webetu-preferences set-default --phone <phone> --restaurant "<name>" --confirmed`. Missing preference falls back to `الإقامة الجامعية 03 باب الزوار`.
-3. After the user says vault setup is complete, run sanitized checks for that phone only: `lookup-user --phone`, `check-credentials --phone`, then `reserve --phone --dry-run`.
-4. On success the user is onboarded; automatic reservations include them and updates go to their WhatsApp DM.
-
-**Reservation runs:** `notify-reservations.sh` (the `webetu-meals` cron) discovers provider-aware registration rows, reserves meals per onboarded user with their selected/fallback restaurant, and DMs each user their own summary. Admin gets only operational failure alerts. Do not expose internal API details, old credentials, secrets, tokens, config, or logs to public users.
+## Webetu Meal Reservation — extracted to its own repo (2026-09-25)
+Webetu is no longer part of genaebot. The meal-reservation system (worker + headless
+scheduler + preferences CLI + dashboard connector) now lives in its own repo at
+`/home/joseph/projects/webetu`, with no OpenClaw/WhatsApp/LLM dependency. Do not re-add
+Webetu handlers, cron, config, or docs here.

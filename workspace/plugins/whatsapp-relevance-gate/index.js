@@ -6,7 +6,6 @@ import { classifyByEmbedding } from "./lib/embedding-classifier.js";
 import {
   keywordMatch,
   normalizeText,
-  restaurantNameMatch,
   shortContinuationMatch,
 } from "./lib/keyword-classifier.js";
 
@@ -16,7 +15,7 @@ const RELEVANCE_MODES = new Set(["keyword", "embedding", "off"]);
 const PUBLIC_SERVICE_GATE_ID = "public-service-gate";
 
 const DEFAULT_REJECTION =
-  "I can help with Webetu meal reservations, personalized news, local events, " +
+  "I can help with personalized news, local events, " +
   "and job/scholarship/internship scouting. Which one do you want?";
 const DEFAULT_MAX_TEXT_LENGTH = 400;
 const DEFAULT_LLM_MAX_TOKENS = 5;
@@ -258,8 +257,8 @@ export async function classify(api, text, mode = getRelevanceMode(api)) {
 
   if (mode === "embedding") {
     // Keep the cheap, safe fast-path allows so trivial replies (menu digits,
-    // continuations, restaurant names) never burn an embedding call.
-    if (shortContinuationMatch(api, normalized) || restaurantNameMatch(api, text, normalized)) {
+    // continuations) never burn an embedding call.
+    if (shortContinuationMatch(api, normalized)) {
       cacheSet(cacheKey, "relevant");
       return "relevant";
     }
@@ -271,7 +270,7 @@ export async function classify(api, text, mode = getRelevanceMode(api)) {
   // --- keyword mode (default) — behavior unchanged ---
 
   // 1) Local keyword / example pass — free, fast, no LLM call.
-  if (keywordMatch(api, normalized) || restaurantNameMatch(api, text, normalized)) {
+  if (keywordMatch(api, normalized)) {
     cacheSet(cacheKey, "relevant");
     return "relevant";
   }

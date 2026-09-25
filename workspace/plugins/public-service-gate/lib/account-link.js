@@ -1,7 +1,6 @@
 import fs from "node:fs";
 
 import { expandHome, getPluginConfig, resolveAppPublicBaseUrl } from "./config.js";
-import { normalizePhone, parseIsoTime } from "./events.js";
 import { HELPER_TIMEOUT_MS, helperLimiter, runJsonCommand } from "./runtime.js";
 
 const DEFAULT_ACCOUNT_LINK_SCRIPT = "~/.openclaw/workspace/bin/account-link";
@@ -105,18 +104,4 @@ export function readPendingLinks(api) {
     api.logger?.debug?.(`public-service-gate: pending link cache unavailable (${String(err)})`);
   }
   return [];
-}
-
-export function hasPendingWebetuVaultLink(api, phone) {
-  const normalizedPhone = normalizePhone(phone);
-  if (!normalizedPhone) return false;
-  const now = Date.now();
-  return readPendingLinks(api).some((entry) => {
-    if (!entry || typeof entry !== "object") return false;
-    if (normalizePhone(entry.phone) !== normalizedPhone) return false;
-    if (entry.service !== "account-link" || entry.purpose !== "webetu" || entry.nextPath !== "/vault") return false;
-    if (!String(entry.setupUrl ?? "").trim()) return false;
-    const expiresAt = parseIsoTime(entry.expiresAt);
-    return Boolean(expiresAt && expiresAt.getTime() > now);
-  });
 }

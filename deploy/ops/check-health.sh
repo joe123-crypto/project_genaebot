@@ -74,48 +74,6 @@ else
   warn "no recent gateway/WhatsApp log signals found in last 300 log lines"
 fi
 
-printf '\nWebetu worker check:\n'
-if [ -n "${OPENCLAW_WEBETU_ENABLED_OVERRIDE:-}" ]; then
-  webetu_enabled="$OPENCLAW_WEBETU_ENABLED_OVERRIDE"
-else
-  webetu_enabled="$("$DOCKER_BIN" exec -i -u joseph "$CONTAINER" python3 - <<'PY' 2>/dev/null
-import json
-
-with open("/home/joseph/.openclaw/openclaw.json", encoding="utf-8") as fh:
-    config = json.load(fh)
-enabled = config.get("plugins", {}).get("entries", {}).get("public-service-gate", {}).get("config", {}).get("webetuEnabled")
-print("true" if enabled is True else "false")
-PY
-)" || webetu_enabled=unknown
-fi
-
-if [ "$webetu_enabled" = false ]; then
-  skip "Webetu disabled; worker and Firestore were not probed"
-elif [ "$webetu_enabled" = true ]; then
-  webetu_out="$(mktemp)"
-  webetu_err="$(mktemp)"
-  if timeout 25 "$DOCKER_BIN" exec -u joseph "$CONTAINER" \
-    sudo -n -u webetu-worker /usr/local/bin/webetu-worker-safe list-registrations \
-    >"$webetu_out" 2>"$webetu_err"; then
-    python3 - "$webetu_out" <<'PY'
-import json
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as fh:
-    payload = json.load(fh)
-print(f"[OK] webetu list-registrations status={payload.get('status')} count={payload.get('count')}")
-PY
-  elif grep -Eqi 'RESOURCE_EXHAUSTED|Quota exceeded|429' "$webetu_err"; then
-    warn "Webetu Firestore quota is exhausted; gateway deployment remains healthy"
-  else
-    warn "Webetu worker list-registrations failed; gateway deployment remains healthy"
-    sed 's/[[:space:]]\+/ /g' "$webetu_err" 2>/dev/null | head -3
-  fi
-  rm -f "$webetu_out" "$webetu_err"
-else
-  warn "could not determine whether Webetu is enabled; worker was not probed"
-fi
-
 printf '\nPublic user count:\n'
 if "$DOCKER_BIN" exec -i -u joseph "$CONTAINER" python3 - <<'PY'
 import json

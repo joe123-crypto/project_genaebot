@@ -39,16 +39,6 @@
       ]
     },
     {
-      "name": "Webetu public workflow",
-      "paths": [
-        "workspace/plugins/public-service-gate/services/webetu.js",
-        "workspace/bin/webetu-preferences"
-      ],
-      "requiredDocs": [
-        "workspace/docs/webetu-onboarding.md"
-      ]
-    },
-    {
       "name": "personalized news public workflow",
       "paths": [
         "workspace/plugins/public-service-gate/services/news.js",

@@ -553,7 +553,6 @@ sync_source_to_container() {
     /home/joseph/.openclaw/runtime/account-link \
     /home/joseph/.openclaw/runtime/cron-state/algeria-exhibitions-listener \
     /home/joseph/.openclaw/runtime/cron-state/github-issue-tracker \
-    /home/joseph/.openclaw/runtime/cron-state/webetu-meals \
     /home/joseph/.openclaw/runtime/public-news \
     /home/joseph/.openclaw/runtime/public-service-gate
   "$docker" cp "$STAGE_DIR/workspace/." "$CONTAINER:/home/joseph/.openclaw/workspace/"

@@ -25,12 +25,6 @@ const EMBED_INPUT_TYPE = "classification";
 // the config anchors are tuned. Config `serviceAnchors` / `offTopicAnchors`
 // override these entirely when present.
 const DEFAULT_SERVICE_ANCHORS = [
-  // meal reservation / Webetu
-  "reserve a meal at the university restaurant",
-  "book my Webetu meal for tomorrow",
-  "I want to reserve lunch at the resto u",
-  "réserver un repas au restaurant universitaire",
-  "احجز وجبة في المطعم الجامعي",
   // personalized news
   "subscribe me to personalized news",
   "start sending me daily news updates",

@@ -22,8 +22,8 @@ function registerHandler(config = {}, complete, publicServiceGateConfig = {}) {
           "whatsapp-relevance-gate": {
             config: {
               enabled: true,
-              serviceKeywords: ["webetu", "meal", "news", "job", "event"],
-              serviceSummary: "Webetu meals, personalized news, local events, and job scouting",
+              serviceKeywords: ["news", "job", "event"],
+              serviceSummary: "personalized news, local events, and job scouting",
               useLlmFallback: true,
               ...config,
             },
@@ -114,57 +114,6 @@ test("menu digits pass without an LLM call", async () => {
   assert.equal(calls, 0);
 });
 
-test("restaurant names pass without an LLM call", async () => {
-  let calls = 0;
-  const handler = registerHandler({}, async () => {
-    calls += 1;
-    return "IRRELEVANT";
-  });
-
-  const reply = await handler(eventFor("الإقامة الجامعية 03 باب الزوار"), {
-    channelId: "whatsapp",
-    senderId: MEMBER,
-  });
-
-  assert.equal(reply, undefined);
-  assert.equal(calls, 0);
-});
-
-test("Algerian residence shorthand restaurant names pass without an LLM call", async () => {
-  let calls = 0;
-  const handler = registerHandler({}, async () => {
-    calls += 1;
-    return "IRRELEVANT";
-  });
-
-  for (const text of ["RU 2000 Lits Tipaza", "ru 2000 lits tipaza"]) {
-    const reply = await handler(eventFor(text), {
-      channelId: "whatsapp",
-      senderId: MEMBER,
-    });
-
-    assert.equal(reply, undefined);
-  }
-  assert.equal(calls, 0);
-});
-
-test("bare residence shorthand does not pass as a restaurant name", async () => {
-  let calls = 0;
-  const handler = registerHandler({ useLlmFallback: false }, async () => {
-    calls += 1;
-    return "RELEVANT";
-  });
-
-  const reply = await handler(eventFor("ru"), {
-    channelId: "whatsapp",
-    senderId: MEMBER,
-  });
-
-  assert.equal(reply.handled, true);
-  assert.match(reply.text, /Webetu meal reservations/);
-  assert.equal(calls, 0);
-});
-
 test("explicit irrelevant classifier verdict still rejects", async () => {
   const handler = registerHandler({}, async () => "IRRELEVANT");
   const reply = await handler(eventFor("tell me the bitcoin price now"), {
@@ -173,7 +122,7 @@ test("explicit irrelevant classifier verdict still rejects", async () => {
   });
 
   assert.equal(reply.handled, true);
-  assert.match(reply.text, /Webetu meal reservations/);
+  assert.match(reply.text, /personalized news/);
   assert.doesNotMatch(reply.text, /Sorry, I can only help/);
 });
 
@@ -211,7 +160,7 @@ test("configured admin bypass user is filtered when WhatsApp admin mode is disab
     });
 
     assert.equal(reply.handled, true);
-    assert.match(reply.text, /Webetu meal reservations/);
+    assert.match(reply.text, /personalized news/);
     assert.equal(calls, 0);
   });
 });
@@ -249,7 +198,7 @@ test("nested live-style event fields are still classified and rejected", async (
   );
 
   assert.equal(reply.handled, true);
-  assert.match(reply.text, /Webetu meal reservations/);
+  assert.match(reply.text, /personalized news/);
 });
 
 test("WhatsApp message without a sender fails closed", async () => {
@@ -257,7 +206,7 @@ test("WhatsApp message without a sender fails closed", async () => {
   const reply = await handler({ channel: "whatsapp", content: "Tell me a joke" }, { channelId: "whatsapp" });
 
   assert.equal(reply.handled, true);
-  assert.match(reply.text, /Webetu meal reservations/);
+  assert.match(reply.text, /personalized news/);
 });
 
 test("classifier errors fail open by default", async () => {
@@ -284,5 +233,5 @@ test("classifier errors fail closed when configured", async () => {
   });
 
   assert.equal(reply.handled, true);
-  assert.match(reply.text, /Webetu meal reservations/);
+  assert.match(reply.text, /personalized news/);
 });

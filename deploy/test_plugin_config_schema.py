@@ -49,7 +49,7 @@ class PluginConfigSchemaTests(unittest.TestCase):
         )
 
         properties = manifest["configSchema"]["properties"]
-        for flag in ["webetuEnabled", "newsEnabled", "eventScoutEnabled"]:
+        for flag in ["newsEnabled", "eventScoutEnabled"]:
             self.assertEqual(properties[flag], {"type": "boolean"})
 
 
