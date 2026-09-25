@@ -12,7 +12,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/install-promo.sh"
 
 register_promo_cron \
   "cv-promo" \
-  "${CV_PROMO_CRON_EXPR:-0 10 * * *}" \
-  "${CV_PROMO_TZ:-Africa/Algiers}" \
+  "${CV_PROMO_CRON_EXPR:-0 11 * * *}" \
+  "${CV_PROMO_TZ:-Africa/Harare}" \
   "${CV_PROMO_FAILURE_ALERT_TO:-+213563719936}" \
   "/home/joseph/.openclaw/workspace/cron/cv-promo/post_cv_ad.py"

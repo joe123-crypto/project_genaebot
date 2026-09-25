@@ -387,7 +387,7 @@ The deploy script used by both paths:
   preserves the existing schedule without failing the gateway deploy, while all
   other readiness failures remain fatal
 - registers or reconciles the daily `cv-promo` command cron via
-  `install-cv-promo.sh` at 10:00 `Africa/Algiers`; it runs
+  `install-cv-promo.sh` at 11:00 `Africa/Harare`; it runs
   `workspace/cron/cv-promo/post_cv_ad.py`, a deterministic (no-agent) job that
   posts the fixed CV-service ad to the WhatsApp group JIDs listed in
   `workspace/cron/cv-promo/targets.json`. Most groups get the ad daily; groups
@@ -400,7 +400,7 @@ The deploy script used by both paths:
   job that posts the fixed building-materials for-sale ad to the WhatsApp group
   JIDs listed in `workspace/cron/building-materials-promo/targets.json`
 - registers or reconciles the daily `genaie-promo` command cron via
-  `install-genaie-promo.sh` at 13:00 `Africa/Algiers`; it runs
+  `install-genaie-promo.sh` at 14:00 `Africa/Harare`; it runs
   `workspace/cron/genaie-promo/post_ad.py`, a deterministic (no-agent) job that
   posts the fixed Genaie-services ad (group advertising, poster design, WhatsApp
   bots) to the WhatsApp group JIDs listed in
@@ -421,6 +421,16 @@ The deploy script used by both paths:
   lemon; retail/wholesale pricing) to the WhatsApp group JIDs listed in
   `workspace/cron/fruit-trees-promo/targets.json`, reusing the same shared
   `promo_broadcast` delivery engine
+- registers or reconciles the daily `borehole-drilling-promo` command cron via
+  `install-borehole-drilling-promo.sh` at 08:00 `Africa/Harare`; it runs
+  `workspace/cron/borehole-drilling-promo/post_ad.py`, a deterministic (no-agent) job
+  that posts the fixed solar-borehole installation ad (0.75HP/1HP/1.5HP/2HP DC pump
+  packages, each with tank, stand, solar and installation) to the WhatsApp group JIDs
+  listed in `workspace/cron/borehole-drilling-promo/targets.json`, rotating through four
+  bundled photos daily and reusing the same shared `promo_broadcast` delivery engine.
+  Most groups get the ad daily; groups under the file's `weekly_groups` map are posted
+  to only on their configured weekdays, which is how MUTANDIRI VILLAGE RESIDENTS gets
+  the ad three times a week (Mon, Wed and Fri)
 - writes `/home/joseph/openclaw-deploy/.last-successful-deploy.json` only after all
   required readiness, health, and reconciliation steps finish successfully
 

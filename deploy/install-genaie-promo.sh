@@ -12,7 +12,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/install-promo.sh"
 
 register_promo_cron \
   "genaie-promo" \
-  "${GENAIE_PROMO_CRON_EXPR:-0 13 * * *}" \
-  "${GENAIE_PROMO_TZ:-Africa/Algiers}" \
+  "${GENAIE_PROMO_CRON_EXPR:-0 14 * * *}" \
+  "${GENAIE_PROMO_TZ:-Africa/Harare}" \
   "${GENAIE_PROMO_FAILURE_ALERT_TO:-+213563719936}" \
   "/home/joseph/.openclaw/workspace/cron/genaie-promo/post_ad.py"
