@@ -24,9 +24,11 @@ from .constants import (
 )
 from .jsearch import (
   application_key,
+  candidate_application_url,
   closing_state,
   fetch_scraped_candidates_with_results,
   fetch_whatsapp_channel_candidates_with_results,
+  has_application_email,
   is_actionable_application_url,
   is_low_information_candidate,
   is_unactionable_channel_candidate,
@@ -90,11 +92,17 @@ def candidate_delivery_key(candidate: dict) -> str:
 
 
 def _dedupe_candidates(candidates: list[dict], limit: int) -> tuple[list[dict], dict[str, int]]:
-  output: list[dict] = []
+  # Collect every eligible, de-duplicated candidate, then order the fully
+  # structured ("quality") adverts first so the daily delivery cap posts the best
+  # ones and only falls back to the rest to fill the remaining slots. Eligibility
+  # filtering is unchanged -- expired / unactionable / low-info / title-less /
+  # duplicate adverts are still excluded entirely, never used as fill.
+  eligible: list[dict] = []
   seen_delivery_keys: set[str] = set()
   seen_company_roles: set[tuple[str, str]] = set()
   stats = {
     "eligibleCount": 0,
+    "qualityCount": 0,
     "expiredCount": 0,
     "duplicateCount": 0,
     "unactionableCount": 0,
@@ -129,13 +137,20 @@ def _dedupe_candidates(candidates: list[dict], limit: int) -> tuple[list[dict], 
     if company_role != ("unknown employer", "unknown role") and company_role in seen_company_roles:
       stats["duplicateCount"] += 1
       continue
-    if len(output) >= max(0, int(limit or 0)):
-      continue
-    enriched = {**candidate, "groupFeedKey": delivery_key}
-    output.append(enriched)
+    enriched = {
+      **candidate,
+      "groupFeedKey": delivery_key,
+      "groupFeedQuality": candidate_meets_quality_standard(candidate),
+    }
+    eligible.append(enriched)
     seen_delivery_keys.add(delivery_key)
     seen_company_roles.add(company_role)
-    stats["eligibleCount"] += 1
+
+  # Stable sort keeps source order within each tier; quality adverts come first.
+  ordered = sorted(eligible, key=lambda item: not item.get("groupFeedQuality"))
+  output = ordered[:max(0, int(limit or 0))]
+  stats["eligibleCount"] = len(output)
+  stats["qualityCount"] = sum(1 for item in output if item.get("groupFeedQuality"))
   return output, stats
 
 
@@ -912,6 +927,62 @@ def format_group_feed_message(candidate: dict, invite_url: str = DEFAULT_GROUP_F
     lines.extend(["Application", "", *application_lines])
   _append_group_join_link(lines, invite_url)
   return "\n".join(lines).strip()
+
+
+# A fully structured advert like the two reference posts needs a substantive,
+# sectioned body; this floor rejects heading-only or stub descriptions.
+QUALITY_MIN_BODY_CHARS = 120
+
+
+def _section_categories(body: str) -> set[str]:
+  """Section categories (overview/responsibilities/qualifications/other) in a body.
+
+  Classifies each heading line against :data:`SUMMARY_SECTION_KEYS`, the same map
+  the summarizer uses, so detection matches what actually gets posted.
+  """
+  categories: set[str] = set()
+  for raw in body.splitlines():
+    line = raw.strip()
+    if not line:
+      continue
+    category = SUMMARY_SECTION_KEYS.get(_heading_key(line))
+    if category and category != "skip":
+      categories.add(category)
+  return categories
+
+
+def candidate_meets_quality_standard(candidate: dict) -> bool:
+  """True for a well-structured, fully-complete advert.
+
+  The bar mirrors the reference posts: a clear title and location, an actionable
+  way to apply, a known (non-expired) closing date, and a body that carries both a
+  Responsibilities and a Qualifications/Experience section. It is intentionally
+  strict -- it only ranks adverts for the group feed; the daily cap still falls
+  back to other eligible adverts when fewer than the cap qualify.
+  """
+  if not display_job_title(candidate):
+    return False
+  location = _clean_line(candidate.get("location"), 180)
+  if not location:
+    return False
+  if not (has_application_email(candidate) or candidate_application_url(candidate) is not None):
+    return False
+  if closing_state(candidate.get("closing")) != "open":
+    return False
+  role = _job_title(candidate)
+  company = _clean_line(candidate.get("company"), 180)
+  body = _summarize_group_feed_description(
+    _normalize_group_feed_description(
+      _description_text(candidate.get("description")),
+      role=role,
+      location=location,
+      company=company,
+    )
+  )
+  if len(body) < QUALITY_MIN_BODY_CHARS:
+    return False
+  categories = _section_categories(body)
+  return "responsibilities" in categories and "qualifications" in categories
 
 
 def delivery_record(candidate: dict, result: dict, target: str, run_id: str) -> dict:

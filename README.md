@@ -320,9 +320,13 @@ group — the source is discovery; delivery just reads the cache. Two standalone
 installers register these delivery crons (they are not part of the automatic
 gateway deploy):
 
-- `./deploy/install-job-scout-group-feed.sh` — posts the full daily feed (up to
-  15 jobs) to the main jobs group (Vacancy Lamp) at `09:20 Africa/Harare`. Set
-  `JOB_SCOUT_GROUP_FEED_TARGET` to the group JID (`120…@g.us`), or
+- `./deploy/install-job-scout-group-feed.sh` — posts the daily feed (up to
+  5 jobs) to the main jobs group (Vacancy Lamp) at `09:20 Africa/Harare`. The
+  cache is ordered so fully structured adverts (a clear title and location, an
+  overview, both a Key Responsibilities and a Qualifications and Experience
+  section, a non-expired closing date, and an actionable contact) are posted
+  first, falling back to other eligible adverts only to fill the 5 daily slots.
+  Set `JOB_SCOUT_GROUP_FEED_TARGET` to the group JID (`120…@g.us`), or
   `JOB_SCOUT_GROUP_FEED_GROUP_QUERY` once the bot is a member and the group
   appears in the OpenClaw WhatsApp directory.
 - `./deploy/install-job-scout-hustlers-feed.sh` — posts **one job per day** from

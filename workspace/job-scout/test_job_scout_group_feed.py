@@ -346,6 +346,147 @@ class GroupFeedTests(unittest.TestCase):
     self.assertEqual(stats["unactionableCount"], 1)
     self.assertEqual(stats["eligibleCount"], 0)
 
+  def quality_candidate(self, **overrides) -> dict:
+    """A fully structured advert that clears the strict quality bar."""
+    data = self.candidate(
+      candidateId="quality-1",
+      role="Accountant",
+      company="Tiru Fresh Finance",
+      location="Harare",
+      closing=FUTURE_CLOSING,
+      sourceUrl="https://vacancymail.co.zw/jobs/accountant/",
+      applyLinks=["https://vacancymail.co.zw/jobs/accountant/"],
+      applicationEmails=["hr@tirufresh.co.zw"],
+      applicationEmail="hr@tirufresh.co.zw",
+      description=(
+        "About Us We are hiring an Accountant to join our finance team. "
+        "Key Responsibilities - Prepare monthly management accounts. "
+        "- Reconcile ledgers and process payments. "
+        "Qualifications and Experience - Degree in Accounting. "
+        "- At least three years of relevant experience."
+      ),
+    )
+    data.update(overrides)
+    return data
+
+  def test_candidate_meets_quality_standard(self) -> None:
+    self.assertTrue(jobscout.group_feed.candidate_meets_quality_standard(self.quality_candidate()))
+
+    # The baseline fixture has no Qualifications/Experience section.
+    self.assertFalse(jobscout.group_feed.candidate_meets_quality_standard(self.candidate()))
+
+    self.assertFalse(
+      jobscout.group_feed.candidate_meets_quality_standard(self.quality_candidate(location=""))
+    )
+    # Unknown deadline (none supplied) and expired deadlines both fail.
+    self.assertFalse(
+      jobscout.group_feed.candidate_meets_quality_standard(self.quality_candidate(closing=None))
+    )
+    self.assertFalse(
+      jobscout.group_feed.candidate_meets_quality_standard(self.quality_candidate(closing="1 January 2020"))
+    )
+    # No actionable contact: no email, no apply link, and an empty source page.
+    self.assertFalse(
+      jobscout.group_feed.candidate_meets_quality_standard(self.quality_candidate(
+        applicationEmails=[], applicationEmail=None, applyLinks=[], sourceUrl="",
+      ))
+    )
+    # Missing the Qualifications section.
+    self.assertFalse(
+      jobscout.group_feed.candidate_meets_quality_standard(self.quality_candidate(
+        description="About Us We need an Accountant. Key Responsibilities - Prepare monthly accounts and reconcile ledgers daily.",
+      ))
+    )
+    # Missing the Responsibilities section.
+    self.assertFalse(
+      jobscout.group_feed.candidate_meets_quality_standard(self.quality_candidate(
+        description="About Us We need an Accountant. Qualifications and Experience - Degree in Accounting with three years of experience.",
+      ))
+    )
+
+  def test_group_feed_cache_orders_quality_first_without_dropping(self) -> None:
+    plain = self.candidate(
+      candidateId="plain-1",
+      role="Poultry Supervisor",
+      company="Tiru Fresh",
+      sourceUrl="https://vacancymail.co.zw/jobs/poultry-supervisor/",
+      applyLinks=["https://vacancymail.co.zw/jobs/poultry-supervisor/"],
+    )
+    quality = self.quality_candidate()
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      with mock.patch(
+        "jobscout.group_feed.fetch_whatsapp_channel_candidates_with_results",
+        return_value=([], {"everyday-vacancies-whatsapp": {"status": "ok", "rawCount": 0, "durationMs": 1}}),
+      ), mock.patch(
+        "jobscout.group_feed.fetch_scraped_candidates_with_results",
+        # Deliberately list the non-quality advert first; ordering must float quality up.
+        return_value=([plain, quality], {"vacancymail": {"status": "ok", "rawCount": 2, "durationMs": 1}}),
+      ):
+        result = jobscout.group_feed.build_group_feed_cache("run-quality", root=root, limit=10)
+
+      cache = json.loads((root / "latest.json").read_text(encoding="utf-8"))
+      self.assertTrue(result["ok"])
+      # Nothing is dropped; the quality advert is simply ordered first.
+      self.assertEqual(cache["candidateCount"], 2)
+      self.assertEqual([c["candidateId"] for c in cache["candidates"]], ["quality-1", "plain-1"])
+      self.assertTrue(cache["candidates"][0]["groupFeedQuality"])
+      self.assertFalse(cache["candidates"][1]["groupFeedQuality"])
+      self.assertEqual(result["sourceResults"]["_filter"]["qualityCount"], 1)
+      self.assertEqual(result["sourceResults"]["_filter"]["eligibleCount"], 2)
+
+  def test_deliver_group_feed_relaxes_to_fill_cap_quality_first(self) -> None:
+    quality = [
+      self.quality_candidate(
+        candidateId=f"quality-{index}",
+        role=f"Accountant {index}",
+        company=f"Quality Co {index}",
+        sourceUrl=f"https://vacancymail.co.zw/jobs/quality-{index}/",
+        applyLinks=[f"https://vacancymail.co.zw/jobs/quality-{index}/"],
+      )
+      for index in range(2)
+    ]
+    plain = [
+      self.candidate(
+        candidateId=f"plain-{index}",
+        role=f"Poultry Supervisor {index}",
+        company=f"Plain Co {index}",
+        sourceUrl=f"https://vacancymail.co.zw/jobs/plain-{index}/",
+        applyLinks=[f"https://vacancymail.co.zw/jobs/plain-{index}/"],
+      )
+      for index in range(4)
+    ]
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      with mock.patch(
+        "jobscout.group_feed.fetch_whatsapp_channel_candidates_with_results",
+        return_value=([], {"everyday-vacancies-whatsapp": {"status": "ok", "rawCount": 0, "durationMs": 1}}),
+      ), mock.patch(
+        "jobscout.group_feed.fetch_scraped_candidates_with_results",
+        # Non-quality adverts first, so only ordering (not source order) can pass this.
+        return_value=(plain + quality, {"vacancymail": {"status": "ok", "rawCount": 6, "durationMs": 1}}),
+      ):
+        jobscout.group_feed.build_group_feed_cache("run-fill", root=root, limit=80)
+
+      args = argparse.Namespace(
+        target="120363000000000000@g.us",
+        invite_url="https://chat.whatsapp.com/example",
+        group_feed_root=root,
+        cache_max_age_seconds=3600,
+        max_messages=5,
+        send_delay_seconds=0,
+        dry_run=False,
+      )
+      with mock.patch.object(jobscout.commands_group_feed, "send_whatsapp_message", return_value={"messageId": "wa"}) as send:
+        result = job_scout.cmd_deliver_group_feed(args)
+
+      # Only two adverts clear the strict bar; the cap is still filled to five.
+      self.assertEqual(result["sentCount"], 5)
+      self.assertEqual(send.call_count, 5)
+      first_two = "\n".join(call.args[1] for call in send.call_args_list[:2])
+      self.assertIn("Job Title: Accountant 0", first_two)
+      self.assertIn("Job Title: Accountant 1", first_two)
+
   def test_group_feed_message_falls_back_to_source_page_when_only_apply_method(self) -> None:
     # VacancyMail/iHarare board jobs frequently have no email and only the listing
     # page as an apply link (== sourceUrl, which the formatter otherwise hides).
