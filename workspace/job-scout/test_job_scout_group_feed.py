@@ -487,6 +487,61 @@ class GroupFeedTests(unittest.TestCase):
       self.assertIn("Job Title: Accountant 0", first_two)
       self.assertIn("Job Title: Accountant 1", first_two)
 
+  def test_group_feed_message_cleans_bullet_fragments(self) -> None:
+    # Reconstructs the scraper fragments from the two reference adverts: lone-emoji
+    # bullets, a dangling truncated head ("Previous"), and a truncated head whose
+    # continuation was split onto the next bullet ("Proven" / "in security ...").
+    message = jobscout.group_feed.format_group_feed_message(self.candidate(
+      role="Security Supervisor",
+      location="Harare",
+      company="A security company",
+      closing=FUTURE_CLOSING,
+      applicationEmails=["humanresourcesstrike@gmail.com"],
+      applicationEmail="humanresourcesstrike@gmail.com",
+      description=(
+        "Overview A security company is looking for disciplined Security Supervisors.\n"
+        "Key Responsibilities\n"
+        "- 📌\n"
+        "- Supervise and monitor security guards at various client sites\n"
+        "- Conduct regular patrols and inspections\n"
+        "Qualifications and Experience\n"
+        "- 🎓\n"
+        "- Diploma or equivalent in a related field\n"
+        "- Proven\n"
+        "- in security supervision or security operations\n"
+        "- Previous\n"
+      ),
+    ))
+
+    # Lone-emoji bullets are gone.
+    for emoji in ("📌", "🎓"):
+      self.assertNotIn(emoji, message)
+    # The truncated continuation is merged back into one complete bullet.
+    self.assertIn("- Proven in security supervision or security operations", message)
+    # Dangling single-word truncated heads are dropped.
+    self.assertNotIn("- Previous", message)
+    self.assertNotIn("\n- Proven\n", message)
+    self.assertNotIn("\n- in security", message)
+    # Real bullets are preserved intact.
+    self.assertIn("- Supervise and monitor security guards at various client sites", message)
+    self.assertIn("- Diploma or equivalent in a related field", message)
+
+  def test_group_feed_message_keeps_legitimate_single_word_skill_bullets(self) -> None:
+    message = jobscout.group_feed.format_group_feed_message(self.candidate(
+      role="Accounts Clerk",
+      description=(
+        "Overview We are hiring an Accounts Clerk.\n"
+        "Key Responsibilities\n"
+        "- Handle filing and maintain records.\n"
+        "Skills\n"
+        "- Communication\n"
+        "- Accounting\n"
+      ),
+    ))
+
+    self.assertIn("- Communication", message)
+    self.assertIn("- Accounting", message)
+
   def test_group_feed_message_falls_back_to_source_page_when_only_apply_method(self) -> None:
     # VacancyMail/iHarare board jobs frequently have no email and only the listing
     # page as an apply link (== sourceUrl, which the formatter otherwise hides).

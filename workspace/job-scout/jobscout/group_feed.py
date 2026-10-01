@@ -630,6 +630,78 @@ def _description_has_closing_date(description: str, value: object) -> bool:
   return bool(keys and keys & _date_keys(description))
 
 
+# Single-word bullets that are almost always the truncated head of a sentence the
+# scraper split away (e.g. "Previous [experience in a similar role]"), rather than
+# a standalone skill or qualification. A single-word bullet matching one of these
+# with no sentence punctuation is dropped. Real one-word bullets ("Communication",
+# "Accounting") are not in the set and survive.
+BULLET_LEAD_IN_WORDS = frozenset({
+  "previous", "proven", "minimum", "relevant", "strong", "good", "excellent",
+  "ability", "experience", "knowledge", "demonstrated", "sound", "proficient",
+  "familiarity", "understanding", "at", "a", "an",
+})
+
+
+def _bullet_content(line: str) -> str | None:
+  """Return the text after the "- " bullet marker, or None for a non-bullet line."""
+  stripped = line.strip()
+  if stripped.startswith("- "):
+    return stripped[2:].strip()
+  return None
+
+
+def _last_bullet_index(lines: list[str]) -> int | None:
+  """Index of the last emitted line when it is a bullet, skipping blank lines."""
+  for index in range(len(lines) - 1, -1, -1):
+    if not lines[index].strip():
+      continue
+    return index if _bullet_content(lines[index]) is not None else None
+  return None
+
+
+def _clean_bullet_fragments(lines: list[str]) -> list[str]:
+  """Remove scraper bullet fragments: lone emoji, truncated heads, continuations.
+
+  Only bullet lines ("- ...") are touched; headings, blanks and prose pass through
+  unchanged. Two passes: first strip leading emoji/symbols, drop lone-emoji
+  bullets, and merge a lowercase continuation into the previous bullet; then drop
+  any single-word truncated lead-in (see :data:`BULLET_LEAD_IN_WORDS`). Merging
+  runs before the lead-in drop so a truncated head keeps its continuation
+  ("Proven" + "in security operations" -> one complete bullet) instead of being
+  dropped out from under it.
+  """
+  merged: list[str] = []
+  for line in lines:
+    content = _bullet_content(line)
+    if content is None:
+      merged.append(line)
+      continue
+    cleaned = re.sub(r"^[^\w]+", "", content).strip()
+    if not cleaned:
+      continue
+    if cleaned[0].islower():
+      previous = _last_bullet_index(merged)
+      if previous is not None:
+        prior = _bullet_content(merged[previous]) or ""
+        merged[previous] = f"- {prior.rstrip()} {cleaned}".rstrip()
+        continue
+    merged.append(f"- {cleaned}")
+
+  output: list[str] = []
+  for line in merged:
+    content = _bullet_content(line)
+    if content is not None:
+      words = content.split()
+      if (
+        len(words) == 1
+        and not re.search(r"[.!?;:)]$", content)
+        and words[0].strip(",.").casefold() in BULLET_LEAD_IN_WORDS
+      ):
+        continue
+    output.append(line)
+  return output
+
+
 def _normalize_group_feed_description(
   description: str,
   *,
@@ -740,7 +812,7 @@ def _normalize_group_feed_description(
     _append_description_line(output, line)
     index += 1
 
-  return _compact_description_lines(output)
+  return _compact_description_lines(_clean_bullet_fragments(output))
 
 
 SUMMARY_SECTION_KEYS = {
