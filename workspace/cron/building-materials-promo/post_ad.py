@@ -21,8 +21,11 @@ cached in the state file to avoid re-resolving every day.
 
 Usage:
   post_ad.py            normal run (resolve, skip groups already sent today, send)
-  post_ad.py --dry-run  show resolved targets + the message; no send, no state
+  post_ad.py --dry-run  show resolved targets, each group's caption variant + ref,
+                        and every caption variant; no send, no state
                         mutation
+  post_ad.py --refs     print ref code -> promo + group JID + link (decode refs);
+                        no send, no state mutation
 
 Std-lib only.
 """
@@ -74,14 +77,76 @@ POST_TEXT = (
     "\U0001F4E9 Contact us now to place your order!"
 )
 
+# Caption variants that rotate per group per day (see promo_broadcast) so the ad
+# doesn't read as copy-paste spam. Variant 1 is POST_TEXT verbatim; the others
+# reword/reorder only. Every fact (materials, prices, units, both numbers and
+# which line takes WhatsApp vs calls only) must stay IDENTICAL across variants --
+# never add a claim or offer here.
+POST_TEXT_V2 = (
+    "\U0001F3E0 Building or renovating? Get your materials here! \U0001F477\n"
+    "\n"
+    "\U0001FAA8 Quarry Stones: $25 per cubic\n"
+    "\U000026F0️ Gravel: $220 per 15 cubic\n"
+    "\U0001F3DE️ River Sand: $350 per 15 cubic\n"
+    "\U0001F3D6️ Pit Sand: $340 per 15 cubic\n"
+    "\n"
+    "\U0001F9F1 Bricks:\n"
+    "  - Red commons: $95 per 1000\n"
+    "  - Blue heart: $100 per 1000\n"
+    "\n"
+    "\U0001F4E6 Bulk quantities available\n"
+    "\n"
+    "\U0001F4AC WhatsApp & Calls: +263 775 489 417\n"
+    "\U0001F4DE Phone Calls Only: +263 785 632 943\n"
+    "\n"
+    "Place your order today! \U0001F4E9"
+)
+
+POST_TEXT_V3 = (
+    "\U0001F9F1 *Bricks, sand, gravel & quarry stones for sale* \U0001F3D7️\n"
+    "\n"
+    "Bricks (per 1000):\n"
+    "  • Red commons - $95\n"
+    "  • Blue heart - $100\n"
+    "\n"
+    "Per 15 cubic:\n"
+    "  • River Sand - $350\n"
+    "  • Pit Sand - $340\n"
+    "  • Gravel - $220\n"
+    "\n"
+    "Per cubic:\n"
+    "  • Quarry Stones - $25\n"
+    "\n"
+    "\U0001F4E6 Available in bulk quantities\n"
+    "\n"
+    "To order:\n"
+    "\U0001F4AC WhatsApp & Calls: +263 775 489 417\n"
+    "\U0001F4DE Phone Calls Only: +263 785 632 943"
+)
+
+POST_TEXTS = [POST_TEXT, POST_TEXT_V2, POST_TEXT_V3]
+
+# Per-group ref-coded wa.me link to the SELLER's WhatsApp line (+263775489417,
+# the "WhatsApp & Calls" number; the other line is calls only and doubles as the
+# bot number -- see public-service-gate/services/seller-referral.js). Replies go
+# straight to the seller, so the ref in the prefilled text tells the seller which
+# ad/group the customer came from; Genaie cannot count these automatically.
+TRACKING = {
+    "prefix": "BM",
+    "number": "+263775489417",
+    "label": "building materials",
+}
+
 
 def main():
     return promo_broadcast.broadcast(
-        text=POST_TEXT,
+        text=POST_TEXTS,
         image=IMAGE_PATH,
         targets_file=TARGETS_FILE,
         state_file=STATE_FILE,
         send_delay=SEND_DELAY_SECONDS,
+        tracking=TRACKING,
+        promo_name="building-materials-promo",
     )
 
 

@@ -15,6 +15,24 @@ is posted to only on its configured weekdays; groups only under the flat
 ``groups`` list are posted to daily). Weekly support is inert when a targets file
 has no ``weekly_groups`` key, so it is transparent for the daily-only promos.
 
+Caption rotation: ``text`` may be a single string (sent verbatim, unchanged
+behavior) or a list of caption variants. A group's variant is
+``(post counter + stable hash of the group JID) % len(variants)``: the counter
+advances by one per post (per day for daily groups, per configured weekday for
+weekly-limited groups), so a group never gets the identical caption on two
+consecutive posts, and the per-JID offset spreads groups across variants on any
+given day. The hash is ``hashlib.sha256`` -- NOT Python's per-process salted
+``hash()`` -- so the choice is identical across runs and retries.
+
+Tracking links (opt-in per promo via ``tracking=``): each group gets a short,
+stable ref code (promo prefix + 3 chars derived from the group JID, e.g.
+``BH-7K2``) inside a ``wa.me`` click-to-chat link whose prefilled text names the
+ad and the ref. A caption may place it with ``{ref_link}`` / ``{ref}``
+placeholders; otherwise a "tap to chat" line is appended. A promo that passes no
+``tracking`` sends exactly the caption it supplies. ``--refs`` prints the
+ref -> promo + group JID mapping (no sends, no state mutation) so codes seen in
+DMs can be decoded later.
+
 Std-lib only (plus the sibling :mod:`json_store` helper), so it stays importable
 from the OpenClaw ``--command`` cron scripts, which are std-lib only by contract.
 """
@@ -23,7 +41,9 @@ import os
 import sys
 import json
 import time
+import hashlib
 import subprocess
+import urllib.parse
 from datetime import date
 
 import json_store
@@ -318,9 +338,139 @@ def _resolve_image(image):
     return (image, False)
 
 
+# --------------------------------------------------------- caption rotation ----
+def _stable_hash(value):
+    """Deterministic non-negative int for ``value``. Stable across processes,
+    unlike the builtin ``hash()`` which is salted per interpreter run."""
+    return int(hashlib.sha256(str(value).encode("utf-8")).hexdigest()[:12], 16)
+
+
+def _variants(text):
+    """Normalize ``text`` to a non-empty list of caption variants. A plain string
+    is a single fixed caption (the historical behavior)."""
+    if isinstance(text, (list, tuple)):
+        out = [t for t in text if isinstance(t, str) and t.strip()]
+        if not out:
+            raise ValueError("caption variant list is empty")
+        return out
+    return [text]
+
+
+def _post_counter(day, allowed=None):
+    """Per-group counter that advances by exactly one per post. For a daily group
+    it is the date ordinal. For a weekly-limited group (``allowed`` weekdays) it
+    counts only its allowed weekdays, so successive POSTS (e.g. Mon -> Thu -> Mon)
+    still step by one and never repeat a caption back to back."""
+    ordinal = day.toordinal()
+    if not allowed:
+        return ordinal
+    days = sorted(allowed)
+    week, weekday = divmod(ordinal - 1, 7)  # ordinal 1 (0001-01-01) is a Monday
+    return week * len(days) + sum(1 for d in days if d < weekday)
+
+
+def variant_index(jid, n_variants, day=None, allowed=None):
+    """Index of the caption variant ``jid`` gets on ``day`` (default today)."""
+    if n_variants <= 1:
+        return 0
+    day = day or date.today()
+    return (_post_counter(day, allowed) + _stable_hash(jid)) % n_variants
+
+
+# ------------------------------------------------------------ tracking refs ----
+# Crockford base32 (no I, L, O, U): unambiguous when read off a phone screen.
+REF_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+REF_CODE_LEN = 3
+DEFAULT_PREFILL = "Hi, I saw your {label} ad (ref {ref})"
+DEFAULT_LINK_LINE = "\U0001F449 Tap to chat on WhatsApp: {ref_link}"
+
+
+def ref_code(prefix, jid):
+    """Short stable ref for (promo prefix, group JID), e.g. ``BH-7K2``. The suffix
+    depends only on the JID, so one group carries the same suffix in every promo
+    while the prefix names the promo."""
+    n = int(hashlib.sha256(str(jid).encode("utf-8")).hexdigest(), 16)
+    chars = []
+    for _ in range(REF_CODE_LEN):
+        n, r = divmod(n, len(REF_ALPHABET))
+        chars.append(REF_ALPHABET[r])
+    return "%s-%s" % (str(prefix).upper(), "".join(chars))
+
+
+def wa_digits(number):
+    """``+263 78 563 2943`` -> ``263785632943`` (wa.me wants digits only)."""
+    return "".join(ch for ch in str(number) if ch.isdigit())
+
+
+def ref_link(number, prefill):
+    """wa.me click-to-chat link to ``number`` with URL-encoded prefilled text."""
+    return "https://wa.me/%s?text=%s" % (
+        wa_digits(number), urllib.parse.quote(prefill, safe=""))
+
+
+def tracking_for(tracking, jid):
+    """(ref, link) for ``jid`` under a tracking config, or (None, None)."""
+    if not tracking:
+        return (None, None)
+    ref = ref_code(tracking["prefix"], jid)
+    prefill = (tracking.get("prefill") or DEFAULT_PREFILL).replace(
+        "{label}", tracking.get("label", "")).replace("{ref}", ref)
+    return (ref, ref_link(tracking["number"], prefill))
+
+
+def render_caption(caption, ref=None, link=None, link_line=DEFAULT_LINK_LINE):
+    """Substitute ``{ref_link}`` / ``{ref}`` in ``caption``. Uses plain
+    ``str.replace`` (not ``str.format``), so any other braces in operator copy
+    are left alone. With tracking on and no ``{ref_link}`` placeholder in the
+    caption, ``link_line`` is appended after a blank line. With no ref/link the
+    caption is returned unchanged."""
+    if not ref and not link:
+        return caption
+    had_link = "{ref_link}" in caption
+    out = caption.replace("{ref_link}", link or "").replace("{ref}", ref or "")
+    if link and not had_link and link_line:
+        line = link_line.replace("{ref_link}", link).replace("{ref}", ref or "")
+        out = out.rstrip("\n") + "\n\n" + line
+    return out
+
+
+def caption_for(jid, variants, day=None, allowed=None, tracking=None):
+    """(variant_index, rendered caption, ref) for one group on ``day``."""
+    idx = variant_index(jid, len(variants), day=day, allowed=allowed)
+    ref, link = tracking_for(tracking, jid)
+    line = (tracking or {}).get("link_line") or DEFAULT_LINK_LINE
+    return (idx, render_caption(variants[idx], ref, link, line), ref)
+
+
+def ref_map(jids, tracking, promo_name):
+    """[(ref, promo_name, jid, link)] for decoding ref codes later."""
+    if not tracking:
+        return []
+    return [(ref, promo_name, j, link)
+            for j in jids for ref, link in [tracking_for(tracking, j)]]
+
+
+def _print_refs(jids, tracking, promo_name):
+    if not tracking:
+        print("Tracking is not enabled for %s (no ref codes)." % promo_name)
+        return
+    print("ref\tpromo\tgroup_jid\tlink")
+    for row in ref_map(jids, tracking, promo_name):
+        print("\t".join(row))
+
+
+def _preview(caption, tracking):
+    if not tracking:
+        return caption
+    line = tracking.get("link_line") or DEFAULT_LINK_LINE
+    return render_caption(caption, "<REF>", "<ref_link>", line)
+
+
 def _print_dry_run(jids, weekly, weekday, sent_map, today, image_path, rotating, text,
-                   eligible, pending):
+                   eligible, pending, variants=None, tracking=None, day=None):
     print("Targets (resolved JIDs): %d" % len(jids))
+    variants = variants or [text]
+    multi = len(variants) > 1
     for j in jids:
         allowed = weekly.get(j)
         if allowed is not None and weekday not in allowed:
@@ -333,10 +483,23 @@ def _print_dry_run(jids, weekly, weekday, sent_map, today, image_path, rotating,
             mark = "would send (weekly: %s)" % days
         else:
             mark = "would send"
-        print("  - %s  [%s]" % (j, mark))
+        extra = ""
+        if multi or tracking:
+            idx, _, ref = caption_for(j, variants, day=day, allowed=allowed,
+                                      tracking=tracking)
+            if multi:
+                extra += "  variant %d/%d" % (idx + 1, len(variants))
+            if ref:
+                extra += "  ref %s" % ref
+        print("  - %s  [%s]%s" % (j, mark, extra))
     print(("Image (today): %s" if rotating else "Image: %s") % image_path)
-    print("\n----- message -----")
-    print(text)
+    if multi:
+        for k, v in enumerate(variants):
+            print("\n----- message (variant %d/%d) -----" % (k + 1, len(variants)))
+            print(_preview(v, tracking))
+    else:
+        print("\n----- message -----")
+        print(_preview(variants[0], tracking))
     print("-------------------")
     if weekly:
         print("\n[dry-run] resolved=%d eligible=%d pending=%d"
@@ -345,14 +508,31 @@ def _print_dry_run(jids, weekly, weekday, sent_map, today, image_path, rotating,
         print("\n[dry-run] resolved=%d pending=%d" % (len(jids), len(pending)))
 
 
-def broadcast(*, text, image, targets_file, state_file, send_delay=3.0, argv=None):
+def broadcast(*, text, image, targets_file, state_file, send_delay=3.0, argv=None,
+              tracking=None, promo_name=None):
     """Resolve targets, skip groups already sent today (and weekly-limited groups
     off their configured weekday), then send the advert to each pending group,
     committing state per group so a crash or retry never double-posts. Returns a
-    process exit code: 0 on success, 1 if any hard (non-permission) send failed."""
+    process exit code: 0 on success, 1 if any hard (non-permission) send failed.
+
+    ``text`` is one caption (str, sent as-is) or a list of caption variants that
+    rotate per group per post (see :func:`variant_index`). ``tracking`` is
+    optional: ``{"prefix": "BH", "number": "+263...", "label": "borehole"}`` plus
+    optional ``prefill`` / ``link_line`` templates; when set, each group's caption
+    carries its ref code + wa.me link. ``--refs`` prints the ref mapping and
+    exits without sending or touching state."""
     args = sys.argv[1:] if argv is None else argv
-    dry = "--dry-run" in args
-    today = date.today().isoformat()
+    show_refs = "--refs" in args
+    dry = "--dry-run" in args or show_refs
+    day = date.today()
+    today = day.isoformat()
+    variants = _variants(text)
+    if tracking:
+        missing = [k for k in ("prefix", "number") if not tracking.get(k)]
+        if missing:
+            raise ValueError("tracking config missing: %s" % ", ".join(missing))
+    if not promo_name:
+        promo_name = os.path.basename(os.path.dirname(os.path.abspath(targets_file)))
 
     image_path, rotating = _resolve_image(image)
     if not image_path or not os.path.exists(image_path):
@@ -387,9 +567,14 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=3.0, argv=Non
     sent_map = st["sent"]
     pending = [j for j in eligible if sent_map.get(j) != today]
 
+    if show_refs:
+        _print_refs(jids, tracking, promo_name)
+        return 0
+
     if dry:
         _print_dry_run(jids, weekly, weekday, sent_map, today, image_path, rotating,
-                       text, eligible, pending)
+                       text, eligible, pending, variants=variants, tracking=tracking,
+                       day=day)
         return 0
 
     if not pending:
@@ -400,7 +585,9 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=3.0, argv=Non
     skipped = 0
     sent = 0
     for i, jid in enumerate(pending):
-        ok, out = send_ad(jid, text, image_path)
+        _, caption, _ = caption_for(jid, variants, day=day, allowed=weekly.get(jid),
+                                    tracking=tracking)
+        ok, out = send_ad(jid, caption, image_path)
         if ok:
             sent_map[jid] = today
             save_state(state_file, st)  # commit per group: crash/retry never double-posts

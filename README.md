@@ -435,6 +435,9 @@ The deploy script used by both paths:
   Most groups get the ad daily; groups under the file's `weekly_groups` map are posted
   to only on their configured weekdays, which is how MUTANDIRI VILLAGE RESIDENTS gets
   the ad three times a week (Mon, Wed and Fri)
+- all six promo crons above rotate between three caption variants (the original
+  operator copy plus two rewordings with identical facts) and carry a per-group
+  tracking link; see "Promo caption rotation and ad ref tracking" below
 - writes `/home/joseph/openclaw-deploy/.last-successful-deploy.json` only after all
   required readiness, health, and reconciliation steps finish successfully
 
@@ -471,6 +474,50 @@ deploys do **not** pass `--apply-container-boundary`; the deploy detects the
 installed override and leaves it in place (and skips the in-container source sync,
 which the read-only bind mounts make redundant). The flag is only needed to
 (re)install the override from scratch.
+
+### Promo caption rotation and ad ref tracking
+
+The shared promo engine (`workspace/lib/promo_broadcast.py`) accepts either one
+caption string (sent verbatim, as before) or a list of caption variants. Each
+promo now supplies three: its original operator copy as variant 1, plus two
+rewordings that keep every fact identical. A group's variant is
+`(post counter + sha256(group JID)) % 3`, so a group never gets the same caption
+on two consecutive posts (weekly-limited groups count their own posting days) and
+groups are spread across variants on a given day. `--dry-run` shows each group's
+variant and ref.
+
+Each promo also passes a `TRACKING` config (opt-in; a promo without one sends
+exactly its caption). Every group gets a stable ref code: a promo prefix plus
+three characters derived from the group JID, e.g. `BH-VD4`. The caption is sent
+with an extra line `Tap to chat on WhatsApp: https://wa.me/<number>?text=...`
+whose prefilled text reads `Hi, I saw your borehole ad (ref BH-VD4)`. A caption
+may instead place the link itself with the `{ref_link}` / `{ref}` placeholders.
+
+| Promo | Prefix | Link target |
+|---|---|---|
+| borehole-drilling-promo | BH | +263785632943 (bot) |
+| building-materials-promo | BM | +263775489417 (seller's WhatsApp line) |
+| cv-promo | CV | +263785632943 (bot) |
+| fruit-trees-promo | FT | +263785632943 (bot) |
+| genaie-leads-promo | GL | +263785632943 (bot) |
+| genaie-promo | GN | +263785632943 (bot) |
+
+Decode refs with `--refs`, which prints `ref  promo  group_jid  link` for every
+target and exits without sending or touching state:
+
+```bash
+python3 workspace/cron/borehole-drilling-promo/post_ad.py --refs
+```
+
+When a DM carrying a ref reaches the bot, the public-service-gate plugin counts it
+in `runtime/public-service-gate/ad-refs.json` (`count`, `uniqueSenders`,
+`firstSeen`, `lastSeen` per ref; senders stored only as a short one-way hash).
+Recording is observe-only and never changes the reply; admin DMs and group
+messages are not counted. Building-materials links go to the seller's own number,
+so those replies never reach the bot: the seller sees the ref in the customer's
+first message, but Genaie cannot count them automatically. Keep the prefix list in
+`workspace/plugins/public-service-gate/lib/ad-refs.js` in sync with the promos'
+`TRACKING` prefixes (a test enforces this).
 
 ## Deploy Mirror
 
@@ -572,6 +619,7 @@ runtime/
 ├── public-news/subscriptions.json
 ├── public-service-gate/invites.json (member store; invite codes retired)
 ├── public-service-gate/state.json
+├── public-service-gate/ad-refs.json (promo ad ref code counts)
 └── cron-state/
     ├── algeria-exhibitions-listener/state.json
     └── github-issue-tracker/state.json

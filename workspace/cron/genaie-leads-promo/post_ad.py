@@ -23,8 +23,11 @@ cached in the state file to avoid re-resolving every day.
 
 Usage:
   post_ad.py            normal run (resolve, skip groups already sent today, send)
-  post_ad.py --dry-run  show resolved targets + the message; no send, no state
+  post_ad.py --dry-run  show resolved targets, each group's caption variant + ref,
+                        and every caption variant; no send, no state
                         mutation
+  post_ad.py --refs     print ref code -> promo + group JID + link (decode refs);
+                        no send, no state mutation
 
 Std-lib only.
 """
@@ -72,14 +75,55 @@ POST_TEXT = (
     "\U0001F4DE WhatsApp us: +263785632943"
 )
 
+# Caption variants that rotate per group per day (see promo_broadcast) so the ad
+# doesn't read as copy-paste spam. Variant 1 is POST_TEXT verbatim; the others
+# reword/reorder only. Every fact (the three payment models, number) must stay
+# IDENTICAL across variants -- never add a claim or offer here.
+POST_TEXT_V2 = (
+    "\U0001F4C8 Need more customers for your business?\n"
+    "\n"
+    "We generate potential customers for you - and you pick how you pay:\n"
+    "\n"
+    "✅ Pay per lead\n"
+    "✅ Fixed monthly payment\n"
+    "✅ Pay a % of revenue\n"
+    "\n"
+    "\U0001F4DE WhatsApp us: +263785632943"
+)
+
+POST_TEXT_V3 = (
+    "\U0001F91D *Potential customers for your business, your way*\n"
+    "\n"
+    "✅ Fixed monthly payment\n"
+    "✅ Pay per lead\n"
+    "✅ Pay a % of revenue\n"
+    "\n"
+    "Choose the model that suits your business.\n"
+    "\n"
+    "\U0001F4DE WhatsApp us: +263785632943"
+)
+
+POST_TEXTS = [POST_TEXT, POST_TEXT_V2, POST_TEXT_V3]
+
+# Per-group ref-coded wa.me link to Genaie's own number (+263785632943, the
+# bot's WhatsApp number), so replies reach the bot and the public-service-gate
+# ad-ref recorder counts them.
+TRACKING = {
+    "prefix": "GL",
+    "number": "+263785632943",
+    "label": "lead generation",
+}
+
 
 def main():
     return promo_broadcast.broadcast(
-        text=POST_TEXT,
+        text=POST_TEXTS,
         image=IMAGE,
         targets_file=TARGETS_FILE,
         state_file=STATE_FILE,
         send_delay=SEND_DELAY_SECONDS,
+        tracking=TRACKING,
+        promo_name="genaie-leads-promo",
     )
 
 

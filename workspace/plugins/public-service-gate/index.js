@@ -16,6 +16,7 @@ import {
   runJsonCommand,
 } from "./lib/runtime.js";
 import { clearServiceState } from "./lib/state.js";
+import { recordAdRefs } from "./lib/ad-refs.js";
 import {
   FAILSAFE_STOP_PRIORITY,
   clearFailsafeStopSuppression,
@@ -260,6 +261,13 @@ export default {
       }
 
       const admin = isWhatsAppAdmin(api, sender);
+
+      // Observe-only: count promo ad ref codes ("ref BH-7K2") arriving in DMs so
+      // ad/group performance can be measured. Never replies, claims, or throws,
+      // so every flow below behaves exactly as before. Admin DMs are skipped so
+      // operator testing doesn't inflate counts; group messages never get here
+      // (claimed by the group hard block above).
+      if (!admin) recordAdRefs(api, sender, text);
       const gateOn = memberGateEnabled(api);
 
       // Admin-only CV order settlement from chat: "cv approve <id>" / "cv deny
