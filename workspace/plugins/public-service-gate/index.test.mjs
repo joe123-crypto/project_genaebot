@@ -1402,3 +1402,34 @@ test("an admin cv command is not honored while WhatsApp admin mode is disabled",
     assert.deepEqual(handler.cvCalls(), []);
   });
 });
+
+test("a DM carrying a promo ad ref is counted without changing the reply", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-adref-"));
+  const serviceStatePath = path.join(dir, "state.json");
+  const handler = registerHandler({ serviceStatePath, greetingTemplatePath: GREETING_FILE });
+  const control = registerHandler({ greetingTemplatePath: GREETING_FILE });
+  const ctx = { channelId: "whatsapp", senderId: MEMBER };
+
+  const reply = await handler(eventFor("Hi, I saw your borehole ad (ref BH-7K2)", MEMBER), ctx);
+  const baseline = await control(eventFor("Hi, I saw your borehole ad", MEMBER), ctx);
+  assert.deepEqual(reply, baseline);
+
+  const { refs } = JSON.parse(fs.readFileSync(path.join(dir, "ad-refs.json"), "utf8"));
+  assert.equal(refs["BH-7K2"].count, 1);
+});
+
+test("ad refs in group messages and admin DMs are not counted", async () => {
+  await withAdminMode("true", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-adref-"));
+    const serviceStatePath = path.join(dir, "state.json");
+    const handler = registerHandler({ serviceStatePath, whatsappAdminUsers: [ADMIN] });
+
+    const group = await handler(
+      { ...eventFor("ref BH-7K2", MEMBER), isGroup: true },
+      { channelId: "whatsapp", senderId: MEMBER },
+    );
+    assert.deepEqual(group, { handled: true });
+    await handler(eventFor("ref BH-7K2", ADMIN), { channelId: "whatsapp", senderId: ADMIN });
+    assert.equal(fs.existsSync(path.join(dir, "ad-refs.json")), false);
+  });
+});
