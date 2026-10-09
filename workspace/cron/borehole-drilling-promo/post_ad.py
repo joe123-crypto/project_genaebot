@@ -24,8 +24,11 @@ VILLAGE RESIDENTS gets the ad three times a week: Mon/Wed/Fri).
 
 Usage:
   post_ad.py            normal run (resolve, skip groups already sent today, send)
-  post_ad.py --dry-run  show resolved targets + the message; no send, no state
+  post_ad.py --dry-run  show resolved targets, each group's caption variant + ref,
+                        and every caption variant; no send, no state
                         mutation
+  post_ad.py --refs     print ref code -> promo + group JID + link (decode refs);
+                        no send, no state mutation
 
 Std-lib only.
 """
@@ -123,14 +126,75 @@ POST_TEXT = (
     "\U0001F4DE WhatsApp: +263785632943 - Genaie"
 )
 
+# Caption variants that rotate per group per day (see promo_broadcast) so the ad
+# doesn't read as copy-paste spam. Variant 1 is POST_TEXT verbatim; the others
+# reword/reorder only. Every fact (packages, contents, prices, location, number)
+# must stay IDENTICAL across variants -- never add a claim or offer here.
+POST_TEXT_V2 = (
+    "☀️ *Solar borehole systems, installed for you* ☀️\n"
+    "Bring water closer to home with professional borehole drilling you can "
+    "depend on.\n"
+    "\n"
+    "✅ *Every package includes:*\n"
+    "  • 5000L Tank\n"
+    "  • 4 Meters Tank Stand\n"
+    "  • Pump & External Controller\n"
+    "  • Solar Panels\n"
+    "  • Solar Stand\n"
+    "  • Pipes & Cables\n"
+    "  • 1 Garden Tap\n"
+    "  • All Accessories & Installation\n"
+    "\n"
+    "\U0001F4A7 *Choose your DC pump (with Control Box):*\n"
+    "1️⃣ 0.75HP DC Pump - $1800\n"
+    "2️⃣ 1HP DC Pump - $2000\n"
+    "3️⃣ 1.5HP DC Pump - $2200\n"
+    "4️⃣ 2HP DC Pump - $2400\n"
+    "\n"
+    "\U0001F4CD Based in Bindura - We Come To You!\n"
+    "\U0001F4DE WhatsApp: +263785632943 - Genaie"
+)
+
+POST_TEXT_V3 = (
+    "\U0001F6B0 *Want water closer to home?*\n"
+    "Complete solar borehole system installation packages. "
+    "Based in Bindura - We Come To You! \U0001F4CD\n"
+    "\n"
+    "*BOREHOLE SYSTEM INSTALLATION PACKAGES*\n"
+    "\U0001F4B5 Package 1 - 0.75HP DC Pump with Control Box: *$1800*\n"
+    "\U0001F4B5 Package 2 - 1HP DC Pump with Control Box: *$2000*\n"
+    "\U0001F4B5 Package 3 - 1.5HP DC Pump with Control Box: *$2200*\n"
+    "\U0001F4B5 Package 4 - 2HP DC Pump with Control Box: *$2400*\n"
+    "\n"
+    "\U0001F4E6 All 4 packages come with: 5000L Tank • 4 Meters Tank Stand • "
+    "Pump & External Controller • Solar Panels • Solar Stand • Pipes & Cables • "
+    "1 Garden Tap • All Accessories & Installation\n"
+    "\n"
+    "\U0001F4A7 Professional borehole drilling you can depend on.\n"
+    "\U0001F4DE WhatsApp: +263785632943 - Genaie"
+)
+
+POST_TEXTS = [POST_TEXT, POST_TEXT_V2, POST_TEXT_V3]
+
+# Per-group ref-coded wa.me link. The ad's contact number is Genaie's own
+# (+263785632943, the bot's WhatsApp number), so replies reach the bot and the
+# public-service-gate ad-ref recorder counts them.
+TRACKING = {
+    "prefix": "BH",
+    "number": "+263785632943",
+    "label": "borehole",
+}
+
 
 def main():
     return promo_broadcast.broadcast(
-        text=POST_TEXT,
+        text=POST_TEXTS,
         image=IMAGE,
         targets_file=TARGETS_FILE,
         state_file=STATE_FILE,
         send_delay=SEND_DELAY_SECONDS,
+        tracking=TRACKING,
+        promo_name="borehole-drilling-promo",
     )
 
 

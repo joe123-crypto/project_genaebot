@@ -27,8 +27,11 @@ outside its configured weekdays, so no second cron is needed.
 
 Usage:
   post_cv_ad.py            normal run (resolve, skip groups already sent today, send)
-  post_cv_ad.py --dry-run  show resolved targets + the message; no send, no state
+  post_cv_ad.py --dry-run  show resolved targets, each group's caption variant +
+                           ref, and every caption variant; no send, no state
                            mutation
+  post_cv_ad.py --refs     print ref code -> promo + group JID + link (decode
+                           refs); no send, no state mutation
 
 Std-lib only.
 """
@@ -85,14 +88,66 @@ POST_TEXT = (
     "*Your next opportunity starts with a better CV.*"
 )
 
+# Caption variants that rotate per group per day (see promo_broadcast) so the ad
+# doesn't read as copy-paste spam. Variant 1 is POST_TEXT verbatim; the others
+# reword/reorder only. Every fact (services, $5 EcoCash price, catalogue samples,
+# number, site) must stay IDENTICAL across variants -- never add a claim here.
+POST_TEXT_V2 = (
+    "Is your CV holding you back? \U0001F914\n"
+    "\n"
+    "Get a CV that clearly presents your skills, experience, and achievements.\n"
+    "\n"
+    "\U0001F4C4 CV Writing\n"
+    "\U0001F504 CV Revamping\n"
+    "\U0001F4BC Professional presentation\n"
+    "\n"
+    "\U0001F4B5 Only $5 (EcoCash)\n"
+    "\U0001F4C1 Samples are in the catalogue\n"
+    "\n"
+    "\U0001F4F2 +263785632943\n"
+    "\U0001F310 genaie.site\n"
+    "\n"
+    "*Your next opportunity starts with a better CV.*"
+)
+
+POST_TEXT_V3 = (
+    "\U0001F4BC *Job hunting? Start with a professional CV.*\n"
+    "\n"
+    "We write new CVs and revamp old ones so your skills, experience, and "
+    "achievements stand out.\n"
+    "\n"
+    "\U0001F4B5 Only $5 (EcoCash)\n"
+    "\n"
+    "\U0001F4C4 CV Writing\n"
+    "\U0001F504 CV Revamping\n"
+    "\U0001F4BC Professional presentation\n"
+    "\n"
+    "\U0001F4C1 See the catalogue for samples\n"
+    "\U0001F4F2 +263785632943\n"
+    "\U0001F310 genaie.site"
+)
+
+POST_TEXTS = [POST_TEXT, POST_TEXT_V2, POST_TEXT_V3]
+
+# Per-group ref-coded wa.me link to Genaie's own number (+263785632943, the
+# bot's WhatsApp number), so replies reach the bot and the public-service-gate
+# ad-ref recorder counts them.
+TRACKING = {
+    "prefix": "CV",
+    "number": "+263785632943",
+    "label": "CV",
+}
+
 
 def main():
     return promo_broadcast.broadcast(
-        text=POST_TEXT,
+        text=POST_TEXTS,
         image=IMAGE,
         targets_file=TARGETS_FILE,
         state_file=STATE_FILE,
         send_delay=SEND_DELAY_SECONDS,
+        tracking=TRACKING,
+        promo_name="cv-promo",
     )
 
 
