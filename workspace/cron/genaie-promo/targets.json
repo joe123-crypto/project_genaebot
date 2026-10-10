@@ -1,5 +1,5 @@
 {
-  "_comment": "Target WhatsApp groups for the daily Genaie-services ad. Use group JIDs (ending in @g.us); the bot must be a MEMBER of each. Invite links are NOT reliably resolvable on this gateway (WhatsApp channels resolve is unsupported and the directory is config-backed), so always list JIDs here. This aims to cover every group the bot is in EXCEPT 'Vacancy Lamp' (120363407177302513@g.us), which is deliberately omitted. Named groups for reference: Bindura Town Business, Shamva Bindura & Madziva, Bindura Hustlers 24/7, Glendale Hustlers 24/7 (others have no cached subject). NOTE: membership cannot be listed via the gateway, so groups are discovered from the WhatsApp sender-key store (credentials/whatsapp/default/sender-key-<jid>...). The last two JIDs below were silently-joined groups (relevance-gated, no agent session) found on 2026-08-30 that were missing from the ad; discover newly-joined groups the same way. Admin-only groups the bot cannot post to (send returns 'forbidden') are omitted. Edit this list to add/remove groups; no code change needed. Newly-joined groups for reference: Buying and Selling (120363292471414376@g.us), Zim Mining Company (120363411788614990@g.us). Admin-only (announcement) group 120363157571427036@g.us is omitted: the bot cannot post there (send returns 'forbidden').",
+  "_comment": "Target WhatsApp groups for the daily Genaie-services ad. Use group JIDs (ending in @g.us); the bot must be a MEMBER of each. Invite links are NOT reliably resolvable on this gateway (WhatsApp channels resolve is unsupported and the directory is config-backed), so always list JIDs here. This aims to cover every group the bot is in EXCEPT 'Vacancy Lamp' (120363407177302513@g.us), which is deliberately omitted. Named groups for reference: Bindura Town Business, Shamva Bindura & Madziva, Bindura Hustlers 24/7, Glendale Hustlers 24/7 (others have no cached subject). NOTE: membership cannot be listed via the gateway, so groups are discovered from the WhatsApp sender-key store (credentials/whatsapp/default/sender-key-<jid>...). The last two JIDs below were silently-joined groups (relevance-gated, no agent session) found on 2026-08-30 that were missing from the ad; discover newly-joined groups the same way. Admin-only groups the bot cannot post to (send returns 'forbidden') are omitted. Edit this list to add/remove groups; no code change needed. Newly-joined groups for reference: Buying and Selling (120363292471414376@g.us), Zim Mining Company (120363411788614990@g.us), TerraTones Advertising (120363374641440124@g.us), Bulawayo all links, yonkinto (120363411842576299@g.us). Admin-only (announcement) group 120363157571427036@g.us is omitted: the bot cannot post there (send returns 'forbidden').",
   "groups": [
     "120363275485319265@g.us",
     "120363364576432272@g.us",
@@ -14,6 +14,8 @@
     "120363417642755000@g.us",
     "120363422964450745@g.us",
     "120363292471414376@g.us",
-    "120363411788614990@g.us"
+    "120363411788614990@g.us",
+    "120363374641440124@g.us",
+    "120363411842576299@g.us"
   ]
 }
