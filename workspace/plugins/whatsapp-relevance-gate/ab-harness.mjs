@@ -32,7 +32,7 @@ const TEMPLATE = path.join(repoRoot, "config", "openclaw.template.json");
 function loadRelevanceConfig() {
   const cfg = JSON.parse(fs.readFileSync(TEMPLATE, "utf8"));
   const relevance = cfg.plugins?.entries?.["whatsapp-relevance-gate"]?.config ?? {};
-  const memorySearch = JSON.parse(JSON.stringify(cfg.agents?.defaults?.memorySearch ?? {}));
+  const memorySearch = JSON.parse(JSON.stringify(cfg.memory?.search ?? {}));
   // The template stores apiKey as a dotenv SecretRef (resolved from ~/.openclaw/.env
   // in production). For local harness runs, substitute the literal env key so the
   // provider can authenticate without a populated dotenv file.
@@ -72,7 +72,7 @@ const DEFAULT_FIXTURE = [
 function buildApi(mode, relevance, memorySearch) {
   return {
     config: {
-      agents: { defaults: { memorySearch } },
+      memory: { search: memorySearch },
       plugins: {
         entries: {
           "whatsapp-relevance-gate": { config: { ...relevance, relevanceMode: mode } },

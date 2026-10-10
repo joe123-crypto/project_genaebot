@@ -65,6 +65,13 @@ class ApplyTemplateTests(unittest.TestCase):
         self.assertIn("private administrator", direct["+213000000000"]["systemPrompt"])
         self.assertEqual([binding["agentId"] for binding in merged["bindings"]], ["main", "public"])
 
+    def test_retired_meta_key_is_dropped_from_preserved_meta(self):
+        live = {"meta": {"lastTouchedVersion": "2026.6.34", "lastTouchedAt": "2026-10-01T00:00:00.000Z"}}
+
+        merged = PATCHER.apply_template(live, {}, "public prompt")
+
+        self.assertEqual(merged["meta"], {"lastTouchedVersion": "2026.6.34"})
+
     def test_empty_prompt_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "prompt is empty"):
             PATCHER.apply_template({}, {}, "  \n")

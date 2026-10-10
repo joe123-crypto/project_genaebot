@@ -11,7 +11,8 @@
 //     empty anchors) returns the fail-open verdict so an outage never blocks
 //     real users. Set failOpen:false in config to invert.
 //   * The model is pinned to google/text-multilingual-embedding-002 via the
-//     Vercel AI gateway (reuses agents.defaults.memorySearch.remote), and is
+//     Vercel AI gateway (reuses memory.search.remote; the pre-2026.9 OpenClaw
+//     path agents.defaults.memorySearch.remote is still honoured), and is
 //     overridable through the `embeddingModel` config key.
 
 const PLUGIN_ID = "whatsapp-relevance-gate";
@@ -157,7 +158,7 @@ async function getEmbedder(api) {
   if (providerCache.has(model)) return providerCache.get(model);
 
   const cfg = getCurrentConfig(api);
-  const remote = cfg.agents?.defaults?.memorySearch?.remote;
+  const remote = cfg.memory?.search?.remote ?? cfg.agents?.defaults?.memorySearch?.remote;
   if (!remote || !remote.baseUrl) return null; // no gateway configured
 
   const { getEmbeddingProvider, cosineSimilarity } = await loadSdk();
