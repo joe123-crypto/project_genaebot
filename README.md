@@ -663,11 +663,20 @@ A new OpenClaw release refuses to start on state written by an older one until
 `openclaw doctor --fix` has run. Both entrypoints therefore run a one-time upgrade
 migration before the gateway until `.openclaw-upgrade-<version>.done` exists on the volume
 (or whenever `meta.lastTouchedVersion` in `openclaw.json` differs from the installed
-version): they snapshot the config to
+version, or an npm-installed plugin in `openclaw plugins list --json` is not at the
+installed version): they snapshot the config to
 `openclaw.json.pre-upgrade-<version>`, run doctor until it converges (it upgrades the
-external `@openclaw/*` plugins on the volume to the matching release), restore the
-WhatsApp `allowFrom`/`groupAllowFrom` lists from the snapshot (doctor would otherwise add
-`"*"`), and validate. One-off commands (`railway ssh -- …`) skip this step.
+external `@openclaw/*` plugins on the volume to the matching release), run
+`openclaw plugins update` for any plugin still behind, restore the WhatsApp
+`allowFrom`/`groupAllowFrom` lists from the snapshot (doctor would otherwise add `"*"`),
+and validate. One-off commands (`railway ssh -- …`) skip this step.
+
+Doctor only warns when it cannot update a plugin, and a plugin built for an older core
+fails to register (for WhatsApp: the bot stops replying). npm runs as `joseph`, so
+`/home/joseph/.npm` must be writable by it: the images delete the cache `npm install -g`
+leaves there as root, and the entrypoints chown it at boot. If a plugin still cannot be
+updated, the entrypoint logs `WARNING: plugins still not at <version>` and retries on the
+next boot.
 
 The 2026.9 config schema moved `agents.list` to keyed `agents.entries`,
 `agents.defaults.memorySearch` to `memory.search`, `media` to `attachments`, and WhatsApp

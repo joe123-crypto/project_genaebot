@@ -65,7 +65,8 @@ RUN userdel -r node 2>/dev/null || true \
  && useradd -m -u 1000 -g 1000 -s /bin/bash joseph
 
 RUN npm install -g openclaw@2026.9.9 \
- && npm cache clean --force
+ && npm cache clean --force \
+ && rm -rf /home/joseph/.npm
 
 # Bake the curated source overlay assembled in stage 1. The entrypoint syncs it
 # onto the state volume on every boot (source of truth for workspace/ and the
