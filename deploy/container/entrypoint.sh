@@ -106,7 +106,12 @@ done
 # Secondary agents do not inherit model-provider environment keys at run time.
 # Materialize the OpenRouter key as a static profile for the restricted public
 # agent before the gateway opens and locks the auth store.
-if [ -n "${OPENROUTER_API_KEY:-}" ] && grep -q '"id"[[:space:]]*:[[:space:]]*"public"' "$OC_DIR/openclaw.json"; then
+# OpenClaw >=2026.9 keys agents under agents.entries; older configs used agents.list.
+if [ -n "${OPENROUTER_API_KEY:-}" ] && python3 -c '
+import json, sys
+agents = json.load(open(sys.argv[1])).get("agents", {})
+sys.exit(0 if "public" in (agents.get("entries") or {}) or any(a.get("id") == "public" for a in agents.get("list", [])) else 1)
+' "$OC_DIR/openclaw.json" 2>/dev/null; then
   runuser -u joseph -- env PUBLIC_MODEL_API_KEY="$OPENROUTER_API_KEY" python3 - <<'PY'
 import json
 import os
