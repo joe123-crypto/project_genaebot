@@ -5,8 +5,9 @@ Borehole-drilling daily ad poster.
 Posts a FIXED, predefined advert (caption + rotating image) for solar borehole
 system installation packages (0.75HP / 1HP / 1.5HP / 2HP DC pump packages) to a
 configured set of WhatsApp groups, once per day per group. There is NO AI/LLM
-generation involved: the post text is a hardcoded constant and the images are
-bundled assets that rotate daily. This script is meant to run from an OpenClaw
+generation involved: the post text is a set of hardcoded caption variants and the
+images are bundled assets that rotate daily, except the El Nino variant, which
+always uses assets/elnino.jpg and links the MSD seasonal forecast. This script is meant to run from an OpenClaw
 `--command` cron (deterministic, no agent turn).
 
 Delivery, invite/JID resolution, per-group state, the weekly cadence, and the
@@ -64,6 +65,19 @@ _IMAGE_ASSETS = [
     os.path.join(HERE, "assets", "borehole-4.jpg"),
 ]
 IMAGE = os.environ.get("BOREHOLE_IMAGE") or _IMAGE_ASSETS
+
+# The El Nino caption variant (POST_TEXT_V4) always goes out with its own
+# matching photo instead of the daily rotation above.
+ELNINO_IMAGE = os.path.join(HERE, "assets", "elnino.jpg")
+
+# Zimbabwe Meteorological Services Department 2026-2027 seasonal forecast, cited
+# and linked by the El Nino variant.
+FORECAST_URL = (
+    "https://www.weatherzw.org.zw/products/seasonal-forecast/"
+    "2026-2027-seasonal-forecast/"
+)
+# External source links a variant may carry on top of the shared ad facts.
+SOURCE_URLS = (FORECAST_URL,)
 
 # Fixed advert. Package details are extracted from the operator-supplied poster
 # (packages only; the source brand/logo is deliberately dropped). Emoji are kept
@@ -174,7 +188,41 @@ POST_TEXT_V3 = (
     "\U0001F4DE WhatsApp: +263785632943 - Genaie"
 )
 
-POST_TEXTS = [POST_TEXT, POST_TEXT_V2, POST_TEXT_V3]
+# El Nino / dry-season variant. The ONLY variant allowed an external claim: the
+# MSD seasonal forecast, attributed and linked via FORECAST_URL. Ad facts stay
+# identical to the other variants.
+POST_TEXT_V4 = (
+    "\u2600\ufe0f *El Nino is coming. Are you prepared?* \u2600\ufe0f\n"
+    "The Meteorological Services Department's seasonal forecast warns that El Nino "
+    "could bring a drier-than-normal season, with below-normal rains and long dry "
+    "spells expected, especially early in the season.\n"
+    "\U0001F4C4 Read the forecast: " + FORECAST_URL + "\n"
+    "\n"
+    "Don't wait for the wells and taps to run dry. Get a solar borehole system "
+    "installed now: professional borehole drilling you can depend on.\n"
+    "\n"
+    "*BOREHOLE SYSTEM INSTALLATION PACKAGES*\n"
+    "\U0001F4A7 Package 1 - 0.75HP DC Pump with Control Box: *$1800*\n"
+    "\U0001F4A7 Package 2 - 1HP DC Pump with Control Box: *$2000*\n"
+    "\U0001F4A7 Package 3 - 1.5HP DC Pump with Control Box: *$2200*\n"
+    "\U0001F4A7 Package 4 - 2HP DC Pump with Control Box: *$2400*\n"
+    "\n"
+    "\u2705 Every package includes: 5000L Tank \u2022 4 Meters Tank Stand \u2022 "
+    "Pump & External Controller \u2022 Solar Panels \u2022 Solar Stand \u2022 "
+    "Pipes & Cables \u2022 1 Garden Tap \u2022 All Accessories & Installation\n"
+    "\n"
+    "\U0001F4CD Based in Bindura - We Come To You!\n"
+    "\U0001F4DE WhatsApp: +263785632943 - Genaie"
+)
+
+POST_TEXTS = [POST_TEXT, POST_TEXT_V2, POST_TEXT_V3, POST_TEXT_V4]
+
+# Variant index -> fixed image. BOREHOLE_IMAGE (a test override) still forces a
+# single image for every variant.
+VARIANT_IMAGES = (
+    {} if os.environ.get("BOREHOLE_IMAGE")
+    else {POST_TEXTS.index(POST_TEXT_V4): ELNINO_IMAGE}
+)
 
 # Per-group ref-coded wa.me link. The ad's contact number is Genaie's own
 # (+263785632943, the bot's WhatsApp number), so replies reach the bot and the
@@ -195,6 +243,7 @@ def main():
         send_delay=SEND_DELAY_SECONDS,
         tracking=TRACKING,
         promo_name="borehole-drilling-promo",
+        variant_images=VARIANT_IMAGES,
     )
 
 

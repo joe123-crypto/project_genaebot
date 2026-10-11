@@ -467,7 +467,8 @@ def _preview(caption, tracking):
 
 
 def _print_dry_run(jids, weekly, weekday, sent_map, today, image_path, rotating, text,
-                   eligible, pending, variants=None, tracking=None, day=None):
+                   eligible, pending, variants=None, tracking=None, day=None,
+                   variant_images=None):
     print("Targets (resolved JIDs): %d" % len(jids))
     variants = variants or [text]
     multi = len(variants) > 1
@@ -491,8 +492,12 @@ def _print_dry_run(jids, weekly, weekday, sent_map, today, image_path, rotating,
                 extra += "  variant %d/%d" % (idx + 1, len(variants))
             if ref:
                 extra += "  ref %s" % ref
+            if variant_images and idx in variant_images:
+                extra += "  image %s" % os.path.basename(variant_images[idx])
         print("  - %s  [%s]%s" % (j, mark, extra))
     print(("Image (today): %s" if rotating else "Image: %s") % image_path)
+    for k, path in sorted((variant_images or {}).items()):
+        print("Image (variant %d/%d): %s" % (k + 1, len(variants), path))
     if multi:
         for k, v in enumerate(variants):
             print("\n----- message (variant %d/%d) -----" % (k + 1, len(variants)))
@@ -509,7 +514,7 @@ def _print_dry_run(jids, weekly, weekday, sent_map, today, image_path, rotating,
 
 
 def broadcast(*, text, image, targets_file, state_file, send_delay=3.0, argv=None,
-              tracking=None, promo_name=None):
+              tracking=None, promo_name=None, variant_images=None):
     """Resolve targets, skip groups already sent today (and weekly-limited groups
     off their configured weekday), then send the advert to each pending group,
     committing state per group so a crash or retry never double-posts. Returns a
@@ -519,8 +524,10 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=3.0, argv=Non
     rotate per group per post (see :func:`variant_index`). ``tracking`` is
     optional: ``{"prefix": "BH", "number": "+263...", "label": "borehole"}`` plus
     optional ``prefill`` / ``link_line`` templates; when set, each group's caption
-    carries its ref code + wa.me link. ``--refs`` prints the ref mapping and
-    exits without sending or touching state."""
+    carries its ref code + wa.me link. ``variant_images`` is optional:
+    ``{variant_index: image_path}`` pins a fixed image to a caption variant (e.g. a
+    themed caption that needs its matching photo); other variants keep ``image``.
+    ``--refs`` prints the ref mapping and exits without sending or touching state."""
     args = sys.argv[1:] if argv is None else argv
     show_refs = "--refs" in args
     dry = "--dry-run" in args or show_refs
@@ -538,6 +545,13 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=3.0, argv=Non
     if not image_path or not os.path.exists(image_path):
         sys.stderr.write("ERROR: promo image missing: %s\n" % image_path)
         return 1
+    variant_images = dict(variant_images or {})
+    for k, path in variant_images.items():
+        if not 0 <= k < len(variants):
+            raise ValueError("variant_images index out of range: %r" % k)
+        if not path or not os.path.exists(path):
+            sys.stderr.write("ERROR: promo image missing: %s\n" % path)
+            return 1
 
     entries = load_targets(targets_file)
     weekly = load_weekly_targets(targets_file)
@@ -574,7 +588,7 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=3.0, argv=Non
     if dry:
         _print_dry_run(jids, weekly, weekday, sent_map, today, image_path, rotating,
                        text, eligible, pending, variants=variants, tracking=tracking,
-                       day=day)
+                       day=day, variant_images=variant_images)
         return 0
 
     if not pending:
@@ -585,9 +599,9 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=3.0, argv=Non
     skipped = 0
     sent = 0
     for i, jid in enumerate(pending):
-        _, caption, _ = caption_for(jid, variants, day=day, allowed=weekly.get(jid),
-                                    tracking=tracking)
-        ok, out = send_ad(jid, caption, image_path)
+        idx, caption, _ = caption_for(jid, variants, day=day, allowed=weekly.get(jid),
+                                      tracking=tracking)
+        ok, out = send_ad(jid, caption, variant_images.get(idx, image_path))
         if ok:
             sent_map[jid] = today
             save_state(state_file, st)  # commit per group: crash/retry never double-posts
