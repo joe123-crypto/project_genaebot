@@ -42,6 +42,12 @@ PRESERVE_PATHS: list[list[str]] = [
     ["tools", "elevated", "allowFrom"],                                        # PII: elevated-access phones
 ]
 
+# Keys an older OpenClaw wrote inside a preserved path that the current schema
+# rejects. OpenClaw >=2026.9 refuses to start on meta.lastTouchedAt (2026.6.x).
+RETIRED_PRESERVED_KEYS: list[list[str]] = [
+    ["meta", "lastTouchedAt"],
+]
+
 
 def get_path(d: dict, path: list[str]):
     """Return (found, value) for a nested path."""
@@ -124,6 +130,10 @@ def apply_template(live: dict, template: dict, public_whatsapp_prompt: str) -> d
         found, value = get_path(live, path)
         if found:
             set_path(merged, path, json.loads(json.dumps(value)))
+    for path in RETIRED_PRESERVED_KEYS:
+        found, parent = get_path(merged, path[:-1])
+        if found and isinstance(parent, dict):
+            parent.pop(path[-1], None)
     set_public_whatsapp_prompt(merged, public_whatsapp_prompt)
     set_admin_bindings(merged)
     return merged

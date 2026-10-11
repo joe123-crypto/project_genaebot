@@ -19,7 +19,7 @@
 # ---------------------------------------------------------------------------
 # Stage 1: assemble the curated source overlay from repo HEAD.
 # ---------------------------------------------------------------------------
-FROM node:22-bookworm-slim AS stage
+FROM node:24-bookworm-slim AS stage
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends rsync ca-certificates \
@@ -40,7 +40,7 @@ RUN bash /src/deploy/stage-openclaw-source.sh /src /opt/live-source \
 # ---------------------------------------------------------------------------
 # Stage 2: the gateway runtime image.
 # ---------------------------------------------------------------------------
-FROM node:22-bookworm-slim
+FROM node:24-bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive \
     HOME=/home/joseph \
@@ -64,7 +64,7 @@ RUN userdel -r node 2>/dev/null || true \
  && groupadd -g 1000 joseph \
  && useradd -m -u 1000 -g 1000 -s /bin/bash joseph
 
-RUN npm install -g openclaw@2026.6.34 \
+RUN npm install -g openclaw@2026.9.9 \
  && npm cache clean --force
 
 # Bake the curated source overlay assembled in stage 1. The entrypoint syncs it

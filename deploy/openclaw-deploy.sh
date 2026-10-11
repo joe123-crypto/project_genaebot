@@ -734,7 +734,8 @@ from pathlib import Path
 
 config = json.loads(Path("/home/joseph/.openclaw/openclaw.json").read_text(encoding="utf-8"))
 agents = config.get("agents", {})
-listed = {entry.get("id"): entry for entry in agents.get("list", [])}
+# OpenClaw >=2026.9 keys agents by id under agents.entries; older configs used agents.list.
+listed = dict(agents.get("entries") or {}) or {entry.get("id"): entry for entry in agents.get("list", [])}
 admin = listed.get("main", {})
 public = listed.get("public", {})
 if admin.get("workspace") != "/home/joseph/.openclaw/agent-workspace-admin":

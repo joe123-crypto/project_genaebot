@@ -42,24 +42,13 @@
         "maxChildrenPerAgent": 4,
         "runTimeoutSeconds": 2700
       },
-      "memorySearch": {
-        "provider": "openai-compatible",
-        "model": "google/text-embedding-005",
-        "remote": {
-          "baseUrl": "https://ai-gateway.vercel.sh/v1",
-          "apiKey": {
-            "source": "env",
-            "provider": "dotenv",
-            "id": "AI_GATEWAY_API_KEY"
-          }
-        }
-      },
-      "thinkingDefault": "high"
+      "thinkingDefault": "high",
+      "heartbeat": { "agentId": "main" },
+      "systemAgent": { "agentId": "main" }
     },
-    "list": [
-      {
-        "id": "main",
-        "default": true,
+    "ownership": "explicit",
+    "entries": {
+      "main": {
         "workspace": "/home/joseph/.openclaw/agent-workspace-admin",
         "subagents": {
           "allowAgents": ["main"]
@@ -68,19 +57,35 @@
           "alsoAllow": ["sessions_spawn", "sessions_yield", "subagents"]
         }
       },
-      {
-        "id": "public",
+      "public": {
         "workspace": "/home/joseph/.openclaw/agent-workspace-public",
-        "memorySearch": {
-          "enabled": false
-        },
         "tools": {
           "allow": ["public_service"],
           "deny": ["exec", "process", "read", "write", "edit", "apply_patch", "browser", "gateway", "cron", "sessions_list", "sessions_history", "sessions_send", "subagents", "agents_list", "message"]
+        },
+        "memory": {
+          "search": {
+            "enabled": false
+          }
         }
       }
-    ]
+    }
   },
+  "memory": {
+    "search": {
+      "provider": "openai-compatible",
+      "model": "google/text-embedding-005",
+      "remote": {
+        "baseUrl": "https://ai-gateway.vercel.sh/v1",
+        "apiKey": {
+          "source": "env",
+          "provider": "dotenv",
+          "id": "AI_GATEWAY_API_KEY"
+        }
+      }
+    }
+  },
+  "talk": { "agentId": "main" },
   "bindings": [
     {
       "agentId": "public",
@@ -89,6 +94,10 @@
         "accountId": "*",
         "peer": { "kind": "direct", "id": "*" }
       }
+    },
+    {
+      "agentId": "main",
+      "match": { "channel": "whatsapp", "accountId": "*" }
     }
   ],
   "plugins": {
@@ -105,6 +114,7 @@
       "voice-call": {
         "enabled": true,
         "config": {
+          "agentId": "main",
           "provider": "mock",
           "sessionScope": "per-phone",
           "outbound": {
@@ -203,25 +213,21 @@
       ]
     }
   },
-  "web": {
-    "enabled": true,
-    "whatsapp": {
-      "keepAliveIntervalMs": 25000,
-      "connectTimeoutMs": 60000,
-      "defaultQueryTimeoutMs": 60000
-    }
-  },
   "channels": {
     "whatsapp": {
       "dmPolicy": "open",
       "groupPolicy": "disabled",
       "selfChatMode": true,
       "sendReadReceipts": false,
-      "blockStreaming": true,
-      "blockStreamingCoalesce": {
-        "minChars": 400,
-        "maxChars": 900,
-        "idleMs": 1200
+      "streaming": {
+        "block": {
+          "enabled": true,
+          "coalesce": {
+            "minChars": 400,
+            "maxChars": 900,
+            "idleMs": 1200
+          }
+        }
       },
       "enabled": true
     }
@@ -365,7 +371,7 @@
       }
     }
   },
-  "media": {
+  "attachments": {
     "ttlHours": 168
   },
   "messages": {

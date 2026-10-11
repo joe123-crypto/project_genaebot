@@ -32,8 +32,8 @@ function fakeEmbeddings(extra = {}) {
 function embApi({ config = {}, embeddings, withGateway = false } = {}) {
   return {
     config: {
-      agents: withGateway
-        ? { defaults: { memorySearch: { remote: { baseUrl: "https://gateway.example/v1" } } } }
+      memory: withGateway
+        ? { search: { remote: { baseUrl: "https://gateway.example/v1" } } }
         : {},
       plugins: {
         entries: {

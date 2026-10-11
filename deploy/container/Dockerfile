@@ -3,7 +3,7 @@
 # Contains only the immutable runtime: OS packages, Node, the global OpenClaw
 # CLI, and Python. Durable OpenClaw state is mounted at /home/joseph/.openclaw.
 
-FROM node:22-bookworm-slim
+FROM node:24-bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive \
     HOME=/home/joseph \
@@ -26,7 +26,7 @@ RUN userdel -r node 2>/dev/null || true \
  && groupadd -g 1000 joseph \
  && useradd -m -u 1000 -g 1000 -s /bin/bash joseph
 
-RUN npm install -g openclaw@2026.6.34 \
+RUN npm install -g openclaw@2026.9.9 \
  && npm cache clean --force
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh

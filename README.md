@@ -655,8 +655,28 @@ git ls-files
 
 The gateway image pins OpenClaw via `npm install -g openclaw@<version>` in
 `deploy/railway/Dockerfile` and `deploy/container/Dockerfile`. The current pin is
-`openclaw@2026.6.34` (the `extended-stable` maintenance channel). Bump both Dockerfiles
-together to keep the Railway and Compose paths from drifting.
+`openclaw@2026.9.9` (the `latest` stable channel), which requires Node `>=24.16`, so both
+images use `node:24-bookworm-slim`. Bump both Dockerfiles together to keep the Railway and
+Compose paths from drifting.
+
+A new OpenClaw release refuses to start on state written by an older one until
+`openclaw doctor --fix` has run. Both entrypoints therefore run a one-time upgrade
+migration before the gateway until `.openclaw-upgrade-<version>.done` exists on the volume
+(or whenever `meta.lastTouchedVersion` in `openclaw.json` differs from the installed
+version): they snapshot the config to
+`openclaw.json.pre-upgrade-<version>`, run doctor until it converges (it upgrades the
+external `@openclaw/*` plugins on the volume to the matching release), restore the
+WhatsApp `allowFrom`/`groupAllowFrom` lists from the snapshot (doctor would otherwise add
+`"*"`), and validate. One-off commands (`railway ssh -- …`) skip this step.
+
+The 2026.9 config schema moved `agents.list` to keyed `agents.entries`,
+`agents.defaults.memorySearch` to `memory.search`, `media` to `attachments`, and WhatsApp
+`blockStreaming*` to `channels.whatsapp.streaming.block`; it removed `web.whatsapp` (its
+socket timings are now the plugin defaults) and requires an explicit
+`plugins.entries.voice-call.config.agentId` when several agents exist. The template uses
+the new shape. To roll back, redeploy the previous image and restore
+`openclaw.json.pre-upgrade-<version>` plus the `*.pre-startup-migration-*.bak` SQLite
+backups doctor leaves next to each database.
 
 A runtime WhatsApp compatibility shim used to live in both `entrypoint.sh` files to work
 around a `formatInboundMediaUnavailableText` import mismatch in the 2026.6.11 packages. As
