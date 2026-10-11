@@ -432,11 +432,15 @@ The deploy script used by both paths:
   packages, each with tank, stand, solar and installation) to the WhatsApp group JIDs
   listed in `workspace/cron/borehole-drilling-promo/targets.json`, rotating through four
   bundled photos daily and reusing the same shared `promo_broadcast` delivery engine.
+  Its fourth caption variant ("El Nino is coming. Are you prepared?") cites and links
+  the Meteorological Services Department 2026-2027 seasonal forecast and always posts
+  with `assets/elnino.jpg` instead of the rotating photo.
   Most groups get the ad daily; groups under the file's `weekly_groups` map are posted
   to only on their configured weekdays, which is how MUTANDIRI VILLAGE RESIDENTS gets
   the ad three times a week (Mon, Wed and Fri)
-- all six promo crons above rotate between three caption variants (the original
-  operator copy plus two rewordings with identical facts) and carry a per-group
+- all six promo crons above rotate between caption variants (the original operator
+  copy plus rewordings with identical facts; three each, four for the borehole promo)
+  and carry a per-group
   tracking link; see "Promo caption rotation and ad ref tracking" below
 - writes `/home/joseph/openclaw-deploy/.last-successful-deploy.json` only after all
   required readiness, health, and reconciliation steps finish successfully
@@ -479,12 +483,17 @@ which the read-only bind mounts make redundant). The flag is only needed to
 
 The shared promo engine (`workspace/lib/promo_broadcast.py`) accepts either one
 caption string (sent verbatim, as before) or a list of caption variants. Each
-promo now supplies three: its original operator copy as variant 1, plus two
-rewordings that keep every fact identical. A group's variant is
-`(post counter + sha256(group JID)) % 3`, so a group never gets the same caption
+promo now supplies three (the borehole promo four): its original operator copy as
+variant 1, plus rewordings that keep every fact identical (the borehole El Nino
+variant may additionally carry its cited forecast link, listed in `SOURCE_URLS`).
+A group's variant is `(post counter + sha256(group JID)) % <variant count>`, so a
+group never gets the same caption
 on two consecutive posts (weekly-limited groups count their own posting days) and
-groups are spread across variants on a given day. `--dry-run` shows each group's
-variant and ref.
+groups are spread across variants on a given day. A promo may pass
+`variant_images={variant_index: image_path}` to pin a fixed image to one variant
+(the borehole El Nino variant uses `assets/elnino.jpg`); other variants keep the
+daily image rotation. `--dry-run` shows each group's variant, ref and any pinned
+image.
 
 Each promo also passes a `TRACKING` config (opt-in; a promo without one sends
 exactly its caption). Every group gets a stable ref code: a promo prefix plus
