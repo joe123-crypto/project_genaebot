@@ -171,18 +171,38 @@ fi
 # upgraded the external plugins. Doctor also "repairs" dmPolicy=open by adding
 # "*" to the WhatsApp allowlists, which would widen who can reach the bot, so
 # those lists are restored from the pre-upgrade snapshot. Runs when the
-# installed version has no completion marker or differs from the one that last
-# wrote openclaw.json; an interrupted run resumes from its original snapshot.
+# installed version has no completion marker, differs from the one that last
+# wrote openclaw.json, or an npm-installed plugin (e.g. whatsapp) is not at the
+# installed version; an interrupted run resumes from its original snapshot.
+# Doctor only warns when it cannot update a plugin, and a plugin built for an
+# older core fails to register, so the plugin versions are checked explicitly.
+# npm runs as joseph and needs a writable cache under $HOME.
+install -d -o joseph -g joseph /home/joseph/.npm
+chown -R joseph:joseph /home/joseph/.npm
 openclaw_installed="$(runuser -u joseph -- openclaw --version 2>/dev/null | grep -oE '[0-9]{4}\.[0-9]+\.[0-9]+' | head -n 1 || true)"
 openclaw_recorded="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("meta", {}).get("lastTouchedVersion", ""))' "$OC_DIR/openclaw.json" 2>/dev/null || true)"
+stale_openclaw_plugins() {
+  runuser -u joseph -- openclaw plugins list --json 2>/dev/null | python3 -c '
+import json, sys
+try:
+    plugins = json.load(sys.stdin).get("plugins", [])
+except ValueError:
+    plugins = []
+print(" ".join(sorted({p["id"] for p in plugins if p.get("origin") == "global" and p.get("version") != sys.argv[1]})))
+' "$openclaw_installed" || true
+}
 upgrade_marker="$OC_DIR/.openclaw-upgrade-$openclaw_installed"
-if [ -n "$openclaw_installed" ] && { [ ! -e "$upgrade_marker.done" ] || [ "$openclaw_installed" != "$openclaw_recorded" ]; }; then
+openclaw_stale=""
+if [ -n "$openclaw_installed" ] && [ -e "$upgrade_marker.done" ] && [ "$openclaw_installed" = "$openclaw_recorded" ]; then
+  openclaw_stale="$(stale_openclaw_plugins)"
+fi
+if [ -n "$openclaw_installed" ] && { [ ! -e "$upgrade_marker.done" ] || [ "$openclaw_installed" != "$openclaw_recorded" ] || [ -n "$openclaw_stale" ]; }; then
   upgrade_snapshot="$OC_DIR/openclaw.json.pre-upgrade-$openclaw_installed"
   if [ ! -e "$upgrade_marker.started" ] || [ ! -e "$upgrade_snapshot" ]; then
     cp -p "$OC_DIR/openclaw.json" "$upgrade_snapshot"
     runuser -u joseph -- touch "$upgrade_marker.started"
   fi
-  log "OpenClaw ${openclaw_recorded:-unknown} -> $openclaw_installed: running doctor --fix (config snapshot: $upgrade_snapshot)"
+  log "OpenClaw ${openclaw_recorded:-unknown} -> $openclaw_installed${openclaw_stale:+ (stale plugins: $openclaw_stale)}: running doctor --fix (config snapshot: $upgrade_snapshot)"
   for doctor_pass in 1 2 3; do
     if runuser -u joseph -- openclaw doctor --fix --non-interactive --no-workspace-suggestions; then
       break
@@ -193,6 +213,14 @@ if [ -n "$openclaw_installed" ] && { [ ! -e "$upgrade_marker.done" ] || [ "$open
     fi
     log "doctor pass $doctor_pass did not finish cleanly; retrying"
   done
+  openclaw_stale="$(stale_openclaw_plugins)"
+  if [ -n "$openclaw_stale" ]; then
+    log "updating plugins not at $openclaw_installed: $openclaw_stale"
+    # shellcheck disable=SC2086 # plugin ids are space-separated words
+    runuser -u joseph -- openclaw plugins update $openclaw_stale || true
+    runuser -u joseph -- openclaw doctor --fix --non-interactive --no-workspace-suggestions || true
+    openclaw_stale="$(stale_openclaw_plugins)"
+  fi
   runuser -u joseph -- python3 - "$upgrade_snapshot" "$OC_DIR/openclaw.json" <<'PY'
 import json
 import os
@@ -229,7 +257,11 @@ PY
   runuser -u joseph -- openclaw config validate
   runuser -u joseph -- touch "$upgrade_marker.done"
   rm -f "$upgrade_marker.started"
-  log "OpenClaw upgrade migration to $openclaw_installed complete"
+  if [ -n "$openclaw_stale" ]; then
+    echo "[entrypoint] WARNING: plugins still not at $openclaw_installed: $openclaw_stale. They will fail to load (WhatsApp is unavailable if whatsapp is listed); retrying on the next boot." >&2
+  else
+    log "OpenClaw upgrade migration to $openclaw_installed complete"
+  fi
 fi
 
 # --bind lan  : listen on all container interfaces so the published port is reachable
