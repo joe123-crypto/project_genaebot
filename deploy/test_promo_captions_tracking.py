@@ -168,6 +168,52 @@ class VariantRotationTests(unittest.TestCase):
         finally:
             pb.send_ad, pb.date = saved_send, saved_date
 
+    def test_variant_images_pin_an_image_to_a_variant(self):
+        sent = {}
+        saved_send, saved_date = pb.send_ad, pb.date
+        pb.send_ad = lambda target, text, image: (sent.__setitem__(target, image)
+                                                  or (True, '{"messageId":"m"}'))
+        pb.date = pin(date(2026, 10, 9))
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                img, pinned = Path(tmp, "ad.png"), Path(tmp, "pinned.png")
+                img.write_bytes(b"img")
+                pinned.write_bytes(b"img")
+                targets = Path(tmp, "targets.json")
+                targets.write_text(json.dumps({"groups": self.JIDS[:12]}))
+                rc = pb.broadcast(text=self.VARIANTS, image=str(img),
+                                  targets_file=str(targets),
+                                  state_file=str(Path(tmp, "state.json")),
+                                  send_delay=0, argv=[],
+                                  variant_images={1: str(pinned)})
+                self.assertEqual(rc, 0)
+                idxs = {j: pb.variant_index(j, 3, day=date(2026, 10, 9))
+                        for j in self.JIDS[:12]}
+                self.assertIn(1, idxs.values())
+                self.assertNotEqual(set(idxs.values()), {1})
+                for jid, idx in idxs.items():
+                    self.assertEqual(sent[jid], str(pinned if idx == 1 else img), jid)
+        finally:
+            pb.send_ad, pb.date = saved_send, saved_date
+
+    def test_missing_variant_image_fails_before_sending(self):
+        saved = pb.send_ad
+        pb.send_ad = lambda *a: self.fail("must not send")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                img = Path(tmp, "ad.png")
+                img.write_bytes(b"img")
+                Path(tmp, "t.json").write_text(json.dumps({"groups": self.JIDS[:3]}))
+                with redirect_stdout(io.StringIO()):
+                    rc = pb.broadcast(text=self.VARIANTS, image=str(img),
+                                      targets_file=str(Path(tmp, "t.json")),
+                                      state_file=str(Path(tmp, "s.json")),
+                                      send_delay=0, argv=[],
+                                      variant_images={2: str(Path(tmp, "nope.png"))})
+                self.assertEqual(rc, 1)
+        finally:
+            pb.send_ad = saved
+
     def test_string_caption_is_sent_verbatim(self):
         sent = []
         saved = pb.send_ad
@@ -261,9 +307,10 @@ class PromoWiringTests(unittest.TestCase):
     def test_each_promo_has_three_variants_with_original_first(self):
         for name in PROMOS:
             m = load_promo(name)
-            self.assertEqual(len(m.POST_TEXTS), 3, name)
+            self.assertGreaterEqual(len(m.POST_TEXTS), 3, name)
             self.assertIs(m.POST_TEXTS[0], m.POST_TEXT, name)
-            self.assertEqual(len(set(m.POST_TEXTS)), 3, "%s: duplicate variants" % name)
+            self.assertEqual(len(set(m.POST_TEXTS)), len(m.POST_TEXTS),
+                             "%s: duplicate variants" % name)
 
     def test_variants_keep_every_fact(self):
         for name in PROMOS:
@@ -271,7 +318,22 @@ class PromoWiringTests(unittest.TestCase):
             base = facts(m.POST_TEXT)
             self.assertTrue(base, name)
             for k, v in enumerate(m.POST_TEXTS[1:], start=2):
+                # Cited source links (e.g. the borehole El Nino variant's forecast
+                # URL) are the only extra content a variant may carry.
+                for url in getattr(m, "SOURCE_URLS", ()):
+                    v = v.replace(url, "")
                 self.assertEqual(facts(v), base, "%s variant %d facts drifted" % (name, k))
+
+    def test_borehole_elnino_variant(self):
+        m = load_promo("borehole-drilling-promo")
+        v4 = m.POST_TEXT_V4
+        self.assertIn(m.POST_TEXT_V4, m.POST_TEXTS)
+        self.assertIn("*El Nino is coming. Are you prepared?*", v4.splitlines()[0])
+        self.assertIn(m.FORECAST_URL, v4)
+        self.assertTrue(m.FORECAST_URL.startswith("https://www.weatherzw.org.zw/"))
+        self.assertTrue(os.path.isfile(m.ELNINO_IMAGE), m.ELNINO_IMAGE)
+        if not os.environ.get("BOREHOLE_IMAGE"):
+            self.assertEqual(m.VARIANT_IMAGES, {m.POST_TEXTS.index(v4): m.ELNINO_IMAGE})
 
     def test_tracking_targets(self):
         for name, (_, prefix, number) in PROMOS.items():
@@ -309,11 +371,12 @@ class PromoWiringTests(unittest.TestCase):
         for name, (_, prefix, _) in PROMOS.items():
             rc, out = self._run(name, ["--dry-run"])
             self.assertEqual(rc, 0, name)
+            n = len(load_promo(name).POST_TEXTS)
             for jid in all_target_jids(name):
                 line = next(l for l in out.splitlines() if jid in l)
-                self.assertRegex(line, r"variant [123]/3", name)
+                self.assertRegex(line, r"variant \d+/%d" % n, name)
                 self.assertIn("ref %s" % pb.ref_code(prefix, jid), line)
-            self.assertIn("message (variant 3/3)", out)
+            self.assertIn("message (variant %d/%d)" % (n, n), out)
             self.assertIn("<ref_link>", out)
 
     def test_refs_flag_prints_mapping_without_sending(self):
