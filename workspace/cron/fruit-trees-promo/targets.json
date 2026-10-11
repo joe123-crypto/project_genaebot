@@ -1,5 +1,5 @@
 {
-  "_comment": "Target WhatsApp groups for the daily fruit-trees ad. Use group JIDs (ending in @g.us); the bot must be a MEMBER of each. Invite links are NOT reliably resolvable on this gateway (WhatsApp channels resolve is unsupported and the directory is config-backed), so always list JIDs here. Named groups for reference: ZVIRIKUITIKA MUBINDURA NEMASHONALAND CENTRAL YESE (120363428165196397@g.us), ZVIRIKUITIKA MUSHAMVA (120363417642755000@g.us), Shamva Bindura & Madziva (120363364576432272@g.us), Glendale Hustlers 24/7 (120363175904566195@g.us), Hatcliffe Community Newspaper..(HCN) (120363403898552868@g.us), Buying and Selling (120363292471414376@g.us), Zim Mining Company (120363411788614990@g.us), TerraTones Advertising (120363374641440124@g.us), Bulawayo all links, yonkinto (120363411842576299@g.us). Admin-only groups the bot cannot post to (send returns 'forbidden') are omitted. Edit this list to add/remove groups; no code change needed.",
+  "_comment": "Target WhatsApp groups for the daily fruit-trees ad. Use group JIDs (ending in @g.us); the bot must be a MEMBER of each. Invite links are NOT reliably resolvable on this gateway (WhatsApp channels resolve is unsupported and the directory is config-backed), so always list JIDs here. Named groups for reference: ZVIRIKUITIKA MUBINDURA NEMASHONALAND CENTRAL YESE (120363428165196397@g.us), ZVIRIKUITIKA MUSHAMVA (120363417642755000@g.us), Shamva Bindura & Madziva (120363364576432272@g.us), Glendale Hustlers 24/7 (120363175904566195@g.us), Hatcliffe Community Newspaper..(HCN) (120363403898552868@g.us), Buying and Selling (120363292471414376@g.us), Zim Mining Company (120363411788614990@g.us), TerraTones Advertising (120363374641440124@g.us), Bulawayo all links, yonkinto (120363411842576299@g.us). Admin-only groups the bot cannot post to (send returns 'forbidden') are omitted. Edit this list to add/remove groups; no code change needed. Newly-joined groups added 2026-10-11 (discovered via the WhatsApp sender-key store; names TBD): 120363410412233096, 120363426951301193, 120363414718035443, 120363406180229523, 120363427198843381, 120363217323303430, 120363426924923592, 120363406036971278, 120363427762371217, 120363427719606842.",
   "groups": [
     "120363428165196397@g.us",
     "120363417642755000@g.us",
@@ -9,6 +9,16 @@
     "120363292471414376@g.us",
     "120363411788614990@g.us",
     "120363374641440124@g.us",
-    "120363411842576299@g.us"
+    "120363411842576299@g.us",
+    "120363410412233096@g.us",
+    "120363426951301193@g.us",
+    "120363414718035443@g.us",
+    "120363406180229523@g.us",
+    "120363427198843381@g.us",
+    "120363217323303430@g.us",
+    "120363426924923592@g.us",
+    "120363406036971278@g.us",
+    "120363427762371217@g.us",
+    "120363427719606842@g.us"
   ]
 }
