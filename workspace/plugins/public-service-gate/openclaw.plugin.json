@@ -7,7 +7,9 @@
     "onStartup": true
   },
   "contracts": {
-    "tools": ["public_service"]
+    "tools": [
+      "public_service"
+    ]
   },
   "toolMetadata": {
     "public_service": {
@@ -74,6 +76,22 @@
       },
       "serviceStatePath": {
         "type": "string"
+      },
+      "greetingTemplatePath": {
+        "type": "string",
+        "description": "Deprecated and unread. Still present in the live openclaw.json on the volume, and configSchema is additionalProperties:false, so removing it here makes the live config invalid and the gateway refuses to start. Delete only after it is removed from the live config."
+      },
+      "pendingAckText": {
+        "type": "string",
+        "description": "Deprecated and unread. Still present in the live openclaw.json on the volume, and configSchema is additionalProperties:false, so removing it here makes the live config invalid and the gateway refuses to start. Delete only after it is removed from the live config."
+      },
+      "newsEnabled": {
+        "type": "boolean",
+        "description": "Deprecated and unread. Still present in the live openclaw.json on the volume, and configSchema is additionalProperties:false, so removing it here makes the live config invalid and the gateway refuses to start. Delete only after it is removed from the live config."
+      },
+      "eventScoutEnabled": {
+        "type": "boolean",
+        "description": "Deprecated and unread. Still present in the live openclaw.json on the volume, and configSchema is additionalProperties:false, so removing it here makes the live config invalid and the gateway refuses to start. Delete only after it is removed from the live config."
       }
     }
   }
