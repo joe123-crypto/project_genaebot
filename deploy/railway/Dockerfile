@@ -74,7 +74,8 @@ RUN npm install -g openclaw@2026.9.9 \
 COPY --from=stage /opt/live-source /opt/live-source
 
 COPY deploy/railway/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod 0755 /usr/local/bin/entrypoint.sh
+COPY deploy/railway/sync-public-prompt.py /usr/local/bin/sync-public-prompt.py
+RUN chmod 0755 /usr/local/bin/entrypoint.sh /usr/local/bin/sync-public-prompt.py
 
 EXPOSE 18789
 

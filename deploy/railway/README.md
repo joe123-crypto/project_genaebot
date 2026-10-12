@@ -49,7 +49,12 @@ GitHub-Actions deploy job that runs `railway up` with
   manual file copying, no drift.
 
 To change what the gateway ships (workspace code, cron jobs like the CV-promo ad targets,
-agent context markdown): edit it in this repo, open a PR, merge. That's the whole flow.
+agent context markdown, the public WhatsApp system prompt, the business info page):
+edit it in this repo, open a PR, merge. That's the whole flow. The prompt is the one
+piece of `openclaw.json` the boot rewrites: `deploy/railway/sync-public-prompt.py`
+(baked at `/usr/local/bin/`) copies `workspace/docs/public-whatsapp-system-prompt.txt`
+into `channels.whatsapp.direct["*"].systemPrompt` just before the gateway starts.
+The rest of `config/openclaw.template.json` is still not applied (see README).
 
 ## One-time wiring (must be done in the dashboards; the CLI cannot do these)
 
@@ -113,7 +118,8 @@ the project memory notes for the full seed/stuck-session recovery procedure.
 
 ```sh
 railway logs        # expect: [whatsapp] ... starting provider, [gateway] ready,
-                    #         [entrypoint] synced source overlay from /opt/live-source/workspace
+                    #         [entrypoint] synced source overlay from /opt/live-source/workspace,
+                    #         [entrypoint] public WhatsApp prompt updated|unchanged
 ```
 
 Do **not** trigger a manual ad send to test — the CV-promo campaign delivers on its own

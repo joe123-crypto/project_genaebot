@@ -451,14 +451,22 @@ config/openclaw.template.json
 never runs `deploy/patch-openclaw-config.py`; that merge was a step in the retired
 self-hosted deploy script. The applier is still here and still tested, but nothing
 on the Railway boot path calls it, so editing the template alone changes nothing
-in production. The same goes for the public WhatsApp system prompt at
-`workspace/docs/public-whatsapp-system-prompt.txt`: `patch-openclaw-config.py` is
-what injects it into `channels.whatsapp.direct["*"].systemPrompt`, so repo edits to
-that file also do not reach the live agent on their own.
+in production.
 
-Until that is wired up (see the warning below), a config or prompt change has to be
-applied to the volume deliberately, for example by running the applier inside the
-container:
+The one exception is the public WhatsApp system prompt at
+`workspace/docs/public-whatsapp-system-prompt.txt`. On every boot, after the
+OpenClaw upgrade step and before the gateway starts, the entrypoint runs
+`deploy/railway/sync-public-prompt.py`, which writes that file into
+`channels.whatsapp.direct["*"].systemPrompt` and touches nothing else in the
+config (peer overrides included). It logs `public WhatsApp prompt updated` or
+`unchanged`; any problem (missing or empty file, bad JSON) is logged as
+`NOT synced` and the boot carries on with the previous prompt. So a prompt edit
+reaches the live agent on the next deploy, and the business facts it reads
+(`workspace/docs/business-info.md`) are synced with the rest of `workspace/`.
+
+Any other config change has to be applied to the volume deliberately until the
+full applier is wired up (see the warning below), for example by running the
+applier inside the container:
 
 ```bash
 railway ssh -- python3 /home/joseph/.openclaw/deploy/patch-openclaw-config.py --help
