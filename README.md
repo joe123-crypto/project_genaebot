@@ -37,6 +37,12 @@ read/write **boundary** (`deploy/docker-compose.override.yml`, installed):
   `agent-workspace-admin/` and other WhatsApp DMs to the restricted `public`
   agent in `agent-workspace-public/`. The public agent has no `MEMORY.md` or
   `COMMANDS.md` and is limited to the sender-bound `public_service` tool.
+  Every non-admin DM gets a conversational reply from the public agent, which
+  answers from `workspace/docs/business-info.md` (edit prices there) and hands a
+  customer off when they are ready to order or ask something the page does not
+  cover. Fruit-tree and building-material handoffs are forwarded to the partner
+  on WhatsApp; after any handoff the bot stays silent for that customer until an
+  admin sends `resume +<number>`. See `workspace/docs/public-services.md`.
 - credentials, identity, state, and `openclaw.json` stay in the base
   `openclaw-state` Docker volume.
 - The override also mounts the current `entrypoint.sh` over the image's baked one,
@@ -505,7 +511,7 @@ may instead place the link itself with the `{ref_link}` / `{ref}` placeholders.
 | Promo | Prefix | Link target |
 |---|---|---|
 | borehole-drilling-promo | BH | +263785632943 (bot) |
-| building-materials-promo | BM | +263775489417 (seller's WhatsApp line) |
+| building-materials-promo | BM | +263785632943 (bot) |
 | cv-promo | CV | +263785632943 (bot) |
 | fruit-trees-promo | FT | +263785632943 (bot) |
 | genaie-leads-promo | GL | +263785632943 (bot) |
@@ -522,9 +528,9 @@ When a DM carrying a ref reaches the bot, the public-service-gate plugin counts 
 in `runtime/public-service-gate/ad-refs.json` (`count`, `uniqueSenders`,
 `firstSeen`, `lastSeen` per ref; senders stored only as a short one-way hash).
 Recording is observe-only and never changes the reply; admin DMs and group
-messages are not counted. Building-materials links go to the seller's own number,
-so those replies never reach the bot: the seller sees the ref in the customer's
-first message, but Genaie cannot count them automatically. Keep the prefix list in
+messages are not counted. Every promo links to the bot's own number, so every
+reply is counted and answered by the bot, which forwards partner orders (fruit
+trees, building materials) to the partner when it hands the customer off. Keep the prefix list in
 `workspace/plugins/public-service-gate/lib/ad-refs.js` in sync with the promos'
 `TRACKING` prefixes (a test enforces this).
 
@@ -629,6 +635,7 @@ runtime/
 ├── public-service-gate/invites.json (member store; invite codes retired)
 ├── public-service-gate/state.json
 ├── public-service-gate/ad-refs.json (promo ad ref code counts)
+├── public-service-gate/handoffs.json (customers handed off to a person; bot silent)
 └── cron-state/
     ├── algeria-exhibitions-listener/state.json
     └── github-issue-tracker/state.json

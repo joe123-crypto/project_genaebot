@@ -1,18 +1,3 @@
-import fs from "node:fs";
-
-import { expandHome, getPluginConfig } from "../lib/config.js";
-
-const DEFAULT_GREETING_TEMPLATE_PATH = "~/.openclaw/workspace/docs/public-greeting.txt";
-const DEFAULT_GREETING = `Hi 👋 Welcome to Genae. What do you need?
-
-1. Automatic Job & Internship searching
-2. CV writing & revamping
-3. Digital marketing (posters, WhatsApp ads)
-4. WhatsApp customer-service bots
-5. Buy a product we advertise (e.g. quarry stones)
-
-Reply with a number.`;
-
 const GREETING_PATTERNS = [
   /^(?:hi|hello|hey|hie|yo|salam|salaam|bonjour|good\s+(?:morning|afternoon|evening)|gm|morning|afternoon|evening)[\s!.?]*$/i,
   /^(?:hi|hello|hey|hie|salam|salaam|bonjour)\s+(?:there|openclaw|genaie|service\s+desk|bot|assistant)[\s!.?]*$/i,
@@ -32,22 +17,9 @@ export function getServiceMenuSelection(text) {
   return match ? match[1] : "";
 }
 
+// Leaves an in-flight automated flow (the CV order). Deliberately narrow: words
+// like "help" or "menu" are normal answers mid-interview and must not abandon it.
 export function isStateResetRequest(text) {
   const compact = String(text ?? "").trim().replace(/\s+/g, " ");
-  return /^(?:menu|main\s+menu|services|service|options|help|start\s+over|restart|cancel)[\s!.?]*$/i.test(compact);
-}
-
-export function loadGreeting(api) {
-  const pluginCfg = getPluginConfig(api);
-  const configuredPath =
-    typeof pluginCfg.greetingTemplatePath === "string" && pluginCfg.greetingTemplatePath.trim()
-      ? pluginCfg.greetingTemplatePath.trim()
-      : DEFAULT_GREETING_TEMPLATE_PATH;
-  try {
-    const text = fs.readFileSync(expandHome(configuredPath), "utf8").trim();
-    return text || DEFAULT_GREETING;
-  } catch (err) {
-    api.logger?.warn?.(`public-service-gate: failed to read greeting template (${String(err)})`);
-    return DEFAULT_GREETING;
-  }
+  return /^(?:cancel|cancel\s+(?:it|this|the\s+cv|my\s+cv|order)|start\s+over|restart|exit|quit)[\s!.?]*$/i.test(compact);
 }

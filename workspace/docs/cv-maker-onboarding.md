@@ -4,13 +4,15 @@ Purpose: make a professional CV for a public WhatsApp user, for US$5, without en
 Job Scout. There is no account link, no Gmail, and no saved profile.
 
 **This service runs deterministically inside the public-service-gate plugin. The agent does not
-drive it and cannot run any part of it.** Menu option 2 hands the sender to the gate, which
+drive it and cannot run any part of it.** When a customer says yes to the automated AI interview,
+the public agent calls `cv_maker_start`, which hands the sender to the gate, which
 interviews them, asks for payment, and delivers the CV once an admin approves. This document
 describes the flow so an operator can reason about it; it is not a script for the agent to follow.
 
 ## Flow
 
-1. The user picks option 2 from the DM menu, or asks for a CV in their own words.
+1. The user asks for a CV, the agent quotes the price and offers the automated AI interview, and
+   the user accepts. Declining hands the user off to a person instead.
 2. The gate resolves whether they already have an order in flight and resumes them at the right
    point. A returning user is never restarted from scratch.
 3. The intro message states the price and the payment method (for example "US$5, paid by EcoCash")

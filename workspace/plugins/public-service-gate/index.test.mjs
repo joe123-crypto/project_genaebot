@@ -17,8 +17,8 @@ const ADMIN = "+213563719936";
 
 // The real deployed greeting/menu, so intake tests assert the wired copy.
 const GREETING_FILE = fileURLToPath(new URL("../../docs/public-greeting.txt", import.meta.url));
-const MENU_PROMPT = /reply with a number/i;
-const HANDOFF = /a team member will contact you soon/i;
+const HANDOFF = /your request is in\. Someone will contact you soon/i;
+const PARTNER = "+263775489417";
 
 function registerHandler(config = {}, complete, relevanceConfig = {}) {
   const handlers = [];
@@ -139,7 +139,7 @@ test("disabled public services are omitted from the public service tool schema",
   const handler = registerHandler({ newsEnabled: false, eventScoutEnabled: false });
   const tool = handler.publicTool({ agentId: "public", requesterSenderId: MEMBER, messageChannel: "whatsapp" });
 
-  assert.deepEqual(tool.parameters.properties.action.enum, ["job_scout_start_or_status"]);
+  assert.deepEqual(tool.parameters.properties.action.enum, ["business_info", "handoff", "job_scout_start_or_status"]);
 
   const result = await tool.execute("test", { action: "news_start_or_update" });
   assert.match(result.content[0].text, /isn't available here right now/i);
@@ -192,8 +192,8 @@ test("job scout onboarding has a generic disabled response", async () => {
   assert.doesNotMatch(reply.text, /pilot/i);
 });
 
-test("enabling the CV maker exposes cv_maker_start and routes to the intro", async () => {
-  const handler = registerHandler({ cvMakerEnabled: true });
+test("classic mode: enabling the CV maker exposes cv_maker_start and routes to the intro", async () => {
+  const handler = registerHandler({ cvMakerEnabled: true, memberGateEnabled: false });
   const tool = handler.publicTool({ agentId: "public", requesterSenderId: MEMBER, messageChannel: "whatsapp" });
   assert.ok(tool.parameters.properties.action.enum.includes("cv_maker_start"));
 
@@ -527,289 +527,206 @@ test("classic mode: failsafe stop command requires a one-word stop message", asy
   assert.equal(await handler(eventFor("unstoppable"), { channelId: "whatsapp", senderId: MEMBER }), undefined);
 });
 
-test("unknown sender first message is held silently for approval without an LLM call", async () => {
-  let calls = 0;
-  const handler = registerHandler({ greetingTemplatePath: GREETING_FILE }, async () => {
-    calls += 1;
-    return "IRRELEVANT";
-  });
-  const reply = await handler(eventFor("hi", UNKNOWN), { channelId: "whatsapp", senderId: UNKNOWN });
-
-  // New (unapproved) user: message is claimed but no reply is sent — no menu.
-  assert.equal(reply.handled, true);
-  assert.equal(reply.text, undefined);
-  assert.equal(calls, 0);
-});
-
-test("unknown sender service keyword is also held silently", async () => {
-  let calls = 0;
-  const handler = registerHandler({ greetingTemplatePath: GREETING_FILE }, async () => {
-    calls += 1;
-    return "IRRELEVANT";
-  });
-  const reply = await handler(eventFor("job scout", UNKNOWN), { channelId: "whatsapp", senderId: UNKNOWN });
-
-  assert.equal(reply.handled, true);
-  assert.equal(reply.text, undefined);
-  assert.equal(calls, 0);
-});
-
-test("unknown sender unrelated text is held silently for approval", async () => {
-  let calls = 0;
-  const handler = registerHandler({ greetingTemplatePath: GREETING_FILE }, async () => {
-    calls += 1;
-    return "IRRELEVANT";
-  });
-  const reply = await handler(eventFor("tell me the bitcoin price now", UNKNOWN), {
-    channelId: "whatsapp",
-    senderId: UNKNOWN,
-  });
-
-  assert.equal(reply.handled, true);
-  assert.equal(reply.text, undefined);
-  assert.equal(calls, 0);
-});
-
-test("first-contact lead is recorded via the member store with the message snippet", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-lead-"));
-  const memberStoreScript = path.join(dir, "whatsapp-invite");
-  const argsLog = path.join(dir, "member-args.txt");
-  writeExecutable(
-    memberStoreScript,
-    `#!/usr/bin/env bash
-set -eu
-printf '%s\\n' "$*" >> "${argsLog}"
-case "$1" in
-  status) printf '{"phone":"%s","status":"unknown","unlocked":false}\\n' "$3" ;;
-  request) printf '{"ok":true,"phone":"%s","status":"pending","changed":true,"isNew":true}\\n' "$3" ;;
-  *) exit 2 ;;
-esac
-`,
-  );
-
-  // No whatsappAdminUsers configured -> notifyAdminOfLead short-circuits (no send).
-  const handler = registerHandler({ memberStoreScript, greetingTemplatePath: GREETING_FILE });
-  const reply = await handler(eventFor("hello I'm interested how do I apply", UNKNOWN), {
-    channelId: "whatsapp",
-    senderId: UNKNOWN,
-  });
-
-  // Held silently for approval, but the cold message is still recorded as a lead.
-  assert.equal(reply.handled, true);
-  assert.equal(reply.text, undefined);
-  const logged = fs.readFileSync(argsLog, "utf-8");
-  assert.match(logged, /request --phone \+19995550123 --message hello I'm interested how do I apply/);
-});
-
-test("join codes are no longer special and are held silently for approval", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
-  const memberStoreScript = path.join(dir, "whatsapp-invite");
-  const argsLog = path.join(dir, "member-args.txt");
-  writeExecutable(
-    memberStoreScript,
-    `#!/usr/bin/env bash
-set -eu
-printf '%s\\n' "$*" >> "${argsLog}"
-case "$1" in
-  status) printf '{"phone":"%s","status":"unknown","unlocked":false}\\n' "$3" ;;
-  request) printf '{"ok":true,"phone":"%s","status":"pending","changed":true,"isNew":true}\\n' "$3" ;;
-  *) exit 2 ;;
-esac
-`,
-  );
-
-  const handler = registerHandler({ memberStoreScript, greetingTemplatePath: GREETING_FILE }, async () => "RELEVANT");
-  const reply = await handler(eventFor("JOIN-ABC123", UNKNOWN), {
-    channelId: "whatsapp",
-    senderId: UNKNOWN,
-  });
-
-  assert.equal(reply.handled, true);
-  assert.equal(reply.text, undefined);
-  assert.doesNotMatch(fs.readFileSync(argsLog, "utf-8"), /redeem/);
-});
-
-// The intake menu-flow tests below model an already-approved (unlocked) member
-// walking the service menu, so this stub reports the sender as unlocked. Pending
-// non-members are exercised separately by the access-gate tests.
-function intakeStore(argsLog) {
-  return `#!/usr/bin/env bash
-set -eu
-printf '%s\\n' "$*" >> "${argsLog}"
-case "$1" in
-  status) printf '{"phone":"%s","status":"unlocked","unlocked":true}\\n' "$3" ;;
-  request) printf '{"ok":true,"phone":"%s","status":"unlocked","changed":true,"isNew":false}\\n' "$3" ;;
-  *) exit 2 ;;
-esac
-`;
-}
-
-// Store stub for pending (not-yet-approved) users: status is pending/unlocked=false
-// and the first `request` is a new lead, so the access gate stays closed.
-function pendingIntakeStore(argsLog) {
+// Member-store stub that logs every call. `isNew` controls whether the lead is
+// a first contact (which alerts the admin once).
+function leadStore(argsLog, { isNew = true } = {}) {
   return `#!/usr/bin/env bash
 set -eu
 printf '%s\\n' "$*" >> "${argsLog}"
 case "$1" in
   status) printf '{"phone":"%s","status":"pending","unlocked":false}\\n' "$3" ;;
-  request) printf '{"ok":true,"phone":"%s","status":"pending","changed":true,"isNew":true}\\n' "$3" ;;
+  request) printf '{"ok":true,"phone":"%s","status":"pending","changed":true,"isNew":${isNew}}\\n' "$3" ;;
   *) exit 2 ;;
 esac
 `;
 }
 
-test("new user gets no reply and is held for admin approval", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-intake-"));
-  const memberStoreScript = path.join(dir, "whatsapp-invite");
-  const argsLog = path.join(dir, "member-args.txt");
-  const serviceStatePath = path.join(dir, "state.json");
-  writeExecutable(memberStoreScript, pendingIntakeStore(argsLog));
+// Existing member store stub: never a new lead, so no admin alert.
+function intakeStore(argsLog) {
+  return leadStore(argsLog, { isNew: false });
+}
 
-  const handler = registerHandler({ memberStoreScript, serviceStatePath, greetingTemplatePath: GREETING_FILE });
-  const ctx = { channelId: "whatsapp", senderId: UNKNOWN };
-
-  const reply = await handler(eventFor("hi", UNKNOWN), ctx);
-
-  // Message is claimed (agent never runs) but nothing is sent back — no menu.
-  assert.equal(reply.handled, true);
-  assert.equal(reply.text, undefined);
-
-  // The cold message is recorded as a lead so the admin can approve it.
-  const args = fs.readFileSync(argsLog, "utf-8");
-  assert.match(args, /request --phone \+19995550123/);
-  // No intake state is stored for an unapproved user.
-  assert.equal(fs.existsSync(serviceStatePath), false);
-});
-
-test("repeat message from a pending user stays silent", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-intake-"));
-  const memberStoreScript = path.join(dir, "whatsapp-invite");
-  const serviceStatePath = path.join(dir, "state.json");
-  writeExecutable(memberStoreScript, pendingIntakeStore(path.join(dir, "member-args.txt")));
-
-  const handler = registerHandler({ memberStoreScript, serviceStatePath, greetingTemplatePath: GREETING_FILE });
-  const ctx = { channelId: "whatsapp", senderId: UNKNOWN };
-
-  await handler(eventFor("hi", UNKNOWN), ctx);
-  const again = await handler(eventFor("please help", UNKNOWN), ctx);
-
-  assert.equal(again.handled, true);
-  assert.equal(again.text, undefined);
-});
-
-test("menu selection captures the request under the chosen service and hands off", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-intake-"));
-  const memberStoreScript = path.join(dir, "whatsapp-invite");
-  const argsLog = path.join(dir, "member-args.txt");
-  const serviceStatePath = path.join(dir, "state.json");
-  writeExecutable(memberStoreScript, intakeStore(argsLog));
-
-  const handler = registerHandler({ memberStoreScript, serviceStatePath, greetingTemplatePath: GREETING_FILE });
-  const ctx = { channelId: "whatsapp", senderId: UNKNOWN };
-
-  const menu = await handler(eventFor("hi", UNKNOWN), ctx);
-  assert.match(menu.text, MENU_PROMPT);
-
-  const done = await handler(eventFor("2", UNKNOWN), ctx);
-  assert.equal(done.handled, true);
-  assert.match(done.text, HANDOFF);
-
-  // The second turn records the picked service so the admin sees it in the store.
-  assert.match(fs.readFileSync(argsLog, "utf-8"), /request --phone \+19995550123 --message \[Professional CV writing\] 2/);
-  // State is cleared once the order is captured.
-  const saved = JSON.parse(fs.readFileSync(serviceStatePath, "utf8"));
-  assert.deepEqual(saved.states, {});
-});
-
-test("menu option 5 runs the seller referral flow and forwards the lead to the seller", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-referral-"));
-  const memberStoreScript = path.join(dir, "whatsapp-invite");
-  const serviceStatePath = path.join(dir, "state.json");
-  const openclawLog = path.join(dir, "openclaw.log");
-  writeExecutable(memberStoreScript, intakeStore(path.join(dir, "member-args.txt")));
-  writeExecutable(path.join(dir, "openclaw"), `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> ${JSON.stringify(openclawLog)}\n`);
-
-  const handler = registerHandler({ memberStoreScript, serviceStatePath, greetingTemplatePath: GREETING_FILE });
-  const ctx = { channelId: "whatsapp", senderId: UNKNOWN };
-
+// Puts a fake `openclaw` CLI on PATH that logs every send, for the duration of fn.
+async function withFakeOpenclaw(dir, fn) {
+  const log = path.join(dir, "openclaw.log");
+  writeExecutable(path.join(dir, "openclaw"), `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> ${JSON.stringify(log)}\n`);
   const previousPath = process.env.PATH;
   process.env.PATH = `${dir}${path.delimiter}${previousPath}`;
   try {
-    const menu = await handler(eventFor("hi", UNKNOWN), ctx);
-    assert.match(menu.text, MENU_PROMPT);
-
-    const intro = await handler(eventFor("5", UNKNOWN), ctx);
-    assert.match(intro.text, /what exactly/i);
-
-    const source = await handler(eventFor("20 tonnes of quarry stones", UNKNOWN), ctx);
-    assert.match(source.text, /where did you see/i);
-
-    const done = await handler(eventFor("Facebook", UNKNOWN), ctx);
-    assert.match(done.text, /seller will contact you/i);
-
-    const sent = fs.readFileSync(openclawLog, "utf8");
-    assert.match(sent, /--target \+263775489417/);
-    assert.match(sent, /Quarry stones/);
-    assert.match(sent, /20 tonnes of quarry stones/);
-    assert.match(sent, /Facebook/);
-    assert.doesNotMatch(sent, /\$|price|cost/i);
-
-    // State is cleared once the referral is handed off.
-    const saved = JSON.parse(fs.readFileSync(serviceStatePath, "utf8"));
-    assert.deepEqual(saved.states, {});
+    return await fn(() => (fs.existsSync(log) ? fs.readFileSync(log, "utf8") : ""));
   } finally {
     process.env.PATH = previousPath;
   }
-});
+}
 
-test("free-text request is captured under the matched service label", async () => {
+function intakeHandler(extraConfig = {}, store = leadStore) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-intake-"));
   const memberStoreScript = path.join(dir, "whatsapp-invite");
   const argsLog = path.join(dir, "member-args.txt");
   const serviceStatePath = path.join(dir, "state.json");
-  writeExecutable(memberStoreScript, intakeStore(argsLog));
+  writeExecutable(memberStoreScript, store(argsLog));
+  const handler = registerHandler({ memberStoreScript, serviceStatePath, ...extraConfig });
+  handler.dir = dir;
+  handler.memberArgs = () => (fs.existsSync(argsLog) ? fs.readFileSync(argsLog, "utf8") : "");
+  handler.handoffsPath = path.join(dir, "handoffs.json");
+  return handler;
+}
 
-  const handler = registerHandler({ memberStoreScript, serviceStatePath, greetingTemplatePath: GREETING_FILE });
-  const ctx = { channelId: "whatsapp", senderId: UNKNOWN };
+function publicToolFor(handler, sender) {
+  return handler.publicTool({ agentId: "public", requesterSenderId: sender, messageChannel: "whatsapp" });
+}
 
-  await handler(eventFor("hi", UNKNOWN), ctx);
-  const done = await handler(eventFor("find me a job please", UNKNOWN), ctx);
+test("a new sender's message reaches the agent, is recorded as a lead, and alerts the admin once", async () => {
+  await withAdminMode("true", async () => {
+    const handler = intakeHandler({ whatsappAdminUsers: [ADMIN] });
+    await withFakeOpenclaw(handler.dir, async (sent) => {
+      const reply = await handler(eventFor("Hello 5000 to Bindura hw much", UNKNOWN), {
+        channelId: "whatsapp",
+        senderId: UNKNOWN,
+      });
 
-  assert.match(done.text, HANDOFF);
-  assert.match(
-    fs.readFileSync(argsLog, "utf-8"),
-    /request --phone \+19995550123 --message \[Automatic Job & Internship searching\] find me a job please/,
-  );
-});
-
-test("greeting again re-shows the menu instead of completing the order", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-intake-"));
-  const serviceStatePath = path.join(dir, "state.json");
-
-  // An approved (unlocked) member re-showing the menu — the default store reports
-  // MEMBER as unlocked, so it clears the access gate.
-  const handler = registerHandler({ serviceStatePath, greetingTemplatePath: GREETING_FILE });
-  const ctx = { channelId: "whatsapp", senderId: MEMBER };
-
-  await handler(eventFor("hi", MEMBER), ctx);
-  const again = await handler(eventFor("menu", MEMBER), ctx);
-
-  assert.match(again.text, MENU_PROMPT);
-  assert.doesNotMatch(again.text, HANDOFF);
-  // Still awaiting a selection, not cleared.
-  const saved = JSON.parse(fs.readFileSync(serviceStatePath, "utf8"));
-  assert.equal(saved.states[MEMBER]?.step, "intake.awaiting_selection");
-});
-
-test("invite link requests are no longer handled deterministically", async () => {
-  const handler = registerHandler({ botWhatsappNumber: "+263785632943" }, async () => "IRRELEVANT");
-  const reply = await handler(eventFor("invite link", UNKNOWN), {
-    channelId: "whatsapp",
-    senderId: UNKNOWN,
+      // Not claimed: the public agent answers. No menu, no silent hold.
+      assert.equal(reply, undefined);
+      assert.match(handler.memberArgs(), /request --phone \+19995550123 --message Hello 5000 to Bindura hw much/);
+      assert.match(sent(), new RegExp(`--target \\${ADMIN}`));
+      assert.match(sent(), /New chat from \+19995550123/);
+      assert.doesNotMatch(sent(), /allow/);
+    });
   });
+});
 
-  assert.equal(reply.handled, true);
-  assert.doesNotMatch(reply.text ?? "", /wa\.me|JOIN-/);
+test("a returning sender reaches the agent without another admin alert", async () => {
+  await withAdminMode("true", async () => {
+    const handler = intakeHandler({ whatsappAdminUsers: [ADMIN] }, intakeStore);
+    await withFakeOpenclaw(handler.dir, async (sent) => {
+      const reply = await handler(eventFor("hi", UNKNOWN), { channelId: "whatsapp", senderId: UNKNOWN });
+      assert.equal(reply, undefined);
+      assert.equal(sent(), "");
+    });
+  });
+});
+
+test("greetings, digits and off-topic text all reach the agent", async () => {
+  const handler = intakeHandler();
+  for (const text of ["hi", "2", "menu", "tell me the bitcoin price now", "JOIN-ABC123", "invite link"]) {
+    const reply = await handler(eventFor(text, UNKNOWN), { channelId: "whatsapp", senderId: UNKNOWN });
+    assert.equal(reply, undefined, `expected "${text}" to reach the agent`);
+  }
+});
+
+test("business_info returns the business info page", async () => {
+  const handler = intakeHandler();
+  const infoPath = path.join(handler.dir, "business-info.md");
+  fs.writeFileSync(infoPath, "# Info\nRed commons: $95 per 1000\n");
+  const tool = publicToolFor(registerHandler({ businessInfoPath: infoPath }), UNKNOWN);
+
+  const result = await tool.execute("test", { action: "business_info" });
+  assert.match(result.content[0].text, /Red commons: \$95 per 1000/);
+});
+
+test("business_info fails soft and points at a handoff when the page is missing", async () => {
+  const tool = publicToolFor(registerHandler({ businessInfoPath: "/nonexistent/business-info.md" }), UNKNOWN);
+  const result = await tool.execute("test", { action: "business_info" });
+  assert.match(result.content[0].text, /unavailable/i);
+  assert.match(result.content[0].text, /handoff/i);
+});
+
+test("the deployed business info page carries the core facts", () => {
+  const page = fs.readFileSync(new URL("../../docs/business-info.md", import.meta.url), "utf8");
+  assert.match(page, /We are based in Bindura, and we are mobile/);
+  assert.match(page, /Never give anything more specific than Bindura/);
+  assert.match(page, /Transport within local Bindura: \$550/);
+  assert.match(page, /Any extra meter beyond 40m: \$25 per meter/);
+  assert.match(page, /Big: \$20 per tree/);
+  assert.match(page, /\$3 per tree, minimum 20 trees/);
+  assert.match(page, /medium or big: available from 100 trees/);
+});
+
+test("handoff of a partner product forwards to the partner, replies, then silences the customer", async () => {
+  for (const category of ["building_materials", "fruit_trees"]) {
+    const handler = intakeHandler();
+    await withFakeOpenclaw(handler.dir, async (sent) => {
+      const tool = publicToolFor(handler, UNKNOWN);
+      const result = await tool.execute("test", {
+        action: "handoff",
+        category,
+        details: "5000 red commons, deliver to Chipadze",
+      });
+
+      assert.match(result.content[0].text, HANDOFF);
+      assert.match(sent(), new RegExp(`--target \\${PARTNER}`));
+      assert.match(sent(), /Customer: \+19995550123/);
+      assert.match(sent(), /5000 red commons, deliver to Chipadze/);
+
+      const later = await handler(eventFor("hello?", UNKNOWN), { channelId: "whatsapp", senderId: UNKNOWN });
+      assert.equal(later.handled, true, `${category}: later messages are claimed`);
+      assert.equal(later.text, undefined, `${category}: and get no reply`);
+    });
+  }
+});
+
+test("handoff of other categories forwards nothing but still silences the customer", async () => {
+  for (const category of ["borehole", "cv", "marketing", "other", "not-a-category"]) {
+    const handler = intakeHandler();
+    await withFakeOpenclaw(handler.dir, async (sent) => {
+      const result = await publicToolFor(handler, UNKNOWN).execute("test", {
+        action: "handoff",
+        category,
+        details: "drilling and installation quote",
+      });
+      assert.match(result.content[0].text, HANDOFF);
+      assert.equal(sent(), "", `${category}: nothing forwarded`);
+      const later = await handler(eventFor("any update?", UNKNOWN), { channelId: "whatsapp", senderId: UNKNOWN });
+      assert.equal(later.handled, true);
+      assert.equal(later.text, undefined);
+    });
+  }
+});
+
+test("admin resume lets the bot reply to a handed-off customer again", async () => {
+  await withAdminMode("true", async () => {
+    const handler = intakeHandler({ whatsappAdminUsers: [ADMIN] });
+    await withFakeOpenclaw(handler.dir, async () => {
+      await publicToolFor(handler, UNKNOWN).execute("test", { action: "handoff", category: "borehole", details: "x" });
+
+      const resumed = await handler(eventFor(`resume ${UNKNOWN}`, ADMIN), { channelId: "whatsapp", senderId: ADMIN });
+      assert.equal(resumed.handled, true);
+      assert.match(resumed.text, /Resumed \+19995550123/);
+
+      const again = await handler(eventFor("hi", UNKNOWN), { channelId: "whatsapp", senderId: UNKNOWN });
+      assert.equal(again, undefined);
+
+      const noop = await handler(eventFor(`resume ${UNKNOWN}`, ADMIN), { channelId: "whatsapp", senderId: ADMIN });
+      assert.match(noop.text, /was not handed off/);
+    });
+  });
+});
+
+test("classic mode: a handed-off member is held silently too", async () => {
+  const handler = intakeHandler({ memberGateEnabled: false });
+  await withFakeOpenclaw(handler.dir, async () => {
+    await publicToolFor(handler, MEMBER).execute("test", { action: "handoff", category: "borehole", details: "x" });
+    const reply = await handler(eventFor("hello?", MEMBER), { channelId: "whatsapp", senderId: MEMBER });
+    assert.equal(reply.handled, true);
+    assert.equal(reply.text, undefined);
+  });
+});
+
+test("mid-interview words like help or menu stay in the CV flow; only cancel leaves it", async () => {
+  const handler = cvHandler();
+  const ctx = { channelId: "whatsapp", senderId: UNKNOWN };
+  await handler.startCv();
+  for (const text of ["help", "menu", "services"]) {
+    const turn = await handler(eventFor(text, UNKNOWN), ctx);
+    assert.equal(turn.text, "What is your full name?", `"${text}" is relayed to the interview`);
+  }
+  assert.equal(await handler(eventFor("cancel", UNKNOWN), ctx), undefined);
+});
+
+test("a non-admin resume command is ordinary text for the agent", async () => {
+  const handler = intakeHandler({ whatsappAdminUsers: [ADMIN] });
+  const reply = await handler(eventFor(`resume ${MEMBER}`, UNKNOWN), { channelId: "whatsapp", senderId: UNKNOWN });
+  assert.equal(reply, undefined);
 });
 
 test("classic mode: member greeting falls through to the agent", async () => {
@@ -975,15 +892,14 @@ test("admin sender still bypasses public-service gate", async () => {
   });
 });
 
-test("admin sender is treated as a normal unapproved user when WhatsApp admin mode is disabled", async () => {
+test("admin sender is treated as a normal public user when WhatsApp admin mode is disabled", async () => {
   await withAdminMode("false", async () => {
-    const handler = registerHandler({ whatsappAdminUsers: [ADMIN], greetingTemplatePath: GREETING_FILE });
+    const handler = intakeHandler({ whatsappAdminUsers: [ADMIN] }, intakeStore);
     const reply = await handler(eventFor("hi", ADMIN), { channelId: "whatsapp", senderId: ADMIN });
 
-    // With admin mode off, ADMIN is not special: it flows through the public gate
-    // and, being unapproved, is held silently for approval.
-    assert.equal(reply.handled, true);
-    assert.equal(reply.text, undefined);
+    // With admin mode off, ADMIN is not special: the message goes through the
+    // public gate to the public agent like anyone else's.
+    assert.equal(reply, undefined);
   });
 });
 
@@ -1017,10 +933,8 @@ esac
       assert.equal(reply.handled, true, `expected "${command}" to be claimed`);
       assert.match(reply.text, /Allowed \+263788390903: unlocked/);
       assert.equal(fs.readFileSync(argsLog, "utf-8").trim(), "grandfather --phone +263788390903");
-      // The approved user's intake slot is primed so their next reply lands as a
-      // menu selection (the menu itself is sent by notifyMemberAllowed).
-      const saved = JSON.parse(fs.readFileSync(serviceStatePath, "utf8"));
-      assert.equal(saved.states["+263788390903"]?.step, "intake.awaiting_selection");
+      // No menu is sent and no intake slot is primed any more.
+      assert.equal(fs.existsSync(serviceStatePath), false);
     }
   });
 });
@@ -1051,25 +965,21 @@ esac
       senderId: ADMIN,
     });
 
-    assert.equal(reply.handled, true);
-    assert.doesNotMatch(reply.text ?? "", /Allowed/);
+    // Not a command: it is ordinary text for the public agent.
+    assert.equal(reply, undefined);
     assert.equal(fs.existsSync(argsLog), false);
   });
 });
 
-test("non-admin allow command does not unlock and gets gated", async () => {
-  let calls = 0;
-  const handler = registerHandler({ whatsappAdminUsers: [ADMIN] }, async () => {
-    calls += 1;
-    return "IRRELEVANT";
-  });
+test("non-admin allow command does not unlock and is ordinary text for the agent", async () => {
+  const handler = intakeHandler({ whatsappAdminUsers: [ADMIN] });
   const reply = await handler(eventFor("allow +263788390903", UNKNOWN), {
     channelId: "whatsapp",
     senderId: UNKNOWN,
   });
 
-  assert.equal(reply.handled, true);
-  assert.doesNotMatch(reply.text ?? "", /Allowed/);
+  assert.equal(reply, undefined);
+  assert.doesNotMatch(handler.memberArgs(), /grandfather/);
 });
 
 test("runJsonCommand parses JSON stdout", async () => {
@@ -1095,6 +1005,8 @@ test("public canned replies use the concise style", () => {
     "services/event-scout.js",
     "services/job-scout.js",
     "services/cv-maker.js",
+    "services/handoff.js",
+    "lib/handoffs.js",
   ];
   for (const file of files) {
     const source = fs.readFileSync(new URL(file, import.meta.url), "utf8");
@@ -1105,6 +1017,7 @@ test("public canned replies use the concise style", () => {
     "public-whatsapp-system-prompt.txt",
     "public-services.md",
     "public-greeting.txt",
+    "business-info.md",
     "calendar-save-onboarding.md",
     "event-scout-onboarding.md",
     "gmail-onboarding.md",
@@ -1120,8 +1033,11 @@ test("public canned replies use the concise style", () => {
     new URL("../../docs/public-whatsapp-system-prompt.txt", import.meta.url),
     "utf8",
   );
-  assert.match(prompt, /use 1-2 short sentences by default/i);
-  assert.match(prompt, /Do not use em dashes/i);
+  assert.match(prompt, /usually one or two short sentences/i);
+  assert.match(prompt, /No em dashes/i);
+  assert.match(prompt, /call `public_service` with action `business_info`/i);
+  assert.match(prompt, /Never guess/);
+  assert.match(prompt, /unrelated to the business[^\n]*list what we offer/i);
 });
 
 test("runJsonCommand rejects non-JSON stdout with stdout attached", async () => {
@@ -1182,7 +1098,7 @@ test("createLimiter caps concurrency and rejects when the queue is full", async 
 });
 
 // ---------------------------------------------------------------------------
-// Paid CV order flow (menu option 2)
+// Paid CV order flow (started by the agent via cv_maker_start)
 // ---------------------------------------------------------------------------
 
 const CV_ORDER_ID = "Ab3-_x";
@@ -1230,70 +1146,39 @@ function cvHandler(extraConfig = {}) {
     cvMakerScript: cli.script,
     memberStoreScript,
     serviceStatePath,
-    greetingTemplatePath: GREETING_FILE,
     ...extraConfig,
   });
   handler.cvCalls = cli.calls;
+  handler.startCv = (sender = UNKNOWN) =>
+    publicToolFor(handler, sender).execute("test", { action: "cv_maker_start", text: "yes" });
   handler.serviceStatePath = serviceStatePath;
   return handler;
 }
 
-test("menu option 2 branches into the automated CV flow instead of the manual handoff", async () => {
+test("cv_maker_start pins the sender to the automated CV flow", async () => {
   const handler = cvHandler();
-  const ctx = { channelId: "whatsapp", senderId: UNKNOWN };
 
-  const menu = await handler(eventFor("hi", UNKNOWN), ctx);
-  assert.match(menu.text, MENU_PROMPT);
-
-  const started = await handler(eventFor("2", UNKNOWN), ctx);
-  assert.equal(started.handled, true);
-  assert.doesNotMatch(started.text, HANDOFF);
-  assert.match(started.text, /CV/);
-  // The order itself is created by the first relayed turn, not by the digit.
-  // Entering the flow resolves the sender's real order status before deciding
-  // where to resume them.
+  const started = await handler.startCv();
+  assert.match(started.content[0].text, /US\$5/);
+  assert.match(started.content[0].text, /EcoCash/);
+  // The order itself is created by the first relayed turn. Entering the flow
+  // resolves the sender's real order status before deciding where to resume.
   assert.deepEqual(handler.cvCalls(), [`status --phone=${UNKNOWN}`]);
   const saved = JSON.parse(fs.readFileSync(handler.serviceStatePath, "utf8"));
   assert.equal(saved.states[UNKNOWN]?.service, "cv");
 });
 
-test("a free-text CV request also branches into the CV flow", async () => {
+test("without cv_maker_start a CV request is just conversation for the agent", async () => {
   const handler = cvHandler();
-  const ctx = { channelId: "whatsapp", senderId: UNKNOWN };
-
-  await handler(eventFor("hi", UNKNOWN), ctx);
-  const started = await handler(eventFor("please revamp my cv", UNKNOWN), ctx);
-
-  assert.doesNotMatch(started.text, HANDOFF);
-  const saved = JSON.parse(fs.readFileSync(handler.serviceStatePath, "utf8"));
-  assert.equal(saved.states[UNKNOWN]?.service, "cv");
+  const reply = await handler(eventFor("please revamp my cv", UNKNOWN), { channelId: "whatsapp", senderId: UNKNOWN });
+  assert.equal(reply, undefined);
+  assert.deepEqual(handler.cvCalls(), []);
 });
 
-test("menu options 1, 3 and 4 keep the manual handoff while the CV flow is live", async () => {
-  for (const digit of ["1", "3", "4"]) {
-    const handler = cvHandler();
-    const ctx = { channelId: "whatsapp", senderId: UNKNOWN };
-
-    await handler(eventFor("hi", UNKNOWN), ctx);
-    const done = await handler(eventFor(digit, UNKNOWN), ctx);
-
-    assert.equal(done.handled, true, `expected "${digit}" to be handled`);
-    assert.match(done.text, HANDOFF, `expected "${digit}" to hand off`);
-    assert.deepEqual(handler.cvCalls(), [], `expected "${digit}" not to touch the CV maker`);
-    // State is cleared once the manual order is captured, exactly as before.
-    const saved = JSON.parse(fs.readFileSync(handler.serviceStatePath, "utf8"));
-    assert.deepEqual(saved.states, {});
-  }
-});
-
-test("menu option 2 still hands off while the CV maker is disabled", async () => {
+test("cv_maker_start is refused while the CV maker is disabled", async () => {
   const handler = cvHandler({ cvMakerEnabled: false });
-  const ctx = { channelId: "whatsapp", senderId: UNKNOWN };
-
-  await handler(eventFor("hi", UNKNOWN), ctx);
-  const done = await handler(eventFor("2", UNKNOWN), ctx);
-
-  assert.match(done.text, HANDOFF);
+  const result = await handler.startCv();
+  assert.match(result.content[0].text, /isn't available here right now/i);
   assert.deepEqual(handler.cvCalls(), []);
 });
 
@@ -1304,8 +1189,7 @@ test("CV flow turns relay to the CLI and the payment message uses the configured
   });
   const ctx = { channelId: "whatsapp", senderId: UNKNOWN };
 
-  await handler(eventFor("hi", UNKNOWN), ctx);
-  await handler(eventFor("2", UNKNOWN), ctx);
+  await handler.startCv();
 
   const turn = await handler(eventFor("Jane", UNKNOWN), ctx);
   assert.equal(turn.text, "What is your full name?");
@@ -1328,16 +1212,17 @@ test("CV flow turns relay to the CLI and the payment message uses the configured
   assert.equal(saved.states[UNKNOWN]?.step, "cv.awaiting_approval");
 });
 
-test("menu escapes the CV flow back to the service menu", async () => {
+test("cancel escapes the CV flow back to the agent", async () => {
   const handler = cvHandler();
   const ctx = { channelId: "whatsapp", senderId: UNKNOWN };
 
-  await handler(eventFor("hi", UNKNOWN), ctx);
-  await handler(eventFor("2", UNKNOWN), ctx);
-  const back = await handler(eventFor("menu", UNKNOWN), ctx);
+  await handler.startCv();
+  const back = await handler(eventFor("cancel", UNKNOWN), ctx);
 
-  assert.match(back.text, MENU_PROMPT);
+  assert.equal(back, undefined);
   assert.deepEqual(handler.cvCalls(), [`status --phone=${UNKNOWN}`]);
+  const saved = JSON.parse(fs.readFileSync(handler.serviceStatePath, "utf8"));
+  assert.equal(saved.states[UNKNOWN], undefined);
 });
 
 test("admin cv approve and cv deny settle the order", async () => {
@@ -1366,9 +1251,8 @@ test("a non-admin cv approve is ignored and falls through as ordinary text", asy
       senderId: UNKNOWN,
     });
 
-    assert.equal(reply.handled, true);
-    assert.doesNotMatch(reply.text ?? "", /approved|denied/i);
-    assert.match(reply.text, MENU_PROMPT);
+    // Ordinary text: it goes to the public agent like any other message.
+    assert.equal(reply, undefined);
     assert.deepEqual(handler.cvCalls(), []);
   });
 });
@@ -1397,8 +1281,7 @@ test("an admin cv command is not honored while WhatsApp admin mode is disabled",
       senderId: ADMIN,
     });
 
-    assert.equal(reply.handled, true);
-    assert.doesNotMatch(reply.text ?? "", /approved/i);
+    assert.equal(reply, undefined);
     assert.deepEqual(handler.cvCalls(), []);
   });
 });

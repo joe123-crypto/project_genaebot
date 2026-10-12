@@ -16,6 +16,7 @@ import {
   runJsonCommand,
 } from "./lib/runtime.js";
 import { clearServiceState } from "./lib/state.js";
+import { clearHandoff, isHandedOff } from "./lib/handoffs.js";
 import { recordAdRefs } from "./lib/ad-refs.js";
 import {
   FAILSAFE_STOP_PRIORITY,
@@ -33,11 +34,16 @@ import {
   isWhatsAppAdmin,
   isWhatsAppPublicUser,
   memberGateEnabled,
-  notifyMemberAllowed,
   parseAllowCommand,
   runMemberStoreScript,
 } from "./services/membership.js";
-import { handleIntake, primeIntakeSelection } from "./services/intake.js";
+import { handleIntake } from "./services/intake.js";
+import {
+  HANDOFF_CATEGORIES,
+  handleHandoff,
+  loadBusinessInfo,
+  parseResumeCommand,
+} from "./services/handoff.js";
 import {
   handleNewsRequest,
   handleNewsTopicsContinuation,
@@ -51,9 +57,12 @@ import {
   handleCvMakerRequest,
   isCvMakerRequest,
   parseCvDecisionCommand,
+  startCvOrder,
 } from "./services/cv-maker.js";
 
 const PUBLIC_SERVICE_ACTIONS = [
+  { name: "business_info", service: "core" },
+  { name: "handoff", service: "core" },
   { name: "news_start_or_update", service: "news" },
   { name: "news_topics", service: "news" },
   { name: "event_scout_start", service: "eventScout" },
@@ -75,6 +84,8 @@ function serviceDisabledReply(api) {
 function isServiceEnabled(api, service) {
   const pluginCfg = getPluginConfig(api);
   switch (service) {
+    case "core":
+      return true;
     case "news":
       return pluginCfg.newsEnabled !== false;
     case "eventScout":
@@ -103,15 +114,22 @@ function toolText(reply) {
   return { content: [{ type: "text", text: text || "I couldn't complete that request right now." }] };
 }
 
-async function runPublicServiceAction(api, sender, action, text) {
+async function runPublicServiceAction(api, sender, action, text, params = {}) {
   const service = actionService(action);
   if (!service || !isServiceEnabled(api, service)) return toolText({ text: serviceDisabledReply(api) });
   switch (action) {
+    case "business_info": return toolText({ text: loadBusinessInfo(api) });
+    case "handoff": return toolText(await handleHandoff(api, sender, params.category, params.details || text));
     case "news_start_or_update": return toolText(await handleNewsRequest(api, sender, text));
     case "news_topics": return toolText(await handleNewsTopicsContinuation(api, sender, text));
     case "event_scout_start": return toolText(await handleEventScoutRequest(api, sender));
     case "job_scout_start_or_status": return toolText(await handleJobScoutRequest(api, sender, text));
-    case "cv_maker_start": return toolText(await handleCvMakerRequest(api, sender, text));
+    // Open-DM mode starts the automated CV order (the gate then relays each
+    // interview turn); classic allowlist mode keeps the agent-driven intro.
+    case "cv_maker_start":
+      return toolText(
+        memberGateEnabled(api) ? await startCvOrder(api, sender) : await handleCvMakerRequest(api, sender, text),
+      );
     default: return toolText();
   }
 }
@@ -178,7 +196,7 @@ export default {
         const authorized = Boolean(sender && channel.includes("whatsapp"));
         return {
           name: "public_service",
-          description: "Perform one supported Genaie public-service action for the authenticated WhatsApp sender. Identity is bound by the runtime and cannot be supplied by the model.",
+          description: "Perform one supported Genaie public-service action for the authenticated WhatsApp sender: business_info returns the current products, prices and answering rules; handoff passes the customer to a person (send its reply text exactly); cv_maker_start starts the automated CV interview. Identity is bound by the runtime and cannot be supplied by the model.",
           parameters: {
             type: "object",
             additionalProperties: false,
@@ -190,11 +208,24 @@ export default {
                 maxLength: 2000,
                 description: "The user's current message. Include it so short onboarding choices such as 1, 2, web, or WhatsApp can continue the saved flow.",
               },
+              category: {
+                type: "string",
+                enum: HANDOFF_CATEGORIES,
+                description: "handoff only: what the customer wants.",
+              },
+              details: {
+                type: "string",
+                maxLength: 600,
+                description: "handoff only: a short summary of the order or question (item, size, quantity, where to deliver, customer name if given).",
+              },
             },
           },
           async execute(_id, params) {
             if (!authorized) return toolText();
-            return runPublicServiceAction(api, sender, params.action, String(params.text || ""));
+            return runPublicServiceAction(api, sender, params.action, String(params.text || ""), {
+              category: String(params.category || ""),
+              details: String(params.details || ""),
+            });
           },
         };
       },
@@ -295,12 +326,6 @@ export default {
         if (allowTarget) {
           try {
             const res = await runMemberStoreScript(api, ["grandfather", "--phone", allowTarget]);
-            if (res.changed) {
-              // Send the newly-approved user the menu, then prime their intake slot
-              // so their next reply (a digit) is handled as a menu selection.
-              await notifyMemberAllowed(api, allowTarget);
-              primeIntakeSelection(api, allowTarget);
-            }
             api.logger?.info?.("public-service-gate: admin allow handled deterministically");
             return {
               handled: true,
@@ -314,10 +339,29 @@ export default {
         }
       }
 
-      // Open-DM intake mode. Everyone who DMs gets the greeting + service menu,
-      // has their request captured as a lead, and is handed off to the admin for
-      // manual follow-up. No automated onboarding runs. Admins fall through to the
-      // agent so they are never trapped in the intake flow.
+      // Admin-only: "resume +263..." lets the bot talk to a handed-off customer
+      // again. Claimed here so the command never reaches the agent.
+      if (admin && gateOn) {
+        const resumeTarget = parseResumeCommand(text);
+        if (resumeTarget) {
+          let cleared = false;
+          try {
+            cleared = clearHandoff(api, resumeTarget);
+          } catch (err) {
+            api.logger?.warn?.(`public-service-gate: failed to clear handoff (${String(err)})`);
+            return { handled: true, text: "That number couldn't be resumed. Try again later." };
+          }
+          return {
+            handled: true,
+            text: cleared ? `Resumed ${resumeTarget}: the bot will reply again.` : `${resumeTarget} was not handed off.`,
+          };
+        }
+      }
+
+      // Open-DM mode. Every DM reaches the public agent, which chats with the
+      // customer and hands them off when they are ready to order. handleIntake
+      // only holds back handed-off customers and relays the automated CV order.
+      // Admins fall through to the main agent.
       if (gateOn) {
         if (admin) return;
         try {
@@ -325,7 +369,7 @@ export default {
         } catch (err) {
           if (isQueueFullError(err)) return busyReply();
           api.logger?.warn?.(`public-service-gate: intake failed (${String(err)})`);
-          return { handled: true };
+          return;
         }
       }
 
@@ -335,6 +379,8 @@ export default {
       // requests fall through to the agent (which has the public-service tools).
       const member = isWhatsAppPublicUser(api, event, ctx);
       if (!member) return; // leave to core access control
+      // The handoff action is exposed in this mode too, so its silence must hold.
+      if (isHandedOff(api, sender)) return { handled: true };
       if (isDisabledServiceRequestText(api, text)) {
         return { handled: true, text: serviceDisabledReply(api) };
       }
