@@ -57,6 +57,9 @@
       "greetingTemplatePath": {
         "type": "string"
       },
+      "businessInfoPath": {
+        "type": "string"
+      },
       "newsEnabled": {
         "type": "boolean"
       },

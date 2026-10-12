@@ -126,14 +126,13 @@ POST_TEXT_V3 = (
 
 POST_TEXTS = [POST_TEXT, POST_TEXT_V2, POST_TEXT_V3]
 
-# Per-group ref-coded wa.me link to the SELLER's WhatsApp line (+263775489417,
-# the "WhatsApp & Calls" number; the other line is calls only and doubles as the
-# bot number -- see public-service-gate/services/seller-referral.js). Replies go
-# straight to the seller, so the ref in the prefilled text tells the seller which
-# ad/group the customer came from; Genaie cannot count these automatically.
+# Per-group ref-coded wa.me link to Genaie's own number (+263785632943, the
+# bot's WhatsApp number), like every other promo: replies reach the bot, the
+# public-service-gate ad-ref recorder counts them, and the bot forwards the order
+# to the seller when it hands the customer off (services/handoff.js).
 TRACKING = {
     "prefix": "BM",
-    "number": "+263775489417",
+    "number": "+263785632943",
     "label": "building materials",
 }
 

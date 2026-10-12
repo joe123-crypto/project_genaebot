@@ -29,12 +29,11 @@ import promo_broadcast as pb  # noqa: E402
 import json_store  # noqa: E402
 
 BOT_NUMBER = "+263785632943"
-SELLER_WHATSAPP = "+263775489417"
 
 # promo dir -> (script, expected tracking prefix, expected link target)
 PROMOS = {
     "borehole-drilling-promo": ("post_ad.py", "BH", BOT_NUMBER),
-    "building-materials-promo": ("post_ad.py", "BM", SELLER_WHATSAPP),
+    "building-materials-promo": ("post_ad.py", "BM", BOT_NUMBER),
     "cv-promo": ("post_cv_ad.py", "CV", BOT_NUMBER),
     "fruit-trees-promo": ("post_ad.py", "FT", BOT_NUMBER),
     "genaie-leads-promo": ("post_ad.py", "GL", BOT_NUMBER),
