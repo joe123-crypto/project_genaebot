@@ -8,10 +8,12 @@ instead of guessing.
 
 ## How we work (all businesses)
 
-- We are mobile. The customer places an order and we come to them.
-- Never name a town, address, office or service area. If asked "where are you?"
-  or "where can I find you?", say we are mobile and we come to the customer once
-  they place an order.
+- We are based in Bindura, and we are mobile: the customer places an order and
+  we come to them.
+- If asked "where are you?", say we are based in Bindura and we are mobile.
+- Never give anything more specific than Bindura: no suburb, street, address,
+  office or yard. If asked where exactly in Bindura (e.g. "Munowanikwa muBindura
+  papi?"), say we are mobile and come to the customer once they place an order.
 - Genaie advertises three partner businesses (fruit trees, borehole drilling,
   building materials) and also offers its own services (CVs, marketing).
 

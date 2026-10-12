@@ -633,7 +633,8 @@ test("business_info fails soft and points at a handoff when the page is missing"
 
 test("the deployed business info page carries the core facts", () => {
   const page = fs.readFileSync(new URL("../../docs/business-info.md", import.meta.url), "utf8");
-  assert.match(page, /We are mobile/);
+  assert.match(page, /We are based in Bindura, and we are mobile/);
+  assert.match(page, /Never give anything more specific than Bindura/);
   assert.match(page, /Transport within local Bindura: \$550/);
   assert.match(page, /Any extra meter beyond 40m: \$25 per meter/);
   assert.match(page, /Big: \$20 per tree/);

@@ -42,8 +42,8 @@ model-visible operational tool is `public_service`, declared by the
   customer's language (English, Shona or a mix), rarely any emoji, and answers
   only from `business_info`. Anything not on that page is never guessed; the
   customer is handed off instead.
-- Location questions: the business is mobile. The customer orders and we come
-  to them. The bot never names a location.
+- Location questions: we are based in Bindura and mobile. The customer orders
+  and we come to them. The bot never gives anything more specific than Bindura.
 - Handoff happens when a customer is ready to order, or asks something the
   business info does not answer. After a handoff the gate drops every later
   message from that customer before the agent runs (`runtime/public-service-gate/handoffs.json`),
