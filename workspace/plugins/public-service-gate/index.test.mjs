@@ -1015,6 +1015,7 @@ test("public canned replies use the concise style", () => {
   assert.match(prompt, /No em dashes/i);
   assert.match(prompt, /call `public_service` with action `business_info`/i);
   assert.match(prompt, /Never guess/);
+  assert.match(prompt, /unrelated to the business[^\n]*list what we offer/i);
 });
 
 test("runJsonCommand rejects non-JSON stdout with stdout attached", async () => {
