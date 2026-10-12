@@ -2,30 +2,31 @@
   "version": 1,
   "rules": [
     {
-      "name": "GitHub Actions and runner operations",
+      "name": "CI workflow",
       "paths": [
         ".github/workflows/**",
-        ".github/actionlint.yaml",
-        "deploy/github-actions/**"
+        ".github/actionlint.yaml"
       ],
       "requiredDocs": [
-        "deploy/github-actions/README.md"
+        "deploy/railway/README.md"
       ]
     },
     {
-      "name": "production deployment and container boundary",
+      "name": "production deployment",
       "paths": [
-        "deploy/openclaw-deploy.sh",
-        "deploy/validate-openclaw-deploy.sh",
+        "railway.json",
+        "deploy/railway/**",
         "deploy/stage-openclaw-source.sh",
+        "deploy/verify-staged-source.sh",
         "deploy/stage-workspace.rsync",
-        "deploy/docker-compose.override.yml",
+        "deploy/gateway-exec.sh",
+        "deploy/install-*.sh",
         "deploy/job-scout-browser.Dockerfile",
-        "deploy/container/**",
-        "deploy/systemd/**"
+        "deploy/job-scout-channel-listener.Dockerfile"
       ],
       "requiredDocs": [
-        "README.md"
+        "README.md",
+        "deploy/railway/README.md"
       ]
     },
     {
@@ -34,38 +35,17 @@
         "workspace/plugins/*/openclaw.plugin.json"
       ],
       "requiredDocs": [
-        "workspace/docs/public-services.md",
+        "workspace/docs/public-services.md"
+      ]
+    },
+    {
+      "name": "public agent action surface",
+      "paths": [
+        "workspace/plugins/public-service-gate/index.js",
+        "workspace/plugins/public-service-gate/services/*.js"
+      ],
+      "requiredDocs": [
         "workspace/docs/public-whatsapp-system-prompt.txt"
-      ]
-    },
-    {
-      "name": "personalized news public workflow",
-      "paths": [
-        "workspace/plugins/public-service-gate/services/news.js",
-        "workspace/public-news/**"
-      ],
-      "requiredDocs": [
-        "workspace/docs/personalized-news-onboarding.md"
-      ]
-    },
-    {
-      "name": "event scout public workflow",
-      "paths": [
-        "workspace/plugins/public-service-gate/services/event-scout.js",
-        "workspace/public-events/**"
-      ],
-      "requiredDocs": [
-        "workspace/docs/event-scout-onboarding.md"
-      ]
-    },
-    {
-      "name": "calendar save interface",
-      "paths": [
-        "workspace/bin/genaie-calendar",
-        "workspace/skills/genaie-calendar/**"
-      ],
-      "requiredDocs": [
-        "workspace/docs/calendar-save-onboarding.md"
       ]
     },
     {

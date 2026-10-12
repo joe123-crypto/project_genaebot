@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CONTAINER="${OPENCLAW_CONTAINER:-openclaw-gateway}"
-DOCKER="${DOCKER:-docker}"
+# shellcheck disable=SC1091  # sourced at runtime from the same deploy/ directory
+source "$(dirname "${BASH_SOURCE[0]}")/gateway-exec.sh"
+
 NAME="job-scout"
 LEGACY_NAME="job-scout-pilot"
 CRON_EXPR="0 8 * * *"
@@ -16,29 +17,45 @@ case "${1:-}" in
   --disable) INSTALL_STATE="disabled" ;;
   *) printf 'usage: %s [--enable|--disable]\n' "$0" >&2; exit 2 ;;
 esac
-job_scout=("$DOCKER" exec -u joseph "$CONTAINER" /home/joseph/.openclaw/workspace/bin/job-scout)
-openclaw=("$DOCKER" exec -u joseph "$CONTAINER" sh -lc 'exec env -u OPENCLAW_HOME OPENCLAW_GATEWAY_TOKEN="$GATEWAY_AUTH_TOKEN" openclaw "$@"' openclaw)
+job_scout=("${GATEWAY_EXEC[@]}" /home/joseph/.openclaw/workspace/bin/job-scout)
+openclaw=("${GATEWAY_OPENCLAW[@]}")
 
-if ! "$DOCKER" exec "$CONTAINER" sh -lc '[ "${#JOB_SCOUT_BROWSER_TOKEN}" -ge 32 ]'; then
-  printf 'ERROR: JOB_SCOUT_BROWSER_TOKEN is missing from the gateway or shorter than 32 characters.\n' >&2
-  exit 1
-fi
+# The job-scout-browser worker handles URL-only applications. It is a separate
+# container, so the token-parity preflight below only applies where that
+# container can exist -- i.e. a local Docker runtime. Production (Railway) runs
+# the gateway service alone and has no browser worker, so URL-only applications
+# are unavailable there and the dispatcher records them as action_required.
+if [ "$GATEWAY_EXEC_MODE" = docker ]; then
+  docker_bin="${DOCKER:-docker}"
+  container="${OPENCLAW_CONTAINER:-openclaw-gateway}"
 
-browser_id="$("$DOCKER" ps --filter label=com.docker.compose.service=job-scout-browser --format '{{.ID}}' | head -1)"
-if [ -z "$browser_id" ]; then
-  printf 'ERROR: the optional job-scout-browser container is not running.\n' >&2
-  exit 1
+  if ! "$docker_bin" exec "$container" sh -lc '[ "${#JOB_SCOUT_BROWSER_TOKEN}" -ge 32 ]'; then
+    printf 'ERROR: JOB_SCOUT_BROWSER_TOKEN is missing from the gateway or shorter than 32 characters.\n' >&2
+    exit 1
+  fi
+
+  browser_id="$("$docker_bin" ps --filter label=com.docker.compose.service=job-scout-browser --format '{{.ID}}' | head -1)"
+  if [ -z "$browser_id" ]; then
+    printf 'ERROR: the optional job-scout-browser container is not running.\n' >&2
+    exit 1
+  fi
+  gateway_token_hash="$("$docker_bin" exec "$container" sh -lc 'printf %s "$JOB_SCOUT_BROWSER_TOKEN" | sha256sum | cut -d " " -f 1')"
+  browser_token_hash="$("$docker_bin" exec "$browser_id" sh -lc 'printf %s "$JOB_SCOUT_BROWSER_TOKEN" | sha256sum | cut -d " " -f 1')"
+  if [ "$gateway_token_hash" != "$browser_token_hash" ]; then
+    printf 'ERROR: gateway and browser worker tokens do not match.\n' >&2
+    exit 1
+  fi
+  unset gateway_token_hash browser_token_hash docker_bin container
+  runtime_check_args=(--check-browser --check-subscribers)
+else
+  printf 'NOTE: no browser worker on this runtime; URL-only applications stay action_required.\n' >&2
+  # Probing the worker's health here would always fail: there is no such
+  # container to resolve. The subscriber/CV gate below still applies.
+  runtime_check_args=(--check-subscribers)
 fi
-gateway_token_hash="$("$DOCKER" exec "$CONTAINER" sh -lc 'printf %s "$JOB_SCOUT_BROWSER_TOKEN" | sha256sum | cut -d " " -f 1')"
-browser_token_hash="$("$DOCKER" exec "$browser_id" sh -lc 'printf %s "$JOB_SCOUT_BROWSER_TOKEN" | sha256sum | cut -d " " -f 1')"
-if [ "$gateway_token_hash" != "$browser_token_hash" ]; then
-  printf 'ERROR: gateway and browser worker tokens do not match.\n' >&2
-  exit 1
-fi
-unset gateway_token_hash browser_token_hash
 
 set +e
-runtime_check_output="$("${job_scout[@]}" check-runtime --check-browser --check-subscribers 2>&1)"
+runtime_check_output="$("${job_scout[@]}" check-runtime "${runtime_check_args[@]}" 2>&1)"
 runtime_check_rc=$?
 set -e
 if [ "$runtime_check_rc" -ne 0 ]; then

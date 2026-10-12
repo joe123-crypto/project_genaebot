@@ -127,13 +127,9 @@
         "enabled": true,
         "config": {
           "enabled": true,
-          "greetingTemplatePath": "/home/joseph/.openclaw/workspace/docs/public-greeting.txt",
           "businessInfoPath": "/home/joseph/.openclaw/workspace/docs/business-info.md",
           "botWhatsappNumber": "+263785632943",
           "memberGateEnabled": true,
-          "pendingAckText": "Thanks for reaching out. Genae grants access manually, so your request has been received and is waiting for review. You'll get a message here once you're approved.",
-          "newsEnabled": false,
-          "eventScoutEnabled": false,
           "jobScoutOnboardingEnabled": true,
           "cvMakerEnabled": true,
           "cvMakerPriceText": "US$5",

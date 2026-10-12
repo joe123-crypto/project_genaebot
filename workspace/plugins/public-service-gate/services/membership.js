@@ -6,10 +6,6 @@ import { HELPER_TIMEOUT_MS, helperLimiter, runJsonCommand, runTextCommand } from
 // invite-code commands are gone and only the phone-keyed member map remains.
 const DEFAULT_MEMBER_STORE_SCRIPT = "~/.openclaw/workspace/bin/whatsapp-invite";
 const DEFAULT_ALLOW_FAILED = `I couldn't unlock that number. Try again later.`;
-const DEFAULT_ACCESS_REQUIRED = `Genaie isn't open for new users right now.`;
-const DEFAULT_PENDING_ACK =
-  `Thanks for reaching out. Genae grants access manually, so your request has been received and is ` +
-  `waiting for review. You'll get a message here once you're approved.`;
 
 // Keep admin alerts and stored snippets short and single-line.
 const LEAD_SNIPPET_MAX = 280;
@@ -81,20 +77,6 @@ export function parseAllowCommand(text) {
   if (!compact || compact.length > 60) return "";
   const match = ALLOW_COMMAND_PATTERN.exec(compact);
   return match ? normalizePhone(match[1]) : "";
-}
-
-export function loadAccessRequiredText(api) {
-  const pluginCfg = getPluginConfig(api);
-  return typeof pluginCfg.accessRequiredText === "string" && pluginCfg.accessRequiredText.trim()
-    ? pluginCfg.accessRequiredText.trim()
-    : DEFAULT_ACCESS_REQUIRED;
-}
-
-export function loadPendingAckText(api) {
-  const pluginCfg = getPluginConfig(api);
-  return typeof pluginCfg.pendingAckText === "string" && pluginCfg.pendingAckText.trim()
-    ? pluginCfg.pendingAckText.trim()
-    : DEFAULT_PENDING_ACK;
 }
 
 // Record a non-member's cold message as a pending lead. Returns the store result

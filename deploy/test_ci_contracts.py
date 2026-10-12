@@ -79,14 +79,11 @@ class WorkflowContractTests(unittest.TestCase):
             job_block(workflow, "validate"), "run: ./deploy/ci-check.sh"
         )
 
-    # The former gateway `deploy` job (push-to-main -> self-hosted
-    # openclaw-prod-deploy) and the dispatched `job-scout-deploy` /
-    # `record-job-scout-release` receiver jobs have been retired: the gateway
-    # now deploys via Railway's GitHub integration (deploy/railway/Dockerfile),
-    # and the self-hosted openclaw-prod host that ran those jobs was stopped at
-    # the 2026-08-20 Railway cutover. The `validate` job remains the required
-    # gate; its node-install ordering is covered by
-    # test_node_dependencies_are_installed_before_repository_tests above.
+    # This workflow deliberately has no deploy job: the gateway deploys through
+    # Railway's GitHub integration, which builds deploy/railway/Dockerfile on
+    # every push to main. `validate` is the required status check that gates the
+    # merge, so its node-install ordering (covered above) is what protects
+    # production.
 
     def test_node_cache_tracks_both_package_locks(self) -> None:
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")

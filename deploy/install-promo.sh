@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Shared helper for the deterministic WhatsApp promo-ad cron installers
-# (install-cv-promo.sh, install-genaie-promo.sh, install-building-materials-promo.sh).
+# (one per campaign: cv, genaie, genaie-leads, building-materials, fruit-trees,
+# borehole-drilling).
 #
 # This file is SOURCED by those wrappers, not run directly; it exposes one
 # function, register_promo_cron, which idempotently registers/updates a
@@ -14,17 +15,20 @@
 #   source "$(dirname "${BASH_SOURCE[0]}")/install-promo.sh"
 #   register_promo_cron <name> <cron-expr> <tz> <failure-alert-to> <script-path>
 #
-# Honors OPENCLAW_CONTAINER (default openclaw-gateway) and DOCKER (default docker).
+# The gateway access mechanism comes from gateway-exec.sh: `railway ssh` against
+# the production service by default, or a local container when DOCKER /
+# OPENCLAW_CONTAINER / OPENCLAW_EXEC_MODE=docker is set.
+
+# shellcheck disable=SC1091  # sourced at runtime from the same deploy/ directory
+source "$(dirname "${BASH_SOURCE[0]}")/gateway-exec.sh"
 
 register_promo_cron() {
   local name="$1" cron_expr="$2" tz="$3" alert_to="$4" script="$5"
-  local container="${OPENCLAW_CONTAINER:-openclaw-gateway}"
-  local docker="${DOCKER:-docker}"
   local command_argv
   command_argv="$(printf '["python3","%s"]' "$script")"
 
   local openclaw
-  openclaw=("$docker" exec -u joseph "$container" sh -lc 'exec env -u OPENCLAW_HOME OPENCLAW_GATEWAY_TOKEN="$GATEWAY_AUTH_TOKEN" openclaw "$@"' openclaw)
+  openclaw=("${GATEWAY_OPENCLAW[@]}")
 
   local jobs_json existing_id
   jobs_json="$("${openclaw[@]}" cron list --all --json)"

@@ -178,7 +178,7 @@ def check_staged_source(files: dict[str, str], checks: Checks) -> None:
 
         required = {
             "workspace/skills/genaie-calendar/SKILL.md",
-            "workspace/docs/public-greeting.txt",
+            "workspace/docs/business-info.md",
             "workspace/bin/job-scout",
             "workspace/job-scout/job_scout.py",
             "workspace/USER.md",
@@ -222,15 +222,19 @@ def check_runtime_references(checks: Checks) -> None:
         rel = "workspace/" + str(value).removeprefix(RUNTIME_WORKSPACE_PREFIX)
         checks.require((ROOT / rel / "openclaw.plugin.json").is_file(), f"plugin load path is invalid: {value}")
 
-    compose = (ROOT / "deploy/docker-compose.override.yml").read_text(encoding="utf-8")
+    # The gateway boots on Railway, where the entrypoint seeds each agent room
+    # from the staged source instead of bind-mounting individual files.
+    entrypoint = (ROOT / "deploy/railway/entrypoint.sh").read_text(encoding="utf-8")
     checks.require(
-        "./live-source/workspace/USER.md:/home/joseph/.openclaw/agent-workspace-admin/USER.md:ro" in compose,
-        "container boundary does not mount USER.md read-only into the admin workspace",
+        "for f in SOUL.md HEARTBEAT.md IDENTITY.md MEMORY.md USER.md; do" in entrypoint,
+        "entrypoint does not seed the admin workspace from workspace/ context files",
     )
+    # The public room is seeded by copying every *.md out of the template dir, so
+    # the boundary is enforced at the source: those two files must not exist there.
+    public_room = ROOT / "deploy/agent-workspace-public"
     checks.require(
-        "/home/joseph/.openclaw/agent-workspace-public/MEMORY.md" not in compose
-        and "/home/joseph/.openclaw/agent-workspace-public/COMMANDS.md" not in compose,
-        "public workspace must not mount MEMORY.md or COMMANDS.md",
+        not (public_room / "MEMORY.md").exists() and not (public_room / "COMMANDS.md").exists(),
+        "public workspace template must not contain MEMORY.md or COMMANDS.md",
     )
 
 
@@ -260,17 +264,14 @@ def check_service_catalog(checks: Checks) -> None:
         public_gate = {}
     policy = (ROOT / "workspace/docs/public-services.md").read_text(encoding="utf-8").lower()
     prompt = (ROOT / "workspace/docs/public-whatsapp-system-prompt.txt").read_text(encoding="utf-8").lower()
-    greeting = (ROOT / "workspace/docs/public-greeting.txt").read_text(encoding="utf-8").lower()
     services = {
-        "personalized news": (public_gate.get("newsEnabled") is not False, ("personalized news",)),
-        "event scouting": (public_gate.get("eventScoutEnabled") is not False, ("event scout", "local event")),
         "Job Scout": (public_gate.get("jobScoutOnboardingEnabled") is True, ("job scout", "job, scholarship", "job & internship")),
+        "CV maker": (public_gate.get("cvMakerEnabled") is True, ("cv",)),
     }
     for label, (enabled, terms) in services.items():
         if not enabled:
-            checks.require(not any(term in greeting for term in terms), f"greeting still advertises disabled {label} service")
             continue
-        for document_name, document in (("policy", policy), ("prompt", prompt), ("greeting", greeting)):
+        for document_name, document in (("policy", policy), ("prompt", prompt)):
             checks.require(any(term in document for term in terms), f"{document_name} is missing the {label} service")
 
 

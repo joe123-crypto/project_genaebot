@@ -21,13 +21,10 @@
 
 # Agent identity/context docs.
 !workspace/
-!workspace/AGENTS.md
 !workspace/HEARTBEAT.md
 !workspace/IDENTITY.md
 !workspace/MEMORY.md
-!workspace/README.md
 !workspace/SOUL.md
-!workspace/TOOLS.md
 !workspace/USER.md
 
 # Developer-controlled command/source files.
@@ -90,10 +87,6 @@
 !workspace/docs/**
 !workspace/account-link/
 !workspace/account-link/*.py
-!workspace/public-news/
-!workspace/public-news/*.py
-!workspace/public-events/
-!workspace/public-events/*.py
 # Standalone CV maker service (project-owned; NOT part of the job-scout overlay).
 !workspace/cv-maker/
 !workspace/cv-maker/*.md

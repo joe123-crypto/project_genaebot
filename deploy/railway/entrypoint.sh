@@ -89,8 +89,8 @@ for role in admin public; do
     find "$src" -maxdepth 1 -name '*.md' -exec cp -f {} "$OC_DIR/agent-workspace-$role/" \;
   fi
 done
-# The admin agent context also pulls a few markdown files from workspace/ (see
-# docker-compose.override.yml). Mirror those explicitly.
+# The admin agent context also pulls a few markdown files from workspace/.
+# deploy/ci/check.py asserts this list, so keep the two in step.
 for f in SOUL.md HEARTBEAT.md IDENTITY.md MEMORY.md USER.md; do
   [ -f "$LIVE_SOURCE/workspace/$f" ] && cp -f "$LIVE_SOURCE/workspace/$f" "$OC_DIR/agent-workspace-admin/$f"
 done

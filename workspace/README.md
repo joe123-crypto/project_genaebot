@@ -1,2 +1,0 @@
-# genaiebot
-genaie agent

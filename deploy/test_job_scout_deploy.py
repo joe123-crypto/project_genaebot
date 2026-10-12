@@ -16,40 +16,6 @@ class JobScoutDeploymentTests(unittest.TestCase):
     plugin = config["plugins"]["entries"]["public-service-gate"]["config"]
     self.assertIs(plugin["jobScoutOnboardingEnabled"], True)
 
-  def test_browser_is_optional_and_does_not_gate_openclaw(self) -> None:
-    compose = (ROOT / "deploy/docker-compose.override.yml").read_text(encoding="utf-8")
-
-    self.assertNotIn("depends_on:", compose)
-    self.assertIn("profiles:\n      - job-scout", compose)
-    self.assertNotIn("seccomp=", compose)
-    self.assertNotIn("no-new-privileges", compose)
-    self.assertIn("user: ubuntu", compose)
-    self.assertIn("/tmp:size=256m,uid=1000,gid=1000,mode=1770", compose)
-    self.assertIn("JOB_SCOUT_BROWSER_TOKEN: ${JOB_SCOUT_BROWSER_TOKEN:-}", compose)
-    self.assertNotIn("JOB_SCOUT_PILOT_USER_IDS", compose)
-    self.assertEqual(compose.count("JOB_SCOUT_BROWSER_TOKEN: ${JOB_SCOUT_BROWSER_TOKEN:-}"), 2)
-
-  def test_channel_listener_is_isolated_and_requires_pairing(self) -> None:
-    compose = (ROOT / "deploy/docker-compose.override.yml").read_text(encoding="utf-8")
-    deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")
-    pair = (ROOT / "deploy/pair-job-scout-channel.sh").read_text(encoding="utf-8")
-
-    self.assertIn("- job-scout-channel", compose)
-    self.assertIn("JOB_SCOUT_CHANNEL_BACKFILL_COUNT: \"10\"", compose)
-    self.assertIn("JOB_SCOUT_CHANNELS_JSON:", compose)
-    self.assertIn("0029VaYITFn2v1IsGm9zxP1k", compose)
-    self.assertIn("0029VaQ9LFe8PgsLScuJES32", compose)
-    self.assertIn("zim-job-vacancies-whatsapp", compose)
-    self.assertIn("0029VacRRi9GE56qqFobOZ2K", compose)
-    self.assertIn("everyday-vacancies-whatsapp", compose)
-    self.assertIn("runtime/job-scout-channel:/data", compose)
-    self.assertNotIn(".openclaw/credentials", compose)
-    self.assertIn("cap_drop:\n      - ALL", compose)
-    self.assertIn("auth/creds.json", deploy)
-    self.assertIn("JOB_SCOUT_CHANNEL_PAIRING=1", pair)
-    self.assertLess(pair.index(" compose --profile job-scout-channel build "), pair.index("JOB_SCOUT_CHANNEL_PAIRING=1"))
-    self.assertIn("install-job-scout-channel-health.sh", pair)
-
   def test_channel_listener_image_pins_baileys_and_runs_read_only(self) -> None:
     package = json.loads((ROOT / "workspace/job-scout/channel-listener/package.json").read_text(encoding="utf-8"))
     dockerfile = (ROOT / "deploy/job-scout-channel-listener.Dockerfile").read_text(encoding="utf-8")
@@ -97,11 +63,9 @@ class JobScoutDeploymentTests(unittest.TestCase):
     self.assertIn("--agent-phase wait", (ROOT / "workspace/skills/job-scout/SKILL.md").read_text(encoding="utf-8"))
     self.assertLess(wrapper.index('prepare_json='), wrapper.index('"$openclaw_bin" agent'))
 
-  def test_normal_deploy_reconciles_scheduler_without_reenabling_a_pause(self) -> None:
-    deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")
+  def test_rerunning_the_installer_does_not_reenable_a_paused_schedule(self) -> None:
     installer = (ROOT / "deploy/install-job-scout.sh").read_text(encoding="utf-8")
 
-    self.assertIn('bash "$OC_DIR/deploy/install-job-scout.sh"', deploy)
     self.assertIn('INSTALL_STATE="preserve"', installer)
     self.assertIn('add_state=(--disabled)', installer)
     self.assertIn('.enabled == $expected_enabled', installer)
@@ -164,28 +128,22 @@ class JobScoutDeploymentTests(unittest.TestCase):
     self.assertIn('[ "$old_id" != "$existing_id" ]', installer)
 
   def test_healthcheck_exercises_chromium_and_pdf_readiness(self) -> None:
-    compose = (ROOT / "deploy/docker-compose.override.yml").read_text(encoding="utf-8")
     server = (ROOT / "workspace/job-scout/web_apply_server.mjs").read_text(encoding="utf-8")
 
-    self.assertIn("/ready", compose)
     self.assertIn("probeChromium(chromium)", server)
     self.assertIn("probePdfRendering(chromium)", server)
     self.assertIn('request.url === "/render-pdf"', server)
     self.assertIn('"content-type": "application/pdf"', server)
 
-  def test_gateway_image_includes_cv_converter_and_is_deployed(self) -> None:
-    dockerfile = (ROOT / "deploy/container/Dockerfile").read_text(encoding="utf-8")
-    deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")
+  def test_gateway_image_includes_the_cv_converter_toolchain(self) -> None:
+    dockerfile = (ROOT / "deploy/railway/Dockerfile").read_text(encoding="utf-8")
 
     self.assertIn("poppler-utils", dockerfile)
     self.assertIn("tesseract-ocr", dockerfile)
-    self.assertIn('GATEWAY_DOCKERFILE_SRC="$OC_DIR/deploy/container/Dockerfile"', deploy)
-    self.assertIn('install -m 0644 "$GATEWAY_DOCKERFILE_SRC" "$GATEWAY_DOCKERFILE_DST"', deploy)
 
   def test_pending_cv_converter_runs_frequently_without_overlap(self) -> None:
     installer = (ROOT / "deploy/install-job-scout-cv-conversion.sh").read_text(encoding="utf-8")
     wrapper = (ROOT / "workspace/bin/job-scout-convert-pending").read_text(encoding="utf-8")
-    deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")
 
     self.assertIn('NAME="job-scout-cv-conversion"', installer)
     self.assertIn('CRON_EXPR="0 * * * * *"', installer)
@@ -193,59 +151,22 @@ class JobScoutDeploymentTests(unittest.TestCase):
     self.assertIn('"/home/joseph/.openclaw/workspace/bin/job-scout-convert-pending"', installer)
     self.assertIn("flock -n 9", wrapper)
     self.assertIn("convert-pending-cvs --limit 100", wrapper)
-    self.assertIn('bash "$OC_DIR/deploy/install-job-scout-cv-conversion.sh"', deploy)
 
   def test_approved_application_worker_runs_every_five_minutes(self) -> None:
     installer = (ROOT / "deploy/install-job-scout-approvals.sh").read_text(encoding="utf-8")
     wrapper = (ROOT / "workspace/bin/job-scout-agent").read_text(encoding="utf-8")
-    deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")
-    main = deploy[deploy.index("main()") :]
 
     self.assertIn('NAME="job-scout-approvals"', installer)
     self.assertIn('CRON_EXPR="0 */5 * * * *"', installer)
     self.assertIn('"--approved-live"', installer)
     self.assertIn("--approved-only --browser-apply", wrapper)
-    self.assertIn('bash "$OC_DIR/deploy/install-job-scout-approvals.sh"', deploy)
-    self.assertLess(
-      main.index('bash "$OC_DIR/deploy/install-job-scout-approvals.sh"'),
-      main.index("install_job_scout_schedule"),
-    )
-
-  def test_optional_worker_starts_after_core_restart(self) -> None:
-    deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")
-    restart = deploy.index("  restart_gateway_if_needed\n", deploy.index("main()"))
-    optional = deploy.index("  start_optional_job_scout_browser\n", deploy.index("main()"))
-
-    self.assertLess(restart, optional)
-    self.assertIn("core gateway remains available", deploy)
-    self.assertNotIn("--force-recreate", deploy)
-
-  def test_gateway_api_stabilizes_before_cron_installation(self) -> None:
-    deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")
-    main = deploy[deploy.index("main()") :]
-
-    self.assertIn("wait_gateway_api_ready()", deploy)
-    self.assertIn("openclaw cron status --timeout 5000 --json", deploy)
-    self.assertIn('consecutive_successes" -ge 2', deploy)
-    self.assertLess(main.index("  restart_gateway_if_needed\n"), main.index("  wait_gateway_api_ready\n"))
-    self.assertLess(main.index("  wait_gateway_api_ready\n"), main.index("  run_health_check\n"))
-    self.assertLess(
-      main.index("  wait_gateway_api_ready\n"),
-      main.index('bash "$OC_DIR/deploy/install-job-scout-cv-conversion.sh"'),
-    )
 
   def test_firestore_quota_defers_job_scout_schedule_without_hiding_other_failures(self) -> None:
     installer = (ROOT / "deploy/install-job-scout.sh").read_text(encoding="utf-8")
-    deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")
 
     self.assertIn("RESOURCE_EXHAUSTED|quota exceeded", installer)
     self.assertIn("exit 75", installer)
-    self.assertLess(installer.index("check-runtime --check-browser --check-subscribers"), installer.index("cron list --all --json"))
-    self.assertIn("install_job_scout_schedule()", deploy)
-    self.assertIn('if [ "$rc" -eq 75 ]', deploy)
-    self.assertIn("existing schedule preserved", deploy)
-    self.assertIn('return "$rc"', deploy)
-    self.assertIn("  install_job_scout_schedule\n", deploy[deploy.index("main()") :])
+    self.assertLess(installer.index("check-runtime"), installer.index("cron list --all --json"))
 
     with tempfile.TemporaryDirectory() as temp_dir:
       temp = Path(temp_dir)
@@ -275,7 +196,12 @@ exit 0
         encoding="utf-8",
       )
       fake_docker.chmod(0o755)
-      env = {**os.environ, "DOCKER": str(fake_docker), "FAKE_DOCKER_CALLS": str(calls)}
+      env = {
+        **os.environ,
+        "OPENCLAW_EXEC_MODE": "docker",
+        "DOCKER": str(fake_docker),
+        "FAKE_DOCKER_CALLS": str(calls),
+      }
 
       quota = subprocess.run(
         ["bash", str(ROOT / "deploy/install-job-scout.sh")],
@@ -302,53 +228,76 @@ exit 0
       self.assertIn("runtime transport failed", other.stderr)
       self.assertNotIn("reconciliation was deferred", other.stderr)
 
-  def test_live_source_bind_mount_is_refreshed_safely(self) -> None:
-    deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")
-    staging = (ROOT / "deploy/stage-openclaw-source.sh").read_text(encoding="utf-8")
-    stage = deploy[deploy.index("stage_source()") : deploy.index("write_generated_marker()")]
-    recreate = deploy.index("    reconcile_boundary_stack\n", deploy.index("main()"))
-    ensure_running = deploy.index("  ensure_container_running\n", deploy.index("main()"))
+  def test_browser_health_is_only_probed_where_a_browser_worker_can_exist(self) -> None:
+    installer = (ROOT / "deploy/install-job-scout.sh").read_text(encoding="utf-8")
 
-    self.assertIn('stage-openclaw-source.sh" "$OC_DIR" "$STAGE_DIR"', stage)
-    self.assertNotIn('rm -rf "$stage_root"', staging)
-    self.assertIn('"$stage_root/workspace"', staging)
-    self.assertLess(ensure_running, recreate)
+    # The browser worker is a separate container, so both the token-parity
+    # preflight and the --check-browser probe belong inside the docker branch.
+    # On Railway the gateway runs alone and the probe would always fail.
+    docker_branch = installer.index('if [ "$GATEWAY_EXEC_MODE" = docker ]')
+    else_branch = installer.index("\nelse\n", docker_branch)
+    self.assertLess(docker_branch, installer.index("--check-browser"))
+    self.assertLess(installer.index("--check-browser"), else_branch)
+    # The subscriber/CV readiness gate is real on both runtimes.
+    self.assertIn("--check-subscribers", installer)
 
-  def test_container_service_waits_for_docker_api(self) -> None:
-    unit = (ROOT / "deploy/systemd/openclaw-gateway-container.service").read_text(encoding="utf-8")
-    deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")
-
-    self.assertIn("ExecStartPre=/usr/local/libexec/openclaw-wait-for-docker", unit)
-    self.assertIn("install_container_service", deploy)
-    self.assertIn('run_root install -D -m 0644 "$SERVICE_UNIT_SRC" "$SERVICE_UNIT_DST"', deploy)
-
-  def test_live_workspace_verification_survives_container_restart(self) -> None:
-    deploy = (ROOT / "deploy/openclaw-deploy.sh").read_text(encoding="utf-8")
-    verify = deploy[deploy.index("verify_live_workspace()") : deploy.index("main()")]
-
-    self.assertIn('for _attempt in $(seq 1 5)', verify)
-    self.assertIn('exec -i "$CONTAINER" python3', verify)
-    self.assertIn("ensure_container_running", verify)
-
-  def test_docker_readiness_check_succeeds_and_is_bounded(self) -> None:
-    waiter = ROOT / "deploy/systemd/wait-for-docker.sh"
-    with tempfile.TemporaryDirectory() as tmp:
-      fake = Path(tmp) / "docker"
-      fake.write_text("#!/bin/sh\n[ \"$1\" = info ]\n", encoding="utf-8")
-      fake.chmod(0o755)
+  def test_railway_mode_installs_the_schedule_without_a_browser_worker(self) -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+      temp = Path(temp_dir)
+      fake_railway = temp / "railway"
+      calls = temp / "calls.log"
+      fake_railway.write_text(
+        """#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$FAKE_RAILWAY_CALLS"
+if printf '%s\\n' "$*" | grep -q check-runtime; then
+  printf '%s\\n' '{"ok": true}'
+  exit 0
+fi
+if printf '%s\\n' "$*" | grep -q 'cron list'; then
+  printf '%s\\n' '{"jobs": []}'
+  exit 0
+fi
+exit 0
+""",
+        encoding="utf-8",
+      )
+      fake_railway.chmod(0o755)
       env = {
         **os.environ,
-        "DOCKER_BIN": str(fake),
-        "DOCKER_READY_ATTEMPTS": "1",
-        "DOCKER_READY_INTERVAL_SECONDS": "0",
+        "OPENCLAW_EXEC_MODE": "railway",
+        "RAILWAY": str(fake_railway),
+        "FAKE_RAILWAY_CALLS": str(calls),
       }
-      success = subprocess.run(["bash", str(waiter)], env=env, capture_output=True, text=True, check=False)
-      fake.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
-      failure = subprocess.run(["bash", str(waiter)], env=env, capture_output=True, text=True, check=False)
 
-    self.assertEqual(success.returncode, 0, success.stderr)
-    self.assertEqual(failure.returncode, 1)
-    self.assertIn("did not become ready after 1 attempts", failure.stderr)
+      result = subprocess.run(
+        ["bash", str(ROOT / "deploy/install-job-scout.sh")],
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+      )
+      recorded = calls.read_text(encoding="utf-8")
+
+      # The readiness gate still runs, but never asks about the absent browser.
+      self.assertIn("check-runtime", recorded)
+      self.assertNotIn("--check-browser", recorded)
+      self.assertIn("no browser worker on this runtime", result.stderr)
+      # Having passed the gate, the installer must reach the cron work rather
+      # than aborting on an unreachable worker.
+      self.assertIn("cron list", recorded, result.stderr)
+
+  def test_image_build_stages_the_source_overlay_and_verifies_it(self) -> None:
+    dockerfile = (ROOT / "deploy/railway/Dockerfile").read_text(encoding="utf-8")
+    staging = (ROOT / "deploy/stage-openclaw-source.sh").read_text(encoding="utf-8")
+
+    # Staging must run before verification, so a bad overlay fails the build.
+    self.assertLess(
+      dockerfile.index("deploy/stage-openclaw-source.sh"),
+      dockerfile.index("deploy/verify-staged-source.sh"),
+    )
+    self.assertNotIn('rm -rf "$stage_root"', staging)
+    self.assertIn('"$stage_root/workspace"', staging)
 
 
 if __name__ == "__main__":

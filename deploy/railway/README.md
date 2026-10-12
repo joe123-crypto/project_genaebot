@@ -9,15 +9,38 @@ truth** — there is no hand-maintained `live-source/` copy anymore.
 
 ```
 open PR ─► "Portable validation" (deploy-main.yml) runs deploy/ci-check.sh ─►
-branch protection blocks merge until green ─► merge to main ─► Railway auto-builds
-deploy/railway/Dockerfile ─► gateway redeploys
+branch protection should block merge until green ─► merge to main ─►
+Railway auto-builds deploy/railway/Dockerfile ─► gateway redeploys
 ```
+
+**Railway deploys whatever lands on `main`, pass or fail.** CI only gates
+production if the `Portable validation` check is *required* on `main`, which is
+step 2 under one-time wiring below. Nothing in this repository can enforce it, so
+verify it rather than assuming it:
+
+```sh
+gh api repos/joe123-crypto/project_genaebot/branches/main/protection \
+  --jq '.required_status_checks.contexts'
+```
+
+An error or an empty list means a failing commit will deploy. If branch
+protection is unavailable on the current plan, the enforced alternative is a
+GitHub-Actions deploy job that runs `railway up` with
+`needs: [validate, secrets]`, with Railway auto-deploy turned off.
 
 - The **`validate` job** (`name: Portable validation`) in
   `.github/workflows/deploy-main.yml` runs the full suite on every PR and push
-  (actionlint, shellcheck, gitleaks, `deploy/ci-check.sh`, npm audit). It is the required
-  status check that gates merges into `main` (see setup below). We reuse it rather than add
-  a second workflow, so there is exactly one CI run per push.
+  (actionlint, shellcheck, gitleaks, `deploy/ci-check.sh`, npm audit). It is the check
+  that should be required on `main` (see setup below). We reuse it rather than add a
+  second workflow, so there is exactly one CI run per push.
+  Its required checks cover repository and staging structure, documentation
+  contracts, syntax, every discovered Python and Node test, ShellCheck, actionlint,
+  locked npm dependencies, high-severity production npm advisories, and
+  secret/private-state scanning. The Job Scout and channel-listener dependency sets
+  are installed from their lockfiles before the Node tests run, then both
+  production sets are audited. The Job Scout browser image is built when one of its
+  inputs changes. Actions are pinned to commit revisions and containerized
+  validation tools to versions.
 - **Railway's GitHub integration** watches `main` and rebuilds on every push. It reads
   `railway.json` (repo root) → `deploy/railway/Dockerfile`.
 - The Docker build assembles the curated overlay from repo HEAD in a first stage

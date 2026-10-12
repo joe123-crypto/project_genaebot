@@ -4,7 +4,7 @@
 
 Purpose: onboard a user so OpenClaw/Agent Genaie can send job scout or application emails from that user's own Gmail account after the user explicitly connects Gmail in the web app.
 
-This is for the future Job Scout/Application service path. It does not make the public Job Scout service active by itself.
+This backs the live Job Scout application path. Connecting Gmail does not by itself make a user ready for dispatch: they still need a linked chat, a profile/CV in R2, and the scam-warning acknowledgement.
 
 ## Security Boundary
 

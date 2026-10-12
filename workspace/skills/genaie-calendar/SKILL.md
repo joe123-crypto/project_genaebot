@@ -23,5 +23,4 @@ Flags
 Notes
 - Requires `AGENT_GENAI_INTERNAL_API_KEY` and `APP_BASE_URL` (or `AGENT_GENAI_CALENDAR_URL`) in `/home/joseph/.openclaw/.env` or the process environment. Do not print the key.
 - The user must have connected Google **with calendar access** in the Agent Genaie app. Users who connected only Gmail must reconnect to add calendar access.
-- For the public-chat flow to save specific user-named events, follow `docs/calendar-save-onboarding.md`.
 - Do not use `gog calendar` for Agent Genaie product calendar writes.

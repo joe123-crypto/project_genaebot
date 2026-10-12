@@ -15,8 +15,9 @@ set -euo pipefail
 # The invite link appended to each post defaults to the main jobs-group invite
 # (JOB_SCOUT_GROUP_FEED_INVITE_URL); override with JOB_SCOUT_HUSTLERS_FEED_INVITE_URL.
 
-CONTAINER="${OPENCLAW_CONTAINER:-openclaw-gateway}"
-DOCKER="${DOCKER:-docker}"
+# shellcheck disable=SC1091  # sourced at runtime from the same deploy/ directory
+source "$(dirname "${BASH_SOURCE[0]}")/gateway-exec.sh"
+
 NAME="job-scout-hustlers-feed"
 # A bit after the main group feed (09:20) so the daily cache is already fresh.
 CRON_EXPR="40 9 * * *"
@@ -28,7 +29,7 @@ TARGET="${JOB_SCOUT_HUSTLERS_FEED_TARGET:-}"
 GROUP_QUERY="${JOB_SCOUT_HUSTLERS_FEED_GROUP_QUERY:-Hustlers Marketplace}"
 MAX_MESSAGES="${JOB_SCOUT_HUSTLERS_FEED_MAX_MESSAGES:-1}"
 
-openclaw=("$DOCKER" exec -u joseph "$CONTAINER" sh -lc 'exec env -u OPENCLAW_HOME OPENCLAW_GATEWAY_TOKEN="$GATEWAY_AUTH_TOKEN" openclaw "$@"' openclaw)
+openclaw=("${GATEWAY_OPENCLAW[@]}")
 
 resolve_target() {
   local groups_json
