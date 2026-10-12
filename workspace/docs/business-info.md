@@ -41,14 +41,15 @@ Prices:
 - Small (nursery size): $5 per tree
 - Medium: $15 per tree
 - Big: $20 per tree
-- Wholesale, small (nursery size) only: $3 per tree
+- Wholesale, small (nursery size): $3 per tree, minimum 20 trees
+- Wholesale, medium or big: available from 100 trees
+- Below these quantities the retail prices apply.
 
 To take an order, find out: which trees, what size, how many, and where to
 deliver.
 
-Not known, so hand off: transport or delivery price, wholesale minimums,
-wholesale for medium or big trees, delivery dates, anything else not listed
-above.
+Not known, so hand off: transport or delivery price, the wholesale price for
+medium or big trees, delivery dates, anything else not listed above.
 
 ## Borehole drilling
 

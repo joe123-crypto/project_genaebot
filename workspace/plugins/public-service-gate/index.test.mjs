@@ -637,6 +637,8 @@ test("the deployed business info page carries the core facts", () => {
   assert.match(page, /Transport within local Bindura: \$550/);
   assert.match(page, /Any extra meter beyond 40m: \$25 per meter/);
   assert.match(page, /Big: \$20 per tree/);
+  assert.match(page, /\$3 per tree, minimum 20 trees/);
+  assert.match(page, /medium or big: available from 100 trees/);
 });
 
 test("handoff of a partner product forwards to the partner, replies, then silences the customer", async () => {
