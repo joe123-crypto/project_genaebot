@@ -33,6 +33,21 @@ model-visible operational tool is `public_service`, declared by the
 - `MEMORY.md`, administrator commands, operator context, and source code are not
   part of the public agent workspace.
 
+The plugin's config block in the live `openclaw.json` is volume state. Nothing on
+the Railway boot path rebuilds it from `config/openclaw.template.json`, so it
+drifts from the template in both directions, and that affects whether the contract
+above is actually in force:
+
+- A key added to the template does not reach production on its own.
+  `businessInfoPath` is currently absent from the live config, so `business_info`
+  falls back to `~/.openclaw/workspace/docs/business-info.md`, the same file the
+  template names, which is why the documented behaviour still holds. A future key
+  with no safe default would simply not take effect.
+- Keys retired from the template stay in the live config. `configSchema` is
+  `additionalProperties: false`, so the manifest has to keep declaring them or the
+  gateway refuses to start; four such keys are marked deprecated in the manifest
+  for exactly this reason. Remove them from the live config first.
+
 ## Conversation Flow
 
 - Everyone who DMs gets a reply. There is no approval step and no service menu.

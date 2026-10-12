@@ -69,7 +69,7 @@ This is the repository tree. Paths are relative to the repo root.
 │   ├── stage-workspace.rsync      # The single deployable-workspace allowlist
 │   ├── ci-check.sh                # Portable repository validation and tests
 │   ├── ci/                        # Structure/docs policy and mappings
-│   ├── patch-openclaw-config.py   # Merges the template into the live openclaw.json
+│   ├── patch-openclaw-config.py   # Applies the template to a live openclaw.json (NOT wired into the Railway boot)
 │   ├── gateway-exec.sh            # How installers reach the live gateway
 │   ├── install-*.sh               # Cron registration (promos, Job Scout workers)
 │   ├── agent-workspace-admin/     # Private administrator context template
@@ -447,16 +447,35 @@ changes nothing. For stable deterministic config changes, edit:
 config/openclaw.template.json
 ```
 
-and merge to `main`. The deploy merges the template into the live `openclaw.json`
-via `deploy/patch-openclaw-config.py`, preserving runtime user data. The template
-is the tracked source of truth; `openclaw.json` and its backup/pre-update variants
-are gitignored.
+**but be aware the template is not applied automatically.** `deploy/railway/entrypoint.sh`
+never runs `deploy/patch-openclaw-config.py`; that merge was a step in the retired
+self-hosted deploy script. The applier is still here and still tested, but nothing
+on the Railway boot path calls it, so editing the template alone changes nothing
+in production. The same goes for the public WhatsApp system prompt at
+`workspace/docs/public-whatsapp-system-prompt.txt`: `patch-openclaw-config.py` is
+what injects it into `channels.whatsapp.direct["*"].systemPrompt`, so repo edits to
+that file also do not reach the live agent on their own.
 
-The public WhatsApp system prompt is tracked separately at
-`workspace/docs/public-whatsapp-system-prompt.txt`. Every deploy injects it into
-`channels.whatsapp.direct["*"].systemPrompt` while preserving runtime user data
-and peer-specific overrides, so reverting a prompt commit and redeploying restores
-the earlier prompt without a manual volume edit.
+Until that is wired up (see the warning below), a config or prompt change has to be
+applied to the volume deliberately, for example by running the applier inside the
+container:
+
+```bash
+railway ssh -- python3 /home/joseph/.openclaw/deploy/patch-openclaw-config.py --help
+```
+
+> **Removing a key from a plugin's `configSchema` can take production down.**
+> `workspace/plugins/public-service-gate/openclaw.plugin.json` sets
+> `additionalProperties: false`, and because the template is not applied, the live
+> `openclaw.json` still carries keys the template has dropped. Deleting such a key
+> from the schema makes the live config invalid and the gateway refuses to start,
+> which is exactly what crashlooped production on 2026-10-12. Four keys are kept
+> declared-but-unread for this reason, each with a `description` saying so, and
+> `deploy/test_plugin_config_schema.py` pins the live key set so CI fails before a
+> deploy does. Remove a key from the live config first, then from the schema.
+
+The template remains the tracked source of truth for what the config *should* be;
+`openclaw.json` and its backup/pre-update variants are gitignored.
 
 ## Operational Changes
 

@@ -35,6 +35,41 @@ class PluginConfigSchemaTests(unittest.TestCase):
 
         self.assertGreater(len(checked), 0, "no strict local plugin schemas were checked")
 
+    # Captured from the live openclaw.json on the Railway volume on 2026-10-12.
+    # Nothing applies config/openclaw.template.json on Railway, so the live config
+    # drifts from the template and is the set the shipped schema must actually
+    # accept. Removing four of these from the schema crashlooped production:
+    # configSchema is additionalProperties:false, so the live config stopped
+    # validating and the gateway refused to start. Update this list only from a
+    # fresh read of the live config, never to make a failing test pass.
+    LIVE_PUBLIC_SERVICE_GATE_KEYS = [
+        "enabled",
+        "greetingTemplatePath",
+        "botWhatsappNumber",
+        "memberGateEnabled",
+        "pendingAckText",
+        "newsEnabled",
+        "eventScoutEnabled",
+        "jobScoutOnboardingEnabled",
+        "cvMakerEnabled",
+        "whatsappAdminUsers",
+    ]
+
+    def test_schema_accepts_every_key_in_the_live_production_config(self) -> None:
+        manifest = json.loads(
+            (ROOT / "workspace/plugins/public-service-gate/openclaw.plugin.json").read_text(encoding="utf-8")
+        )
+        schema = manifest["configSchema"]
+        self.assertIs(schema.get("additionalProperties"), False)
+
+        rejected = sorted(set(self.LIVE_PUBLIC_SERVICE_GATE_KEYS) - set(schema["properties"]))
+        self.assertEqual(
+            rejected,
+            [],
+            "these keys exist in the live config but are no longer declared, so the "
+            "gateway will refuse to start: remove them from the live config first",
+        )
+
     def test_job_scout_onboarding_flag_is_boolean(self) -> None:
         manifest = json.loads(
             (ROOT / "workspace/plugins/public-service-gate/openclaw.plugin.json").read_text(encoding="utf-8")
