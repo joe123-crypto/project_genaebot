@@ -350,6 +350,17 @@ PY
   fi
 fi
 
+# Public WhatsApp prompt sync. The public agent's instructions live in the
+# volume's openclaw.json (channels.whatsapp.direct["*"].systemPrompt), and nothing
+# else on this boot path applies the config template, so copy the tracked prompt
+# in on every boot. Only that key is written, after doctor (which could rewrite
+# the file) and before the gateway reads its config. Never fatal.
+runuser -u joseph -- python3 /usr/local/bin/sync-public-prompt.py \
+  "$LIVE_SOURCE/workspace/docs/public-whatsapp-system-prompt.txt" \
+  "$OC_DIR/openclaw.json" \
+  "$LIVE_SOURCE/deploy/patch-openclaw-config.py" \
+  | while IFS= read -r line; do log "$line"; done || true
+
 # --bind lan  : listen on all container interfaces so the platform can reach us.
 # --tailscale off : no tailscaled in the container; remote access is via ingress.
 log "starting openclaw gateway on port $PORT as joseph (bind=lan, tailscale=off)"
