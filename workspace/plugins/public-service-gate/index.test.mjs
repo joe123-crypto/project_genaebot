@@ -701,6 +701,27 @@ test("admin resume lets the bot reply to a handed-off customer again", async () 
   });
 });
 
+test("classic mode: a handed-off member is held silently too", async () => {
+  const handler = intakeHandler({ memberGateEnabled: false });
+  await withFakeOpenclaw(handler.dir, async () => {
+    await publicToolFor(handler, MEMBER).execute("test", { action: "handoff", category: "borehole", details: "x" });
+    const reply = await handler(eventFor("hello?", MEMBER), { channelId: "whatsapp", senderId: MEMBER });
+    assert.equal(reply.handled, true);
+    assert.equal(reply.text, undefined);
+  });
+});
+
+test("mid-interview words like help or menu stay in the CV flow; only cancel leaves it", async () => {
+  const handler = cvHandler();
+  const ctx = { channelId: "whatsapp", senderId: UNKNOWN };
+  await handler.startCv();
+  for (const text of ["help", "menu", "services"]) {
+    const turn = await handler(eventFor(text, UNKNOWN), ctx);
+    assert.equal(turn.text, "What is your full name?", `"${text}" is relayed to the interview`);
+  }
+  assert.equal(await handler(eventFor("cancel", UNKNOWN), ctx), undefined);
+});
+
 test("a non-admin resume command is ordinary text for the agent", async () => {
   const handler = intakeHandler({ whatsappAdminUsers: [ADMIN] });
   const reply = await handler(eventFor(`resume ${MEMBER}`, UNKNOWN), { channelId: "whatsapp", senderId: UNKNOWN });

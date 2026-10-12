@@ -1,6 +1,6 @@
 import { expandHome, getPluginConfig, parseBoolean, readEnvValue } from "../lib/config.js";
 import { getEventChannel, getEventSender, isWhatsAppChannel, normalizePhone } from "../lib/events.js";
-import { HELPER_TIMEOUT_MS, helperLimiter, isQueueFullError, runJsonCommand, runTextCommand } from "../lib/runtime.js";
+import { HELPER_TIMEOUT_MS, helperLimiter, runJsonCommand, runTextCommand } from "../lib/runtime.js";
 
 // The member store CLI still lives at the historical whatsapp-invite path; the
 // invite-code commands are gone and only the phone-keyed member map remains.
@@ -35,20 +35,6 @@ export function getMemberStoreScript(api) {
 export function runMemberStoreScript(api, args) {
   const script = getMemberStoreScript(api);
   return helperLimiter(() => runJsonCommand(script, args, { timeoutMs: HELPER_TIMEOUT_MS }));
-}
-
-export async function memberStatus(api, phone) {
-  try {
-    return await runMemberStoreScript(api, ["status", "--phone", phone]);
-  } catch (err) {
-    if (isQueueFullError(err)) throw err;
-    api.logger?.warn?.(`public-service-gate: failed to check member status (${String(err)})`);
-    return { status: "unknown", unlocked: false };
-  }
-}
-
-export function isUnlockedMember(status) {
-  return Boolean(status?.unlocked || status?.status === "unlocked");
 }
 
 export function getPublicUsers(api) {

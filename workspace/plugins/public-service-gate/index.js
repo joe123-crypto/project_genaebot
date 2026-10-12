@@ -16,7 +16,7 @@ import {
   runJsonCommand,
 } from "./lib/runtime.js";
 import { clearServiceState } from "./lib/state.js";
-import { clearHandoff } from "./lib/handoffs.js";
+import { clearHandoff, isHandedOff } from "./lib/handoffs.js";
 import { recordAdRefs } from "./lib/ad-refs.js";
 import {
   FAILSAFE_STOP_PRIORITY,
@@ -379,6 +379,8 @@ export default {
       // requests fall through to the agent (which has the public-service tools).
       const member = isWhatsAppPublicUser(api, event, ctx);
       if (!member) return; // leave to core access control
+      // The handoff action is exposed in this mode too, so its silence must hold.
+      if (isHandedOff(api, sender)) return { handled: true };
       if (isDisabledServiceRequestText(api, text)) {
         return { handled: true, text: serviceDisabledReply(api) };
       }

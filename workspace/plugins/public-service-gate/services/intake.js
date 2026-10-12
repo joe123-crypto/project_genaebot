@@ -30,8 +30,8 @@ export async function handleIntake(api, sender, text) {
   }
 
   // The automated CV order is a multi-turn flow driven by the CV maker CLI, so
-  // once a sender is pinned to it every turn is relayed there. "cancel"/"menu"
-  // escapes back to the normal conversation.
+  // once a sender is pinned to it every turn is relayed there. "cancel" (see
+  // isStateResetRequest) escapes back to the normal conversation.
   const state = loadServiceState(api, sender);
   if (state?.service === CV_SERVICE) {
     if (!isStateResetRequest(text)) return handleCvOrder(api, sender, text, state);
