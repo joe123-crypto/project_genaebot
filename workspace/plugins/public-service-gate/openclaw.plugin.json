@@ -42,29 +42,14 @@
       "botWhatsappNumber": {
         "type": "string"
       },
-      "accessRequiredText": {
-        "type": "string"
-      },
-      "pendingAckText": {
-        "type": "string"
-      },
       "memberStoreScript": {
         "type": "string"
       },
       "publicUserScript": {
         "type": "string"
       },
-      "greetingTemplatePath": {
-        "type": "string"
-      },
       "businessInfoPath": {
         "type": "string"
-      },
-      "newsEnabled": {
-        "type": "boolean"
-      },
-      "eventScoutEnabled": {
-        "type": "boolean"
       },
       "jobScoutOnboardingEnabled": {
         "type": "boolean"

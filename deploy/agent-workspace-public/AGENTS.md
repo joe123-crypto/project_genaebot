@@ -1,6 +1,6 @@
 # AGENTS.md - Public Agent Workspace
 
-This is the isolated workspace for allowlisted public WhatsApp users.
+This is the isolated workspace for public WhatsApp users (any non-admin DM).
 
 Its context files are mounted read-only. OpenClaw may write only its own small
 workspace-state file outside those context mounts.

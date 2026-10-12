@@ -34,14 +34,6 @@ mkdir -p \
   "$stage_root/config" \
   "$stage_root/deploy"
 
-# Remove the obsolete single-agent context tree after the admin/public split.
-# This is generated staging output only; the live private workspace is migrated
-# separately by openclaw-deploy.sh before the container is recreated.
-if [ -d "$stage_root/agent-workspace" ]; then
-  find "$stage_root/agent-workspace" -depth -mindepth 1 -delete
-  rmdir "$stage_root/agent-workspace"
-fi
-
 rsync -a --delete --delete-excluded --filter="merge $filter_file" \
   "$source_root/workspace/" "$stage_root/workspace/"
 mkdir -p "$stage_root/workspace/tmp"

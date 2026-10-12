@@ -10,8 +10,6 @@ usage() {
 Usage:
   openclaw-cap users <add|remove|list|sync|check> [args...]
   openclaw-cap account-link <create-invite|status|start-onboarding> [args...]
-  openclaw-cap public-news <register|disable|list-enabled|record-delivery> [args...]
-  openclaw-cap public-events <register|disable|get|list-enabled|mark-synced|record-offers|clear-pending|record-delivery> [args...]
   openclaw-cap job-scout <resolve-location|stage-cv|save-profile|list-ready> [args...]
   openclaw-cap cron run <algeria-exhibitions|github-issue-tracker> [--dry-run]
 EOF
@@ -27,8 +25,6 @@ ensure_runtime() {
     "$RUNTIME/account-link" \
     "$RUNTIME/cron-state/algeria-exhibitions-listener" \
     "$RUNTIME/cron-state/github-issue-tracker" \
-    "$RUNTIME/public-events" \
-    "$RUNTIME/public-news" \
     "$RUNTIME/public-service-gate"
 }
 
@@ -54,34 +50,6 @@ cmd_account_link() {
       ;;
     *)
       die "unsupported account-link subcommand: $1"
-      ;;
-  esac
-}
-
-cmd_public_news() {
-  [ "$#" -ge 1 ] || die "public-news requires a subcommand"
-  case "$1" in
-    register|disable|list-enabled|record-delivery)
-      ensure_runtime
-      export OPENCLAW_PUBLIC_NEWS_REGISTRY="$RUNTIME/public-news/subscriptions.json"
-      exec python3 "$WORKSPACE/public-news/news_subscriptions.py" "$@"
-      ;;
-    *)
-      die "unsupported public-news subcommand: $1"
-      ;;
-  esac
-}
-
-cmd_public_events() {
-  [ "$#" -ge 1 ] || die "public-events requires a subcommand"
-  case "$1" in
-    register|disable|get|list-enabled|mark-synced|record-offers|clear-pending|record-delivery)
-      ensure_runtime
-      export OPENCLAW_PUBLIC_EVENTS_REGISTRY="$RUNTIME/public-events/subscriptions.json"
-      exec python3 "$WORKSPACE/public-events/event_subscriptions.py" "$@"
-      ;;
-    *)
-      die "unsupported public-events subcommand: $1"
       ;;
   esac
 }
@@ -136,14 +104,6 @@ main() {
     account-link)
       shift
       cmd_account_link "$@"
-      ;;
-    public-news)
-      shift
-      cmd_public_news "$@"
-      ;;
-    public-events)
-      shift
-      cmd_public_events "$@"
       ;;
     job-scout)
       shift

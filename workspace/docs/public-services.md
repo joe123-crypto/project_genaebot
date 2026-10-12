@@ -71,7 +71,8 @@ The facts live in `workspace/docs/business-info.md`. In summary:
    web app or WhatsApp before creating or sending any link. A job-vacancy
    WhatsApp group is also offered to job seekers.
 
-Personalized news, event scouting and calendar saves are not offered.
+That list is the whole catalogue. Anything else is out of scope: say what we
+do offer and ask what the customer needs.
 
 ## Request Handling
 

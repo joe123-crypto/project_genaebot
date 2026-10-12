@@ -451,15 +451,19 @@ cronJobState.nextRunAt ASC
 cronRuns.jobId ASC, startedAt DESC
 ```
 
-## Migration Sources
+## Migration Sources (completed)
 
-Current local sources to migrate:
+The original migration into Firestore is done; Firebase users, WhatsApp phone
+links and Gmail connections are mirrored there. This section is kept only to
+record where the data came from:
 
 - Agent Genaie Gmail tokens: `/home/joseph/projects/agent_genaie/data/tokens.json`
-- Public news subscriptions: `/home/joseph/.openclaw/runtime/public-news/subscriptions.json`
-- Job tracker: `/home/joseph/.openclaw/workspace/jobs/tracker.json`
-- Cron jobs/state/runs: `/home/joseph/.openclaw/cron/jobs.json`, `jobs-state.json`, `runs/*.jsonl`
-- Passbolt: migrate only operational references into `credentialRefs`; do not make Firestore schema depend on Passbolt tables.
+- Cron jobs/state/runs: the gateway's own `cron/jobs.json`, `jobs-state.json`, `runs/*.jsonl`
+- Passbolt: operational references only, in `credentialRefs`. The Firestore schema
+  does not depend on Passbolt tables.
+
+The public-news subscription store and the `workspace/jobs/tracker.json` job
+tracker that this list used to name no longer exist.
 
 ## Future Service Rule
 

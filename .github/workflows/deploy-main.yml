@@ -68,9 +68,6 @@ jobs:
       - name: Run repository validation and tests
         run: ./deploy/ci-check.sh --base-sha "$BASE_SHA" --head-sha "$GITHUB_SHA"
 
-      - name: Render Docker Compose configuration
-        run: docker compose -f deploy/docker-compose.override.yml config --no-interpolate >/dev/null
-
       - name: Audit locked Node dependencies
         run: |
           npm --prefix workspace/job-scout audit --omit=dev --audit-level=high

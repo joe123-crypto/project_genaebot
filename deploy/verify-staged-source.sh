@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # Validate a staged live-source tree produced by stage-openclaw-source.sh.
 #
-# Ported from the reject_staged_runtime_files / require_staged_workspace_files
-# guards in openclaw-deploy.sh so the Railway image build (and CI) can fail fast
-# if a build ever ships runtime/cache/secret files or is missing a required
-# Job Scout deploy artifact. Portable: no docker/systemd/host coupling.
+# Fails the Railway image build (and CI) fast if a build ever ships
+# runtime/cache/secret files, or is missing a required Job Scout deploy
+# artifact. Portable: no docker/systemd/host coupling.
 #
 # Usage: verify-staged-source.sh STAGE_ROOT
 set -euo pipefail

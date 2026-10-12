@@ -44,14 +44,7 @@ import {
   loadBusinessInfo,
   parseResumeCommand,
 } from "./services/handoff.js";
-import {
-  handleNewsRequest,
-  handleNewsTopicsContinuation,
-  isNewsRequest,
-  isNewsStopRequest,
-} from "./services/news.js";
 import { handleJobScoutRequest, isJobScoutRequest } from "./services/job-scout.js";
-import { handleEventScoutRequest, isEventScoutRequest } from "./services/event-scout.js";
 import {
   handleCvDecision,
   handleCvMakerRequest,
@@ -63,9 +56,6 @@ import {
 const PUBLIC_SERVICE_ACTIONS = [
   { name: "business_info", service: "core" },
   { name: "handoff", service: "core" },
-  { name: "news_start_or_update", service: "news" },
-  { name: "news_topics", service: "news" },
-  { name: "event_scout_start", service: "eventScout" },
   { name: "job_scout_start_or_status", service: "jobScout" },
   { name: "cv_maker_start", service: "cvMaker" },
 ];
@@ -86,10 +76,6 @@ function isServiceEnabled(api, service) {
   switch (service) {
     case "core":
       return true;
-    case "news":
-      return pluginCfg.newsEnabled !== false;
-    case "eventScout":
-      return pluginCfg.eventScoutEnabled !== false;
     case "jobScout":
       return pluginCfg.jobScoutOnboardingEnabled === true;
     case "cvMaker":
@@ -120,9 +106,6 @@ async function runPublicServiceAction(api, sender, action, text, params = {}) {
   switch (action) {
     case "business_info": return toolText({ text: loadBusinessInfo(api) });
     case "handoff": return toolText(await handleHandoff(api, sender, params.category, params.details || text));
-    case "news_start_or_update": return toolText(await handleNewsRequest(api, sender, text));
-    case "news_topics": return toolText(await handleNewsTopicsContinuation(api, sender, text));
-    case "event_scout_start": return toolText(await handleEventScoutRequest(api, sender));
     case "job_scout_start_or_status": return toolText(await handleJobScoutRequest(api, sender, text));
     // Open-DM mode starts the automated CV order (the gate then relays each
     // interview turn); classic allowlist mode keeps the agent-driven intro.
@@ -139,25 +122,14 @@ function isEnabled(api) {
   return pluginCfg.enabled !== false;
 }
 
-function isCalendarSaveRequestText(text) {
-  const compact = String(text ?? "").trim().replace(/\s+/g, " ");
-  if (!compact || compact.length > 420) return false;
-  return /\b(?:calendar|google\s+calendar)\b/i.test(compact) &&
-    /\b(?:add|save|put|schedule|remind|reminder)\b/i.test(compact);
-}
-
 function isDisabledServiceRequestText(api, text) {
   // A message that also matches an enabled signal (a Job Scout request, a
-  // greeting, or a menu digit) must reach the agent: "any news on my job
-  // applications?" is a Job Scout question, not a disabled-news request.
+  // greeting, or a menu digit) must reach the agent. Any other off-topic ask
+  // also reaches the agent, which answers from business-info.md; only an
+  // explicit request for a switched-off service is refused here.
   if (getServiceMenuSelection(text) || isGreetingOrServiceMenuRequest(text)) return false;
   if (isServiceEnabled(api, "jobScout") && isJobScoutRequest(text)) return false;
-  if (isServiceEnabled(api, "cvMaker") && isCvMakerRequest(text)) return false;
-  return Boolean(
-    (!isServiceEnabled(api, "news") && (isNewsStopRequest(text) || isNewsRequest(text))) ||
-      (!isServiceEnabled(api, "eventScout") && (isEventScoutRequest(text) || isCalendarSaveRequestText(text))) ||
-      (!isServiceEnabled(api, "cvMaker") && isCvMakerRequest(text)),
-  );
+  return Boolean(!isServiceEnabled(api, "cvMaker") && isCvMakerRequest(text));
 }
 
 export default {

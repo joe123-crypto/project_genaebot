@@ -1,108 +1,99 @@
-# OpenClaw Local Deployment Source
+# OpenClaw Gateway Source
 
-This repository is the developer-owned layer around a local OpenClaw install.
+This repository is the developer-owned layer around an OpenClaw install. It is
+the single source of truth for the live gateway: custom plugins, command
+wrappers, skills metadata, agent context, cron jobs, deployment helpers, and the
+sanitized config template.
 
-It does not own or patch the installed OpenClaw npm package under
-`/home/joseph/.npm-global/lib/node_modules/openclaw`. OpenClaw updates should
-replace only package-managed files, while this repository tracks custom plugins,
-commands, skills metadata, deployment helpers, and sanitized config templates.
+It does not own or patch the OpenClaw npm package itself. OpenClaw upgrades
+replace only package-managed files; this repository tracks everything around them.
 
-Git commits and pushes are manual. Pull requests and `main` pushes run portable
-structure, documentation-contract, syntax, unit, dependency, secret, Compose,
-and browser-image checks on GitHub-hosted runners. A successful `main` push then
-uses the self-hosted runner on this host to deploy the exact validated commit.
+Production runs on **Railway** (project `openclaw-gateway`, service `gateway`,
+environment `production`, EU West). Railway's GitHub integration watches `main`
+and rebuilds on every push, so **merging to `main` is the deploy**. Git commits
+and pushes are manual. See `deploy/railway/README.md` for the pipeline, the
+one-time dashboard wiring, and the volume seed/recovery procedure.
 
-## Working Checkout and Container Boundary
+Pull requests and `main` pushes run portable structure, documentation-contract,
+syntax, unit, dependency, secret, and browser-image checks on GitHub-hosted
+runners (`.github/workflows/deploy-main.yml`). There is no deploy job in that
+workflow: the `validate` job is the gate, and Railway does the deploying.
 
-This repository is checked out in two places on the host:
+## Runtime Layout
 
-- `/home/joseph/.openclaw/` — the original checkout and OpenClaw's runtime home.
-  The host-native gateway here is **retired** (its systemd user unit is disabled),
-  so this tree's runtime data is now **stale**. Do not edit data here.
-- `/home/joseph/projects/genaebot/` — **the editable source of truth.** Make code
-  and config edits here and push to `main`; this is also where live data is edited
-  (see below). Substitute this path for `/home/joseph/.openclaw` in the `cd`
-  commands throughout this document.
+The gateway runs as a single Railway service. There is no second container: the
+Job Scout browser worker and WhatsApp channel listener described below are built
+in CI but **not currently deployed** (see *Job Scout sidecars*).
 
-The live gateway runs in the `openclaw-gateway` Docker container under a
-read/write **boundary** (`deploy/docker-compose.override.yml`, installed):
+Durable state lives on a Railway volume mounted at `/home/joseph/.openclaw`:
 
-- `workspace/` is mounted **read-only** from the staged `live-source` — code and
-  context the container cannot modify; it changes only via deploy.
-- `runtime/`, `agent-workspace-admin/`, and `agent-workspace-public/` are host
-  bind-mounts from `/home/joseph/projects/genaebot/`. Runtime state remains live
-  in one place. Agent context files are mounted individually from staged,
-  source-controlled templates so the gateway cannot rewrite them.
-- OpenClaw routes administrator DMs to the `main` agent in
-  `agent-workspace-admin/` and other WhatsApp DMs to the restricted `public`
-  agent in `agent-workspace-public/`. The public agent has no `MEMORY.md` or
-  `COMMANDS.md` and is limited to the sender-bound `public_service` tool.
-  Every non-admin DM gets a conversational reply from the public agent, which
-  answers from `workspace/docs/business-info.md` (edit prices there) and hands a
-  customer off when they are ready to order or ask something the page does not
-  cover. Fruit-tree and building-material handoffs are forwarded to the partner
-  on WhatsApp; after any handoff the bot stays silent for that customer until an
-  admin sends `resume +<number>`. See `workspace/docs/public-services.md`.
-- credentials, identity, state, and `openclaw.json` stay in the base
-  `openclaw-state` Docker volume.
-- The override also mounts the current `entrypoint.sh` over the image's baked one,
-  because the baked entrypoint blanket-`chown`s the whole tree and crashes on the
-  read-only `workspace` mount.
-- URL-only Job Scout applications run in the separate non-root
-  `job-scout-browser` Playwright container. It has no published port, receives CVs
-  through a read-only runtime mount, and returns only submitted/action-required/
-  failed outcomes to the dispatcher. The worker uses Docker's default seccomp
-  profile, drops all capabilities, keeps its root filesystem read-only, and has
-  only `/tmp` writable. On this snap-Docker host, `no-new-privileges` prevents
-  even the image entrypoint from executing, so Chromium readiness is enforced by
-  the deep `/ready` probe instead.
+- `workspace/` is the curated source overlay. The image build stages it from repo
+  HEAD into `/opt/live-source` (`deploy/stage-openclaw-source.sh`, checked by
+  `deploy/verify-staged-source.sh`), and the entrypoint rsyncs it onto the volume
+  at boot. It changes only by deploying; nothing in the container edits it.
+- `agent-workspace-admin/` is the `main` agent's private room. The entrypoint
+  seeds it from `deploy/agent-workspace-admin/` plus five context files copied out
+  of `workspace/` (`SOUL.md`, `HEARTBEAT.md`, `IDENTITY.md`, `MEMORY.md`,
+  `USER.md`). `deploy/ci/check.py` asserts that list.
+- `agent-workspace-public/` is the restricted public agent's room, seeded from
+  `deploy/agent-workspace-public/`. It has no `MEMORY.md` and no `COMMANDS.md`,
+  and the agent is limited to the sender-bound `public_service` tool. CI enforces
+  the absence of those two files.
+- `runtime/`, credentials, identity, state, and `openclaw.json` persist on the
+  volume across deploys. `runtime/` is reseeded only by an explicit one-shot
+  upload (see `deploy/railway/README.md`).
 
-Snap Docker can read these bind sources only because `/home/joseph/projects/...` is
-non-hidden; the hidden `/home/joseph/.openclaw` cannot be bind-mounted under snap
-confinement, which is why the editable checkout lives under `projects/`.
+OpenClaw routes administrator DMs to the `main` agent and every other WhatsApp DM
+to the restricted `public` agent. There is no approval step and no service menu:
+every non-admin DM gets a conversational reply from the public agent, which
+answers from `workspace/docs/business-info.md` (edit prices there) and hands a
+customer off when they are ready to order or ask something the page does not
+cover. Fruit-tree and building-material handoffs are forwarded to the partner on
+WhatsApp; after any handoff the bot stays silent for that customer until an admin
+sends `resume +<number>`. See `workspace/docs/public-services.md`.
 
 ## Structure
 
+This is the repository tree. Paths are relative to the repo root.
+
 ```text
-/home/joseph/.openclaw/
-├── .git/                         # Canonical Git repo for this custom layer
-├── .gitignore                    # Default-deny tracking policy
+.
+├── .gitignore                     # Default-deny tracking policy
+├── railway.json                   # Railway build config -> deploy/railway/Dockerfile
 ├── config/
-│   └── openclaw.template.json    # Sanitized stable config patch/template
+│   └── openclaw.template.json     # Sanitized config template, merged on deploy
 ├── deploy/
-│   ├── openclaw-deploy.sh        # Deterministic deploy script
-│   ├── validate-openclaw-deploy.sh
+│   ├── railway/                   # The production image: Dockerfile, entrypoint, README
+│   ├── stage-openclaw-source.sh   # Builds the curated workspace overlay
+│   ├── verify-staged-source.sh    # Rejects a staged overlay with runtime/secret files
+│   ├── stage-workspace.rsync      # The single deployable-workspace allowlist
 │   ├── ci-check.sh                # Portable repository validation and tests
 │   ├── ci/                        # Structure/docs policy and mappings
-│   ├── stage-openclaw-source.sh   # Shared CI/production staging helper
-│   ├── stage-workspace.rsync      # Single deployable-workspace allowlist
-│   ├── check-openclaw-mirror.sh  # Generated mirror freshness/runtime check
-│   ├── patch-openclaw-config.py
-│   ├── github-actions/           # Source-controlled host automation helpers
-│   ├── docker-compose.override.yml
-│   ├── agent-workspace-admin/    # Private administrator context template
-│   ├── agent-workspace-public/   # Restricted public context template
-│   └── container/entrypoint.sh   # Tracked custom container entrypoint
-├── workspace/                    # Developer-owned source/context
-├── agent-workspace-admin/        # Live private admin workspace, ignored
-├── agent-workspace-public/       # Live restricted public workspace, ignored
-├── runtime/                      # Command/runtime state, ignored
-└── gitclaw/                      # Retired GitClaw archive, ignored
+│   ├── patch-openclaw-config.py   # Merges the template into the live openclaw.json
+│   ├── gateway-exec.sh            # How installers reach the live gateway
+│   ├── install-*.sh               # Cron registration (promos, Job Scout workers)
+│   ├── agent-workspace-admin/     # Private administrator context template
+│   ├── agent-workspace-public/    # Restricted public context template
+│   └── job-scout-*.Dockerfile     # Sidecar images, built in CI, not deployed
+└── workspace/                     # Developer-owned source and agent context
+    ├── bin/                       # Command wrappers (openclaw-cap, job-scout, ...)
+    ├── lib/                       # Shared Python helpers
+    ├── plugins/                   # OpenClaw plugins
+    ├── docs/                       # Service policy and onboarding docs
+    ├── cron/                      # Deterministic cron jobs (promo ads, listeners)
+    ├── skills/                    # Custom skills + skills.lock.json
+    ├── account-link/              # Account linking CLI
+    ├── cv-maker/                  # Standalone CV maker service
+    └── job-scout/                 # Job Scout service (maintained upstream)
 ```
 
-`workspace/` contains source and context: plugins, command wrappers, scripts,
-docs, selected skills, and agent identity files. It is not the public bot's active
-working room anymore.
+`workspace/` holds source and context, not a working room: plugins, command
+wrappers, scripts, docs, selected skills, and the five agent context files that
+the entrypoint copies into the admin room.
 
-`agent-workspace-admin/` is the `main` agent's private room and contains operator
-memory and context. `agent-workspace-public/` is the public agent's room; its
-bootstrap files contain public-only context and are mounted read-only. OpenClaw
-may write its small workspace-state file there, but the public model has no
-general shell or filesystem tools.
-
-`runtime/` is for mutable command state such as account-link caches, public-news
-subscriptions, public-service routing state, cron state, and cron logs. It is
-volume data, not source.
+On the live volume, `runtime/` holds mutable command state — account-link caches,
+public-service routing state, cron state, and cron logs. It is volume data, not
+source, and is neither tracked nor staged.
 
 ## Git Tracking
 
@@ -113,13 +104,14 @@ Tracked categories:
 
 - `config/openclaw.template.json`
 - `deploy/**`
-- `workspace/*.md`
+- the five agent context files (`workspace/SOUL.md`, `HEARTBEAT.md`,
+  `IDENTITY.md`, `MEMORY.md`, `USER.md`)
 - `workspace/bin/**`
 - `workspace/lib/*.py`
 - `workspace/plugins/**`
 - `workspace/cron/**/*.py` and `workspace/cron/**/*.sh`
 - `workspace/docs/**`
-- custom source folders such as `account-link/`, `public-news/`,
+- custom source folders such as `account-link/`, `cv-maker/`,
   and `job-scout/` (including its `scrapers/`,
   `jobscout/`, and `channel-listener/` helper packages). Each service folder is
   staged whole by a per-service recursive glob in
@@ -131,10 +123,9 @@ Tracked categories:
   matter: the filter ends in `- /**`, and the repository `.gitignore` is
   default-deny, so a new tree has to be allowlisted in both or it will neither
   commit nor deploy. `workspace/cv-maker/` is listed in each for that reason. It
-  is deliberately outside `workspace/job-scout/`, which the upstream
-  `genaie-job-scout` overlay owns (`deploy/parity/job-scout-owned-paths.json`):
-  an earlier CV maker implementation lived there and was silently deleted by a
-  sync.
+  is deliberately outside `workspace/job-scout/`, which is maintained upstream
+  and synced in wholesale: an earlier CV maker implementation lived inside it and
+  was silently deleted by a sync.
 - selected custom skills plus `workspace/skills.lock.json`. Unlike the service
   folders above, skills are **not** covered by a recursive glob: each one is
   listed explicitly in `deploy/stage-workspace.rsync` (e.g. `+ /skills/cv-maker/`
@@ -143,122 +134,111 @@ Tracked categories:
 
 Ignored categories:
 
-- `.env`, `gateway.systemd.env`, and all secrets
-- the live `openclaw.json` (no longer tracked; generated from
-  `config/openclaw.template.json`) and its backup/pre-update variants such as
-  `openclaw.json.last-good` and `openclaw.json.pre-update*`
+- `.env` and all secrets
+- the live `openclaw.json`, generated from `config/openclaw.template.json`, and
+  its backup/pre-update variants (`openclaw.json.last-good`,
+  `openclaw.json.pre-update*`)
 - credentials, devices, identity, sessions, memory DBs, logs, runtime DBs
 - `npm/`, media, browser data, caches, Python bytecode, virtualenvs
 - generated job/CV artifacts and runtime state files
-- the retired `gitclaw/` archive
 
-Before upload, inspect exactly what Git sees:
+Before pushing, inspect exactly what Git sees:
 
 ```bash
-cd /home/joseph/.openclaw
 git status --short
 git ls-files --others --exclude-standard
 ```
 
 ## Deploying Changes
 
-Normal production deploy path:
+Merging to `main` is the deploy:
 
 ```bash
-cd /home/joseph/.openclaw
 git status --short
 git commit -m "Describe the change"
-git push origin main
+git push origin main            # via a PR; see the gate below
 ```
 
-GitHub Actions first validates the commit on hosted runners. The production job
-starts only after portable validation, secret scanning, dependency checks, and
-the conditional Job Scout browser build succeed. It then checks out the same
-commit on the `openclaw-prod` self-hosted runner and runs:
+GitHub Actions runs the `validate` job (portable structure and docs-contract
+checks, shellcheck, actionlint, unit tests, `npm audit`), a gitleaks secret scan,
+and — when the browser image inputs change — a Job Scout browser image build.
+Railway's GitHub integration then rebuilds `deploy/railway/Dockerfile` from the
+new `main` and redeploys the gateway.
+
+**The CI gate depends on branch protection, which lives outside this repo.**
+Railway deploys whatever lands on `main` regardless of the workflow result, so
+the `Portable validation` check must be required on `main` for CI to actually
+prevent a broken deploy. `deploy/railway/README.md` has the `gh api` command that
+sets it. Verify it is in place before relying on it:
 
 ```bash
-sudo /usr/local/sbin/openclaw-prod-deploy "$GITHUB_WORKSPACE"
+gh api repos/joe123-crypto/project_genaebot/branches/main/protection \
+  --jq '.required_status_checks.contexts'
 ```
 
-The sudo rule is intentionally narrow: the runner user may run only that wrapper,
-not arbitrary root commands. The wrapper refuses to deploy anything except a clean
-checkout of `joe123-crypto/project_genaebot` on `main`, and it uses a lock so two
-deploys cannot overlap. Repository fetches and revision checks run as the checkout
-owner `joseph`, so both Actions' temporary credentials and Joseph's normal HTTPS
-credential helper work without giving GitHub credentials to root. Before dependency installation or deployment, the workflow
-and wrapper run `deploy/check-deploy-resources.sh`. The preflight requires at least
-1 GiB of immediately available memory and 6 GiB of combined available memory plus
-free swap, and reports the largest processes without changing production if the
-host is under pressure.
-
-The cross-repository Job Scout release receiver that used to run in this
-workflow (a hosted validation gate plus a self-hosted `openclaw-prod` apply and
-ledger job, triggered by `repository_dispatch: job_scout_release` and a manual
-`workflow_dispatch` rollback) has been **removed**, along with its whole
-implementation: the `--job-scout-request` branch of the `openclaw-prod-deploy`
-root wrapper and the `deploy/job_scout_release.py` / `deploy/job_scout_consumer.py`
-helpers. The planned `genaie-job-scout` repository split was abandoned, the
-self-hosted release host was stopped at the 2026-08-20 Railway cutover, and Job
-Scout still runs inside this repository, so no release-delivery path remains. The
-historical payload, GHCR access, validation, and rollback contracts are described
-for reference only in `deploy/github-actions/README.md`.
+If that returns an error or an empty list, a failing commit pushed to `main` will
+deploy. Roll production back by reverting the bad commit on `main`; the revert
+goes through the same path.
 
 Validate without deploying:
 
 ```bash
-cd /home/joseph/.openclaw
 ./deploy/ci-check.sh
-./deploy/validate-openclaw-deploy.sh
 ```
 
-`ci-check.sh` is host-independent. The deployment validator adds host-only
-checks for ignored private paths and generated mirror state. CI also applies `deploy/ci/docs-contract.json`: changes to a
-declared public, onboarding, or operations interface must update the mapped
-documentation in the same pull request or push.
+`ci-check.sh` is host-independent and is exactly what CI runs. It also applies
+`deploy/ci/docs-contract.json`: a change to a declared public, onboarding, or
+operations interface must update the mapped documentation in the same pull
+request or push.
 
-The repository is currently private on a GitHub plan that does not provide
-branch protection. A failing commit can therefore reach `main`, but the workflow
-will not deploy it. Production rollback is performed by reverting the bad commit
-on `main`; the revert passes through the same validation and deployment path.
-
-Manual fallback deploy for emergency/local use:
+To check that the deployable overlay still builds the way the image build will:
 
 ```bash
-cd /home/joseph/projects/genaebot
-sudo /usr/local/sbin/openclaw-prod-deploy "$PWD"
+./deploy/stage-openclaw-source.sh . /tmp/stage
+./deploy/verify-staged-source.sh /tmp/stage
 ```
 
-Job Scout scheduler activation is deliberately separate from a normal gateway
-deploy. Use this order:
+### Job Scout sidecars (built, not deployed)
 
-1. Add these private values to `/home/joseph/openclaw-deploy/.env`:
+Two sidecar images are defined and CI-built but have **no Railway service**:
+
+- `deploy/job-scout-browser.Dockerfile` — the Playwright worker that submits
+  URL-only applications. `jobscout/config.py` defaults its endpoint to
+  `http://job-scout-browser:8787/apply`, a hostname that does not resolve in
+  production, so URL-only applications are recorded `action_required` rather than
+  submitted.
+- `deploy/job-scout-channel-listener.Dockerfile` — the Baileys listener that feeds
+  the `zimlinks` WhatsApp Channel source.
+
+Restoring either means adding a Railway service, not editing docs. Until then,
+treat the channel-source and URL-apply features below as inactive.
+
+### Job Scout scheduler activation
+
+Scheduler activation is deliberately separate from a gateway deploy.
+
+1. Set these as Railway service variables (never in Git):
 
 ```text
 JOB_SCOUT_BROWSER_TOKEN=<at least 32 random bytes>
 OPENROUTER_API_KEY=<OpenRouter API key, sk-or-...>
 ```
 
-   Do not put these values in Git. The same Compose interpolation supplies the
-   browser token to the gateway and worker, preventing mismatched delivery paths.
    `OPENROUTER_API_KEY` backs all LLM model calls (the agent brain and the Job
-   Scout channel post classifier), which now route through OpenRouter. The
-   retained `AI_GATEWAY_API_KEY` (Vercel AI Gateway) is used only for
-   memory-search embeddings, since OpenRouter has no embeddings endpoint.
+   Scout channel post classifier). The retained `AI_GATEWAY_API_KEY` (Vercel AI
+   Gateway) is used only for memory-search embeddings, since OpenRouter has no
+   embeddings endpoint.
 
-2. Deploy the Agent Genaie API schema change, then deploy this repository. The
-   core gateway starts independently. The optional browser is built afterward;
-   failure leaves Job Scout degraded but does not stop WhatsApp or other services.
+2. Deploy the Agent Genaie API schema change, then merge this repository.
 
-3. CVs now live in the Agent Genaie Cloudflare R2 bucket (object key
-   `<uid>/cv/cv.pdf`), and `cvFileRef` in Firestore holds that key. Existing
-   on-disk CVs were already migrated into R2 by the Agent Genaie
-   `scripts/migrate-cvs-to-r2.ts` one-off; the genaebot `migrate-runtime-cvs`
-   command has been removed. New CVs are uploaded to R2 by `stage-cv` /
-   `save-profile`, and the worker downloads a presigned URL at dispatch time.
-   The gateway converts uploaded PDFs into a structured A4 HTML template using
-   Poppler and Tesseract OCR, with plain text extraction as a fallback. The
-   conversion removes browser print headers, local `file://` paths, timestamps,
-   and page counters before any personalized CV is rendered.
+3. CVs live in the Agent Genaie Cloudflare R2 bucket (object key
+   `<uid>/cv/cv.pdf`), and `cvFileRef` in Firestore holds that key. New CVs are
+   uploaded to R2 by `stage-cv` / `save-profile`, and the worker downloads a
+   presigned URL at dispatch time. The gateway converts uploaded PDFs into a
+   structured A4 HTML template using Poppler and Tesseract OCR, with plain text
+   extraction as a fallback. The conversion removes browser print headers, local
+   `file://` paths, timestamps, and page counters before any personalized CV is
+   rendered.
 
 4. Any ready user without a CV in R2 must upload it again through the normal Job
    Scout profile flow. Local files under `runtime/job-scout/users` are disposable
@@ -267,55 +247,57 @@ OPENROUTER_API_KEY=<OpenRouter API key, sk-or-...>
 5. Install or update the schedule:
 
 ```bash
-sudo ./deploy/install-job-scout.sh
+./deploy/install-job-scout.sh
 ```
 
-The installer refuses to enable the cron unless the worker is healthy, the
-gateway and worker tokens match, at least one subscriber is ready, and every
-ready CV is accessible. It installs an isolated `main` agent turn at
-`08:00 Africa/Harare` with a six-hour run budget. The parent prepares every
-ready subscriber and delegates four isolated same-model children at a time;
-children score the deterministic shortlist, while the validated dispatcher
-remains the only component allowed to record, submit, or send. For subscribers
-with `autoApply: false`, strong email and website matches are recorded as
-`pending_approval` without creating personalized documents or submitting an
-application. The dashboard exposes those records for approval. A separate
-five-minute `job-scout-approvals` worker picks up records the user changed to
-`approved`, then runs CV and application-letter customization before the
-dispatcher sends email applications or submits supported website forms.
+Cron jobs live in the gateway's own state on the Railway volume, so they survive
+deploys and only need registering when they change. The installers reach the live
+gateway through `deploy/gateway-exec.sh`, which uses `railway ssh` by default;
+set `OPENCLAW_EXEC_MODE=docker` (or `DOCKER` / `OPENCLAW_CONTAINER`) to target a
+local container instead.
+
+The installer refuses to enable the cron unless at least one subscriber is ready
+and every ready CV is accessible. The browser-worker token-parity preflight runs
+only in docker mode, since there is no browser worker in production. It installs
+an isolated `main` agent turn at `08:00 Africa/Harare` with a six-hour run budget.
+The parent prepares every ready subscriber and delegates four isolated same-model
+children at a time; children score the deterministic shortlist, while the
+validated dispatcher remains the only component allowed to record, submit, or
+send. For subscribers with `autoApply: false`, strong email and website matches
+are recorded as `pending_approval` without creating personalized documents or
+submitting an application. The dashboard exposes those records for approval. A
+separate five-minute `job-scout-approvals` worker picks up records the user
+changed to `approved`, then runs CV and application-letter customization before
+the dispatcher sends email applications or submits supported website forms.
 
 ### Dashboard task telemetry
 
 After each per-user run, the Job Scout dispatch publishes a live task snapshot
 to Agent Genaie's `POST /internal/dashboard/tasks`
 (rendered by the signed-in dashboard) through
-`workspace/lib/dashboard_telemetry.py`. Publishing is best-effort: failures log
-one stderr warning and never change the run outcome. It reuses `APP_BASE_URL`
-and `AGENT_GENAI_INTERNAL_API_KEY` via `genaie_env`, so no extra configuration
-is needed.
+`workspace/job-scout/jobscout/integrations/dashboard_telemetry.py`. Publishing is
+best-effort: failures log one stderr warning and never change the run outcome. It
+reuses `APP_BASE_URL` and `AGENT_GENAI_INTERNAL_API_KEY`, so no extra
+configuration is needed.
 
-### WhatsApp Channel sources
+### WhatsApp Channel sources (inactive)
 
-Job Scout can also consume job adverts from the ZimLinks,
-ZIM•JOB•VACANCIES, and EveryDayVacancies WhatsApp Channels. A
-separate `job-scout-channel-listener` container uses its own linked-device auth;
-never point it at OpenClaw's WhatsApp auth directory. It captures posts in real
-time, backfills the latest 10 from each channel after pairing/reconnect, and keeps transient state
-under `runtime/job-scout-channel/`. The daily Job Scout dispatch reads normalized
-Zimbabwe candidates from that queue. Raw post text/media is removed after all
-selected users reach terminal outcomes; application records remain in the
-existing Agent Genaie database.
+Job Scout can consume job adverts from the ZimLinks, ZIM•JOB•VACANCIES, and
+EveryDayVacancies WhatsApp Channels. This needs the separate
+`job-scout-channel-listener` container, which has no Railway service, so the
+source is currently inactive and contributes no candidates.
 
-After a normal deploy, pair the isolated listener once:
+The listener uses its own linked-device auth and must never be pointed at
+OpenClaw's WhatsApp auth directory. It captures posts in real time, backfills the
+latest 10 from each channel after pairing/reconnect, and keeps transient state
+under `runtime/job-scout-channel/`. The daily dispatch reads normalized Zimbabwe
+candidates from that queue. Raw post text/media is removed once all selected
+users reach terminal outcomes; application records remain in the Agent Genaie
+database. Media-only posts are discarded: this version does not perform OCR.
 
-```bash
-./deploy/pair-job-scout-channel.sh
-```
-
-Scan the displayed QR code with the WhatsApp account that should follow the
-configured channels. The script verifies every channel identity, starts the listener, and
-installs a 15-minute health check. Media-only posts are discarded because this
-version deliberately does not perform OCR.
+Reactivating it means adding a Railway service for the image and restoring a
+pairing path (the old `deploy/pair-job-scout-channel.sh` drove it through Docker
+Compose and was removed with the rest of the Compose tooling).
 
 ### Group job feeds (Vacancy Lamp and Hustlers Marketplace)
 
@@ -348,91 +330,44 @@ gateway deploy):
 Delivery is tracked per target, so a job posted to one group is still eligible
 for the other; each group only ever receives a given advert once.
 
-The deploy script used by both paths:
+### Scheduled jobs
 
-- shows Git status and diff stats
-- rejects staged runtime/secret files
-- runs syntax and JSON checks
-- stages curated source into `/home/joseph/openclaw-deploy/live-source` using
-  the same helper and allowlist exercised by hosted CI
-- installs the source-controlled gateway Dockerfile, including the
-  `poppler-utils` and `tesseract-ocr` dependencies used for structured Job
-  Scout CV conversion
-- preserves the `live-source` root inode so Docker's read-only bind mount cannot
-  become detached from the newly staged files
-- stamps `live-source` with `.OPENCLAW_GENERATED` and a source manifest
-- compares the staged-source and container-boundary digest with the last applied
-  digest; an unchanged deploy skips the Compose build and preserves the running
-  gateway process
-- excludes runtime files such as `state.json`, `pending-links.json`,
-  `subscriptions.json`, `*.log`, caches, and bytecode, and removes stale
-  excluded files from the existing generated mirror during restaging
-- syncs curated source into the live container (skipped when the container
-  boundary is active — `workspace/` and agent-room docs then arrive via the
-  read-only bind mounts instead)
-- applies `config/openclaw.template.json` to the container's live config only when
-  deploy inputs changed
-- verifies the `main` and `public` agent definitions, their separate workspace
-  paths, required context files, and the absence of public `MEMORY.md` and
-  `COMMANDS.md`
-  with bounded retries while a changed container stabilizes
-- reconciles `openclaw-gateway-container.service` without forcing container
-  recreation; unchanged inputs do not restart the gateway
-- installs and runs the source-controlled deployment health check; optional
-  integration probes are advisory warnings rather than gateway failures
-- waits for two consecutive authenticated gateway API status probes before any
-  cron reconciliation, preventing transient WebSocket startup closures from
-  interrupting deployment after a successful container restart
-- reconciles the daily Job Scout schedule to the source-controlled isolated
-  agent turn at 08:00 `Africa/Harare`; an existing deliberate pause is preserved
-  as disabled, so deployment cannot silently re-enable applications
-- best-effort builds and readiness-checks the optional Job Scout browser after
-  the core gateway is healthy; failure is reported without failing the gateway
-  deployment
-- installs or reconciles the isolated `job-scout-approvals` worker, which checks
-  every five minutes for dashboard-approved applications and processes them
-  under the user's approval
-- reconciles the main Job Scout schedule only after its subscriber/CV readiness
-  gate passes; Agent Genaie Firestore quota exhaustion defers reconciliation and
-  preserves the existing schedule without failing the gateway deploy, while all
-  other readiness failures remain fatal
-- registers or reconciles the daily `cv-promo` command cron via
-  `install-cv-promo.sh` at 11:00 `Africa/Harare`; it runs
+Cron jobs live in the gateway's own state on the Railway volume, so they survive
+deploys. Each has an idempotent installer under `deploy/` that registers or
+updates it; run one only when its schedule or command changes. All times are
+`Africa/Harare`.
+
+- **`cv-promo`** (`install-cv-promo.sh`, 11:00) runs
   `workspace/cron/cv-promo/post_cv_ad.py`, a deterministic (no-agent) job that
   posts the fixed CV-service ad to the WhatsApp group JIDs listed in
   `workspace/cron/cv-promo/targets.json`. Most groups get the ad daily; groups
   under the file's `weekly_groups` map are posted to only on their configured
   weekdays (the cron still runs daily and simply skips them on other days), which
   is how Vacancy Lamp advertises CV making twice a week (Mon and Thu)
-- registers or reconciles the daily `building-materials-promo` command cron via
-  `install-building-materials-promo.sh` at 12:00 `Africa/Harare`; it runs
-  `workspace/cron/building-materials-promo/post_ad.py`, a deterministic (no-agent)
-  job that posts the fixed building-materials for-sale ad to the WhatsApp group
+- **`building-materials-promo`** (`install-building-materials-promo.sh`, 12:00)
+  runs `workspace/cron/building-materials-promo/post_ad.py`, a deterministic
+  (no-agent) job that posts the fixed building-materials for-sale ad to the WhatsApp group
   JIDs listed in `workspace/cron/building-materials-promo/targets.json`
-- registers or reconciles the daily `genaie-promo` command cron via
-  `install-genaie-promo.sh` at 14:00 `Africa/Harare`; it runs
+- **`genaie-promo`** (`install-genaie-promo.sh`, 14:00) runs
   `workspace/cron/genaie-promo/post_ad.py`, a deterministic (no-agent) job that
   posts the fixed Genaie-services ad (group advertising, poster design, WhatsApp
   bots) to the WhatsApp group JIDs listed in
   `workspace/cron/genaie-promo/targets.json` (every group the bot is in except
   Vacancy Lamp)
-- registers or reconciles the daily `genaie-leads-promo` command cron via
-  `install-genaie-leads-promo.sh` at 17:00 `Africa/Harare`; it runs
+- **`genaie-leads-promo`** (`install-genaie-leads-promo.sh`, 17:00) runs
   `workspace/cron/genaie-leads-promo/post_ad.py`, a deterministic (no-agent) job
   that posts the fixed Genaie lead-generation ad ("we generate potential customers;
   you choose how you pay" — pay per lead, fixed monthly, or a % of revenue) to the
   WhatsApp group JIDs listed in `workspace/cron/genaie-leads-promo/targets.json`.
   This is a separate campaign from `genaie-promo` above (later slot, own image and
   copy), reusing the same shared `promo_broadcast` delivery engine
-- registers or reconciles the daily `fruit-trees-promo` command cron via
-  `install-fruit-trees-promo.sh` at 09:00 `Africa/Harare`; it runs
+- **`fruit-trees-promo`** (`install-fruit-trees-promo.sh`, 09:00) runs
   `workspace/cron/fruit-trees-promo/post_ad.py`, a deterministic (no-agent) job that
   posts the fixed grafted-fruit-tree for-sale ad (mango, pawpaw, orange, naartjie,
   lemon; retail/wholesale pricing) to the WhatsApp group JIDs listed in
   `workspace/cron/fruit-trees-promo/targets.json`, reusing the same shared
   `promo_broadcast` delivery engine
-- registers or reconciles the daily `borehole-drilling-promo` command cron via
-  `install-borehole-drilling-promo.sh` at 08:00 `Africa/Harare`; it runs
+- **`borehole-drilling-promo`** (`install-borehole-drilling-promo.sh`, 08:00) runs
   `workspace/cron/borehole-drilling-promo/post_ad.py`, a deterministic (no-agent) job
   that posts the fixed solar-borehole installation ad (0.75HP/1HP/1.5HP/2HP DC pump
   packages, each with tank, stand, solar and installation) to the WhatsApp group JIDs
@@ -444,46 +379,15 @@ The deploy script used by both paths:
   Most groups get the ad daily; groups under the file's `weekly_groups` map are posted
   to only on their configured weekdays, which is how MUTANDIRI VILLAGE RESIDENTS gets
   the ad three times a week (Mon, Wed and Fri)
-- all six promo crons above rotate between caption variants (the original operator
-  copy plus rewordings with identical facts; three each, four for the borehole promo)
-  and carry a per-group
-  tracking link; see "Promo caption rotation and ad ref tracking" below
-- writes `/home/joseph/openclaw-deploy/.last-successful-deploy.json` only after all
-  required readiness, health, and reconciliation steps finish successfully
 
-Host automation files:
+All six promo crons rotate between caption variants (the original operator copy
+plus rewordings with identical facts; three each, four for the borehole promo) and
+carry a per-group tracking link. See *Promo caption rotation and ad ref tracking*
+below.
 
-```text
-.github/workflows/deploy-main.yml
-deploy/github-actions/openclaw-prod-deploy
-deploy/github-actions/register-openclaw-runner.sh
-deploy/github-actions/install-openclaw-runner-hardening.sh
-deploy/github-actions/ensure-openclaw-swap.sh
-deploy/systemd/actions-runner-openclaw-prod.override.conf
-/usr/local/sbin/openclaw-prod-deploy
-/etc/sudoers.d/openclaw-prod-deploy
-/swap-openclaw.img
-/home/joseph/actions-runner-openclaw-prod/
-```
-
-The runner override restarts the service after failures and keeps OOM handling
-within its control group. `ensure-openclaw-swap.sh` provisions a dedicated,
-persistent 8 GiB swap file at the exact path above and refuses unexpected targets
-or sizes.
-
-If the runner ever needs to be registered again, get a fresh registration token
-from the GitHub repository settings and run:
-
-```bash
-cd /home/joseph/.openclaw
-sudo RUNNER_TOKEN='...' ./deploy/github-actions/register-openclaw-runner.sh
-```
-
-The container boundary is now installed and is the standard runtime. Normal
-deploys do **not** pass `--apply-container-boundary`; the deploy detects the
-installed override and leaves it in place (and skips the in-container source sync,
-which the read-only bind mounts make redundant). The flag is only needed to
-(re)install the override from scratch.
+The daily Job Scout turn (`install-job-scout.sh`, 08:00), the five-minute
+`job-scout-approvals` worker, the hourly `job-scout-cv-conversion` pass and the
+two group feeds have their own installers and are described above.
 
 ### Promo caption rotation and ad ref tracking
 
@@ -534,133 +438,89 @@ trees, building materials) to the partner when it hands the customer off. Keep t
 `workspace/plugins/public-service-gate/lib/ad-refs.js` in sync with the promos'
 `TRACKING` prefixes (a test enforces this).
 
-## Deploy Mirror
-
-`/home/joseph/openclaw-deploy/live-source` is generated output, not an editable
-source tree. It can be stale between deploys. If a file differs between
-`.openclaw/workspace` and `openclaw-deploy/live-source`, the canonical version is
-the one under `.openclaw`.
-
-Check mirror state:
-
-```bash
-cd /home/joseph/.openclaw
-./deploy/check-openclaw-mirror.sh
-```
-
-Refresh the mirror and live container:
-
-```bash
-cd /home/joseph/.openclaw
-sudo ./deploy/openclaw-deploy.sh
-```
-
-The old manual sync workflow has been archived under:
-
-```text
-/home/joseph/openclaw-deploy/archive/manual-sync-20260618T182611/
-```
-
-Do not use archived `live-sync-stage` or `apply-*.sh` files for live changes.
-
 ## Config Changes
 
-`openclaw.json` lives in the base `openclaw-state` Docker volume (it is not
-bind-mounted), so editing a host copy does not update the live container.
-
-For stable deterministic config changes, edit:
+The live `openclaw.json` lives on the Railway volume, so editing a local copy
+changes nothing. For stable deterministic config changes, edit:
 
 ```text
 config/openclaw.template.json
 ```
 
-Then deploy:
-
-```bash
-sudo ./deploy/openclaw-deploy.sh
-```
-
-`openclaw.json` is no longer tracked (it is gitignored). The tracked source of
-truth for config is `config/openclaw.template.json`, which the deploy merges into
-the live `openclaw.json` via `patch-openclaw-config.py`. The backup and
-pre-update variants remain ignored.
+and merge to `main`. The deploy merges the template into the live `openclaw.json`
+via `deploy/patch-openclaw-config.py`, preserving runtime user data. The template
+is the tracked source of truth; `openclaw.json` and its backup/pre-update variants
+are gitignored.
 
 The public WhatsApp system prompt is tracked separately at
-`workspace/docs/public-whatsapp-system-prompt.txt`. Every deployment injects it
-into `channels.whatsapp.direct["*"].systemPrompt` while preserving runtime user
-data and peer-specific overrides. Reverting a prompt commit and redeploying
-therefore restores the earlier prompt without a manual volume edit.
+`workspace/docs/public-whatsapp-system-prompt.txt`. Every deploy injects it into
+`channels.whatsapp.direct["*"].systemPrompt` while preserving runtime user data
+and peer-specific overrides, so reverting a prompt commit and redeploying restores
+the earlier prompt without a manual volume edit.
 
 ## Operational Changes
 
-Runtime/user operations should go through approved commands instead of hand-editing
-config files.
-
-Inside the live container, use:
+Runtime and user operations go through approved commands rather than hand-edited
+config. Shell into the live gateway with `railway ssh`:
 
 ```bash
-sudo /snap/bin/docker exec -u joseph openclaw-gateway \
-  /home/joseph/.openclaw/workspace/bin/openclaw-cap --help
+railway ssh -- /home/joseph/.openclaw/workspace/bin/openclaw-cap --help
 ```
 
 Examples:
 
 ```bash
-sudo /snap/bin/docker exec -u joseph openclaw-gateway \
-  /home/joseph/.openclaw/workspace/bin/openclaw-cap users list
+railway ssh -- /home/joseph/.openclaw/workspace/bin/openclaw-cap users list
 
-sudo /snap/bin/docker exec -u joseph openclaw-gateway \
-  /home/joseph/.openclaw/workspace/bin/openclaw-cap account-link status --phone +213...
+railway ssh -- /home/joseph/.openclaw/workspace/bin/openclaw-cap \
+  account-link status --phone +213...
 
-sudo /snap/bin/docker exec -u joseph openclaw-gateway \
-  /home/joseph/.openclaw/workspace/bin/openclaw-cap cron run algeria-exhibitions --dry-run
+railway ssh -- /home/joseph/.openclaw/workspace/bin/openclaw-cap \
+  cron run algeria-exhibitions --dry-run
 ```
+
+`railway link` once in this checkout so `railway ssh` resolves the project,
+service and environment (see `deploy/railway/README.md`).
 
 Rule of thumb:
 
-- Source/plugin/script/template changes require deploy.
-- Runtime user operations should use `openclaw-cap`.
-- Runtime state under `runtime/` is preserved by deploys and should not be
-  committed.
+- Source, plugin, script and template changes require a deploy (merge to `main`).
+- Runtime user operations use `openclaw-cap`.
+- Runtime state under `runtime/` lives on the volume, survives deploys, and is
+  never committed.
 - Git commits and pushes are always manual.
 
 ## Runtime Volume Data
 
-Mutable service data now lives under:
+Mutable service data lives on the Railway volume under `/home/joseph/.openclaw`:
 
 ```text
 runtime/
 ├── account-link/pending-links.json
-├── public-news/subscriptions.json
 ├── public-service-gate/invites.json (member store; invite codes retired)
 ├── public-service-gate/state.json
 ├── public-service-gate/ad-refs.json (promo ad ref code counts)
 ├── public-service-gate/handoffs.json (customers handed off to a person; bot silent)
+├── job-scout/ (dispatch runs, per-user CV caches)
 └── cron-state/
     ├── algeria-exhibitions-listener/state.json
     └── github-issue-tracker/state.json
 ```
 
-These files are ignored by Git and excluded from deployment staging. Under the
-container boundary, `runtime/` is a host bind-mount from this checkout, so editing
-a file here (e.g. `runtime/public-service-gate/invites.json`) is the live edit the
-container sees immediately. Treat them as live data: back them up or inspect them
-directly, but do not upload them as source.
+These files are ignored by Git and excluded from deployment staging. They are live
+data on the volume, not source: inspect or back them up through `railway ssh`, and
+never commit them. A deploy never overwrites them; `runtime/` is reseeded only by
+an explicit one-shot upload (see `deploy/railway/README.md`).
 
-The deployable source list is controlled by `deploy/openclaw-deploy.sh` in
-`stage_source()`. To see what the last deploy staged, inspect:
-
-```bash
-find /home/joseph/openclaw-deploy/live-source -type f | sort
-```
-
-To verify that generated mirror is fresh and clean:
+The deployable source list is controlled by `deploy/stage-workspace.rsync`. To see
+exactly what a deploy would stage:
 
 ```bash
-./deploy/check-openclaw-mirror.sh
+./deploy/stage-openclaw-source.sh . /tmp/stage
+find /tmp/stage -type f | sort
 ```
 
-To see what Git can upload, use:
+To see what Git can upload:
 
 ```bash
 git status --short
@@ -670,57 +530,43 @@ git ls-files
 ## OpenClaw Updates
 
 The gateway image pins OpenClaw via `npm install -g openclaw@<version>` in
-`deploy/railway/Dockerfile` and `deploy/container/Dockerfile`. The current pin is
-`openclaw@2026.9.9` (the `latest` stable channel), which requires Node `>=24.16`, so both
-images use `node:24-bookworm-slim`. Bump both Dockerfiles together to keep the Railway and
-Compose paths from drifting.
+`deploy/railway/Dockerfile`. The current pin is `openclaw@2026.9.9` (the `latest`
+stable channel), which requires Node `>=24.16`, so the image uses
+`node:24-bookworm-slim`.
 
 A new OpenClaw release refuses to start on state written by an older one until
-`openclaw doctor --fix` has run. Both entrypoints therefore run a one-time upgrade
-migration before the gateway until `.openclaw-upgrade-<version>.done` exists on the volume
-(or whenever `meta.lastTouchedVersion` in `openclaw.json` differs from the installed
-version, or an npm-installed plugin in `openclaw plugins list --json` is not at the
-installed version): they snapshot the config to
-`openclaw.json.pre-upgrade-<version>`, run doctor until it converges (it upgrades the
-external `@openclaw/*` plugins on the volume to the matching release), run
-`openclaw plugins update` for any plugin still behind, restore the WhatsApp
-`allowFrom`/`groupAllowFrom` lists from the snapshot (doctor would otherwise add `"*"`),
-and validate. One-off commands (`railway ssh -- …`) skip this step.
+`openclaw doctor --fix` has run. The entrypoint therefore runs a one-time upgrade
+migration before the gateway until `.openclaw-upgrade-<version>.done` exists on
+the volume (or whenever `meta.lastTouchedVersion` in `openclaw.json` differs from
+the installed version, or an npm-installed plugin in `openclaw plugins list
+--json` is not at the installed version). It snapshots the config to
+`openclaw.json.pre-upgrade-<version>`, runs doctor until it converges (upgrading
+the external `@openclaw/*` plugins on the volume to the matching release), runs
+`openclaw plugins update` for any plugin still behind, restores the WhatsApp
+`allowFrom`/`groupAllowFrom` lists from the snapshot (doctor would otherwise add
+`"*"`), and validates. One-off commands (`railway ssh -- …`) skip this step.
 
-Doctor only warns when it cannot update a plugin, and a plugin built for an older core
-fails to register (for WhatsApp: the bot stops replying). npm runs as `joseph`, so
-`/home/joseph/.npm` must be writable by it: the images delete the cache `npm install -g`
-leaves there as root, and the entrypoints chown it at boot. If a plugin still cannot be
-updated, the entrypoint logs `WARNING: plugins still not at <version>` and retries on the
-next boot.
+Doctor only warns when it cannot update a plugin, and a plugin built for an older
+core fails to register (for WhatsApp: the bot stops replying). npm runs as
+`joseph`, so `/home/joseph/.npm` must be writable by it: the image deletes the
+cache `npm install -g` leaves there as root, and the entrypoint chowns it at boot.
+If a plugin still cannot be updated, the entrypoint logs
+`WARNING: plugins still not at <version>` and retries on the next boot.
 
 The 2026.9 config schema moved `agents.list` to keyed `agents.entries`,
-`agents.defaults.memorySearch` to `memory.search`, `media` to `attachments`, and WhatsApp
-`blockStreaming*` to `channels.whatsapp.streaming.block`; it removed `web.whatsapp` (its
-socket timings are now the plugin defaults) and requires an explicit
-`plugins.entries.voice-call.config.agentId` when several agents exist. The template uses
-the new shape. To roll back, redeploy the previous image and restore
-`openclaw.json.pre-upgrade-<version>` plus the `*.pre-startup-migration-*.bak` SQLite
-backups doctor leaves next to each database.
+`agents.defaults.memorySearch` to `memory.search`, `media` to `attachments`, and
+WhatsApp `blockStreaming*` to `channels.whatsapp.streaming.block`; it removed
+`web.whatsapp` (its socket timings are now the plugin defaults) and requires an
+explicit `plugins.entries.voice-call.config.agentId` when several agents exist.
+The template uses the new shape. To roll back, redeploy the previous image and
+restore `openclaw.json.pre-upgrade-<version>` plus the
+`*.pre-startup-migration-*.bak` SQLite backups doctor leaves next to each
+database.
 
-A runtime WhatsApp compatibility shim used to live in both `entrypoint.sh` files to work
-around a `formatInboundMediaUnavailableText` import mismatch in the 2026.6.11 packages. As
-of `@openclaw/whatsapp@2026.6.34` the packages have converged (the symbol is gone) and the
-shim has been removed. If a future WhatsApp plugin release reintroduces a similar
-import/export mismatch, reintroduce a narrow, self-skipping shim rather than one that aborts
-boot.
-
-This repo must not edit package-managed files under:
-
-```text
-/home/joseph/.npm-global/lib/node_modules/openclaw
-```
-
-After `openclaw update`, run:
+This repo must not edit package-managed files under the installed OpenClaw
+package. After an OpenClaw bump, run `./deploy/ci-check.sh` and confirm the image
+still builds:
 
 ```bash
-cd /home/joseph/.openclaw
-./deploy/validate-openclaw-deploy.sh
+docker build -f deploy/railway/Dockerfile .
 ```
-
-If validation passes, the custom deployment layer is still intact.

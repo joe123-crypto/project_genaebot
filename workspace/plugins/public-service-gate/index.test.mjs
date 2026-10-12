@@ -8,15 +8,12 @@ import test from "node:test";
 import plugin, { createLimiter, isQueueFullError, runJsonCommand } from "./index.js";
 import { accountLinkRequiredText, VERBATIM_LINK_DIRECTIVE } from "./lib/account-link.js";
 import { busyReply } from "./lib/runtime.js";
-import { handleEventScoutRequest } from "./services/event-scout.js";
 import { handleJobScoutRequest } from "./services/job-scout.js";
 
 const MEMBER = "+233208864185";
 const UNKNOWN = "+19995550123";
 const ADMIN = "+213563719936";
 
-// The real deployed greeting/menu, so intake tests assert the wired copy.
-const GREETING_FILE = fileURLToPath(new URL("../../docs/public-greeting.txt", import.meta.url));
 const HANDOFF = /your request is in\. Someone will contact you soon/i;
 const PARTNER = "+263775489417";
 
@@ -135,54 +132,15 @@ test("public service tool is exposed only to the public WhatsApp agent with a tr
   assert.deepEqual(tool.parameters.required, ["action"]);
 });
 
-test("disabled public services are omitted from the public service tool schema", async () => {
-  const handler = registerHandler({ newsEnabled: false, eventScoutEnabled: false });
+test("a disabled public service is omitted from the public service tool schema", async () => {
+  const handler = registerHandler({ cvMakerEnabled: false });
   const tool = handler.publicTool({ agentId: "public", requesterSenderId: MEMBER, messageChannel: "whatsapp" });
 
   assert.deepEqual(tool.parameters.properties.action.enum, ["business_info", "handoff", "job_scout_start_or_status"]);
 
-  const result = await tool.execute("test", { action: "news_start_or_update" });
+  const result = await tool.execute("test", { action: "cv_maker_start" });
   assert.match(result.content[0].text, /isn't available here right now/i);
   assert.match(result.content[0].text, /Job Scout/);
-});
-
-test("classic mode: member disabled-service requests return unavailable", async () => {
-  // Classic allowlist mode (gate off) is where members still reach the agent, so
-  // the disabled-service guard only fires there now.
-  const handler = registerHandler({
-    memberGateEnabled: false,
-    newsEnabled: false,
-    eventScoutEnabled: false,
-  });
-
-  for (const text of [
-    "start personalized news",
-    "setup event scouting",
-    "add this event to my calendar",
-  ]) {
-    const memberReply = await handler(eventFor(text, MEMBER), {
-      channelId: "whatsapp",
-      senderId: MEMBER,
-    });
-    assert.equal(memberReply.handled, true, `expected member "${text}" to be handled`);
-    assert.match(memberReply.text, /isn't available here right now/i, `expected member "${text}" to be unavailable`);
-    assert.doesNotMatch(memberReply.text, /isn't open for new users/i, `expected "${text}" not to get the access-required reply`);
-  }
-});
-
-test("classic mode: member Job Scout messages with stray disabled-service keywords reach the agent", async () => {
-  const handler = registerHandler({ memberGateEnabled: false, newsEnabled: false, eventScoutEnabled: false });
-
-  for (const text of [
-    "any news on my job applications?",
-    "find me a job in a restaurant",
-  ]) {
-    const reply = await handler(eventFor(text, MEMBER), {
-      channelId: "whatsapp",
-      senderId: MEMBER,
-    });
-    assert.equal(reply, undefined, `expected "${text}" to defer to the agent`);
-  }
 });
 
 test("job scout onboarding has a generic disabled response", async () => {
@@ -729,17 +687,6 @@ test("a non-admin resume command is ordinary text for the agent", async () => {
   assert.equal(reply, undefined);
 });
 
-test("classic mode: member greeting falls through to the agent", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
-  const greetingTemplatePath = path.join(dir, "public-greeting.txt");
-  fs.writeFileSync(greetingTemplatePath, "Choose a service");
-
-  const handler = registerHandler({ memberGateEnabled: false, greetingTemplatePath });
-  const reply = await handler(eventFor("hi"), { channelId: "whatsapp", senderId: MEMBER });
-
-  assert.equal(reply, undefined);
-});
-
 test("classic mode: member off-scope text falls through to the agent without relevance calls", async () => {
   let calls = 0;
   const handler = registerHandler(
@@ -778,7 +725,6 @@ test("classic mode: member service messages do not call deterministic service he
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
   const accountLinkScript = path.join(dir, "account-link");
   const jobScoutScript = path.join(dir, "job-scout");
-  const newsSubscriptionsScript = path.join(dir, "news_subscriptions.py");
   const helperLog = path.join(dir, "helper.log");
 
   for (const script of [accountLinkScript, jobScoutScript]) {
@@ -790,17 +736,7 @@ exit 2
 `,
     );
   }
-  fs.writeFileSync(
-    newsSubscriptionsScript,
-    `#!/usr/bin/env python3
-from pathlib import Path
-Path(${JSON.stringify(helperLog)}).write_text("news helper called", encoding="utf-8")
-raise SystemExit(2)
-`,
-    { mode: 0o755 },
-  );
-
-  const handler = registerHandler({ memberGateEnabled: false, accountLinkScript, jobScoutScript, newsSubscriptionsScript });
+  const handler = registerHandler({ memberGateEnabled: false, accountLinkScript, jobScoutScript });
   for (const text of [
     "Hello",
     "1",
@@ -808,57 +744,12 @@ raise SystemExit(2)
     "3",
     "4",
     "Done",
-    "stop news",
-    "personalized news about AI",
-    "setup event scouting",
     "setup job scout",
   ]) {
     const reply = await handler(eventFor(text), { channelId: "whatsapp", senderId: MEMBER });
     assert.equal(reply, undefined, `expected "${text}" to reach the agent`);
   }
   assert.equal(fs.existsSync(helperLog), false);
-});
-
-test("event scout setup copy promises user selection before calendar saves", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-events-"));
-  const accountLinkScript = path.join(dir, "account-link");
-  writeExecutable(
-    accountLinkScript,
-    `#!/usr/bin/env bash
-set -eu
-case "$1" in
-  status)
-    printf '{"linked":true,"publicUserId":"public-123"}\\n'
-    ;;
-  *) exit 2 ;;
-esac
-`,
-  );
-  const api = {
-    config: {
-      plugins: {
-        entries: {
-          "public-service-gate": {
-            config: {
-              enabled: true,
-              accountLinkScript,
-              agentGenaiePublicBaseUrl: "https://app.example.test",
-            },
-          },
-        },
-      },
-    },
-    logger: {
-      warn() {},
-    },
-  };
-
-  const reply = await handleEventScoutRequest(api, MEMBER);
-
-  assert.equal(reply.handled, true);
-  assert.match(reply.text, /send matching events here/i);
-  assert.match(reply.text, /pick which ones go into your calendar/i);
-  assert.doesNotMatch(reply.text, /I'll add matching upcoming events/i);
 });
 
 test("classic mode: active service state no longer short-circuits member continuations", async () => {
@@ -1001,8 +892,6 @@ test("public canned replies use the concise style", () => {
     "services/membership.js",
     "services/greeting.js",
     "services/intake.js",
-    "services/news.js",
-    "services/event-scout.js",
     "services/job-scout.js",
     "services/cv-maker.js",
     "services/handoff.js",
@@ -1016,13 +905,9 @@ test("public canned replies use the concise style", () => {
   const docs = [
     "public-whatsapp-system-prompt.txt",
     "public-services.md",
-    "public-greeting.txt",
     "business-info.md",
-    "calendar-save-onboarding.md",
-    "event-scout-onboarding.md",
     "gmail-onboarding.md",
     "job-scout-onboarding.md",
-    "personalized-news-onboarding.md",
   ];
   for (const file of docs) {
     const source = fs.readFileSync(new URL(`../../docs/${file}`, import.meta.url), "utf8");
@@ -1289,8 +1174,8 @@ test("an admin cv command is not honored while WhatsApp admin mode is disabled",
 test("a DM carrying a promo ad ref is counted without changing the reply", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-adref-"));
   const serviceStatePath = path.join(dir, "state.json");
-  const handler = registerHandler({ serviceStatePath, greetingTemplatePath: GREETING_FILE });
-  const control = registerHandler({ greetingTemplatePath: GREETING_FILE });
+  const handler = registerHandler({ serviceStatePath });
+  const control = registerHandler({});
   const ctx = { channelId: "whatsapp", senderId: MEMBER };
 
   const reply = await handler(eventFor("Hi, I saw your borehole ad (ref BH-7K2)", MEMBER), ctx);

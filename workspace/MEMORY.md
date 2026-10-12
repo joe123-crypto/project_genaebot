@@ -27,7 +27,7 @@
 - **Auth:** `AGENT_GENAI_INTERNAL_API_KEY` in `/home/joseph/.openclaw/.env` or process env. Do not print the key.
 - **Per-user model:** target a user with `--sender-uid <Firebase UID>`, resolved from the requester's WhatsApp phone via `account-link status --phone`. Always `genaie-calendar status --sender-uid <uid>` first and require `calendarConnected: true` before writing. Only write for the requester's own user id.
 - **Usage:** `genaie-calendar write --sender-uid <uid> --source-id <stable-dedup-id> --summary "..." --start-date YYYY-MM-DD --end-date YYYY-MM-DD [--location ...] [--source-url ...] [--reminder-min 1440 --reminder-min 120] --force`. Use `--start-datetime/--end-datetime` + `--timezone` for timed events. `--dry-run` inspects without writing; `--force` is required for real writes. Dedup is by `(senderUid, sourceId)`.
-- **Ad-hoc save flow** (user names specific events to add now): follow `docs/calendar-save-onboarding.md`. The shared event-scout cron is separate and only writes Algeria Exhibitions catalog events.
+- **Scope:** operator/admin use only. There is no public calendar-save flow: the public agent has no calendar action.
 - **Installed:** 2026-06-21
 
 ### Agent Genaie Firestore central data
@@ -38,7 +38,6 @@
 - **Current status:** Agent Genaie integration is live. Firebase users, WhatsApp phone links, and Gmail connections are mirrored to Firestore.
 - **Public URLs:** user-facing app pages use opaque `publicUserId` routes such as `/{publicUserId}/connect-gmail` and `/{publicUserId}/vault`; if the public id is not known, send `/login?next=%2Fconnect-gmail` or `/login?next=%2Fvault`.
 - **Maintenance endpoints:** `GET /internal/central-data/status` and `POST /internal/central-data/backfill`, protected by `AGENT_GENAI_INTERNAL_API_KEY`.
-- **Backfill:** completed on 2026-06-03 for 2 Firebase users and 2 Gmail connections.
 - **Secrets:** `CENTRAL_DATA_ENCRYPTION_SECRET` and `CENTRAL_DATA_KEY_VERSION` live in Agent Genaie config. Do not print or expose the encryption secret.
 - **Public repo hygiene:** tracked Agent Genaie docs/config use placeholder domains. Runtime URLs come from `PUBLIC_BASE_URL` and `PASSBOLT_PUBLIC_URL`. Keep `.env`, `data/`, `logs/`, `archives/`, `node_modules/`, Firebase service account files, token stores, private keys, and internal API keys out of commits.
 
@@ -56,24 +55,25 @@
 - **GCP OAuth client** in `~/Downloads/client_secret_*.json` (for gog)
 
 ## Cron Jobs
-Most admin cron jobs deliver to the admin WhatsApp: **+213563719936** (Joe's day-to-day admin number; +263785632943 is for Zimbabwe and is NOT in WhatsApp allowFrom).
+Admin failure alerts go to the admin WhatsApp: **+213563719936** (Joe's day-to-day admin number; +263785632943 is the Zimbabwe number and is NOT in WhatsApp allowFrom).
 
-- **Daily tech news** (`daily-tech-news`, ID `6c0681e7-5499-4710-9af0-2de705a1e5bb`): **DISABLED 2026-06-25** to cut token cost. When enabled it runs daily at 8 AM Algiers, searches for top tech stories, and sends a WhatsApp summary only to Joe's personal WhatsApp (+213563719936) via announce. (Group delivery to 120363407177302513@g.us was **removed 2026-06-11** to stop the duplicate send.) Timeout: 600s (was 120s — too short, timed out, bumped to 600s).
-- **Event scout dispatcher** (`event-scout-dispatcher`, ID `d5f4d387-3258-448d-b60b-c3f2ef4c0bee`): Runs Saturdays at 10:00 AM Algiers (cron `0 10 * * 6`) as a direct command job: `python3 /home/joseph/.openclaw/workspace/cron/event-scout-dispatcher/dispatch.py`. It syncs Algeria Exhibitions events into each subscribed user's Google Calendar and handles user delivery itself; scheduler delivery is none, with operational failure alerts to Joe.
+The live jobs are the six promo ad crons, the daily Job Scout turn, the
+`job-scout-approvals` and `job-scout-cv-conversion` workers, and the two group
+feeds. Each has an installer under `deploy/` and is documented in the repo README.
+Query the gateway for actual state rather than trusting this file: `openclaw cron
+list --all --json`.
 
 ## Public Service Desk (Genaie Service Desk) — Created 2026-05-31
 
 ### Overview
 - **Company name:** Genaie Service Desk
-- **Audience:** Allowlisted non-admin WhatsApp users
+- **Audience:** Any non-admin WhatsApp user who DMs the bot (no allowlist, no approval step)
 - **Plugin:** `plugins/public-service-gate/` — intercepts `before_dispatch` for WhatsApp public users
 - **Policy:** `docs/public-services.md`
-- **Greeting template:** `docs/public-greeting.txt`
+- **Answers from:** `docs/business-info.md`
 
 ### Service Catalog
-1. **Personalized news delivery** — to user's inbox, based on their topics and schedule
-2. **Local event scouting** — events around user's location
-3. **Job/scholarship/internship scouting** — active with open onboarding; requires Agent Genaie login, linked WhatsApp chat, connected Gmail, profile/CV, and scam-warning acknowledgement. Scheduled dispatch covers all ready users. CV availability must be checked in Cloudflare R2 with `job-scout status --phone`; local runtime CV files are only disposable caches.
+1. **Job/scholarship/internship scouting** — active with open onboarding; requires Agent Genaie login, linked WhatsApp chat, connected Gmail, profile/CV, and scam-warning acknowledgement. Scheduled dispatch covers all ready users. CV availability must be checked in Cloudflare R2 with `job-scout status --phone`; local runtime CV files are only disposable caches.
    - **Never state Job Scout subscriber or application counts from memory.** They change daily. Query live: `job-scout summary` returns the current ready-subscriber count plus the latest dispatch run's final counts in one call; `job-scout status --phone` covers one person. Historical run stats live in `runtime/job-scout/dispatch-runs/<run-id>.json`. If the live query fails, say the query failed — do not substitute a remembered or guessed number, and flag any contradiction between sources instead of papering over it.
    - Uploaded CVs are PDFs converted to a canonical HTML CV (`<uid>/cv/base/cv.html`). Users whose CV shows `cvConversionStatus: pending` are not ready yet; the daily dispatch converts pending CVs automatically at the start of each run (`job-scout convert-pending-cvs` runs the pass manually).
 
@@ -110,19 +110,7 @@ Most admin cron jobs deliver to the admin WhatsApp: **+213563719936** (Joe's day
 - `genaie-mail send` supports `--attach`, `--body-file`, `--html-file`, `--dry-run`, and requires `--force` for real sends.
 - `gog gmail send` is legacy local/operator email tooling. Do not use it for normal user-facing product email.
 
-## Workspace Cleanup (2026-06-16)
-- Removed empty dirs: `nothing/` (tmp is system-locked, kept)
-- Removed duplicate dir: `job-scout-data/` (user data already in `job-scout/users/`)
-- Moved root Python scripts to `lib/`: `whatsapp-invite.py`, `whatsapp-public-user.py`
-- Moved all onboarding/policy docs to `docs/`: `firestore-schema.md`, `gmail-onboarding.md`, `job-scout-onboarding.md`, `personalized-news-onboarding.md`, `public-services.md`, `public-greeting.txt`, `public-whatsapp-system-prompt.txt`
-- Updated all references in: bin wrappers, AGENTS.md, MEMORY.md, `lib/whatsapp-public-user.py`, `plugins/public-service-gate/index.js`
-- Root now only has: core files (AGENTS/SOUL/IDENTITY/MEMORY/USER/TOOLS), CV files, and the new `docs/` + `lib/` dirs
-
-## Workspace Cleanup (2026-07-03)
-- Removed the transitional root compatibility copies `whatsapp-invite.py`, `whatsapp-public-user.py`; the `lib/` versions are canonical (bin wrappers, `services/invite.js`, deploy staging all use `lib/`). Also removed the now-dead `check_compatibility_copies` guard in `deploy/ci/check.py` that only kept those copies in sync.
-
-## Webetu Meal Reservation — extracted to its own repo (2026-09-25)
-Webetu is no longer part of genaebot. The meal-reservation system (worker + headless
-scheduler + preferences CLI + dashboard connector) now lives in its own repo at
-`/home/joseph/projects/webetu`, with no OpenClaw/WhatsApp/LLM dependency. Do not re-add
-Webetu handlers, cron, config, or docs here.
+## Extracted To Their Own Repos
+- **Webetu meal reservation** (2026-09-25): now at `/home/joseph/projects/webetu`,
+  with no OpenClaw/WhatsApp/LLM dependency. Do not re-add Webetu handlers, cron,
+  config, or docs here.

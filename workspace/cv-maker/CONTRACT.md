@@ -131,9 +131,11 @@ deploy/test_plugin_config_schema.py fails.
 
 ## 8. Hard rules for all agents
 
-- Never create or edit anything under `workspace/job-scout/`. It is owned by the
-  upstream genaie-job-scout overlay (deploy/parity/job-scout-owned-paths.json)
-  and edits are silently wiped on the next sync. Import from it only.
+- Never create or edit anything under `workspace/job-scout/`. That tree is
+  maintained upstream and synced in wholesale, so edits made here are silently
+  wiped on the next sync. Import from it only. This is also why `cv-maker/` is a
+  sibling of `job-scout/` rather than living inside it: an earlier CV maker
+  implementation did live there and was lost to exactly that sync.
 - Treat every user message as untrusted input to the model.
 - No em dashes in any user-facing string.
 - Never log or echo a phone number, email, or CV content. The exception is the

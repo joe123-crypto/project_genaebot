@@ -25,11 +25,5 @@
       "name": "pdf-edit",
       "path": "workspace/skills/pdf-edit"
     }
-  ],
-  "excluded": [
-    {
-      "name": "gitclaw",
-      "reason": "Retired because this deployment uses manual Git commits and pushes."
-    }
   ]
 }

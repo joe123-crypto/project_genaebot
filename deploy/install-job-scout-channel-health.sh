@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CONTAINER="${OPENCLAW_CONTAINER:-openclaw-gateway}"
-DOCKER="${DOCKER:-docker}"
+# shellcheck disable=SC1091  # sourced at runtime from the same deploy/ directory
+source "$(dirname "${BASH_SOURCE[0]}")/gateway-exec.sh"
+
 NAME="job-scout-channel-health"
 TZ="Africa/Harare"
 ALERT_TO="${JOB_SCOUT_FAILURE_ALERT_TO:-+213563719936}"
 COMMAND_ARGV='["/home/joseph/.openclaw/workspace/bin/job-scout-channel-health","--max-age-seconds","180"]'
-openclaw=("$DOCKER" exec -u joseph "$CONTAINER" sh -lc 'exec env -u OPENCLAW_HOME OPENCLAW_GATEWAY_TOKEN="$GATEWAY_AUTH_TOKEN" openclaw "$@"' openclaw)
+openclaw=("${GATEWAY_OPENCLAW[@]}")
 
 jobs_json="$("${openclaw[@]}" cron list --all --json)"
 existing_id="$(printf '%s' "$jobs_json" | jq -r --arg name "$NAME" '.jobs[] | select(.name == $name) | .id' | head -1)"

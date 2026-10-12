@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CONTAINER="${OPENCLAW_CONTAINER:-openclaw-gateway}"
-DOCKER="${DOCKER:-docker}"
+# shellcheck disable=SC1091  # sourced at runtime from the same deploy/ directory
+source "$(dirname "${BASH_SOURCE[0]}")/gateway-exec.sh"
+
 NAME="job-scout-group-feed"
 CRON_EXPR="20 9 * * *"
 TZ="Africa/Harare"
@@ -11,7 +12,7 @@ INVITE_URL="${JOB_SCOUT_GROUP_FEED_INVITE_URL:-https://chat.whatsapp.com/JZvh9lw
 TARGET="${JOB_SCOUT_GROUP_FEED_TARGET:-}"
 GROUP_QUERY="${JOB_SCOUT_GROUP_FEED_GROUP_QUERY:-}"
 
-openclaw=("$DOCKER" exec -u joseph "$CONTAINER" sh -lc 'exec env -u OPENCLAW_HOME OPENCLAW_GATEWAY_TOKEN="$GATEWAY_AUTH_TOKEN" openclaw "$@"' openclaw)
+openclaw=("${GATEWAY_OPENCLAW[@]}")
 
 resolve_target() {
   local groups_json
