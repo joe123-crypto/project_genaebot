@@ -46,12 +46,16 @@ if [ "$GATEWAY_EXEC_MODE" = docker ]; then
     exit 1
   fi
   unset gateway_token_hash browser_token_hash docker_bin container
+  runtime_check_args=(--check-browser --check-subscribers)
 else
   printf 'NOTE: no browser worker on this runtime; URL-only applications stay action_required.\n' >&2
+  # Probing the worker's health here would always fail: there is no such
+  # container to resolve. The subscriber/CV gate below still applies.
+  runtime_check_args=(--check-subscribers)
 fi
 
 set +e
-runtime_check_output="$("${job_scout[@]}" check-runtime --check-browser --check-subscribers 2>&1)"
+runtime_check_output="$("${job_scout[@]}" check-runtime "${runtime_check_args[@]}" 2>&1)"
 runtime_check_rc=$?
 set -e
 if [ "$runtime_check_rc" -ne 0 ]; then

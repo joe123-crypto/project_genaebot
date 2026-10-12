@@ -35,7 +35,16 @@
         "workspace/plugins/*/openclaw.plugin.json"
       ],
       "requiredDocs": [
-        "workspace/docs/public-services.md",
+        "workspace/docs/public-services.md"
+      ]
+    },
+    {
+      "name": "public agent action surface",
+      "paths": [
+        "workspace/plugins/public-service-gate/index.js",
+        "workspace/plugins/public-service-gate/services/*.js"
+      ],
+      "requiredDocs": [
         "workspace/docs/public-whatsapp-system-prompt.txt"
       ]
     },

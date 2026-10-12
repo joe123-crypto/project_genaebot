@@ -166,7 +166,7 @@ class JobScoutDeploymentTests(unittest.TestCase):
 
     self.assertIn("RESOURCE_EXHAUSTED|quota exceeded", installer)
     self.assertIn("exit 75", installer)
-    self.assertLess(installer.index("check-runtime --check-browser --check-subscribers"), installer.index("cron list --all --json"))
+    self.assertLess(installer.index("check-runtime"), installer.index("cron list --all --json"))
 
     with tempfile.TemporaryDirectory() as temp_dir:
       temp = Path(temp_dir)
@@ -227,6 +227,65 @@ exit 0
       self.assertEqual(other.returncode, 42, other.stderr)
       self.assertIn("runtime transport failed", other.stderr)
       self.assertNotIn("reconciliation was deferred", other.stderr)
+
+  def test_browser_health_is_only_probed_where_a_browser_worker_can_exist(self) -> None:
+    installer = (ROOT / "deploy/install-job-scout.sh").read_text(encoding="utf-8")
+
+    # The browser worker is a separate container, so both the token-parity
+    # preflight and the --check-browser probe belong inside the docker branch.
+    # On Railway the gateway runs alone and the probe would always fail.
+    docker_branch = installer.index('if [ "$GATEWAY_EXEC_MODE" = docker ]')
+    else_branch = installer.index("\nelse\n", docker_branch)
+    self.assertLess(docker_branch, installer.index("--check-browser"))
+    self.assertLess(installer.index("--check-browser"), else_branch)
+    # The subscriber/CV readiness gate is real on both runtimes.
+    self.assertIn("--check-subscribers", installer)
+
+  def test_railway_mode_installs_the_schedule_without_a_browser_worker(self) -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+      temp = Path(temp_dir)
+      fake_railway = temp / "railway"
+      calls = temp / "calls.log"
+      fake_railway.write_text(
+        """#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$FAKE_RAILWAY_CALLS"
+if printf '%s\\n' "$*" | grep -q check-runtime; then
+  printf '%s\\n' '{"ok": true}'
+  exit 0
+fi
+if printf '%s\\n' "$*" | grep -q 'cron list'; then
+  printf '%s\\n' '{"jobs": []}'
+  exit 0
+fi
+exit 0
+""",
+        encoding="utf-8",
+      )
+      fake_railway.chmod(0o755)
+      env = {
+        **os.environ,
+        "OPENCLAW_EXEC_MODE": "railway",
+        "RAILWAY": str(fake_railway),
+        "FAKE_RAILWAY_CALLS": str(calls),
+      }
+
+      result = subprocess.run(
+        ["bash", str(ROOT / "deploy/install-job-scout.sh")],
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+      )
+      recorded = calls.read_text(encoding="utf-8")
+
+      # The readiness gate still runs, but never asks about the absent browser.
+      self.assertIn("check-runtime", recorded)
+      self.assertNotIn("--check-browser", recorded)
+      self.assertIn("no browser worker on this runtime", result.stderr)
+      # Having passed the gate, the installer must reach the cron work rather
+      # than aborting on an unreachable worker.
+      self.assertIn("cron list", recorded, result.stderr)
 
   def test_image_build_stages_the_source_overlay_and_verifies_it(self) -> None:
     dockerfile = (ROOT / "deploy/railway/Dockerfile").read_text(encoding="utf-8")
