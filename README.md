@@ -396,7 +396,12 @@ weekly day, and never on `--dry-run` / `--refs`. Override the bounds with
 `install-promo.sh` registers every promo cron with a 3600 s job timeout
 (`PROMO_CRON_TIMEOUT_SECONDS`; it was 600 s, which would kill a long run). That
 timeout is cron state on the volume: it only changes in production when the six
-`install-*-promo.sh` installers are re-run. Each delivered group is committed to
+`install-*-promo.sh` installers are re-run. The installer also passes
+`--run-budget <timeout - 60 s>` to the promo script, and the engine shortens the
+gaps whenever that is needed to finish inside the budget. Jobs registered before
+this have no flag and keep the 600 s timeout, so the default budget is 540 s: until
+the installers are re-run those runs still finish, with shorter (still random)
+gaps. Each delivered group is committed to
 the promo's state file immediately, so a run that is killed part-way and re-run the
 same day skips the groups it already reached.
 

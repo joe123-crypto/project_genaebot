@@ -51,6 +51,7 @@ import json
 import time
 import random
 import hashlib
+import math
 import subprocess
 import urllib.parse
 from datetime import date
@@ -536,8 +537,9 @@ def _env_seconds(name, default):
     except ValueError:
         sys.stderr.write("WARN: ignoring non-numeric %s=%r\n" % (name, raw))
         return default
-    if value < 0:
-        sys.stderr.write("WARN: ignoring negative %s=%r\n" % (name, raw))
+    if not math.isfinite(value) or value < 0:
+        sys.stderr.write("WARN: ignoring invalid %s=%r (must be a finite number >= 0)\n"
+                         % (name, raw))
         return default
     return value
 
@@ -560,9 +562,58 @@ def send_gap_bounds(send_delay=None, send_delay_min=None, send_delay_max=None):
     return (lo, hi)
 
 
+# The whole run must finish inside the cron job's timeout, or the gateway kills
+# it and the groups not yet reached miss the day's ad. Cron jobs are registered
+# by deploy/install-promo.sh, which passes ``--run-budget <seconds>`` matching
+# the timeout it sets. A job registered before that flag existed carries the old
+# 600 s timeout and no flag, so the default budget fits inside 600 s.
+DEFAULT_RUN_BUDGET_SECONDS = 540.0
+# Time reserved per remaining send when fitting gaps into the budget (a media
+# send takes ~7 s, ~10 s when slow).
+SEND_RESERVE_SECONDS = 15.0
+
+
+def run_budget_seconds(args):
+    """Run budget from ``--run-budget N`` / ``--run-budget=N`` in ``args``, else
+    :data:`DEFAULT_RUN_BUDGET_SECONDS`. Invalid values fall back to the default."""
+    raw = None
+    for k, a in enumerate(args):
+        if a == "--run-budget" and k + 1 < len(args):
+            raw = args[k + 1]
+        elif a.startswith("--run-budget="):
+            raw = a.split("=", 1)[1]
+    if raw is None:
+        return DEFAULT_RUN_BUDGET_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        value = float("nan")
+    if not math.isfinite(value) or value <= 0:
+        sys.stderr.write("WARN: ignoring invalid --run-budget %r\n" % raw)
+        return DEFAULT_RUN_BUDGET_SECONDS
+    return value
+
+
+def fit_gap_bounds(gap_min, gap_max, remaining_seconds, sends_left):
+    """Shrink the (min, max) gap range so the ``sends_left`` remaining sends, each
+    preceded by one gap, still fit in ``remaining_seconds``. Unchanged when there
+    is room; otherwise the max becomes the per-gap share of the spare time and the
+    min half of it, so gaps stay random but shorter."""
+    if sends_left <= 0:
+        return (gap_min, gap_max)
+    spare = remaining_seconds - sends_left * SEND_RESERVE_SECONDS
+    cap = max(0.0, spare / sends_left)
+    if cap >= gap_max:
+        return (gap_min, gap_max)
+    hi = cap
+    lo = min(gap_min, hi / 2.0)
+    return (lo, hi)
+
+
 def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=None,
               tracking=None, promo_name=None, variant_images=None,
-              send_delay_min=None, send_delay_max=None, rng=None, sleep=None):
+              send_delay_min=None, send_delay_max=None, rng=None, sleep=None,
+              clock=None):
     """Resolve targets, skip groups already sent today (and weekly-limited groups
     off their configured weekday), then send the advert to each pending group,
     committing state per group so a crash or retry never double-posts. Returns a
@@ -581,7 +632,12 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
     (see :func:`send_gap_bounds`; default 20-60 s). ``send_delay`` is the legacy
     fixed gap and, when given, overrides the range. ``rng`` (anything with a
     ``uniform`` method, default the ``random`` module) and ``sleep`` (default
-    ``time.sleep``) are injectable for tests."""
+    ``time.sleep``) are injectable for tests.
+
+    The gaps are shrunk when needed so the whole run fits the run budget
+    (``--run-budget`` in argv, see :func:`run_budget_seconds`), which keeps the
+    run inside the cron job's timeout. ``clock`` (default ``time.monotonic``) is
+    injectable for tests."""
     args = sys.argv[1:] if argv is None else argv
     show_refs = "--refs" in args
     dry = "--dry-run" in args or show_refs
@@ -652,6 +708,10 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
     gap_min, gap_max = send_gap_bounds(send_delay, send_delay_min, send_delay_max)
     rng = rng or random
     sleep = sleep or time.sleep
+    clock = clock or time.monotonic
+    budget = run_budget_seconds(args)
+    started = clock()
+    squeezed = False
 
     failures = 0
     skipped = 0
@@ -661,7 +721,13 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
             # Random (not fixed) gap between send attempts: a metronome-regular
             # cadence is what WhatsApp spam detection reportedly flags. State is
             # committed per group before this sleep, so a kill mid-gap is safe.
-            sleep(rng.uniform(gap_min, gap_max))
+            lo, hi = fit_gap_bounds(gap_min, gap_max, budget - (clock() - started),
+                                    len(pending) - i)
+            if (lo, hi) != (gap_min, gap_max) and not squeezed:
+                squeezed = True
+                sys.stderr.write("NOTE: shortening send gaps to %.0f-%.0f s to finish "
+                                 "inside the %.0f s run budget\n" % (lo, hi, budget))
+            sleep(rng.uniform(lo, hi))
         idx, caption, _ = caption_for(jid, variants, day=day, allowed=weekly.get(jid),
                                       tracking=tracking)
         ok, out = send_ad(jid, caption, variant_images.get(idx, image_path))

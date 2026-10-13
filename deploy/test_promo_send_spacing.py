@@ -98,7 +98,8 @@ class SendSpacingTests(unittest.TestCase):
     def test_default_gaps_are_uniform_20_to_60_between_sends_only(self):
         groups = ["%d@g.us" % i for i in range(25)]
         rng = RecordingRng(seed=42)
-        self.assertEqual(self._run(groups, rng=rng), 0)
+        # The budget the installer passes with its 3600 s timeout: ample room.
+        self.assertEqual(self._run(groups, argv=["--run-budget", "3540"], rng=rng), 0)
         # send, sleep, send, ..., sleep, send: no leading or trailing sleep.
         self.assertEqual(self.kinds(),
                          ["send"] + ["sleep", "send"] * (len(groups) - 1))
@@ -241,6 +242,79 @@ class CallerWiringTests(unittest.TestCase):
         worst = (largest - 1) * pb.DEFAULT_SEND_DELAY_MAX + largest * 60
         self.assertLess(worst, 3600, "largest promo (%d groups) may exceed the timeout"
                         % largest)
+
+
+class RunBudgetTests(SendSpacingTests):
+    """Gaps shrink so a run always fits the cron job's timeout, and bad
+    PROMO_SEND_DELAY_* values (inf/nan) fall back to the defaults."""
+
+    def setUp(self):
+        super().setUp()
+        self.now = 0.0
+
+    def _clock(self):
+        return self.now
+
+    def _sleep(self, seconds):
+        super()._sleep(seconds)
+        self.now += seconds
+
+    def _fake_send(self, target, text, image):
+        self.now += 10.0  # a slow media send
+        return super()._fake_send(target, text, image)
+
+    def test_default_budget_keeps_old_600s_jobs_alive(self):
+        # Jobs registered before --run-budget existed carry a 600 s timeout and
+        # pass no flag; the 540 s default must keep even worst-case draws inside.
+        groups = ["%d@g.us" % i for i in range(26)]
+
+        class MaxRng:
+            def uniform(self, a, b):
+                return b
+
+        self.assertEqual(self._run(groups, rng=MaxRng(), clock=self._clock), 0)
+        self.assertEqual(self.kinds(), ["send"] + ["sleep", "send"] * 25)
+        self.assertLessEqual(self.now, pb.DEFAULT_RUN_BUDGET_SECONDS)
+        self.assertGreater(len(set(self.sleeps())), 1, "gaps must not be constant")
+
+    def test_installed_budget_keeps_full_range(self):
+        groups = ["%d@g.us" % i for i in range(20)]
+        rng = RecordingRng(seed=1)
+        self.assertEqual(self._run(groups, argv=["--run-budget=3540"], rng=rng,
+                                   clock=self._clock), 0)
+        self.assertEqual(rng.calls, [(20.0, 60.0)] * 19)
+        self.assertLess(self.now, 3540)
+
+    def test_run_budget_parsing(self):
+        self.assertEqual(pb.run_budget_seconds([]), pb.DEFAULT_RUN_BUDGET_SECONDS)
+        self.assertEqual(pb.run_budget_seconds(["--run-budget", "3540"]), 3540.0)
+        self.assertEqual(pb.run_budget_seconds(["--run-budget=900"]), 900.0)
+        with redirect_stderr(io.StringIO()):
+            for bad in ("inf", "nan", "-5", "0", "soon"):
+                self.assertEqual(pb.run_budget_seconds(["--run-budget", bad]),
+                                 pb.DEFAULT_RUN_BUDGET_SECONDS, bad)
+
+    def test_fit_gap_bounds(self):
+        self.assertEqual(pb.fit_gap_bounds(20, 60, 3000, 19), (20, 60))
+        lo, hi = pb.fit_gap_bounds(20, 60, 500, 19)
+        self.assertLess(hi, 60)
+        self.assertLessEqual(lo, hi)
+        self.assertLessEqual(19 * (hi + pb.SEND_RESERVE_SECONDS), 500 + 1e-9)
+        self.assertEqual(pb.fit_gap_bounds(20, 60, 10, 5), (0.0, 0.0))
+
+    def test_non_finite_env_values_fall_back_to_defaults(self):
+        for lo_raw, hi_raw in (("inf", "inf"), ("nan", "nan"), ("20", "inf")):
+            os.environ["PROMO_SEND_DELAY_MIN"] = lo_raw
+            os.environ["PROMO_SEND_DELAY_MAX"] = hi_raw
+            with redirect_stderr(io.StringIO()):
+                lo, hi = pb.send_gap_bounds()
+            self.assertEqual((lo, hi), (pb.DEFAULT_SEND_DELAY_MIN,
+                                        pb.DEFAULT_SEND_DELAY_MAX), (lo_raw, hi_raw))
+
+    def test_installer_passes_run_budget_matching_timeout(self):
+        installer = (ROOT / "deploy/install-promo.sh").read_text(encoding="utf-8")
+        self.assertIn('"--run-budget"', installer)
+        self.assertIn("$((PROMO_CRON_TIMEOUT_SECONDS - 60))", installer)
 
 
 if __name__ == "__main__":

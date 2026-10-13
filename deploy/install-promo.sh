@@ -26,13 +26,17 @@ source "$(dirname "${BASH_SOURCE[0]}")/gateway-exec.sh"
 # (random), so the largest lists (~20 groups) take ~15 min typically and ~23 min
 # worst case (19 gaps x 60 s + sends); the old 600 s limit would kill them
 # mid-run. 3600 s leaves headroom for slow sends. Changing this only reaches the
-# live gateway when the promo installers are re-run.
+# live gateway when the promo installers are re-run; until then the old jobs run
+# with no --run-budget flag, and promo_broadcast's default budget (540 s) keeps
+# them inside the old 600 s timeout by shortening the gaps.
 PROMO_CRON_TIMEOUT_SECONDS="${PROMO_CRON_TIMEOUT_SECONDS:-3600}"
 
 register_promo_cron() {
   local name="$1" cron_expr="$2" tz="$3" alert_to="$4" script="$5"
   local command_argv
-  command_argv="$(printf '["python3","%s"]' "$script")"
+  # --run-budget tells promo_broadcast how long it may run, so it fits its send
+  # gaps inside this job's timeout (60 s margin for startup and the last send).
+  command_argv="$(printf '["python3","%s","--run-budget","%s"]' "$script" "$((PROMO_CRON_TIMEOUT_SECONDS - 60))")"
 
   local openclaw
   openclaw=("${GATEWAY_OPENCLAW[@]}")
