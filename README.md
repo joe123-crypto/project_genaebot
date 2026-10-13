@@ -385,6 +385,31 @@ plus rewordings with identical facts; three each, four for the borehole promo) a
 carry a per-group tracking link. See *Promo caption rotation and ad ref tracking*
 below.
 
+The shared engine spaces consecutive group sends by a **random 20–60 s gap**
+(uniform), not a fixed delay, because WhatsApp spam detection reportedly flags
+machine-regular send intervals (before this change the logs showed one send every
+~10 s, like a metronome). The gap is only taken between two send attempts: not
+before the first or after the last, not for groups already sent today or off their
+weekly day, and never on `--dry-run` / `--refs`. Override the bounds with
+`PROMO_SEND_DELAY_MIN` / `PROMO_SEND_DELAY_MAX` (seconds) in the gateway env. A
+~20-group promo therefore runs for ~15 min typically and ~23 min at worst, so
+`install-promo.sh` registers every promo cron with a 3600 s job timeout
+(`PROMO_CRON_TIMEOUT_SECONDS`; it was 600 s, which would kill a long run). That
+timeout is cron state on the volume: it only changes in production when the six
+`install-*-promo.sh` installers are re-run, and no deploy step runs them. So the
+engine does not assume it: at run time it asks the gateway for its own job's
+timeout and, if the run would not fit, tightens the gaps proportionally (keeping
+them random, never below 5 s) and logs a warning naming the installer to re-run.
+A stale timeout therefore delays groups instead of dropping them; re-running the
+installers restores the full 20-60 s gaps and verifies the new timeout landed. A
+timeout too short to fit the group count even at the 5 s floor (under ~370 s for
+a 20-group promo) is the one case that can still be cut short: the warning then
+says so and names the minimum the job needs, and because each delivered group is
+committed immediately, a re-run the same day resumes where it stopped.
+`PROMO_RUN_TIMEOUT_SECONDS` overrides the lookup (`0` = no limit). Each delivered
+group is committed to the promo's state file immediately, so a run that is killed
+part-way and re-run the same day skips the groups it already reached.
+
 The daily Job Scout turn (`install-job-scout.sh`, 08:00), the five-minute
 `job-scout-approvals` worker, the hourly `job-scout-cv-conversion` pass and the
 two group feeds have their own installers and are described above.

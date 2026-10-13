@@ -33,6 +33,18 @@ placeholders; otherwise a "tap to chat" line is appended. A promo that passes no
 ref -> promo + group JID mapping (no sends, no state mutation) so codes seen in
 DMs can be decoded later.
 
+Send spacing: consecutive group sends are spaced by a random gap drawn
+uniformly from [``send_delay_min``, ``send_delay_max``] seconds (default 20-60,
+env ``PROMO_SEND_DELAY_MIN`` / ``PROMO_SEND_DELAY_MAX``) instead of a fixed
+delay, because WhatsApp spam detection reportedly flags machine-regular send
+intervals. The gap is only taken between two send attempts: never before the
+first or after the last, and never for groups that are not sent to (already
+sent today, off their weekly day) or on ``--dry-run`` / ``--refs``. Because a
+promo cron's job timeout lives in the gateway's cron state on the volume rather
+than in this repo, the engine asks the gateway for its own job's timeout and
+tightens the gaps (keeping them random) when the run would not fit, so a stale
+timeout delays groups instead of dropping them.
+
 Std-lib only (plus the sibling :mod:`json_store` helper), so it stays importable
 from the OpenClaw ``--command`` cron scripts, which are std-lib only by contract.
 """
@@ -41,6 +53,8 @@ import os
 import sys
 import json
 import time
+import math
+import random
 import hashlib
 import subprocess
 import urllib.parse
@@ -513,8 +527,184 @@ def _print_dry_run(jids, weekly, weekday, sent_map, today, image_path, rotating,
         print("\n[dry-run] resolved=%d pending=%d" % (len(jids), len(pending)))
 
 
-def broadcast(*, text, image, targets_file, state_file, send_delay=3.0, argv=None,
-              tracking=None, promo_name=None, variant_images=None):
+# ----------------------------------------------------------- send spacing ----
+DEFAULT_SEND_DELAY_MIN = 20.0
+DEFAULT_SEND_DELAY_MAX = 60.0
+# Floor for a gap squeezed to fit a short job timeout (see fit_gap_bounds).
+MIN_SEND_DELAY = 5.0
+# Wall-clock budgeted per send when planning a run. Observed sends take ~7 s;
+# the margin covers a slow gateway without being as pessimistic as the 180 s
+# per-send subprocess timeout, which only caps a pathological send.
+SEND_ALLOWANCE_SECONDS = 12.0
+# Share of the cron job's timeout a run may plan to spend, leaving room for
+# startup, invite resolution and state writes.
+RUN_BUDGET_FRACTION = 0.9
+
+
+def _seconds(value, label, default):
+    """Coerce ``value`` to a non-negative finite float, else warn and return
+    ``default``. ``inf`` would sleep until the job timeout kills the run and
+    ``nan`` would silently collapse the gap to zero, so both are rejected like a
+    negative value rather than clamped."""
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        sys.stderr.write("WARN: ignoring non-numeric %s=%r\n" % (label, value))
+        return default
+    if not math.isfinite(seconds):
+        sys.stderr.write("WARN: ignoring non-finite %s=%r\n" % (label, value))
+        return default
+    if seconds < 0:
+        sys.stderr.write("WARN: ignoring negative %s=%r\n" % (label, value))
+        return default
+    return seconds
+
+
+def _env_seconds(name, default):
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    return _seconds(raw, name, default)
+
+
+def send_gap_bounds(send_delay=None, send_delay_min=None, send_delay_max=None):
+    """(min, max) seconds between consecutive sends. A legacy fixed
+    ``send_delay`` pins both bounds to it; otherwise each bound comes from its
+    argument, else ``PROMO_SEND_DELAY_MIN`` / ``PROMO_SEND_DELAY_MAX``, else the
+    20 / 60 s defaults. A negative or non-finite value is rejected with a warning
+    in favour of the default, and bounds are swapped if inverted."""
+    if send_delay is not None:
+        lo = hi = _seconds(send_delay, "send_delay", DEFAULT_SEND_DELAY_MIN)
+        return (lo, hi)
+    lo = (_seconds(send_delay_min, "send_delay_min", DEFAULT_SEND_DELAY_MIN)
+          if send_delay_min is not None
+          else _env_seconds("PROMO_SEND_DELAY_MIN", DEFAULT_SEND_DELAY_MIN))
+    hi = (_seconds(send_delay_max, "send_delay_max", DEFAULT_SEND_DELAY_MAX)
+          if send_delay_max is not None
+          else _env_seconds("PROMO_SEND_DELAY_MAX", DEFAULT_SEND_DELAY_MAX))
+    if lo > hi:
+        lo, hi = hi, lo
+    return (lo, hi)
+
+
+_PROBE_CRON_TIMEOUT = object()
+
+
+def cron_timeout_seconds(script=None):
+    """Seconds the gateway allows this run, or None when that is unknowable.
+
+    A promo cron's job timeout lives in the gateway's cron state on the volume,
+    NOT in this repo: merging a longer ``--timeout-seconds`` into
+    deploy/install-promo.sh changes nothing live until the six
+    ``deploy/install-*-promo.sh`` installers are re-run, and no deploy step runs
+    them. A run that plans for the merged timeout would therefore be killed
+    part-way by the stale one, and the groups it had not reached yet would miss
+    the day's ad. So ask the gateway what this job's limit actually is and plan
+    inside it (see :func:`fit_gap_bounds`).
+
+    Matches the job whose command argv ends with this script's ``<promo>/<file>``
+    path. Returns None when the lookup fails or no job matches (e.g. a manual
+    run), which leaves the configured gaps untouched.
+    ``PROMO_RUN_TIMEOUT_SECONDS`` overrides the lookup; 0 means "no limit"."""
+    raw = os.environ.get("PROMO_RUN_TIMEOUT_SECONDS")
+    if raw and raw.strip():
+        override = _env_seconds("PROMO_RUN_TIMEOUT_SECONDS", None)
+        if override is not None:  # a rejected value falls through to the lookup
+            return override or None  # 0 -> no limit
+    script = os.path.abspath(script or sys.argv[0] or "")
+    promo_dir = os.path.basename(os.path.dirname(script))
+    if not promo_dir or not os.path.basename(script):
+        return None  # nothing specific enough to match a single job against
+    tail = os.path.join(promo_dir, os.path.basename(script))
+    try:
+        p = subprocess.run(["openclaw", "cron", "list", "--all", "--json"],
+                           capture_output=True, text=True, timeout=60,
+                           env=gateway_env())
+    except Exception as ex:
+        sys.stderr.write("WARN: could not read this job's cron timeout: %s\n" % ex)
+        return None
+    if p.returncode != 0:
+        sys.stderr.write("WARN: could not read this job's cron timeout: %s\n"
+                         % ((p.stderr or p.stdout or "").strip()[:200]))
+        return None
+    try:
+        jobs = (json.loads(p.stdout or "{}") or {}).get("jobs") or []
+    except ValueError as ex:
+        sys.stderr.write("WARN: could not parse cron list output: %s\n" % ex)
+        return None
+    for job in jobs:
+        payload = (job or {}).get("payload") or {}
+        argv = payload.get("argv") or []
+        if not any(isinstance(a, str) and a.replace("\\", "/").endswith(tail)
+                   for a in argv):
+            continue
+        raw_timeout = payload.get("timeoutSeconds")
+        if raw_timeout is None:
+            return None  # job runs unbounded; nothing to fit the run inside
+        return _seconds(raw_timeout, "timeoutSeconds", None) or None
+    return None
+
+
+def min_timeout_seconds(count):
+    """Shortest job timeout a ``count``-group run can fit in, even once its gaps
+    are squeezed to ``MIN_SEND_DELAY``."""
+    if count < 1:
+        return 0.0
+    return (count * SEND_ALLOWANCE_SECONDS
+            + max(0, count - 1) * MIN_SEND_DELAY) / RUN_BUDGET_FRACTION
+
+
+def fit_gap_bounds(lo, hi, count, timeout):
+    """Shrink ``(lo, hi)`` so a ``count``-group run plans to finish inside
+    ``timeout`` seconds, returning the bounds unchanged when there is room or no
+    timeout is known. Both bounds scale by the same factor, so gaps stay random
+    instead of collapsing to the fixed cadence this spacing exists to avoid, and
+    the upper bound never drops below ``MIN_SEND_DELAY``. Delivering every group
+    with tighter random gaps beats being killed part-way with groups unreached.
+
+    A timeout below :func:`min_timeout_seconds` cannot fit the run even at that
+    floor. Squeezing further would trade the spacing away and still not finish,
+    so the floor stands, the run sends as far as it gets (per-group state keeps a
+    re-run from double-posting) and the warning says so instead of promising a
+    complete run."""
+    if not timeout or count < 2 or hi <= 0:
+        return (lo, hi)
+    room = timeout * RUN_BUDGET_FRACTION - count * SEND_ALLOWANCE_SECONDS
+    allowed = room / (count - 1)
+    if allowed >= hi:
+        return (lo, hi)
+    # Never squeeze below the floor (nor above the configured maximum, for a
+    # range deliberately set tighter than the floor): past that point the
+    # spacing would be traded away without buying a complete run.
+    allowed = max(allowed, min(MIN_SEND_DELAY, hi))
+    # Keep the floor on the lower bound too, so a timeout just above the
+    # feasible minimum cannot produce sub-floor gaps. A range deliberately
+    # configured below the floor keeps its shape instead of being pushed up.
+    new_lo = min(max(lo * (allowed / hi), MIN_SEND_DELAY if lo >= MIN_SEND_DELAY
+                     else 0.0), allowed)
+    if (count - 1) * allowed <= room + 1e-6:
+        sys.stderr.write(
+            "WARN: this cron job's timeout is %.0f s, too short for %d groups at "
+            "%.0f-%.0f s gaps; spacing them %.0f-%.0f s instead so every group "
+            "still gets today's ad. Re-run deploy/install-*-promo.sh to apply the "
+            "longer timeout and restore the full gaps.\n"
+            % (timeout, count, lo, hi, new_lo, allowed))
+    else:
+        sys.stderr.write(
+            "WARN: this cron job's timeout is %.0f s, too short for %d groups "
+            "even at the %.0f s gap floor; spacing them %.0f-%.0f s and the run "
+            "may still be killed before the last groups (a re-run today resumes "
+            "where it stopped). Give the job at least %.0f s "
+            "(PROMO_CRON_TIMEOUT_SECONDS) and re-run deploy/install-*-promo.sh.\n"
+            % (timeout, count, MIN_SEND_DELAY, new_lo, allowed,
+               min_timeout_seconds(count)))
+    return (new_lo, allowed)
+
+
+def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=None,
+              tracking=None, promo_name=None, variant_images=None,
+              send_delay_min=None, send_delay_max=None, rng=None, sleep=None,
+              cron_timeout=_PROBE_CRON_TIMEOUT):
     """Resolve targets, skip groups already sent today (and weekly-limited groups
     off their configured weekday), then send the advert to each pending group,
     committing state per group so a crash or retry never double-posts. Returns a
@@ -527,7 +717,16 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=3.0, argv=Non
     carries its ref code + wa.me link. ``variant_images`` is optional:
     ``{variant_index: image_path}`` pins a fixed image to a caption variant (e.g. a
     themed caption that needs its matching photo); other variants keep ``image``.
-    ``--refs`` prints the ref mapping and exits without sending or touching state."""
+    ``--refs`` prints the ref mapping and exits without sending or touching state.
+
+    Consecutive send attempts are spaced by ``rng.uniform(min, max)`` seconds
+    (see :func:`send_gap_bounds`; default 20-60 s), tightened if needed to fit
+    this cron job's live timeout (see :func:`cron_timeout_seconds` and
+    :func:`fit_gap_bounds`) so a run is never killed with groups unreached.
+    ``send_delay`` is the legacy fixed gap and, when given, overrides the range.
+    ``rng`` (anything with a ``uniform`` method, default the ``random`` module),
+    ``sleep`` (default ``time.sleep``) and ``cron_timeout`` (default: ask the
+    gateway; None disables the fit) are injectable for tests."""
     args = sys.argv[1:] if argv is None else argv
     show_refs = "--refs" in args
     dry = "--dry-run" in args or show_refs
@@ -595,10 +794,23 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=3.0, argv=Non
         print("NO_REPLY")  # every group already got today's ad
         return 0
 
+    gap_min, gap_max = send_gap_bounds(send_delay, send_delay_min, send_delay_max)
+    if cron_timeout is _PROBE_CRON_TIMEOUT:
+        # Only worth asking when there is more than one send to space out.
+        cron_timeout = cron_timeout_seconds() if gap_max > 0 and len(pending) > 1 else None
+    gap_min, gap_max = fit_gap_bounds(gap_min, gap_max, len(pending), cron_timeout)
+    rng = rng or random
+    sleep = sleep or time.sleep
+
     failures = 0
     skipped = 0
     sent = 0
     for i, jid in enumerate(pending):
+        if i > 0:
+            # Random (not fixed) gap between send attempts: a metronome-regular
+            # cadence is what WhatsApp spam detection reportedly flags. State is
+            # committed per group before this sleep, so a kill mid-gap is safe.
+            sleep(rng.uniform(gap_min, gap_max))
         idx, caption, _ = caption_for(jid, variants, day=day, allowed=weekly.get(jid),
                                       tracking=tracking)
         ok, out = send_ad(jid, caption, variant_images.get(idx, image_path))
@@ -616,8 +828,6 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=3.0, argv=Non
         else:
             failures += 1
             sys.stderr.write("SEND FAILED for %s:\n%s\n" % (jid, out))
-        if i < len(pending) - 1:
-            time.sleep(send_delay)
 
     save_state(state_file, st)  # persist any newly-cached invite resolutions
 
