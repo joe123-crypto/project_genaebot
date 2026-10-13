@@ -64,7 +64,6 @@ STATE_FILE = os.environ.get(
     "CV_PROMO_STATE",
     "/home/joseph/.openclaw/runtime/cron-state/cv-promo/state.json",
 )
-SEND_DELAY_SECONDS = float(os.environ.get("CV_PROMO_SEND_DELAY", "3"))
 
 # Fixed advert. WhatsApp bold uses *single* asterisks, so the closing line is
 # wrapped in single asterisks to render bold (not literal ** ). Everything else is
@@ -145,7 +144,6 @@ def main():
         image=IMAGE,
         targets_file=TARGETS_FILE,
         state_file=STATE_FILE,
-        send_delay=SEND_DELAY_SECONDS,
         tracking=TRACKING,
         promo_name="cv-promo",
     )

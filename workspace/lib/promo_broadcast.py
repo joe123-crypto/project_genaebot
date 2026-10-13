@@ -33,6 +33,14 @@ placeholders; otherwise a "tap to chat" line is appended. A promo that passes no
 ref -> promo + group JID mapping (no sends, no state mutation) so codes seen in
 DMs can be decoded later.
 
+Send spacing: consecutive group sends are spaced by a random gap drawn
+uniformly from [``send_delay_min``, ``send_delay_max``] seconds (default 20-60,
+env ``PROMO_SEND_DELAY_MIN`` / ``PROMO_SEND_DELAY_MAX``) instead of a fixed
+delay, because WhatsApp spam detection reportedly flags machine-regular send
+intervals. The gap is only taken between two send attempts: never before the
+first or after the last, and never for groups that are not sent to (already
+sent today, off their weekly day) or on ``--dry-run`` / ``--refs``.
+
 Std-lib only (plus the sibling :mod:`json_store` helper), so it stays importable
 from the OpenClaw ``--command`` cron scripts, which are std-lib only by contract.
 """
@@ -41,6 +49,7 @@ import os
 import sys
 import json
 import time
+import random
 import hashlib
 import subprocess
 import urllib.parse
@@ -513,8 +522,47 @@ def _print_dry_run(jids, weekly, weekday, sent_map, today, image_path, rotating,
         print("\n[dry-run] resolved=%d pending=%d" % (len(jids), len(pending)))
 
 
-def broadcast(*, text, image, targets_file, state_file, send_delay=3.0, argv=None,
-              tracking=None, promo_name=None, variant_images=None):
+# ----------------------------------------------------------- send spacing ----
+DEFAULT_SEND_DELAY_MIN = 20.0
+DEFAULT_SEND_DELAY_MAX = 60.0
+
+
+def _env_seconds(name, default):
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        sys.stderr.write("WARN: ignoring non-numeric %s=%r\n" % (name, raw))
+        return default
+    if value < 0:
+        sys.stderr.write("WARN: ignoring negative %s=%r\n" % (name, raw))
+        return default
+    return value
+
+
+def send_gap_bounds(send_delay=None, send_delay_min=None, send_delay_max=None):
+    """(min, max) seconds between consecutive sends. A legacy fixed
+    ``send_delay`` pins both bounds to it; otherwise each bound comes from its
+    argument, else ``PROMO_SEND_DELAY_MIN`` / ``PROMO_SEND_DELAY_MAX``, else the
+    20 / 60 s defaults. Bounds are clamped to >= 0 and swapped if inverted."""
+    if send_delay is not None:
+        lo = hi = max(0.0, float(send_delay))
+        return (lo, hi)
+    lo = (float(send_delay_min) if send_delay_min is not None
+          else _env_seconds("PROMO_SEND_DELAY_MIN", DEFAULT_SEND_DELAY_MIN))
+    hi = (float(send_delay_max) if send_delay_max is not None
+          else _env_seconds("PROMO_SEND_DELAY_MAX", DEFAULT_SEND_DELAY_MAX))
+    lo, hi = max(0.0, lo), max(0.0, hi)
+    if lo > hi:
+        lo, hi = hi, lo
+    return (lo, hi)
+
+
+def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=None,
+              tracking=None, promo_name=None, variant_images=None,
+              send_delay_min=None, send_delay_max=None, rng=None, sleep=None):
     """Resolve targets, skip groups already sent today (and weekly-limited groups
     off their configured weekday), then send the advert to each pending group,
     committing state per group so a crash or retry never double-posts. Returns a
@@ -527,7 +575,13 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=3.0, argv=Non
     carries its ref code + wa.me link. ``variant_images`` is optional:
     ``{variant_index: image_path}`` pins a fixed image to a caption variant (e.g. a
     themed caption that needs its matching photo); other variants keep ``image``.
-    ``--refs`` prints the ref mapping and exits without sending or touching state."""
+    ``--refs`` prints the ref mapping and exits without sending or touching state.
+
+    Consecutive send attempts are spaced by ``rng.uniform(min, max)`` seconds
+    (see :func:`send_gap_bounds`; default 20-60 s). ``send_delay`` is the legacy
+    fixed gap and, when given, overrides the range. ``rng`` (anything with a
+    ``uniform`` method, default the ``random`` module) and ``sleep`` (default
+    ``time.sleep``) are injectable for tests."""
     args = sys.argv[1:] if argv is None else argv
     show_refs = "--refs" in args
     dry = "--dry-run" in args or show_refs
@@ -595,10 +649,19 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=3.0, argv=Non
         print("NO_REPLY")  # every group already got today's ad
         return 0
 
+    gap_min, gap_max = send_gap_bounds(send_delay, send_delay_min, send_delay_max)
+    rng = rng or random
+    sleep = sleep or time.sleep
+
     failures = 0
     skipped = 0
     sent = 0
     for i, jid in enumerate(pending):
+        if i > 0:
+            # Random (not fixed) gap between send attempts: a metronome-regular
+            # cadence is what WhatsApp spam detection reportedly flags. State is
+            # committed per group before this sleep, so a kill mid-gap is safe.
+            sleep(rng.uniform(gap_min, gap_max))
         idx, caption, _ = caption_for(jid, variants, day=day, allowed=weekly.get(jid),
                                       tracking=tracking)
         ok, out = send_ad(jid, caption, variant_images.get(idx, image_path))
@@ -616,8 +679,6 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=3.0, argv=Non
         else:
             failures += 1
             sys.stderr.write("SEND FAILED for %s:\n%s\n" % (jid, out))
-        if i < len(pending) - 1:
-            time.sleep(send_delay)
 
     save_state(state_file, st)  # persist any newly-cached invite resolutions
 

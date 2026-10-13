@@ -59,7 +59,6 @@ STATE_FILE = os.environ.get(
     "GENAIE_LEADS_PROMO_STATE",
     "/home/joseph/.openclaw/runtime/cron-state/genaie-leads-promo/state.json",
 )
-SEND_DELAY_SECONDS = float(os.environ.get("GENAIE_LEADS_PROMO_SEND_DELAY", "3"))
 
 # Fixed advert. Verbatim marketing copy supplied by the operator. Emoji are kept
 # as explicit \U escapes so the source stays ASCII-safe.
@@ -121,7 +120,6 @@ def main():
         image=IMAGE,
         targets_file=TARGETS_FILE,
         state_file=STATE_FILE,
-        send_delay=SEND_DELAY_SECONDS,
         tracking=TRACKING,
         promo_name="genaie-leads-promo",
     )

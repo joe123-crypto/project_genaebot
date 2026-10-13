@@ -52,7 +52,6 @@ STATE_FILE = os.environ.get(
     "BOREHOLE_STATE",
     "/home/joseph/.openclaw/runtime/cron-state/borehole-drilling-promo/state.json",
 )
-SEND_DELAY_SECONDS = float(os.environ.get("BOREHOLE_SEND_DELAY", "3"))
 
 # Four bundled ad photos that rotate daily: the shared engine picks one by today's
 # date ordinal, so a group never sees the same image on consecutive days.
@@ -240,7 +239,6 @@ def main():
         image=IMAGE,
         targets_file=TARGETS_FILE,
         state_file=STATE_FILE,
-        send_delay=SEND_DELAY_SECONDS,
         tracking=TRACKING,
         promo_name="borehole-drilling-promo",
         variant_images=VARIANT_IMAGES,
