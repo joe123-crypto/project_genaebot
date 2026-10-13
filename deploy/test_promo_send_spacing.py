@@ -300,6 +300,58 @@ class RunTimeoutFitTests(unittest.TestCase):
             self.assertLessEqual(worst, 600, "%d groups" % count)
             self.assertLessEqual(lo, hi, "%d groups" % count)
 
+    def test_a_timeout_that_cannot_fit_even_the_floor_says_so(self):
+        """The squeeze promises a complete run; below min_timeout_seconds it
+        cannot keep that promise, so it must not claim to (Codex P2 on #108)."""
+        count, timeout = 20, 300
+        self.assertGreater(pb.min_timeout_seconds(count), timeout)
+        with redirect_stderr(io.StringIO()) as err:
+            lo, hi = pb.fit_gap_bounds(20.0, 60.0, count, timeout)
+        self.assertEqual(hi, pb.MIN_SEND_DELAY)
+        self.assertLessEqual(lo, hi)
+        warning = err.getvalue()
+        self.assertIn("may still be killed", warning)
+        self.assertNotIn("every group still gets", warning)
+        self.assertIn("%.0f s" % pb.min_timeout_seconds(count), warning)
+
+    def test_min_timeout_seconds_is_the_point_the_run_becomes_feasible(self):
+        for count in range(2, 26):
+            needed = pb.min_timeout_seconds(count)
+            with redirect_stderr(io.StringIO()) as err:
+                lo, hi = pb.fit_gap_bounds(20.0, 60.0, count, needed)
+            self.assertGreaterEqual(hi, pb.MIN_SEND_DELAY, count)
+            self.assertNotIn("may still be killed", err.getvalue(), count)
+            worst = (count - 1) * hi + count * pb.SEND_ALLOWANCE_SECONDS
+            self.assertLessEqual(round(worst, 6), needed, "%d groups" % count)
+
+    def test_squeezed_lower_bound_also_respects_the_floor(self):
+        for timeout in (373, 420, 600, 900):
+            with redirect_stderr(io.StringIO()):
+                lo, hi = pb.fit_gap_bounds(20.0, 60.0, 20, timeout)
+            self.assertGreaterEqual(lo, pb.MIN_SEND_DELAY, timeout)
+            self.assertLessEqual(lo, hi, timeout)
+
+    def test_a_range_configured_below_the_floor_keeps_its_shape(self):
+        with redirect_stderr(io.StringIO()):
+            lo, hi = pb.fit_gap_bounds(1.0, 3.0, 20, 600)
+        self.assertLess(lo, hi, "a sub-floor range must not be pushed to fixed")
+
+    def test_the_warning_tracks_whether_the_plan_actually_fits(self):
+        """One source of truth: the message is chosen from the planned run's
+        worst case, so no branch can promise a complete run it cannot deliver."""
+        for lo, hi, count, timeout, fits in (
+                (20.0, 60.0, 20, 600, True),    # live jobs today
+                (20.0, 60.0, 20, 300, False),
+                (1.0, 3.0, 20, 120, False),     # range configured below the floor
+        ):
+            with redirect_stderr(io.StringIO()) as err:
+                new_lo, new_hi = pb.fit_gap_bounds(lo, hi, count, timeout)
+            worst = (count - 1) * new_hi + count * pb.SEND_ALLOWANCE_SECONDS
+            budget = timeout * pb.RUN_BUDGET_FRACTION
+            self.assertEqual(worst <= budget + 1e-6, fits, (lo, hi, count, timeout))
+            self.assertEqual("every group still gets" in err.getvalue(), fits,
+                             err.getvalue())
+
     def test_gap_never_shrinks_below_the_floor(self):
         with redirect_stderr(io.StringIO()):
             lo, hi = pb.fit_gap_bounds(20.0, 60.0, 50, 60)

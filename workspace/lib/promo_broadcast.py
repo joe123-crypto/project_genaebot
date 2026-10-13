@@ -645,26 +645,59 @@ def cron_timeout_seconds(script=None):
     return None
 
 
+def min_timeout_seconds(count):
+    """Shortest job timeout a ``count``-group run can fit in, even once its gaps
+    are squeezed to ``MIN_SEND_DELAY``."""
+    if count < 1:
+        return 0.0
+    return (count * SEND_ALLOWANCE_SECONDS
+            + max(0, count - 1) * MIN_SEND_DELAY) / RUN_BUDGET_FRACTION
+
+
 def fit_gap_bounds(lo, hi, count, timeout):
     """Shrink ``(lo, hi)`` so a ``count``-group run plans to finish inside
     ``timeout`` seconds, returning the bounds unchanged when there is room or no
     timeout is known. Both bounds scale by the same factor, so gaps stay random
     instead of collapsing to the fixed cadence this spacing exists to avoid, and
     the upper bound never drops below ``MIN_SEND_DELAY``. Delivering every group
-    with tighter random gaps beats being killed part-way with groups unreached."""
+    with tighter random gaps beats being killed part-way with groups unreached.
+
+    A timeout below :func:`min_timeout_seconds` cannot fit the run even at that
+    floor. Squeezing further would trade the spacing away and still not finish,
+    so the floor stands, the run sends as far as it gets (per-group state keeps a
+    re-run from double-posting) and the warning says so instead of promising a
+    complete run."""
     if not timeout or count < 2 or hi <= 0:
         return (lo, hi)
     room = timeout * RUN_BUDGET_FRACTION - count * SEND_ALLOWANCE_SECONDS
-    allowed = max(MIN_SEND_DELAY, room / (count - 1))
+    allowed = room / (count - 1)
     if allowed >= hi:
         return (lo, hi)
-    new_lo = min(lo * (allowed / hi), allowed)
-    sys.stderr.write(
-        "WARN: this cron job's timeout is %.0f s, too short for %d groups at "
-        "%.0f-%.0f s gaps; spacing them %.0f-%.0f s instead so every group still "
-        "gets today's ad. Re-run deploy/install-*-promo.sh to apply the longer "
-        "timeout and restore the full gaps.\n"
-        % (timeout, count, lo, hi, new_lo, allowed))
+    # Never squeeze below the floor (nor above the configured maximum, for a
+    # range deliberately set tighter than the floor): past that point the
+    # spacing would be traded away without buying a complete run.
+    allowed = max(allowed, min(MIN_SEND_DELAY, hi))
+    # Keep the floor on the lower bound too, so a timeout just above the
+    # feasible minimum cannot produce sub-floor gaps. A range deliberately
+    # configured below the floor keeps its shape instead of being pushed up.
+    new_lo = min(max(lo * (allowed / hi), MIN_SEND_DELAY if lo >= MIN_SEND_DELAY
+                     else 0.0), allowed)
+    if (count - 1) * allowed <= room + 1e-6:
+        sys.stderr.write(
+            "WARN: this cron job's timeout is %.0f s, too short for %d groups at "
+            "%.0f-%.0f s gaps; spacing them %.0f-%.0f s instead so every group "
+            "still gets today's ad. Re-run deploy/install-*-promo.sh to apply the "
+            "longer timeout and restore the full gaps.\n"
+            % (timeout, count, lo, hi, new_lo, allowed))
+    else:
+        sys.stderr.write(
+            "WARN: this cron job's timeout is %.0f s, too short for %d groups "
+            "even at the %.0f s gap floor; spacing them %.0f-%.0f s and the run "
+            "may still be killed before the last groups (a re-run today resumes "
+            "where it stopped). Give the job at least %.0f s "
+            "(PROMO_CRON_TIMEOUT_SECONDS) and re-run deploy/install-*-promo.sh.\n"
+            % (timeout, count, MIN_SEND_DELAY, new_lo, allowed,
+               min_timeout_seconds(count)))
     return (new_lo, allowed)
 
 
