@@ -396,9 +396,15 @@ weekly day, and never on `--dry-run` / `--refs`. Override the bounds with
 `install-promo.sh` registers every promo cron with a 3600 s job timeout
 (`PROMO_CRON_TIMEOUT_SECONDS`; it was 600 s, which would kill a long run). That
 timeout is cron state on the volume: it only changes in production when the six
-`install-*-promo.sh` installers are re-run. Each delivered group is committed to
-the promo's state file immediately, so a run that is killed part-way and re-run the
-same day skips the groups it already reached.
+`install-*-promo.sh` installers are re-run, and no deploy step runs them. So the
+engine does not assume it: at run time it asks the gateway for its own job's
+timeout and, if the run would not fit, tightens the gaps proportionally (keeping
+them random, never below 5 s) and logs a warning naming the installer to re-run.
+A stale timeout therefore delays groups instead of dropping them; re-running the
+installers restores the full 20-60 s gaps and verifies the new timeout landed.
+`PROMO_RUN_TIMEOUT_SECONDS` overrides the lookup (`0` = no limit). Each delivered
+group is committed to the promo's state file immediately, so a run that is killed
+part-way and re-run the same day skips the groups it already reached.
 
 The daily Job Scout turn (`install-job-scout.sh`, 08:00), the five-minute
 `job-scout-approvals` worker, the hourly `job-scout-cv-conversion` pass and the

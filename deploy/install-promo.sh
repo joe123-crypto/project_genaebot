@@ -82,5 +82,20 @@ register_promo_cron() {
     --failure-alert-to "$alert_to" \
     --failure-alert-cooldown 1h >/dev/null
 
-  printf '%s cron registered (%s, %s %s).\n' "$name" "$existing_id" "$cron_expr" "$tz"
+  # Prove the job timeout actually landed on the volume's cron state: the run
+  # spacing in promo_broadcast reads this value back at run time, so a stale
+  # timeout must fail loudly here instead of quietly tightening every run.
+  if ! "${openclaw[@]}" cron list --all --json | jq -e \
+    --arg name "$name" --argjson timeout "$PROMO_CRON_TIMEOUT_SECONDS" \
+    '.jobs[] | select(
+      .name == $name and
+      .enabled == true and
+      .payload.timeoutSeconds == $timeout
+    )' >/dev/null; then
+    printf 'ERROR: %s cron timeout is not %s s.\n' "$name" "$PROMO_CRON_TIMEOUT_SECONDS" >&2
+    return 1
+  fi
+
+  printf '%s cron registered (%s, %s %s, timeout %ss).\n' \
+    "$name" "$existing_id" "$cron_expr" "$tz" "$PROMO_CRON_TIMEOUT_SECONDS"
 }

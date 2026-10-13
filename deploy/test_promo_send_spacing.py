@@ -83,6 +83,7 @@ class SendSpacingTests(unittest.TestCase):
         targets = self.tmp / "targets.json"
         targets.write_text(json.dumps(data))
         kwargs.setdefault("rng", RecordingRng())
+        kwargs.setdefault("cron_timeout", None)  # no gateway lookup in tests
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             return pb.broadcast(text="hi", image=str(self.image),
                                 targets_file=str(targets), state_file=str(self.state),
@@ -144,6 +145,24 @@ class SendSpacingTests(unittest.TestCase):
     def test_inverted_bounds_are_swapped(self):
         self.assertEqual(pb.send_gap_bounds(send_delay_min=60, send_delay_max=20),
                          (20.0, 60.0))
+
+    def test_non_finite_env_falls_back_to_defaults(self):
+        """inf would sleep until the job timeout killed the run; nan used to slip
+        past the negative check and collapse the gap to zero, silently removing
+        the spacing this module exists for."""
+        for value in ("inf", "-inf", "nan", "NaN"):
+            os.environ["PROMO_SEND_DELAY_MIN"] = value
+            os.environ["PROMO_SEND_DELAY_MAX"] = value
+            with redirect_stderr(io.StringIO()) as err:
+                self.assertEqual(pb.send_gap_bounds(), (20.0, 60.0), value)
+            self.assertIn("WARN", err.getvalue(), value)
+
+    def test_non_finite_arguments_fall_back_to_defaults(self):
+        inf = float("inf")
+        with redirect_stderr(io.StringIO()):
+            self.assertEqual(pb.send_gap_bounds(send_delay_min=inf), (20.0, 60.0))
+            self.assertEqual(pb.send_gap_bounds(send_delay=float("nan")),
+                             (20.0, 20.0))
 
     def test_legacy_fixed_send_delay_pins_both_bounds(self):
         rng = RecordingRng()
@@ -232,6 +251,9 @@ class CallerWiringTests(unittest.TestCase):
         self.assertNotIn("--timeout-seconds 600", installer)
         self.assertIn('PROMO_CRON_TIMEOUT_SECONDS="${PROMO_CRON_TIMEOUT_SECONDS:-3600}"',
                       installer)
+        # Re-running an installer must prove the timeout reached the volume's
+        # cron state, not just that the job exists.
+        self.assertIn(".payload.timeoutSeconds == $timeout", installer)
         largest = 0
         for targets in CRON.glob("*-promo/targets.json"):
             data = json.loads(targets.read_text(encoding="utf-8"))
@@ -241,6 +263,140 @@ class CallerWiringTests(unittest.TestCase):
         worst = (largest - 1) * pb.DEFAULT_SEND_DELAY_MAX + largest * 60
         self.assertLess(worst, 3600, "largest promo (%d groups) may exceed the timeout"
                         % largest)
+
+
+class RunTimeoutFitTests(unittest.TestCase):
+    """A promo cron's job timeout lives in the gateway's cron state on the
+    volume, so merging a longer one into deploy/install-promo.sh does not change
+    the live jobs until the installers are re-run -- and no deploy step runs
+    them. Under the old 600 s timeout a 20-group promo at 20-60 s gaps takes
+    ~15 min and would be killed with a third of its groups unreached, every day.
+    The engine therefore reads its own job's timeout and tightens the gaps to
+    fit instead."""
+
+    def test_ample_timeout_leaves_bounds_alone(self):
+        self.assertEqual(pb.fit_gap_bounds(20.0, 60.0, 20, 3600), (20.0, 60.0))
+
+    def test_unknown_or_single_send_is_a_no_op(self):
+        self.assertEqual(pb.fit_gap_bounds(20.0, 60.0, 20, None), (20.0, 60.0))
+        self.assertEqual(pb.fit_gap_bounds(20.0, 60.0, 1, 600), (20.0, 60.0))
+        self.assertEqual(pb.fit_gap_bounds(0.0, 0.0, 20, 600), (0.0, 0.0))
+
+    def test_stale_timeout_tightens_gaps_enough_to_finish(self):
+        with redirect_stderr(io.StringIO()) as err:
+            lo, hi = pb.fit_gap_bounds(20.0, 60.0, 20, 600)
+        self.assertLess(hi, 60.0)
+        self.assertLess(lo, hi, "gaps must stay a random range, not a fixed cadence")
+        self.assertGreater(lo, 0.0)
+        worst = (20 - 1) * hi + 20 * pb.SEND_ALLOWANCE_SECONDS
+        self.assertLessEqual(worst, 600)
+        self.assertIn("install-", err.getvalue())  # names the remedy
+
+    def test_every_promo_size_fits_the_legacy_timeout_when_tightened(self):
+        for count in range(2, 26):
+            with redirect_stderr(io.StringIO()):
+                lo, hi = pb.fit_gap_bounds(20.0, 60.0, count, 600)
+            worst = (count - 1) * hi + count * pb.SEND_ALLOWANCE_SECONDS
+            self.assertLessEqual(worst, 600, "%d groups" % count)
+            self.assertLessEqual(lo, hi, "%d groups" % count)
+
+    def test_gap_never_shrinks_below_the_floor(self):
+        with redirect_stderr(io.StringIO()):
+            lo, hi = pb.fit_gap_bounds(20.0, 60.0, 50, 60)
+        self.assertEqual(hi, pb.MIN_SEND_DELAY)
+        self.assertLessEqual(lo, hi)
+
+    def test_broadcast_tightens_gaps_but_still_sends_every_group(self):
+        tests = SendSpacingTests("test_single_send_never_sleeps")
+        tests.setUp()
+        try:
+            rng = RecordingRng(seed=7)
+            groups = ["%d@g.us" % i for i in range(20)]
+            with redirect_stderr(io.StringIO()):
+                rc = tests._run(groups, rng=rng, cron_timeout=600)
+            self.assertEqual(rc, 0)
+            self.assertEqual(len([e for e in tests.events if e[0] == "send"]), 20)
+            (lo, hi), = set(rng.calls)
+            self.assertLess(hi, 60.0)
+            self.assertLess(lo, hi)
+            run = sum(v for kind, v in tests.events if kind == "sleep") + 20 * 7
+            self.assertLess(run, 600, "tightened run must fit the live timeout")
+        finally:
+            tests.tearDown()
+
+
+class CronTimeoutLookupTests(unittest.TestCase):
+    JOBS = {"jobs": [
+        {"name": "other-promo", "payload": {
+            "argv": ["python3", "/w/cron/other-promo/post_ad.py"],
+            "timeoutSeconds": 123}},
+        {"name": "cv-promo", "payload": {
+            "argv": ["python3", "/home/joseph/.openclaw/workspace/cron/cv-promo/post_cv_ad.py"],
+            "timeoutSeconds": 600}},
+    ]}
+
+    def setUp(self):
+        self._saved_run = pb.subprocess.run
+        self._saved_env = os.environ.pop("PROMO_RUN_TIMEOUT_SECONDS", None)
+
+    def tearDown(self):
+        pb.subprocess.run = self._saved_run
+        if self._saved_env is None:
+            os.environ.pop("PROMO_RUN_TIMEOUT_SECONDS", None)
+        else:
+            os.environ["PROMO_RUN_TIMEOUT_SECONDS"] = self._saved_env
+
+    def _stub(self, stdout="", returncode=0, raises=None):
+        def run(cmd, **kwargs):
+            if raises:
+                raise raises
+            return type("P", (), {"returncode": returncode, "stdout": stdout,
+                                  "stderr": ""})()
+        pb.subprocess.run = run
+
+    def test_reads_the_timeout_of_this_script_s_own_job(self):
+        self._stub(json.dumps(self.JOBS))
+        with redirect_stderr(io.StringIO()):
+            self.assertEqual(
+                pb.cron_timeout_seconds("/any/where/cv-promo/post_cv_ad.py"), 600.0)
+
+    def test_no_matching_job_means_no_limit(self):
+        self._stub(json.dumps(self.JOBS))
+        with redirect_stderr(io.StringIO()):
+            self.assertIsNone(
+                pb.cron_timeout_seconds("/any/where/manual-run/post_ad.py"))
+
+    def test_lookup_failures_are_not_fatal(self):
+        for stub in ({"stdout": "not json"}, {"returncode": 1},
+                     {"raises": OSError("boom")}, {"stdout": "{}"}):
+            self._stub(**stub)
+            with redirect_stderr(io.StringIO()):
+                self.assertIsNone(
+                    pb.cron_timeout_seconds("/w/cv-promo/post_cv_ad.py"), stub)
+
+    def test_job_without_a_timeout_is_unbounded(self):
+        self._stub(json.dumps({"jobs": [{"name": "cv-promo", "payload": {
+            "argv": ["python3", "/w/cron/cv-promo/post_cv_ad.py"]}}]}))
+        with redirect_stderr(io.StringIO()) as err:
+            self.assertIsNone(pb.cron_timeout_seconds("/w/cv-promo/post_cv_ad.py"))
+        self.assertNotIn("timeoutSeconds", err.getvalue())  # absent, not invalid
+
+    def test_a_bare_script_name_matches_nothing(self):
+        """Four promos share the file name post_ad.py, so a path with no promo
+        directory must not match one of them by accident."""
+        self._stub(json.dumps(self.JOBS))
+        self.assertIsNone(pb.cron_timeout_seconds("/post_cv_ad.py"))
+
+    def test_env_override_wins_and_zero_means_unlimited(self):
+        self._stub(json.dumps(self.JOBS))
+        os.environ["PROMO_RUN_TIMEOUT_SECONDS"] = "1200"
+        self.assertEqual(pb.cron_timeout_seconds("/w/cv-promo/post_cv_ad.py"), 1200.0)
+        os.environ["PROMO_RUN_TIMEOUT_SECONDS"] = "0"
+        self.assertIsNone(pb.cron_timeout_seconds("/w/cv-promo/post_cv_ad.py"))
+        os.environ["PROMO_RUN_TIMEOUT_SECONDS"] = "later"
+        with redirect_stderr(io.StringIO()):  # rejected -> falls back to lookup
+            self.assertEqual(pb.cron_timeout_seconds("/w/cv-promo/post_cv_ad.py"),
+                             600.0)
 
 
 if __name__ == "__main__":

@@ -61,7 +61,10 @@ it ships": they live in the gateway's cron state on the volume and change only w
 their `deploy/install-*.sh` installer is re-run (via `deploy/gateway-exec.sh`, i.e.
 `railway ssh`). For example, the promo crons' 3600 s job timeout set in
 `deploy/install-promo.sh` reaches production only after the six
-`install-*-promo.sh` installers run again.
+`install-*-promo.sh` installers run again; each installer now verifies the
+timeout it registered is the one the gateway reports back, and the promo engine
+reads that live value at run time so a not-yet-migrated job tightens its send
+gaps rather than being killed with groups unreached (see README).
 
 ## One-time wiring (must be done in the dashboards; the CLI cannot do these)
 
