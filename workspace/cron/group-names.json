@@ -1,0 +1,46 @@
+{
+  "_comment": "Human names for the WhatsApp groups the bot is in, keyed by group JID. This file is the source of truth for group names: the gateway only learns a group's name from WhatsApp itself and shows most of these groups blank, and names must NOT be written into the gateway's session database (doing so took the bot down on 2026-10-14). name is null when nobody has supplied one yet. source says where the name came from: whatsapp (the gateway's own record), operator (given by the operator), git (recorded in the commit that added the group to a promo), notes (older operator notes, unconfirmed). status is optional: on-hold (do not advertise there until the operator says so), admin-only (only admins can post, so sends are refused), not-a-member (sends fail with item-not-found; the bot is probably no longer in it). Print the full list with workspace/bin/list-groups.",
+  "groups": {
+    "120363275485319265@g.us": {"name": "Bindura Town  Business💰💻📱🚙", "source": "whatsapp"},
+    "120363175904566195@g.us": {"name": "Bindura Hustlers 24/7", "source": "whatsapp"},
+    "120363364576432272@g.us": {"name": "Shamva Bindura & Madziva", "source": "whatsapp"},
+    "120363400161887838@g.us": {"name": "Glendale Hustlers 24/7", "source": "whatsapp"},
+    "120363407177302513@g.us": {"name": "Vacancy Lamp", "source": "whatsapp"},
+    "120363166672509962@g.us": {"name": "MUTANDIRI VILLAGE RESIDENTS", "source": "whatsapp"},
+    "120363428165196397@g.us": {"name": "ZVIRIKUITIKA MUBINDURA NEMASHONALAND CENTRAL YESE", "source": "whatsapp"},
+    "120363417642755000@g.us": {"name": "ZVIRIKUITIKA MUSHAMVA", "source": "whatsapp"},
+    "120363422964450745@g.us": {"name": "UNI-MARKETING HUB", "source": "whatsapp", "status": "on-hold"},
+
+    "120363403898552868@g.us": {"name": "Hatcliffe Community Newspaper..(HCN)", "source": "git"},
+    "120363292471414376@g.us": {"name": "Buying and Selling", "source": "git"},
+    "120363411788614990@g.us": {"name": "Zim Mining Company", "source": "git"},
+    "120363374641440124@g.us": {"name": "TerraTones Advertising", "source": "git"},
+    "120363411842576299@g.us": {"name": "Bulawayo all links, yonkinto", "source": "git"},
+
+    "120363426924923592@g.us": {"name": "All link and groups", "source": "operator"},
+    "120363206130909900@g.us": {"name": "Inter-province Hustlers 2", "source": "operator"},
+    "120363427709161501@g.us": {"name": "Hustlers marketplace", "source": "operator"},
+    "120363414718035443@g.us": {"name": "ZIMBABWE UPDATE BYO", "source": "operator"},
+    "120363410412233096@g.us": {"name": "CHIREDZI LOWVELD HUSTLERS GRP 7", "source": "operator"},
+    "120363217323303430@g.us": {"name": "MASVINGO CBD BUYING AND SELLING GRP 4", "source": "operator"},
+    "120363411912048298@g.us": {"name": "GROUP LINKS AND CHATS", "source": "operator"},
+    "120363316754839191@g.us": {"name": "Business in Mutare", "source": "operator"},
+    "263785811799-1594293610@g.us": {"name": "God Did", "source": "operator"},
+    "120363427221695541@g.us": {"name": "CHIKOMBEDZI MARKETPLACE", "source": "operator"},
+
+    "120363429214832655@g.us": {"name": "Algeria Exhibitions", "source": "notes"},
+
+    "120363426951301193@g.us": {"name": null},
+    "120363168421689199@g.us": {"name": null},
+    "120363428938298524@g.us": {"name": null},
+    "120363413442071640@g.us": {"name": null},
+    "120363423293113897@g.us": {"name": null, "status": "admin-only"},
+    "120363406180229523@g.us": {"name": null, "status": "admin-only"},
+    "120363427198843381@g.us": {"name": null, "status": "admin-only"},
+    "120363157571427036@g.us": {"name": null, "status": "admin-only"},
+    "120363427762371217@g.us": {"name": null, "status": "admin-only"},
+    "120363406036971278@g.us": {"name": null, "status": "admin-only"},
+    "120363427719606842@g.us": {"name": null, "status": "not-a-member"},
+    "263778902081-1542199190@g.us": {"name": null, "status": "not-a-member"}
+  }
+}
