@@ -60,7 +60,7 @@ Cron job definitions (schedule, command, job timeout) are the exception to "merg
 it ships": they live in the gateway's cron state on the volume and change only when
 their `deploy/install-*.sh` installer is re-run (via `deploy/gateway-exec.sh`, i.e.
 `railway ssh`). For example, the promo crons' 3600 s job timeout set in
-`deploy/install-promo.sh` reaches production only after the six
+`deploy/install-promo.sh` reaches production only after the seven
 `install-*-promo.sh` installers run again; each installer now verifies the
 timeout it registered is the one the gateway reports back, and the promo engine
 reads that live value at run time so a not-yet-migrated job tightens its send

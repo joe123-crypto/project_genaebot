@@ -7,10 +7,11 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 TARGETS = ROOT / "workspace/cron/genaie-promo/targets.json"
 
-# WhatsApp group JID: a numeric id suffixed with @g.us. The daily Genaie-services
+# WhatsApp group JID: a numeric id suffixed with @g.us (old-style groups carry
+# a second numeric part, e.g. 263785811799-1594293610@g.us). The daily Genaie-services
 # ad only delivers when every target is a group the bot is a member of; invite
 # links are not resolvable on this gateway, so the list must be JIDs.
-GROUP_JID = re.compile(r"^\d+@g\.us$")
+GROUP_JID = re.compile(r"^\d+(-\d+)?@g\.us$")
 
 
 class GenaiePromoTargetsTests(unittest.TestCase):
@@ -30,7 +31,7 @@ class GenaiePromoTargetsTests(unittest.TestCase):
             self.assertRegex(
                 entry,
                 GROUP_JID,
-                f"group is not a valid WhatsApp group JID (expected <digits>@g.us): {entry!r}",
+                f"group is not a valid WhatsApp group JID (expected <digits>@g.us or <digits>-<digits>@g.us): {entry!r}",
             )
 
     def test_groups_are_unique(self) -> None:

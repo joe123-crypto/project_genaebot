@@ -367,6 +367,12 @@ updates it; run one only when its schedule or command changes. All times are
   lemon; retail/wholesale pricing) to the WhatsApp group JIDs listed in
   `workspace/cron/fruit-trees-promo/targets.json`, reusing the same shared
   `promo_broadcast` delivery engine
+- **`appliance-repairs-promo`** (`install-appliance-repairs-promo.sh`, 10:00) runs
+  `workspace/cron/appliance-repairs-promo/post_ad.py`, a deterministic (no-agent) job
+  that posts the fixed APPLIANCE REPAIRS PL ad (a Harare repair shop: TVs, inverters,
+  batteries, welding machines, borehole drives, microwaves, PA systems) to the
+  WhatsApp group JIDs listed in `workspace/cron/appliance-repairs-promo/targets.json`,
+  reusing the same shared `promo_broadcast` delivery engine
 - **`borehole-drilling-promo`** (`install-borehole-drilling-promo.sh`, 08:00) runs
   `workspace/cron/borehole-drilling-promo/post_ad.py`, a deterministic (no-agent) job
   that posts the fixed solar-borehole installation ad (0.75HP/1HP/1.5HP/2HP DC pump
@@ -380,7 +386,7 @@ updates it; run one only when its schedule or command changes. All times are
   to only on their configured weekdays, which is how MUTANDIRI VILLAGE RESIDENTS gets
   the ad three times a week (Mon, Wed and Fri)
 
-All six promo crons rotate between caption variants (the original operator copy
+All seven promo crons rotate between caption variants (the original operator copy
 plus rewordings with identical facts; three each, four for the borehole promo) and
 carry a per-group tracking link. See *Promo caption rotation and ad ref tracking*
 below.
@@ -395,7 +401,7 @@ weekly day, and never on `--dry-run` / `--refs`. Override the bounds with
 ~20-group promo therefore runs for ~15 min typically and ~23 min at worst, so
 `install-promo.sh` registers every promo cron with a 3600 s job timeout
 (`PROMO_CRON_TIMEOUT_SECONDS`; it was 600 s, which would kill a long run). That
-timeout is cron state on the volume: it only changes in production when the six
+timeout is cron state on the volume: it only changes in production when the seven
 `install-*-promo.sh` installers are re-run, and no deploy step runs them. So the
 engine does not assume it: at run time it asks the gateway for its own job's
 timeout and, if the run would not fit, tightens the gaps proportionally (keeping
@@ -439,6 +445,7 @@ may instead place the link itself with the `{ref_link}` / `{ref}` placeholders.
 
 | Promo | Prefix | Link target |
 |---|---|---|
+| appliance-repairs-promo | AR | +263713911390 (the repair shop) |
 | borehole-drilling-promo | BH | +263785632943 (bot) |
 | building-materials-promo | BM | +263785632943 (bot) |
 | cv-promo | CV | +263785632943 (bot) |
@@ -457,11 +464,15 @@ When a DM carrying a ref reaches the bot, the public-service-gate plugin counts 
 in `runtime/public-service-gate/ad-refs.json` (`count`, `uniqueSenders`,
 `firstSeen`, `lastSeen` per ref; senders stored only as a short one-way hash).
 Recording is observe-only and never changes the reply; admin DMs and group
-messages are not counted. Every promo links to the bot's own number, so every
-reply is counted and answered by the bot, which forwards partner orders (fruit
-trees, building materials) to the partner when it hands the customer off. Keep the prefix list in
-`workspace/plugins/public-service-gate/lib/ad-refs.js` in sync with the promos'
-`TRACKING` prefixes (a test enforces this).
+messages are not counted. Every promo except `appliance-repairs-promo` links to
+the bot's own number, so every reply is counted and answered by the bot, which
+forwards partner orders (fruit trees, building materials) to the partner when it
+hands the customer off. The appliance-repairs link goes to the repair shop's own
+number with the prefilled text `Saw your post from Genaie ads (ref AR-XXX)`, so
+those replies never reach the bot and are not counted here; the shop sees the ref.
+Keep the prefix list in `workspace/plugins/public-service-gate/lib/ad-refs.js` in
+sync with the `TRACKING` prefixes of the promos that link to the bot (a test
+enforces this).
 
 ## Config Changes
 

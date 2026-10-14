@@ -76,6 +76,13 @@
 !workspace/cron/fruit-trees-promo/assets/
 !workspace/cron/fruit-trees-promo/assets/*.jpg
 
+# Appliance-repairs promo campaign (APPLIANCE REPAIRS PL): editable target list +
+# the ad image (developer-owned, deployed with the workspace). Daily 10:00
+# Africa/Harare cron.
+!workspace/cron/appliance-repairs-promo/targets.json
+!workspace/cron/appliance-repairs-promo/assets/
+!workspace/cron/appliance-repairs-promo/assets/*.jpg
+
 # Borehole-drilling promo campaign: editable target list + the rotating ad images
 # (developer-owned, deployed with the workspace). Daily 08:00 Africa/Harare cron.
 !workspace/cron/borehole-drilling-promo/targets.json
