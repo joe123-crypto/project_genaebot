@@ -1,5 +1,5 @@
 """Caption rotation + per-group tracking links in the shared promo engine
-(workspace/lib/promo_broadcast.py) and their wiring in the six promo crons.
+(workspace/lib/promo_broadcast.py) and their wiring in the seven promo crons.
 
 unittest-style (not pytest fixtures) so deploy/ci-check.sh, which runs each test
 file with plain ``python3``, actually executes these.
@@ -29,9 +29,13 @@ import promo_broadcast as pb  # noqa: E402
 import json_store  # noqa: E402
 
 BOT_NUMBER = "+263785632943"
+# APPLIANCE REPAIRS PL's own WhatsApp number: the one promo whose link does not
+# go to the bot, so its replies never reach the plugin's ad-ref recorder.
+APPLIANCE_REPAIRS_NUMBER = "+263713911390"
 
 # promo dir -> (script, expected tracking prefix, expected link target)
 PROMOS = {
+    "appliance-repairs-promo": ("post_ad.py", "AR", APPLIANCE_REPAIRS_NUMBER),
     "borehole-drilling-promo": ("post_ad.py", "BH", BOT_NUMBER),
     "building-materials-promo": ("post_ad.py", "BM", BOT_NUMBER),
     "cv-promo": ("post_cv_ad.py", "CV", BOT_NUMBER),
@@ -259,7 +263,10 @@ class RefCodeTests(unittest.TestCase):
         m = re.search(r"AD_REF_PREFIXES = \[([^\]]*)\]", src)
         self.assertIsNotNone(m)
         plugin_prefixes = set(re.findall(r'"([A-Z]+)"', m.group(1)))
-        self.assertEqual(plugin_prefixes, {p for _, p, _ in PROMOS.values()})
+        # Only replies sent to the bot can be counted by the plugin, so a promo
+        # that links to a third party's number stays out of its prefix list.
+        self.assertEqual(plugin_prefixes,
+                         {p for _, p, n in PROMOS.values() if n == BOT_NUMBER})
         self.assertIn("[0-9A-HJKMNP-TV-Z]{%d}" % pb.REF_CODE_LEN, src)
 
 
@@ -339,14 +346,21 @@ class PromoWiringTests(unittest.TestCase):
             m = load_promo(name)
             self.assertEqual(m.TRACKING["prefix"], prefix, name)
             self.assertEqual(m.TRACKING["number"], number, name)
-            # The link must point at a number the ad itself already advertises.
-            self.assertIn(pb.wa_digits(number), pb.wa_digits(m.POST_TEXT), name)
+            # The link must point at a number the ad itself already advertises,
+            # printed either internationally (+263 71 ...) or locally (071 ...).
+            digits = pb.wa_digits(number)
+            printed = pb.wa_digits(m.POST_TEXT)
+            self.assertTrue(
+                digits in printed
+                or (digits.startswith("263") and "0" + digits[3:] in printed),
+                "%s: link number is not in the ad" % name)
 
     def _run(self, name, args, day=date(2026, 10, 9)):
         m = load_promo(name)
         saved_argv, saved_date = sys.argv, pb.date
         with tempfile.TemporaryDirectory() as tmp:
             state_env = {
+                "appliance-repairs-promo": "APPLIANCE_REPAIRS_STATE",
                 "borehole-drilling-promo": "BOREHOLE_STATE",
                 "building-materials-promo": "BUILDING_MATERIALS_STATE",
                 "cv-promo": "CV_PROMO_STATE",
