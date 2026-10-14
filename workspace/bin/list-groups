@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+"""Print every known WhatsApp group with its name and the promos that target it.
+
+Read-only: reads workspace/cron/group-names.json (JID -> name/status) and every
+workspace/cron/*-promo/targets.json, and prints a table grouped as named/unnamed
+x in/not in a promo. It never contacts the gateway and never writes anything, so
+it is safe to run locally or on the gateway. A JID that a promo targets but the
+names file does not list is shown as "(not in names file)" so it can be added.
+
+Usage:
+  list-groups          table
+  list-groups --json   one JSON object per group (jid, name, source, status, promos)
+
+Std-lib only.
+"""
+
+import json
+import sys
+from pathlib import Path
+
+WORKSPACE = Path(__file__).resolve().parents[1]
+CRON = WORKSPACE / "cron"
+NAMES_FILE = CRON / "group-names.json"
+
+
+def load_names():
+    data = json.loads(NAMES_FILE.read_text(encoding="utf-8"))
+    return data.get("groups", {})
+
+
+def load_promos():
+    """{jid: [promo labels]}; weekly-limited groups are labelled with their days."""
+    promos = {}
+    for targets in sorted(CRON.glob("*-promo/targets.json")):
+        promo = targets.parent.name[: -len("-promo")]
+        data = json.loads(targets.read_text(encoding="utf-8"))
+        weekly = data.get("weekly_groups") or {}
+        for jid in data.get("groups", []):
+            promos.setdefault(jid, []).append(promo)
+        for jid, days in weekly.items():
+            if isinstance(days, (str, int)):
+                days = [days]
+            label = "%s (%s only)" % (promo, ", ".join(str(d) for d in days))
+            entries = promos.setdefault(jid, [])
+            if promo in entries:
+                entries[entries.index(promo)] = label
+            else:
+                entries.append(label)
+    return promos
+
+
+def rows():
+    names = load_names()
+    promos = load_promos()
+    out = []
+    for jid in sorted(set(names) | set(promos)):
+        info = names.get(jid)
+        out.append({
+            "jid": jid,
+            "name": info.get("name") if info else None,
+            "source": info.get("source") if info else None,
+            "status": info.get("status") if info else None,
+            "in_names_file": info is not None,
+            "promos": promos.get(jid, []),
+        })
+    return out
+
+
+SECTIONS = [
+    ("Named, in promos", lambda r: r["name"] and r["promos"]),
+    ("Named, not in any promo", lambda r: r["name"] and not r["promos"]),
+    ("Unnamed, in promos", lambda r: not r["name"] and r["promos"]),
+    ("Unnamed, not in any promo", lambda r: not r["name"] and not r["promos"]),
+]
+
+
+def print_table(all_rows):
+    for title, keep in SECTIONS:
+        section = sorted((r for r in all_rows if keep(r)),
+                         key=lambda r: ((r["name"] or "").casefold(), r["jid"]))
+        print("%s (%d)" % (title, len(section)))
+        for r in section:
+            if r["name"]:
+                label = r["name"]
+            elif r["in_names_file"]:
+                label = "-"
+            else:
+                label = "(not in names file)"
+            notes = []
+            if r["status"]:
+                notes.append(r["status"])
+            if r["source"] and r["source"] != "whatsapp":
+                notes.append("name from %s" % r["source"])
+            print("  %-50s %-30s %s%s" % (
+                label, r["jid"],
+                ", ".join(r["promos"]) or "-",
+                ("  [%s]" % "; ".join(notes)) if notes else ""))
+        print()
+    print("Total: %d groups" % len(all_rows))
+
+
+def main(argv):
+    all_rows = rows()
+    if "--json" in argv:
+        for r in all_rows:
+            print(json.dumps(r, ensure_ascii=False))
+    else:
+        print_table(all_rows)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

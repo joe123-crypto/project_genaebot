@@ -76,6 +76,9 @@
 !workspace/cron/fruit-trees-promo/assets/
 !workspace/cron/fruit-trees-promo/assets/*.jpg
 
+# Group JID -> name map shared by all the promos (read by workspace/bin/list-groups).
+!workspace/cron/group-names.json
+
 # Appliance-repairs promo campaign (APPLIANCE REPAIRS PL): editable target list +
 # the ad image (developer-owned, deployed with the workspace). Daily 10:00
 # Africa/Harare cron.
