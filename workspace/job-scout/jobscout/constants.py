@@ -61,4 +61,7 @@ DEFAULT_GROUP_FEED_INVITE_URL = "https://chat.whatsapp.com/JZvh9lwFOvc3N2sSs8F1Q
 DEFAULT_GROUP_FEED_CACHE_MAX_AGE_SECONDS = 6 * 60 * 60
 DEFAULT_GROUP_FEED_LIMIT = 80
 DEFAULT_GROUP_FEED_MAX_MESSAGES = 5
-DEFAULT_GROUP_FEED_SEND_DELAY_SECONDS = 3.0
+# Gap between group-feed sends is drawn at random from [min, max] so the posts
+# do not land on a machine-regular cadence (see promo_broadcast, #108).
+DEFAULT_GROUP_FEED_SEND_DELAY_SECONDS = 20.0
+DEFAULT_GROUP_FEED_SEND_DELAY_MAX_SECONDS = 60.0

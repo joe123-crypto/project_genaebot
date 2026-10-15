@@ -832,11 +832,57 @@ class GroupFeedTests(unittest.TestCase):
       self.assertEqual(sleep.call_count, jobscout.constants.DEFAULT_GROUP_FEED_MAX_MESSAGES - 1)
       sleep.assert_called_with(5.0)
 
+  def test_deliver_group_feed_draws_each_gap_from_the_configured_range(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      candidates = [
+        self.candidate(
+          candidateId=f"job-{index}",
+          sourceUrl=f"https://vacancymail.co.zw/jobs/role-{index}/",
+        )
+        for index in range(20)
+      ]
+      jobscout.group_feed.write_group_feed_cache("cache-run", candidates, {}, root)
+      args = argparse.Namespace(
+        target="120363000000000000@g.us",
+        invite_url="https://chat.whatsapp.com/example",
+        group_feed_root=root,
+        cache_max_age_seconds=3600,
+        max_messages=jobscout.constants.DEFAULT_GROUP_FEED_MAX_MESSAGES,
+        send_delay_seconds=20,
+        send_delay_max_seconds=60,
+        dry_run=False,
+      )
+      with mock.patch.object(jobscout.commands_group_feed, "send_whatsapp_message", return_value={"messageId": "wa"}), \
+           mock.patch.object(jobscout.commands_group_feed.random, "uniform", side_effect=[21.5, 47.0, 33.3, 59.9]) as uniform, \
+           mock.patch.object(jobscout.commands_group_feed.time, "sleep") as sleep:
+        result = job_scout.cmd_deliver_group_feed(args)
+
+      self.assertTrue(result["ok"])
+      gaps = jobscout.constants.DEFAULT_GROUP_FEED_MAX_MESSAGES - 1
+      self.assertEqual(uniform.call_count, gaps)
+      for call in uniform.call_args_list:
+        self.assertEqual(call.args, (20.0, 60.0))
+      self.assertEqual([call.args[0] for call in sleep.call_args_list], [21.5, 47.0, 33.3, 59.9][:gaps])
+
+  def test_group_feed_gap_bounds_reject_bad_values(self) -> None:
+    bounds = jobscout.commands_group_feed.send_gap_bounds
+    default_min = jobscout.constants.DEFAULT_GROUP_FEED_SEND_DELAY_SECONDS
+    self.assertEqual(bounds(argparse.Namespace(send_delay_seconds=20, send_delay_max_seconds=60)), (20.0, 60.0))
+    # No max (older callers) or a max below the min pins the gap to the min.
+    self.assertEqual(bounds(argparse.Namespace(send_delay_seconds=5)), (5.0, 5.0))
+    self.assertEqual(bounds(argparse.Namespace(send_delay_seconds=30, send_delay_max_seconds=10)), (30.0, 30.0))
+    self.assertEqual(bounds(argparse.Namespace(send_delay_seconds=0, send_delay_max_seconds=0)), (0.0, 0.0))
+    # Non-finite or negative values fall back instead of sleeping forever or not at all.
+    self.assertEqual(bounds(argparse.Namespace(send_delay_seconds=float("nan"), send_delay_max_seconds=60)), (default_min, 60.0))
+    self.assertEqual(bounds(argparse.Namespace(send_delay_seconds=-1, send_delay_max_seconds=float("inf"))), (default_min, default_min))
+
   def test_deliver_group_feed_default_cap_is_applied_via_parser(self) -> None:
     parser = job_scout.build_parser()
     args = parser.parse_args(["deliver-group-feed", "--target", "120363000000000000@g.us"])
     self.assertEqual(args.max_messages, jobscout.constants.DEFAULT_GROUP_FEED_MAX_MESSAGES)
     self.assertEqual(args.send_delay_seconds, jobscout.constants.DEFAULT_GROUP_FEED_SEND_DELAY_SECONDS)
+    self.assertEqual(args.send_delay_max_seconds, jobscout.constants.DEFAULT_GROUP_FEED_SEND_DELAY_MAX_SECONDS)
     self.assertIsNone(args.invite_url)
     self.assertFalse(args.refresh_if_stale)
 
