@@ -82,17 +82,27 @@ register_promo_cron() {
     --failure-alert-to "$alert_to" \
     --failure-alert-cooldown 1h >/dev/null
 
-  # Prove the job timeout actually landed on the volume's cron state: the run
-  # spacing in promo_broadcast reads this value back at run time, so a stale
-  # timeout must fail loudly here instead of quietly tightening every run.
+  # Prove the schedule and job timeout actually landed on the volume's cron
+  # state. The run spacing in promo_broadcast reads the timeout back at run
+  # time, so a stale one must fail loudly here instead of quietly tightening
+  # every run; and because the schedule is the thing these installers exist to
+  # change (a merge to main never re-registers a cron), a stale --cron/--tz has
+  # to fail here too -- nothing else would catch it.
   if ! "${openclaw[@]}" cron list --all --json | jq -e \
-    --arg name "$name" --argjson timeout "$PROMO_CRON_TIMEOUT_SECONDS" \
+    --arg name "$name" --arg expr "$cron_expr" --arg tz "$tz" \
+    --argjson timeout "$PROMO_CRON_TIMEOUT_SECONDS" \
     '.jobs[] | select(
       .name == $name and
       .enabled == true and
+      .schedule.expr == $expr and
+      .schedule.tz == $tz and
       .payload.timeoutSeconds == $timeout
     )' >/dev/null; then
-    printf 'ERROR: %s cron timeout is not %s s.\n' "$name" "$PROMO_CRON_TIMEOUT_SECONDS" >&2
+    printf 'ERROR: %s cron did not land as "%s" %s with a %ss timeout. Current state:\n' \
+      "$name" "$cron_expr" "$tz" "$PROMO_CRON_TIMEOUT_SECONDS" >&2
+    "${openclaw[@]}" cron list --all --json | jq -r --arg name "$name" \
+      '.jobs[] | select(.name == $name) |
+       "  schedule=\(.schedule.expr) tz=\(.schedule.tz) timeout=\(.payload.timeoutSeconds) enabled=\(.enabled)"' >&2
     return 1
   fi
 

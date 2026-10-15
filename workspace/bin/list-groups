@@ -1,111 +1,153 @@
 #!/usr/bin/env python3
-"""Print every known WhatsApp group with its name and the promos that target it.
+"""Print every known WhatsApp group with its name, today's ad cap and the promos
+that target it.
 
-Read-only: reads workspace/cron/group-names.json (JID -> name/status) and every
-workspace/cron/*-promo/targets.json, and prints a table grouped as named/unnamed
-x in/not in a promo. It never contacts the gateway and never writes anything, so
-it is safe to run locally or on the gateway. A JID that a promo targets but the
-names file does not list is shown as "(not in names file)" so it can be added.
+Read-only: reads workspace/cron/membership.json (the single source of truth for
+groups, names, statuses and promo membership) and, when it is readable, the
+ad-reply counters the caps are derived from. It never contacts the gateway and
+never writes anything, so it is safe to run locally or on the gateway.
 
 Usage:
-  list-groups          table
-  list-groups --json   one JSON object per group (jid, name, source, status, promos)
+  list-groups            table
+  list-groups --json     one JSON object per group
+  list-groups --caps     show today's cap, tier, reply score and which promos
+                         today's rotation gives the allowance to
+  list-groups --date YYYY-MM-DD   evaluate the caps for another day
 
 Std-lib only.
 """
 
-import json
+import os
 import sys
+import json
+from datetime import date
 from pathlib import Path
 
 WORKSPACE = Path(__file__).resolve().parents[1]
-CRON = WORKSPACE / "cron"
-NAMES_FILE = CRON / "group-names.json"
+LIB_DIR = str(WORKSPACE / "lib")
+if LIB_DIR not in sys.path:
+    sys.path.insert(0, LIB_DIR)
+
+import promo_membership  # noqa: E402
+import promo_caps  # noqa: E402
+
+MEMBERSHIP = promo_membership.default_path(str(WORKSPACE))
 
 
-def load_names():
-    data = json.loads(NAMES_FILE.read_text(encoding="utf-8"))
-    return data.get("groups", {})
+def parse_args(argv):
+    opts = {"json": "--json" in argv, "caps": "--caps" in argv, "day": date.today()}
+    if "--date" in argv:
+        raw = argv[argv.index("--date") + 1] if len(argv) > argv.index("--date") + 1 else ""
+        try:
+            opts["day"] = date(*(int(p) for p in raw.split("-")))
+        except (TypeError, ValueError):
+            sys.stderr.write("ERROR: --date wants YYYY-MM-DD, got %r\n" % raw)
+            return None
+        opts["caps"] = True
+    return opts
 
 
-def load_promos():
-    """{jid: [promo labels]}; weekly-limited groups are labelled with their days."""
-    promos = {}
-    for targets in sorted(CRON.glob("*-promo/targets.json")):
-        promo = targets.parent.name[: -len("-promo")]
-        data = json.loads(targets.read_text(encoding="utf-8"))
-        weekly = data.get("weekly_groups") or {}
-        for jid in data.get("groups", []):
-            promos.setdefault(jid, []).append(promo)
-        for jid, days in weekly.items():
-            if isinstance(days, (str, int)):
-                days = [days]
-            label = "%s (%s only)" % (promo, ", ".join(str(d) for d in days))
-            entries = promos.setdefault(jid, [])
-            if promo in entries:
-                entries[entries.index(promo)] = label
-            else:
-                entries.append(label)
-    return promos
-
-
-def rows():
-    names = load_names()
-    promos = load_promos()
+def rows(m, day, want_caps):
+    """One dict per group, in membership order. ``promos`` labels weekly-limited
+    promos with their weekdays, as the targets files record them."""
+    decisions = {}
+    if want_caps:
+        # Never records a snapshot: this tool is strictly read-only.
+        decisions = promo_caps.plan(m, list(promo_membership.groups(m)), day=day,
+                                    record=False)
     out = []
-    for jid in sorted(set(names) | set(promos)):
-        info = names.get(jid)
+    for jid, entry in promo_membership.groups(m).items():
+        weekly = entry.get("weekly") or {}
+        labels = []
+        for promo in entry.get("promos") or []:
+            days = weekly.get(promo)
+            labels.append("%s (%s only)" % (promo, ", ".join(str(d) for d in days))
+                          if days else promo)
+        info = decisions.get(jid) or {}
         out.append({
             "jid": jid,
-            "name": info.get("name") if info else None,
-            "source": info.get("source") if info else None,
-            "status": info.get("status") if info else None,
-            "in_names_file": info is not None,
-            "promos": promos.get(jid, []),
+            "name": entry.get("name"),
+            "source": entry.get("source"),
+            "status": promo_membership.status_of(entry),
+            "activity": promo_membership.activity_of(m, entry),
+            "daily_cap_override": entry.get("daily_cap"),
+            "promos": labels,
+            "note": entry.get("note"),
+            "cap": info.get("cap"),
+            "reply_score": info.get("score"),
+            "allowed_today": info.get("allowed"),
         })
     return out
 
 
 SECTIONS = [
-    ("Named, in promos", lambda r: r["name"] and r["promos"]),
-    ("Named, not in any promo", lambda r: r["name"] and not r["promos"]),
-    ("Unnamed, in promos", lambda r: not r["name"] and r["promos"]),
-    ("Unnamed, not in any promo", lambda r: not r["name"] and not r["promos"]),
+    ("Advertising now", lambda r: r["status"] == "active" and r["promos"]),
+    ("Active, in no promo", lambda r: r["status"] == "active" and not r["promos"]),
+    ("Not advertised to", lambda r: r["status"] != "active"),
 ]
 
 
-def print_table(all_rows):
+def print_table(all_rows, m, day, want_caps):
+    print("Membership: %s" % os.path.relpath(MEMBERSHIP, WORKSPACE.parent))
+    bands = promo_membership.bands(m)
+    print("Caps: %s  bands: %s" % (
+        "ON" if promo_membership.caps_enabled(m) else "off (caps_enabled is false)",
+        ", ".join("%s %d-%d" % (t, lo, hi) for t, (lo, hi) in sorted(bands.items()))))
+    if want_caps:
+        print("Caps evaluated for %s" % day.isoformat())
+    print()
     for title, keep in SECTIONS:
-        section = sorted((r for r in all_rows if keep(r)),
-                         key=lambda r: ((r["name"] or "").casefold(), r["jid"]))
+        section = [r for r in all_rows if keep(r)]
         print("%s (%d)" % (title, len(section)))
         for r in section:
-            if r["name"]:
-                label = r["name"]
-            elif r["in_names_file"]:
-                label = "-"
-            else:
-                label = "(not in names file)"
+            label = r["name"] or "-"
             notes = []
-            if r["status"]:
+            if r["status"] != "active":
                 notes.append(r["status"])
             if r["source"] and r["source"] != "whatsapp":
                 notes.append("name from %s" % r["source"])
+            if r["daily_cap_override"] is not None:
+                notes.append("cap pinned to %s" % r["daily_cap_override"])
             print("  %-50s %-30s %s%s" % (
-                label, r["jid"],
-                ", ".join(r["promos"]) or "-",
+                label, r["jid"], ", ".join(r["promos"]) or "-",
                 ("  [%s]" % "; ".join(notes)) if notes else ""))
+            if want_caps and r["status"] == "active" and r["promos"]:
+                allowed = r["allowed_today"]
+                print("  %-50s %-30s cap %s/day (%d promos)  tier %s  replies %.1f -> %s"
+                      % ("", "", r["cap"], len(r["promos"]), r["activity"],
+                         r["reply_score"] or 0.0,
+                         ", ".join(allowed) if allowed else "nothing"))
         print()
-    print("Total: %d groups" % len(all_rows))
+    active = [r for r in all_rows if r["status"] == "active" and r["promos"]]
+    sends = sum(len(r["allowed_today"] or []) for r in active) if want_caps else None
+    print("Total: %d groups (%d advertised to)" % (len(all_rows), len(active)))
+    if want_caps:
+        print("Ads scheduled for %s under these caps: %d" % (day.isoformat(), sends))
 
 
 def main(argv):
-    all_rows = rows()
-    if "--json" in argv:
+    opts = parse_args(argv)
+    if opts is None:
+        return 2
+    try:
+        m = promo_membership.load(MEMBERSHIP)
+    except ValueError as ex:
+        sys.stderr.write("ERROR: %s\n" % ex)
+        return 1
+    if m is None:
+        sys.stderr.write("ERROR: membership file not found: %s\n" % MEMBERSHIP)
+        return 1
+    errors = promo_membership.validate(m)
+    for e in errors:
+        sys.stderr.write("WARN: membership.json: %s\n" % e)
+
+    want_caps = opts["caps"] or opts["json"]
+    all_rows = rows(m, opts["day"], want_caps)
+    if opts["json"]:
         for r in all_rows:
             print(json.dumps(r, ensure_ascii=False))
     else:
-        print_table(all_rows)
+        print_table(all_rows, m, opts["day"], opts["caps"])
     return 0
 
 

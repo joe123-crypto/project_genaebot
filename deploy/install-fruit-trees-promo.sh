@@ -12,7 +12,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/install-promo.sh"
 
 register_promo_cron \
   "fruit-trees-promo" \
-  "${FRUIT_TREES_PROMO_CRON_EXPR:-0 9 * * *}" \
+  "${FRUIT_TREES_PROMO_CRON_EXPR:-40 8 * * *}" \
   "${FRUIT_TREES_PROMO_TZ:-Africa/Harare}" \
   "${FRUIT_TREES_PROMO_FAILURE_ALERT_TO:-+263785632943}" \
   "/home/joseph/.openclaw/workspace/cron/fruit-trees-promo/post_ad.py"

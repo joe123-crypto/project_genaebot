@@ -1,0 +1,471 @@
+{
+  "_comment": "Single source of truth for the WhatsApp groups the bot advertises in. The seven workspace/cron/*-promo/targets.json files are GENERATED from this file by workspace/bin/make-promo-targets; CI fails if they drift, so edit here and regenerate. Group names live here because the gateway only learns a name from WhatsApp itself and shows most of these groups blank, and names must NOT be written into the gateway's session database (doing so took the bot down on 2026-10-14). Membership cannot be listed via the gateway: new groups are discovered by hand from the WhatsApp sender-key store (credentials/whatsapp/default/sender-key-<jid>...) and recorded here. status gates generation -- only 'active' groups are advertised to, while 'promos' is kept even for a paused group so resuming it needs only a status flip. activity sets the daily-ad band (see defaults.bands); daily_cap overrides the band outright. Print the full list with workspace/bin/list-groups.",
+  "version": 1,
+  "defaults": {
+    "activity": "normal",
+    "caps_enabled": false,
+    "bands": {
+      "busy": [
+        6,
+        10
+      ],
+      "normal": [
+        4,
+        6
+      ],
+      "quiet": [
+        1,
+        3
+      ]
+    }
+  },
+  "promos": {
+    "borehole-drilling": {
+      "comment": "GENERATED from workspace/cron/membership.json by workspace/bin/make-promo-targets -- do not hand-edit. Add or remove a group by editing its 'promos' list in membership.json and regenerating (CI fails if this file drifts). Only groups with status 'active' reach this list, which is why admin-only, not-a-member and on-hold groups are absent. Invite links are NOT reliably resolvable on this gateway, so membership.json records group JIDs.",
+      "weekly_comment": "Groups posted to only on specific weekdays instead of daily (the cron still runs every day; these are skipped on other days). Weekdays may be names (mon, tue, wed, thu, fri, sat, sun) or ints (Mon=0 .. Sun=6). Set per group under 'weekly' in membership.json."
+    },
+    "fruit-trees": {
+      "comment": "GENERATED from workspace/cron/membership.json by workspace/bin/make-promo-targets -- do not hand-edit. Add or remove a group by editing its 'promos' list in membership.json and regenerating (CI fails if this file drifts). Only groups with status 'active' reach this list, which is why admin-only, not-a-member and on-hold groups are absent. Invite links are NOT reliably resolvable on this gateway, so membership.json records group JIDs."
+    },
+    "appliance-repairs": {
+      "comment": "GENERATED from workspace/cron/membership.json by workspace/bin/make-promo-targets -- do not hand-edit. Add or remove a group by editing its 'promos' list in membership.json and regenerating (CI fails if this file drifts). Only groups with status 'active' reach this list, which is why admin-only, not-a-member and on-hold groups are absent. Invite links are NOT reliably resolvable on this gateway, so membership.json records group JIDs."
+    },
+    "cv": {
+      "comment": "GENERATED from workspace/cron/membership.json by workspace/bin/make-promo-targets -- do not hand-edit. Add or remove a group by editing its 'promos' list in membership.json and regenerating (CI fails if this file drifts). Only groups with status 'active' reach this list, which is why admin-only, not-a-member and on-hold groups are absent. Invite links are NOT reliably resolvable on this gateway, so membership.json records group JIDs.",
+      "weekly_comment": "Groups posted to only on specific weekdays instead of daily (the cron still runs every day; these are skipped on other days). Weekdays may be names (mon, tue, wed, thu, fri, sat, sun) or ints (Mon=0 .. Sun=6). Set per group under 'weekly' in membership.json."
+    },
+    "building-materials": {
+      "comment": "GENERATED from workspace/cron/membership.json by workspace/bin/make-promo-targets -- do not hand-edit. Add or remove a group by editing its 'promos' list in membership.json and regenerating (CI fails if this file drifts). Only groups with status 'active' reach this list, which is why admin-only, not-a-member and on-hold groups are absent. Invite links are NOT reliably resolvable on this gateway, so membership.json records group JIDs.",
+      "weekly_comment": "Groups posted to only on specific weekdays instead of daily (the cron still runs every day; these are skipped on other days). Weekdays may be names (mon, tue, wed, thu, fri, sat, sun) or ints (Mon=0 .. Sun=6). Set per group under 'weekly' in membership.json."
+    },
+    "genaie": {
+      "comment": "GENERATED from workspace/cron/membership.json by workspace/bin/make-promo-targets -- do not hand-edit. Add or remove a group by editing its 'promos' list in membership.json and regenerating (CI fails if this file drifts). Only groups with status 'active' reach this list, which is why admin-only, not-a-member and on-hold groups are absent. Invite links are NOT reliably resolvable on this gateway, so membership.json records group JIDs."
+    },
+    "genaie-leads": {
+      "comment": "GENERATED from workspace/cron/membership.json by workspace/bin/make-promo-targets -- do not hand-edit. Add or remove a group by editing its 'promos' list in membership.json and regenerating (CI fails if this file drifts). Only groups with status 'active' reach this list, which is why admin-only, not-a-member and on-hold groups are absent. Invite links are NOT reliably resolvable on this gateway, so membership.json records group JIDs."
+    }
+  },
+  "groups": {
+    "120363275485319265@g.us": {
+      "name": "Bindura Town  Business💰💻📱🚙",
+      "source": "whatsapp",
+      "status": "active",
+      "daily_cap": null,
+      "promos": [
+        "borehole-drilling",
+        "cv",
+        "building-materials",
+        "genaie",
+        "genaie-leads"
+      ]
+    },
+    "120363175904566195@g.us": {
+      "name": "Bindura Hustlers 24/7",
+      "source": "whatsapp",
+      "status": "active",
+      "daily_cap": null,
+      "promos": [
+        "fruit-trees",
+        "cv",
+        "building-materials",
+        "genaie",
+        "genaie-leads"
+      ]
+    },
+    "120363364576432272@g.us": {
+      "name": "Shamva Bindura & Madziva",
+      "source": "whatsapp",
+      "status": "active",
+      "daily_cap": null,
+      "promos": [
+        "fruit-trees",
+        "cv",
+        "building-materials",
+        "genaie",
+        "genaie-leads"
+      ]
+    },
+    "120363400161887838@g.us": {
+      "name": "Glendale Hustlers 24/7",
+      "source": "whatsapp",
+      "status": "active",
+      "daily_cap": null,
+      "promos": [
+        "borehole-drilling",
+        "cv",
+        "building-materials",
+        "genaie",
+        "genaie-leads"
+      ]
+    },
+    "120363407177302513@g.us": {
+      "name": "Vacancy Lamp",
+      "source": "whatsapp",
+      "status": "active",
+      "daily_cap": null,
+      "promos": [
+        "cv"
+      ],
+      "weekly": {
+        "cv": [
+          "mon",
+          "thu"
+        ]
+      }
+    },
+    "120363166672509962@g.us": {
+      "name": "MUTANDIRI VILLAGE RESIDENTS",
+      "source": "whatsapp",
+      "status": "active",
+      "daily_cap": null,
+      "promos": [
+        "borehole-drilling",
+        "building-materials"
+      ],
+      "weekly": {
+        "borehole-drilling": [
+          "mon",
+          "wed",
+          "fri"
+        ],
+        "building-materials": [
+          "mon",
+          "wed",
+          "fri"
+        ]
+      }
+    },
+    "120363428165196397@g.us": {
+      "name": "ZVIRIKUITIKA MUBINDURA NEMASHONALAND CENTRAL YESE",
+      "source": "whatsapp",
+      "status": "active",
+      "daily_cap": null,
+      "promos": [
+        "borehole-drilling",
+        "fruit-trees",
+        "cv",
+        "building-materials",
+        "genaie",
+        "genaie-leads"
+      ]
+    },
+    "120363417642755000@g.us": {
+      "name": "ZVIRIKUITIKA MUSHAMVA",
+      "source": "whatsapp",
+      "status": "active",
+      "daily_cap": null,
+      "promos": [
+        "borehole-drilling",
+        "fruit-trees",
+        "cv",
+        "building-materials",
+        "genaie",
+        "genaie-leads"
+      ]
+    },
+    "120363422964450745@g.us": {
+      "name": "UNI-MARKETING HUB",
+      "source": "whatsapp",
+      "status": "on-hold",
+      "daily_cap": null,
+      "promos": [],
+      "note": "suspended since 2026-10-14; removed from every promo until the operator says to resume, and do NOT re-add it from the sender-key-store discovery sweep"
+    },
+    "120363403898552868@g.us": {
+      "name": "Hatcliffe Community Newspaper..(HCN)",
+      "source": "git",
+      "status": "active",
+      "daily_cap": null,
+      "promos": [
+        "borehole-drilling",
+        "fruit-trees",
+        "building-materials"
+      ]
+    },
+    "120363292471414376@g.us": {
+      "name": "Buying and Selling",
+      "source": "git",
+      "status": "active",
+      "daily_cap": null,
+      "promos": [
+        "borehole-drilling",
+        "fruit-trees",
+        "cv",
+        "building-materials",
+        "genaie",
+        "genaie-leads"
+      ]
+    },
+    "120363411788614990@g.us": {
+      "name": "Zim Mining Company",
+      "source": "git",
+      "status": "active",
+      "daily_cap": null,
+      "promos": [
+        "borehole-drilling",
+        "fruit-trees",
+        "cv",
+        "building-materials",
+        "genaie",
+        "genaie-leads"
+      ]
+    },
+    "120363374641440124@g.us": {
+      "name": "TerraTones Advertising",
+      "source": "git",
+      "status": "active",
+      "daily_cap": null,
+      "promos": [
+        "borehole-drilling",
+        "fruit-trees",
+        "cv",
+        "building-materials",
+        "genaie",
+        "genaie-leads"
+      ]
+    },
+    "120363411842576299@g.us": {
+      "name": "Bulawayo all links, yonkinto",
+      "source": "git",
+      "status": "active",
+      "daily_cap": null,
+      "promos": [
+        "fruit-trees",
+        "cv",
+        "genaie"
+      ]
+    },
+    "120363426924923592@g.us": {
+      "name": "All link and groups",
+      "source": "operator",
+      "status": "active",
+      "daily_cap": null,
+      "promos": [
+        "fruit-trees",
+        "appliance-repairs",
+        "cv",
+        "genaie",
+        "genaie-leads"
+      ],
+      "note": "discovered via the WhatsApp sender-key store on 2026-10-11"
+    },
+    "120363206130909900@g.us": {
+      "name": "Inter-province Hustlers 2",
+      "source": "operator",
+      "status": "active",
+      "daily_cap": null,
+      "promos": [
+        "appliance-repairs",
+        "cv",
+        "genaie",
+        "genaie-leads"
+      ]
+    },
+    "120363427709161501@g.us": {
+      "name": "Hustlers marketplace",
+      "source": "operator",
+      "status": "active",
+      "daily_cap": null,
+      "promos": [
+        "appliance-repairs",
+        "cv",
+        "genaie",
+        "genaie-leads"
+      ]
+    },
+    "120363414718035443@g.us": {
+      "name": "ZIMBABWE UPDATE BYO",
+      "source": "operator",
+      "status": "active",
+      "daily_cap": null,
+      "promos": [
+        "fruit-trees",
+        "cv",
+        "genaie",
+        "genaie-leads"
+      ],
+      "note": "discovered via the WhatsApp sender-key store on 2026-10-11"
+    },
+    "120363410412233096@g.us": {
+      "name": "CHIREDZI LOWVELD HUSTLERS GRP 7",
+      "source": "operator",
+      "status": "active",
+      "daily_cap": null,
+      "promos": [
+        "fruit-trees",
+        "cv",
+        "genaie",
+        "genaie-leads"
+      ],
+      "note": "discovered via the WhatsApp sender-key store on 2026-10-11"
+    },
+    "120363217323303430@g.us": {
+      "name": "MASVINGO CBD BUYING AND SELLING GRP 4",
+      "source": "operator",
+      "status": "active",
+      "daily_cap": null,
+      "promos": [
+        "fruit-trees",
+        "cv",
+        "genaie",
+        "genaie-leads"
+      ],
+      "note": "discovered via the WhatsApp sender-key store on 2026-10-11"
+    },
+    "120363411912048298@g.us": {
+      "name": "GROUP LINKS AND CHATS",
+      "source": "operator",
+      "status": "active",
+      "daily_cap": null,
+      "promos": [
+        "appliance-repairs",
+        "genaie",
+        "genaie-leads"
+      ]
+    },
+    "120363316754839191@g.us": {
+      "name": "Business in Mutare",
+      "source": "operator",
+      "status": "active",
+      "daily_cap": null,
+      "promos": []
+    },
+    "263785811799-1594293610@g.us": {
+      "name": "God Did",
+      "source": "operator",
+      "status": "active",
+      "daily_cap": null,
+      "promos": [
+        "fruit-trees",
+        "appliance-repairs",
+        "genaie",
+        "genaie-leads"
+      ]
+    },
+    "120363427221695541@g.us": {
+      "name": "CHIKOMBEDZI MARKETPLACE",
+      "source": "operator",
+      "status": "active",
+      "daily_cap": null,
+      "promos": []
+    },
+    "120363412391036323@g.us": {
+      "name": "MAGWEGWE DEALS BUY AND SELL GROUP 2",
+      "source": "operator",
+      "status": "active",
+      "daily_cap": null,
+      "promos": [
+        "fruit-trees"
+      ],
+      "note": "joined 2026-10-14; the bot has not posted here yet, so posting permission is unverified until the first run"
+    },
+    "120363430468852239@g.us": {
+      "name": "LOBENGULA WEST MARKETPLACE",
+      "source": "operator",
+      "status": "active",
+      "daily_cap": null,
+      "promos": [
+        "fruit-trees",
+        "genaie",
+        "genaie-leads"
+      ],
+      "note": "joined 2026-10-14; the bot has not posted here yet, so posting permission is unverified until the first run"
+    },
+    "120363426951301193@g.us": {
+      "name": null,
+      "status": "active",
+      "daily_cap": null,
+      "promos": [
+        "fruit-trees",
+        "cv",
+        "genaie",
+        "genaie-leads"
+      ],
+      "note": "discovered via the WhatsApp sender-key store on 2026-10-11"
+    },
+    "120363168421689199@g.us": {
+      "name": null,
+      "status": "active",
+      "daily_cap": null,
+      "promos": [
+        "cv",
+        "genaie",
+        "genaie-leads"
+      ]
+    },
+    "120363428938298524@g.us": {
+      "name": null,
+      "status": "active",
+      "daily_cap": null,
+      "promos": []
+    },
+    "120363413442071640@g.us": {
+      "name": null,
+      "status": "active",
+      "daily_cap": null,
+      "promos": []
+    },
+    "120363429214832655@g.us": {
+      "name": null,
+      "status": "active",
+      "daily_cap": null,
+      "promos": []
+    },
+    "120363423293113897@g.us": {
+      "name": null,
+      "status": "admin-only",
+      "daily_cap": null,
+      "promos": [],
+      "note": "only admins can post, so sends return 'forbidden'; do NOT re-add it from the sender-key-store discovery sweep"
+    },
+    "120363406180229523@g.us": {
+      "name": null,
+      "status": "admin-only",
+      "daily_cap": null,
+      "promos": [],
+      "note": "only admins can post, so sends return 'forbidden'; do NOT re-add it from the sender-key-store discovery sweep"
+    },
+    "120363427198843381@g.us": {
+      "name": null,
+      "status": "admin-only",
+      "daily_cap": null,
+      "promos": [],
+      "note": "only admins can post, so sends return 'forbidden'; do NOT re-add it from the sender-key-store discovery sweep"
+    },
+    "120363157571427036@g.us": {
+      "name": null,
+      "status": "admin-only",
+      "daily_cap": null,
+      "promos": [],
+      "note": "only admins can post, so sends return 'forbidden'; do NOT re-add it from the sender-key-store discovery sweep"
+    },
+    "120363427762371217@g.us": {
+      "name": null,
+      "status": "admin-only",
+      "daily_cap": null,
+      "promos": [],
+      "note": "only admins can post, so sends return 'forbidden'; do NOT re-add it from the sender-key-store discovery sweep"
+    },
+    "120363406036971278@g.us": {
+      "name": null,
+      "status": "admin-only",
+      "daily_cap": null,
+      "promos": [],
+      "note": "only admins can post, so sends return 'forbidden'; do NOT re-add it from the sender-key-store discovery sweep"
+    },
+    "120363427719606842@g.us": {
+      "name": null,
+      "status": "not-a-member",
+      "daily_cap": null,
+      "promos": [],
+      "note": "sends return 'item-not-found'; the bot is probably no longer in it"
+    },
+    "263778902081-1542199190@g.us": {
+      "name": null,
+      "status": "not-a-member",
+      "daily_cap": null,
+      "promos": [],
+      "note": "sends return 'item-not-found'; the bot is probably no longer in it"
+    }
+  }
+}

@@ -13,7 +13,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/install-promo.sh"
 
 register_promo_cron \
   "appliance-repairs-promo" \
-  "${APPLIANCE_REPAIRS_PROMO_CRON_EXPR:-0 10 * * *}" \
+  "${APPLIANCE_REPAIRS_PROMO_CRON_EXPR:-35 10 * * *}" \
   "${APPLIANCE_REPAIRS_PROMO_TZ:-Africa/Harare}" \
   "${APPLIANCE_REPAIRS_PROMO_FAILURE_ALERT_TO:-+263785632943}" \
   "/home/joseph/.openclaw/workspace/cron/appliance-repairs-promo/post_ad.py"
