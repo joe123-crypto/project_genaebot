@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import math
 import os
+import random
 import time
 
 from . import group_feed
@@ -12,10 +14,36 @@ from .constants import (
   DEFAULT_GROUP_FEED_INVITE_URL,
   DEFAULT_GROUP_FEED_LIMIT,
   DEFAULT_GROUP_FEED_ROOT,
+  DEFAULT_GROUP_FEED_SEND_DELAY_MAX_SECONDS,
   DEFAULT_GROUP_FEED_SEND_DELAY_SECONDS,
 )
 from .delivery import send_whatsapp_message
 from .textutil import public_text
+
+def _finite_non_negative(value: object, fallback: float) -> float:
+  try:
+    number = float(value)
+  except (TypeError, ValueError):
+    return fallback
+  if not math.isfinite(number) or number < 0:
+    return fallback
+  return number
+
+
+def send_gap_bounds(args: argparse.Namespace) -> tuple[float, float]:
+  """Return (min, max) seconds for the random pause between group-feed sends.
+
+  A fixed pause puts the posts on a metronome-regular cadence, which WhatsApp
+  spam detection reportedly flags, so each gap is drawn from this range. With
+  no max given (or a max at or below the min) the pause is pinned to the min.
+  """
+  low = _finite_non_negative(
+    getattr(args, "send_delay_seconds", DEFAULT_GROUP_FEED_SEND_DELAY_SECONDS),
+    DEFAULT_GROUP_FEED_SEND_DELAY_SECONDS,
+  )
+  high = _finite_non_negative(getattr(args, "send_delay_max_seconds", low), low)
+  return low, max(low, high)
+
 
 def maybe_write_group_feed_cache(args: argparse.Namespace, run_id: str) -> dict | None:
   if not getattr(args, "write_group_feed_cache", False):
@@ -92,7 +120,7 @@ def cmd_deliver_group_feed(args: argparse.Namespace) -> dict:
     if args.max_messages > 0:
       pending = pending[:args.max_messages]
 
-    delay = max(0.0, float(getattr(args, "send_delay_seconds", DEFAULT_GROUP_FEED_SEND_DELAY_SECONDS)))
+    delay_min, delay_max = send_gap_bounds(args)
     sent_count = 0
     skipped_count = len(candidates) - len(pending)
     failed_count = 0
@@ -107,8 +135,8 @@ def cmd_deliver_group_feed(args: argparse.Namespace) -> dict:
           "message": message,
         })
         continue
-      if delay > 0 and sent_count > 0:
-        time.sleep(delay)
+      if delay_max > 0 and sent_count > 0:
+        time.sleep(random.uniform(delay_min, delay_max))
       try:
         result = send_whatsapp_message(target, message)
       except Exception as err:

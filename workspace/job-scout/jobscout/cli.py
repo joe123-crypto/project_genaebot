@@ -37,6 +37,7 @@ from .constants import (
   DEFAULT_GROUP_FEED_MAX_MESSAGES,
   DEFAULT_GROUP_FEED_ROOT,
   DEFAULT_GROUP_FEED_SEND_DELAY_SECONDS,
+  DEFAULT_GROUP_FEED_SEND_DELAY_MAX_SECONDS,
   DEFAULT_STORAGE_ROOT,
   DISPATCH_STATUSES,
 )
@@ -226,7 +227,13 @@ def build_parser() -> argparse.ArgumentParser:
     "--send-delay-seconds",
     type=float,
     default=DEFAULT_GROUP_FEED_SEND_DELAY_SECONDS,
-    help="pause between group sends to avoid flooding",
+    help="shortest random pause between group sends",
+  )
+  deliver_group_feed.add_argument(
+    "--send-delay-max-seconds",
+    type=float,
+    default=DEFAULT_GROUP_FEED_SEND_DELAY_MAX_SECONDS,
+    help="longest random pause between group sends (at or below --send-delay-seconds pins the pause)",
   )
   deliver_group_feed.add_argument("--dry-run", action="store_true")
   deliver_group_feed.set_defaults(func=cmd_deliver_group_feed)
