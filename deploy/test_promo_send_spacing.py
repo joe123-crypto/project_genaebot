@@ -499,8 +499,26 @@ class StartJitterTests(unittest.TestCase):
         waited = events[0][1]
         self.assertEqual(events[0][0], "sleep")
         self.assertEqual(waited, 600 * pb.START_JITTER_BUDGET_FRACTION)
+        self.assertEqual(rng.calls[0], (0, 600 * pb.START_JITTER_BUDGET_FRACTION),
+                         "the range shrinks; the draw is not clamped")
         self.assertEqual(len([e for e in events if e[0] == "send"]), 3,
                          "every group must still get today's ad")
+
+    def test_a_stale_short_timeout_still_gives_a_random_wait(self):
+        """Clamping the draw made the wait a constant: on 2026-10-16, under the
+        live 600 s timeout, all five measured promo runs sent their first ad
+        ~2m38s past the hour. Shrinking the range keeps it random."""
+        rng = random.Random(1)
+        waits = set()
+        for _ in range(12):
+            self.setUp()  # fresh state file, so the groups are pending again
+            events = self.run_promo(["1@g.us", "2@g.us"], rng=rng,
+                                    start_jitter=None, send_delay=0,
+                                    cron_timeout=600)
+            self.assertEqual(events[0][0], "sleep")
+            self.assertLessEqual(events[0][1], 600 * pb.START_JITTER_BUDGET_FRACTION)
+            waits.add(round(events[0][1], 3))
+        self.assertGreater(len(waits), 10, "waits must vary run to run")
 
     def test_the_whole_run_still_fits_for_every_promo_size(self):
         for count in (1, 5, 10, 20, 25):

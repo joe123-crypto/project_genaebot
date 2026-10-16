@@ -919,13 +919,17 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
         # or before the first one.
         wants_timeout = (gap_max > 0 and len(pending) > 1) or jitter_bound > 0
         cron_timeout = cron_timeout_seconds() if wants_timeout else None
+    if cron_timeout and jitter_bound > 0:
+        # Never wait away the whole job: against a stale (short) timeout a full
+        # 15-minute head start could burn the run before its first send. Shrink
+        # the RANGE rather than clamping the draw: min(uniform(0, 900), 150)
+        # returns exactly 150 s five times in six, so under the live 600 s
+        # timeout every promo's first send landed at the same second past the
+        # hour -- the fixed daily pattern this wait exists to break.
+        jitter_bound = min(jitter_bound, cron_timeout * START_JITTER_BUDGET_FRACTION)
     # A bound of 0 draws nothing at all, so disabling the jitter leaves the rng
     # untouched.
     jitter = rng.uniform(0, jitter_bound) if jitter_bound > 0 else 0.0
-    if cron_timeout and jitter > 0:
-        # Never wait away the whole job: against a stale (short) timeout a full
-        # 15-minute head start could burn the run before its first send.
-        jitter = min(jitter, cron_timeout * START_JITTER_BUDGET_FRACTION)
     # The wait is charged against the timeout budget, so the gaps are planned
     # with what is left -- otherwise the head start silently eats the margin
     # fit_gap_bounds exists to protect.
