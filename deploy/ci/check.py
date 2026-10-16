@@ -299,6 +299,33 @@ def documentation_failures(changed: set[str], contract: dict) -> list[str]:
     return failures
 
 
+# The bot must never send an em dash, so no page it reads may model one: the
+# prompt, the policy, the business facts it quotes from, and the public agent
+# room files all go into the model's context verbatim.
+CUSTOMER_FACING_PAGES = (
+    "workspace/docs/public-whatsapp-system-prompt.txt",
+    "workspace/docs/public-services.md",
+    "workspace/docs/business-info.md",
+    "workspace/docs/cv-maker-onboarding.md",
+    "workspace/docs/job-scout-onboarding.md",
+)
+DASHES = "\u2012\u2013\u2014\u2015\u2e3a\u2e3b"
+
+
+def check_customer_facing_dashes(checks: Checks) -> None:
+    pages = [*CUSTOMER_FACING_PAGES, *(
+        str(path.relative_to(ROOT)) for path in sorted((ROOT / "deploy/agent-workspace-public").glob("*.md"))
+    )]
+    for rel in pages:
+        source = ROOT / rel
+        if not source.exists():
+            checks.require(False, f"missing customer-facing page: {rel}")
+            continue
+        for number, line in enumerate(source.read_text(encoding="utf-8").splitlines(), start=1):
+            if any(dash in line for dash in DASHES):
+                checks.require(False, f"em or en dash in customer-facing page {rel}:{number}")
+
+
 def check_documentation_contract(base_sha: str | None, head_sha: str, checks: Checks) -> None:
     if not base_sha:
         print("Documentation diff check skipped: no base SHA supplied")
@@ -331,6 +358,7 @@ def main() -> int:
     check_runtime_references(checks)
     check_document_links(files, checks)
     check_service_catalog(checks)
+    check_customer_facing_dashes(checks)
     check_documentation_contract(args.base_sha, args.head_sha, checks)
     checks.finish()
     return 0

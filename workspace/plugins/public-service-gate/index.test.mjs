@@ -448,6 +448,43 @@ test("failsafe stop command suppresses late WhatsApp outbound until next inbound
   assert.equal(allowed, undefined);
 });
 
+test("outbound WhatsApp replies never leave with an em dash", async () => {
+  const handler = registerHandler({});
+
+  const rewritten = await handler.messageSending(
+    { to: MEMBER, content: "We are based in Bindura, but we're mobile \u2014 we come to you." },
+    { channelId: "whatsapp", senderId: MEMBER },
+  );
+  assert.equal(rewritten.content, "We are based in Bindura, but we're mobile, we come to you.");
+  assert.equal(rewritten.cancel, undefined);
+
+  const clean = await handler.messageSending(
+    { to: MEMBER, content: "Pa 60m: $1,450." },
+    { channelId: "whatsapp", senderId: MEMBER },
+  );
+  assert.equal(clean, undefined);
+
+  const otherChannel = await handler.messageSending(
+    { to: MEMBER, content: "Water survey \u2014 $100." },
+    { channelId: "telegram", senderId: MEMBER },
+  );
+  assert.equal(otherChannel, undefined);
+});
+
+test("a failsafe stop still cancels a reply that also needs an em dash rewrite", async () => {
+  const handler = registerHandler({});
+
+  await handler(eventFor("stop"), { channelId: "whatsapp", senderId: MEMBER });
+  const suppressed = await handler.messageSending(
+    { to: MEMBER, content: "Water survey \u2014 $100." },
+    { channelId: "whatsapp", senderId: MEMBER },
+  );
+
+  assert.equal(suppressed.cancel, true);
+  assert.equal(suppressed.cancelReason, "failsafe_stop");
+  assert.equal(suppressed.content, undefined);
+});
+
 test("failsafe stop command claims unknown sender before member or LLM checks", async () => {
   let calls = 0;
   const handler = registerHandler({}, async () => {
@@ -897,9 +934,9 @@ test("public canned replies use the concise style", () => {
     "services/handoff.js",
     "lib/handoffs.js",
   ];
-  for (const file of files) {
+  for (const file of [...files, "lib/style.js"]) {
     const source = fs.readFileSync(new URL(file, import.meta.url), "utf8");
-    assert.doesNotMatch(source, /\u2014/, `${file} contains an em dash`);
+    assert.doesNotMatch(source, /[\u2012-\u2015]/, `${file} contains an em or en dash`);
   }
 
   const docs = [
@@ -911,15 +948,17 @@ test("public canned replies use the concise style", () => {
   ];
   for (const file of docs) {
     const source = fs.readFileSync(new URL(`../../docs/${file}`, import.meta.url), "utf8");
-    assert.doesNotMatch(source, /\u2014/, `${file} contains an em dash`);
+    assert.doesNotMatch(source, /[\u2012-\u2015]/, `${file} contains an em or en dash`);
   }
 
   const prompt = fs.readFileSync(
     new URL("../../docs/public-whatsapp-system-prompt.txt", import.meta.url),
     "utf8",
   );
-  assert.match(prompt, /usually one or two short sentences/i);
-  assert.match(prompt, /No em dashes/i);
+  assert.match(prompt, /one or two short sentences is a whole reply/i);
+  assert.match(prompt, /Never use an em dash or an en dash/i);
+  assert.match(prompt, /Answer the question and stop/i);
+  assert.match(prompt, /Never pitch a service the customer did not ask about/i);
   assert.match(prompt, /call `public_service` with action `business_info`/i);
   assert.match(prompt, /Never guess/);
   assert.match(prompt, /unrelated to the business[^\n]*list what we offer/i);
