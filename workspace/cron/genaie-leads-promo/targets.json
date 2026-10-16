@@ -1,6 +1,9 @@
 {
   "_comment": "GENERATED from workspace/cron/membership.json by workspace/bin/make-promo-targets -- do not hand-edit. Add or remove a group by editing its 'promos' list in membership.json and regenerating (CI fails if this file drifts). Only groups with status 'active' reach this list, which is why admin-only, not-a-member and on-hold groups are absent. Invite links are NOT reliably resolvable on this gateway, so membership.json records group JIDs.",
   "groups": [
+    "120363432743348648@g.us",
+    "120363421153578257@g.us",
+    "120363286085033663@g.us",
     "120363275485319265@g.us",
     "120363175904566195@g.us",
     "120363364576432272@g.us",
@@ -17,9 +20,11 @@
     "120363410412233096@g.us",
     "120363217323303430@g.us",
     "120363411912048298@g.us",
+    "120363316754839191@g.us",
     "263785811799-1594293610@g.us",
     "120363430468852239@g.us",
     "120363426951301193@g.us",
-    "120363168421689199@g.us"
+    "120363168421689199@g.us",
+    "120363428938298524@g.us"
   ]
 }
