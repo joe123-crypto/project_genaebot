@@ -482,15 +482,21 @@ def _preview(caption, tracking):
 
 def _print_dry_run(jids, weekly, weekday, sent_map, today, image_path, rotating, text,
                    eligible, pending, variants=None, tracking=None, day=None,
-                   variant_images=None):
+                   variant_images=None, cap_decisions=None, promo=None):
     print("Targets (resolved JIDs): %d" % len(jids))
     variants = variants or [text]
     multi = len(variants) > 1
+    cap_decisions = cap_decisions or {}
+    eligible_set = set(eligible)
     for j in jids:
         allowed = weekly.get(j)
         if allowed is not None and weekday not in allowed:
             days = ",".join(_WEEKDAY_ABBR[d] for d in sorted(allowed))
             mark = "skipped today (weekly: %s)" % days
+        elif cap_decisions and j not in eligible_set:
+            info = cap_decisions.get(j) or {}
+            mark = "skipped today (at daily cap; today goes to %s)" % (
+                ", ".join(info.get("allowed") or []) or "nothing")
         elif sent_map.get(j) == today:
             mark = "already sent today"
         elif allowed is not None:
@@ -499,6 +505,11 @@ def _print_dry_run(jids, weekly, weekday, sent_map, today, image_path, rotating,
         else:
             mark = "would send"
         extra = ""
+        info = cap_decisions.get(j)
+        if info and info.get("known"):
+            extra += "  cap %s/%d (tier %s, replies %.1f)" % (
+                info.get("cap"), len(info.get("promos") or []), info.get("tier"),
+                info.get("score") or 0.0)
         if multi or tracking:
             idx, _, ref = caption_for(j, variants, day=day, allowed=allowed,
                                       tracking=tracking)
@@ -520,11 +531,18 @@ def _print_dry_run(jids, weekly, weekday, sent_map, today, image_path, rotating,
         print("\n----- message -----")
         print(_preview(variants[0], tracking))
     print("-------------------")
+    capped = sum(1 for j in jids if cap_decisions and j not in eligible_set
+                 and (weekly.get(j) is None or weekday in weekly[j]))
+    suffix = " capped=%d" % capped if cap_decisions else ""
     if weekly:
-        print("\n[dry-run] resolved=%d eligible=%d pending=%d"
-              % (len(jids), len(eligible), len(pending)))
+        print("\n[dry-run] resolved=%d eligible=%d pending=%d%s"
+              % (len(jids), len(eligible), len(pending), suffix))
     else:
-        print("\n[dry-run] resolved=%d pending=%d" % (len(jids), len(pending)))
+        print("\n[dry-run] resolved=%d pending=%d%s"
+              % (len(jids), len(pending), suffix))
+    if cap_decisions:
+        print("[dry-run] per-group caps are ON for %s (membership.json "
+              "caps_enabled)" % (promo or "this promo"))
 
 
 # ----------------------------------------------------------- send spacing ----
@@ -539,6 +557,16 @@ SEND_ALLOWANCE_SECONDS = 12.0
 # Share of the cron job's timeout a run may plan to spend, leaving room for
 # startup, invite resolution and state writes.
 RUN_BUDGET_FRACTION = 0.9
+# Upper bound on the random delay taken before a run's FIRST send, on top of the
+# random gaps between sends. Each promo cron fires at a fixed minute, so without
+# this the account's day-to-day pattern stays perfectly periodic even though the
+# gaps inside a run are not. The delay is charged against the job's timeout
+# budget (see fit_gap_bounds callers), never taken on --dry-run/--refs, and never
+# taken when there is nothing to send.
+DEFAULT_START_JITTER_SECONDS = 900.0
+# Most of a job's timeout the start jitter may spend. A stale 600 s timeout with
+# a full 900 s head start would otherwise kill the run before its first send.
+START_JITTER_BUDGET_FRACTION = 0.25
 
 
 def _seconds(value, label, default):
@@ -588,6 +616,16 @@ def send_gap_bounds(send_delay=None, send_delay_min=None, send_delay_max=None):
 
 
 _PROBE_CRON_TIMEOUT = object()
+
+
+def start_jitter_bound(start_jitter=None):
+    """Upper bound (seconds) for the pre-first-send delay. ``start_jitter``
+    overrides the ``PROMO_START_JITTER_SECONDS`` env var; ``0`` disables it."""
+    if start_jitter is not None:
+        return _seconds(start_jitter, "start_jitter", DEFAULT_START_JITTER_SECONDS)
+    return _seconds(os.environ.get("PROMO_START_JITTER_SECONDS",
+                                   DEFAULT_START_JITTER_SECONDS),
+                    "PROMO_START_JITTER_SECONDS", DEFAULT_START_JITTER_SECONDS)
 
 
 def cron_timeout_seconds(script=None):
@@ -701,10 +739,69 @@ def fit_gap_bounds(lo, hi, count, timeout):
     return (new_lo, allowed)
 
 
+# ------------------------------------------------------------- group caps ----
+# Sentinel: load membership.json and obey its caps_enabled setting.
+_PROBE_CAPS = object()
+PROMO_DIR_SUFFIX = "-promo"
+
+
+def promo_key(promo_name):
+    """``"cv-promo"`` -> ``"cv"``: the key membership.json files a promo under."""
+    name = str(promo_name or "")
+    if name.endswith(PROMO_DIR_SUFFIX):
+        return name[:-len(PROMO_DIR_SUFFIX)]
+    return name
+
+
+def apply_caps(promo_name, jids, day, caps=_PROBE_CAPS, membership_path=None,
+               record=True):
+    """Drop the groups whose daily ad allowance is spoken for by other campaigns
+    today (see :mod:`promo_caps`). Returns ``(kept, decisions)``, with
+    ``decisions`` empty when caps are off.
+
+    Deliberately fail-open: a missing membership file, bad data or an import
+    problem leaves every group in place and logs a warning. A capacity nicety
+    must never be the reason a day's ads do not go out."""
+    if caps is None or not jids:
+        return list(jids), {}
+    try:
+        import promo_membership
+
+        m = promo_membership.load(membership_path)
+        if m is None:
+            return list(jids), {}
+        if caps is _PROBE_CAPS:
+            if not promo_membership.caps_enabled(m):
+                return list(jids), {}
+            import promo_caps as caps_mod
+        else:
+            caps_mod = caps
+        kept, decisions = caps_mod.filter_for_promo(
+            m, promo_key(promo_name), list(jids), day=day, record=record)
+    except Exception as ex:  # fail-open, loudly
+        sys.stderr.write("WARN: per-group caps not applied (%s: %s); sending to "
+                         "every eligible group.\n" % (type(ex).__name__, ex))
+        return list(jids), {}
+
+    dropped = [j for j in jids if j not in set(kept)]
+    if dropped:
+        sys.stderr.write(
+            "CAPS: %d of %d groups are at their daily ad cap and skip %s today.\n"
+            % (len(dropped), len(jids), promo_key(promo_name)))
+        for jid in dropped:
+            info = decisions.get(jid) or {}
+            sys.stderr.write(
+                "  - %s cap %s (tier %s, score %.1f) goes to: %s\n"
+                % (jid, info.get("cap"), info.get("tier"), info.get("score") or 0.0,
+                   ", ".join(info.get("allowed") or []) or "nothing"))
+    return kept, decisions
+
+
 def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=None,
               tracking=None, promo_name=None, variant_images=None,
               send_delay_min=None, send_delay_max=None, rng=None, sleep=None,
-              cron_timeout=_PROBE_CRON_TIMEOUT):
+              cron_timeout=_PROBE_CRON_TIMEOUT, start_jitter=None,
+              caps=_PROBE_CAPS, membership_path=None):
     """Resolve targets, skip groups already sent today (and weekly-limited groups
     off their configured weekday), then send the advert to each pending group,
     committing state per group so a crash or retry never double-posts. Returns a
@@ -724,9 +821,20 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
     this cron job's live timeout (see :func:`cron_timeout_seconds` and
     :func:`fit_gap_bounds`) so a run is never killed with groups unreached.
     ``send_delay`` is the legacy fixed gap and, when given, overrides the range.
+    A run also waits ``rng.uniform(0, start_jitter_bound())`` before its FIRST
+    send (default up to 900 s, ``PROMO_START_JITTER_SECONDS``), charged against
+    the timeout budget, so a cron pinned to one minute still starts at a
+    different time each day.
+
+    Groups whose daily ad cap is already spoken for by other campaigns are
+    dropped before sending (see :mod:`promo_caps`); this is inert until
+    membership.json sets ``caps_enabled``. ``caps=None`` disables it outright and
+    ``caps=<module>`` injects an alternative, both for tests.
+
     ``rng`` (anything with a ``uniform`` method, default the ``random`` module),
-    ``sleep`` (default ``time.sleep``) and ``cron_timeout`` (default: ask the
-    gateway; None disables the fit) are injectable for tests."""
+    ``sleep`` (default ``time.sleep``), ``cron_timeout`` (default: ask the
+    gateway; None disables the fit) and ``membership_path`` are injectable for
+    tests."""
     args = sys.argv[1:] if argv is None else argv
     show_refs = "--refs" in args
     dry = "--dry-run" in args or show_refs
@@ -777,6 +885,12 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
         return allowed is None or weekday in allowed
 
     eligible = [j for j in jids if eligible_today(j)]
+    # Per-group daily cap: a group in six campaigns does not have to take six
+    # ads a day. Rotation decides which campaigns use today's allowance, so this
+    # promo may be asked to stand down for a group it still targets.
+    eligible, cap_decisions = apply_caps(promo_name, eligible, day, caps=caps,
+                                         membership_path=membership_path,
+                                         record=not dry)
     sent_map = st["sent"]
     pending = [j for j in eligible if sent_map.get(j) != today]
 
@@ -787,20 +901,40 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
     if dry:
         _print_dry_run(jids, weekly, weekday, sent_map, today, image_path, rotating,
                        text, eligible, pending, variants=variants, tracking=tracking,
-                       day=day, variant_images=variant_images)
+                       day=day, variant_images=variant_images,
+                       cap_decisions=cap_decisions, promo=promo_key(promo_name))
         return 0
 
     if not pending:
         print("NO_REPLY")  # every group already got today's ad
         return 0
 
-    gap_min, gap_max = send_gap_bounds(send_delay, send_delay_min, send_delay_max)
-    if cron_timeout is _PROBE_CRON_TIMEOUT:
-        # Only worth asking when there is more than one send to space out.
-        cron_timeout = cron_timeout_seconds() if gap_max > 0 and len(pending) > 1 else None
-    gap_min, gap_max = fit_gap_bounds(gap_min, gap_max, len(pending), cron_timeout)
     rng = rng or random
     sleep = sleep or time.sleep
+    jitter_bound = start_jitter_bound(start_jitter)
+
+    gap_min, gap_max = send_gap_bounds(send_delay, send_delay_min, send_delay_max)
+    if cron_timeout is _PROBE_CRON_TIMEOUT:
+        # Worth asking whenever this run plans to wait at all: to space sends,
+        # or before the first one.
+        wants_timeout = (gap_max > 0 and len(pending) > 1) or jitter_bound > 0
+        cron_timeout = cron_timeout_seconds() if wants_timeout else None
+    # A bound of 0 draws nothing at all, so disabling the jitter leaves the rng
+    # untouched.
+    jitter = rng.uniform(0, jitter_bound) if jitter_bound > 0 else 0.0
+    if cron_timeout and jitter > 0:
+        # Never wait away the whole job: against a stale (short) timeout a full
+        # 15-minute head start could burn the run before its first send.
+        jitter = min(jitter, cron_timeout * START_JITTER_BUDGET_FRACTION)
+    # The wait is charged against the timeout budget, so the gaps are planned
+    # with what is left -- otherwise the head start silently eats the margin
+    # fit_gap_bounds exists to protect.
+    budget = max(0.0, cron_timeout - jitter) if cron_timeout else cron_timeout
+    gap_min, gap_max = fit_gap_bounds(gap_min, gap_max, len(pending), budget)
+
+    if jitter > 0:
+        print("Waiting %.0f s before the first send (start jitter)." % jitter)
+        sleep(jitter)
 
     failures = 0
     skipped = 0

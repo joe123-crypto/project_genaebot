@@ -84,6 +84,10 @@ class SendSpacingTests(unittest.TestCase):
         targets.write_text(json.dumps(data))
         kwargs.setdefault("rng", RecordingRng())
         kwargs.setdefault("cron_timeout", None)  # no gateway lookup in tests
+        # Off unless a test asks for it, so the gap assertions below see only
+        # the between-send gaps. StartJitterTests covers it explicitly.
+        kwargs.setdefault("start_jitter", 0)
+        kwargs.setdefault("caps", None)  # per-group caps have their own tests
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             return pb.broadcast(text="hi", image=str(self.image),
                                 targets_file=str(targets), state_file=str(self.state),
@@ -375,6 +379,136 @@ class RunTimeoutFitTests(unittest.TestCase):
             self.assertLess(run, 600, "tightened run must fit the live timeout")
         finally:
             tests.tearDown()
+
+
+class MaxRng:
+    """Always draws the top of the range, so jitter is deterministic."""
+
+    def __init__(self):
+        self.calls = []
+
+    def uniform(self, a, b):
+        self.calls.append((a, b))
+        return b
+
+
+class StartJitterTests(unittest.TestCase):
+    """Each promo cron fires at one fixed minute, so without a random head start
+    the account's day-to-day pattern stays perfectly periodic even though the
+    gaps inside a run are randomised. The engine waits a random 0-900 s before
+    its FIRST send -- charged against the job's timeout budget, never taken on
+    --dry-run/--refs, and never taken when there is nothing to send."""
+
+    def setUp(self):
+        self.tests = SendSpacingTests("test_single_send_never_sleeps")
+        self.tests.setUp()
+        self.addCleanup(self.tests.tearDown)
+        # SendSpacingTests only restores the gap env vars, so this one has to
+        # clean up after itself or it leaks into the next test.
+        saved = os.environ.pop("PROMO_START_JITTER_SECONDS", None)
+        self.addCleanup(lambda: os.environ.__setitem__(
+            "PROMO_START_JITTER_SECONDS", saved) if saved is not None
+            else os.environ.pop("PROMO_START_JITTER_SECONDS", None))
+
+    def run_promo(self, groups=("1@g.us", "2@g.us"), **kwargs):
+        with redirect_stderr(io.StringIO()):
+            rc = self.tests._run(list(groups), **kwargs)
+        self.assertEqual(rc, 0)
+        return self.tests.events
+
+    def test_default_bound_is_fifteen_minutes(self):
+        self.assertEqual(pb.start_jitter_bound(), 900.0)
+
+    def test_a_wait_is_taken_before_the_first_send(self):
+        rng = MaxRng()
+        events = self.run_promo(rng=rng, start_jitter=None, send_delay=0)
+        self.assertEqual(events[0], ("sleep", 900.0))
+        self.assertEqual(events[1][0], "send")
+        self.assertEqual(rng.calls[0], (0, 900.0))
+
+    def test_zero_disables_it_without_touching_the_rng(self):
+        rng = MaxRng()
+        events = self.run_promo(rng=rng, start_jitter=0, send_delay=0)
+        self.assertEqual(events[0][0], "send", "no wait before the first send")
+        # The only draws left are the between-send gaps (pinned to 0 here).
+        self.assertEqual(rng.calls, [(0.0, 0.0)],
+                         "a disabled jitter must not draw its own range")
+
+    def test_env_var_sets_the_bound(self):
+        os.environ["PROMO_START_JITTER_SECONDS"] = "120"
+        rng = MaxRng()
+        self.run_promo(rng=rng, start_jitter=None, send_delay=0)
+        self.assertEqual(rng.calls[0], (0, 120.0))
+
+    def test_bad_env_falls_back_to_the_default(self):
+        os.environ["PROMO_START_JITTER_SECONDS"] = "soonish"
+        with redirect_stderr(io.StringIO()):
+            self.assertEqual(pb.start_jitter_bound(), 900.0)
+
+    def test_not_taken_on_dry_run(self):
+        events = self.run_promo(argv=["--dry-run"], rng=MaxRng(), start_jitter=None)
+        self.assertEqual([e for e in events if e[0] == "sleep"], [])
+
+    def test_not_taken_on_refs(self):
+        events = self.run_promo(argv=["--refs"], rng=MaxRng(), start_jitter=None,
+                                tracking={"prefix": "BH", "number": "+263"})
+        self.assertEqual([e for e in events if e[0] == "sleep"], [])
+
+    def test_not_taken_when_every_group_already_got_todays_ad(self):
+        self.run_promo(rng=MaxRng(), start_jitter=0, send_delay=0)
+        self.tests.events.clear()
+        events = self.run_promo(rng=MaxRng(), start_jitter=None, send_delay=0)
+        self.assertEqual(events, [], "nothing pending: no wait, no sends")
+
+    def test_todays_promo_sizes_pay_nothing_for_the_head_start(self):
+        """At today's biggest promo (20 groups) a full 15-minute head start
+        still leaves room for the full 20-60 s gaps, so enabling the jitter
+        changes no gap."""
+        groups = ["%d@g.us" % i for i in range(20)]
+        rng = MaxRng()
+        self.run_promo(groups, rng=rng, start_jitter=None, cron_timeout=3600)
+        self.assertEqual(rng.calls[0], (0, 900.0))
+        self.assertEqual(set(rng.calls[1:]), {(20.0, 60.0)})
+
+    def test_it_is_charged_against_the_timeout_budget(self):
+        """A 15-minute head start must not eat the margin fit_gap_bounds exists
+        to protect: once a promo is big enough for the budget to bind, the gaps
+        are planned with what the jitter leaves, not the whole timeout."""
+        groups = ["%d@g.us" % i for i in range(45)]
+        with_jitter = MaxRng()
+        self.run_promo(groups, rng=with_jitter, start_jitter=None,
+                       cron_timeout=3600)
+        self.tests.events.clear()
+
+        self.setUp()  # fresh state file, so all 45 are pending again
+        without = MaxRng()
+        self.run_promo(groups, rng=without, start_jitter=0, cron_timeout=3600)
+
+        self.assertEqual(with_jitter.calls[0], (0, 900.0))
+        (lo, hi), = set(with_jitter.calls[1:])
+        self.assertEqual(set(without.calls), {(20.0, 60.0)},
+                         "without the head start these gaps fit untouched")
+        self.assertLess(hi, 60.0, "gaps must tighten to pay for the head start")
+        worst = 900.0 + (len(groups) - 1) * hi + len(groups) * pb.SEND_ALLOWANCE_SECONDS
+        self.assertLessEqual(worst, 3600, "the whole run must still fit")
+
+    def test_a_stale_short_timeout_clamps_the_wait_instead_of_losing_the_run(self):
+        rng = MaxRng()
+        events = self.run_promo(["1@g.us", "2@g.us", "3@g.us"], rng=rng,
+                                start_jitter=None, cron_timeout=600)
+        waited = events[0][1]
+        self.assertEqual(events[0][0], "sleep")
+        self.assertEqual(waited, 600 * pb.START_JITTER_BUDGET_FRACTION)
+        self.assertEqual(len([e for e in events if e[0] == "send"]), 3,
+                         "every group must still get today's ad")
+
+    def test_the_whole_run_still_fits_for_every_promo_size(self):
+        for count in (1, 5, 10, 20, 25):
+            jitter = min(900.0, 3600 * pb.START_JITTER_BUDGET_FRACTION)
+            with redirect_stderr(io.StringIO()):
+                lo, hi = pb.fit_gap_bounds(20.0, 60.0, count, 3600 - jitter)
+            worst = jitter + (count - 1) * hi + count * pb.SEND_ALLOWANCE_SECONDS
+            self.assertLessEqual(worst, 3600, count)
 
 
 class CronTimeoutLookupTests(unittest.TestCase):

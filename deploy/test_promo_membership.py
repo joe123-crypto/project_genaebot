@@ -1,0 +1,235 @@
+"""workspace/cron/membership.json is the single source of truth for the groups
+the bot advertises in (workspace/lib/promo_membership.py reads it).
+
+The seven promo targets.json files used to be hand-maintained, with the same
+JIDs copy-pasted across them and the exclusion rules repeated in prose. They are
+now generated from membership.json. These tests pin the migration -- each
+promo's group set and weekly cadence is exactly what the hand-written files
+carried when they were folded in -- and the validation that keeps a bad edit
+from reaching production.
+
+unittest-style so deploy/ci-check.sh, which runs each test file with plain
+``python3``, executes them.
+"""
+
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+LIB_DIR = ROOT / "workspace/lib"
+CRON = ROOT / "workspace/cron"
+if str(LIB_DIR) not in sys.path:
+    sys.path.insert(0, str(LIB_DIR))
+
+import promo_membership as pm  # noqa: E402
+
+MEMBERSHIP = CRON / "membership.json"
+
+# Frozen from the hand-written targets.json files at the commit that introduced
+# membership.json (#111's successor). A change here means a campaign's reach
+# changed: intended edits update these numbers in the same commit, accidents
+# show up as a failure.
+EXPECTED_DAILY = {
+    "appliance-repairs": 5,
+    "borehole-drilling": 8,
+    "building-materials": 10,
+    "cv": 18,
+    # fruit-trees 15 -> 17, genaie 20 -> 21, genaie-leads 19 -> 20 when
+    # MAGWEGWE DEALS and LOBENGULA WEST MARKETPLACE were added (#112).
+    "fruit-trees": 17,
+    "genaie-leads": 20,
+    "genaie": 21,
+}
+EXPECTED_WEEKLY = {
+    "borehole-drilling": {"120363166672509962@g.us": ["mon", "wed", "fri"]},
+    "building-materials": {"120363166672509962@g.us": ["mon", "wed", "fri"]},
+    "cv": {"120363407177302513@g.us": ["mon", "thu"]},
+}
+
+
+def minimal(**groups):
+    """A tiny valid membership doc, for validation tests."""
+    return {
+        "version": 1,
+        "defaults": {"activity": "normal",
+                     "bands": {"busy": [6, 10], "normal": [4, 6], "quiet": [1, 3]}},
+        "promos": {"cv": {}, "genaie": {}},
+        "groups": groups,
+    }
+
+
+class MembershipFileTests(unittest.TestCase):
+    def setUp(self):
+        self.m = pm.load(str(MEMBERSHIP))
+        self.assertIsNotNone(self.m, "membership.json must exist and parse")
+
+    def test_the_committed_file_is_valid(self):
+        self.assertEqual(pm.validate(self.m), [])
+
+    def test_declares_exactly_the_seven_promo_directories(self):
+        on_disk = sorted(p.name[: -len("-promo")] for p in CRON.glob("*-promo"))
+        self.assertEqual(sorted(self.m["promos"]), on_disk)
+
+    def test_every_promo_has_a_generated_file_comment(self):
+        for promo, meta in self.m["promos"].items():
+            self.assertIn("GENERATED", meta.get("comment", ""),
+                          "%s's targets.json must say it is generated" % promo)
+
+    def test_group_counts_match_the_hand_written_targets_files(self):
+        for promo, expected in EXPECTED_DAILY.items():
+            jids, _ = pm.groups_for_promo(self.m, promo)
+            self.assertEqual(len(jids), expected, promo)
+            self.assertEqual(len(set(jids)), len(jids), "%s has duplicates" % promo)
+
+    def test_weekly_cadences_match_the_hand_written_targets_files(self):
+        for promo in self.m["promos"]:
+            _, weekly = pm.groups_for_promo(self.m, promo)
+            self.assertEqual(weekly, EXPECTED_WEEKLY.get(promo, {}), promo)
+
+    def test_a_weekly_group_is_not_also_in_the_daily_list(self):
+        for promo in self.m["promos"]:
+            jids, weekly = pm.groups_for_promo(self.m, promo)
+            self.assertEqual(set(jids) & set(weekly), set(), promo)
+
+    def test_only_active_groups_are_advertised_to(self):
+        for jid, entry in pm.groups(self.m).items():
+            if pm.status_of(entry) != "active":
+                self.assertEqual(pm.promos_for_group(self.m, jid), [],
+                                 "%s is %s but still advertised to"
+                                 % (jid, pm.status_of(entry)))
+
+    def test_paused_groups_keep_their_record(self):
+        """on-hold / admin-only / not-a-member groups stay listed, so the
+        discovery sweep does not re-add them as if they were new."""
+        statuses = set(pm.status_of(e) for e in pm.groups(self.m).values())
+        self.assertIn("admin-only", statuses)
+        self.assertIn("not-a-member", statuses)
+        self.assertIn("on-hold", statuses)
+
+    def test_caps_are_off_in_the_committed_file(self):
+        """Rollout phase A ships the machinery dark; flipping this is phase B."""
+        self.assertFalse(pm.caps_enabled(self.m))
+
+    def test_every_jid_is_a_group_jid(self):
+        for jid in pm.groups(self.m):
+            self.assertTrue(jid.endswith("@g.us"), jid)
+
+    def test_bands_cover_every_tier_in_use(self):
+        bands = pm.bands(self.m)
+        for jid, entry in pm.groups(self.m).items():
+            self.assertIn(pm.activity_of(self.m, entry), bands, jid)
+
+
+class ProjectionTests(unittest.TestCase):
+    def test_groups_for_promo_preserves_membership_order(self):
+        m = minimal(**{
+            "1@g.us": {"promos": ["cv"]},
+            "2@g.us": {"promos": ["genaie"]},
+            "3@g.us": {"promos": ["cv"]},
+        })
+        self.assertEqual(pm.groups_for_promo(m, "cv"), (["1@g.us", "3@g.us"], {}))
+
+    def test_weekly_group_is_split_out(self):
+        m = minimal(**{"1@g.us": {"promos": ["cv"], "weekly": {"cv": ["mon"]}}})
+        self.assertEqual(pm.groups_for_promo(m, "cv"), ([], {"1@g.us": ["mon"]}))
+
+    def test_status_gates_generation(self):
+        m = minimal(**{"1@g.us": {"promos": ["cv"], "status": "on-hold"}})
+        self.assertEqual(pm.groups_for_promo(m, "cv"), ([], {}))
+        self.assertEqual(pm.promos_for_group(m, "1@g.us"), [])
+
+    def test_targets_payload_omits_weekly_keys_when_there_are_none(self):
+        m = minimal(**{"1@g.us": {"promos": ["cv"]}})
+        m["promos"]["cv"] = {"comment": "c", "weekly_comment": "w"}
+        payload = pm.targets_payload(m, "cv")
+        self.assertEqual(list(payload), ["_comment", "groups"])
+
+    def test_dumps_targets_matches_the_hand_written_formatting(self):
+        """Two-space indent, UTF-8, trailing newline, and each weekly day list on
+        one line -- byte-stability is what lets CI diff a regeneration."""
+        payload = {"_comment": "c", "groups": ["1@g.us"],
+                   "weekly_groups": {"2@g.us": ["mon", "thu"]}}
+        text = pm.dumps_targets(payload)
+        self.assertIn('"2@g.us": ["mon", "thu"]', text)
+        self.assertIn('  "groups": [\n    "1@g.us"\n  ]', text)
+        self.assertTrue(text.endswith("}\n"))
+        self.assertEqual(json.loads(text), payload)
+
+    def test_dumps_targets_keeps_non_ascii_names_readable(self):
+        text = pm.dumps_targets({"_comment": "Bindura 💰", "groups": []})
+        self.assertIn("💰", text)
+        self.assertNotIn("\\u", text)
+
+    def test_load_returns_none_for_a_missing_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIsNone(pm.load(str(Path(tmp, "nope.json"))))
+
+    def test_load_raises_on_invalid_json(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bad = Path(tmp, "membership.json")
+            bad.write_text("{not json", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                pm.load(str(bad))
+
+
+class ValidationTests(unittest.TestCase):
+    def assertComplains(self, m, needle):
+        errors = pm.validate(m)
+        self.assertTrue(any(needle in e for e in errors),
+                        "expected a complaint about %r, got %r" % (needle, errors))
+
+    def test_unknown_status(self):
+        self.assertComplains(minimal(**{"1@g.us": {"status": "paused"}}),
+                             "unknown status")
+
+    def test_unknown_promo(self):
+        self.assertComplains(minimal(**{"1@g.us": {"promos": ["nope"]}}),
+                             "unknown promo")
+
+    def test_promo_used_but_not_declared(self):
+        m = minimal(**{"1@g.us": {"promos": ["cv"]}})
+        del m["promos"]["cv"]
+        self.assertComplains(m, "not declared")
+
+    def test_unknown_activity_tier(self):
+        self.assertComplains(minimal(**{"1@g.us": {"activity": "frantic"}}),
+                             "unknown activity tier")
+
+    def test_bad_weekday_token(self):
+        m = minimal(**{"1@g.us": {"promos": ["cv"], "weekly": {"cv": ["moonday"]}}})
+        self.assertComplains(m, "invalid weekday")
+
+    def test_weekly_for_a_promo_the_group_is_not_in(self):
+        m = minimal(**{"1@g.us": {"promos": ["cv"], "weekly": {"genaie": ["mon"]}}})
+        self.assertComplains(m, "not in its promos")
+
+    def test_duplicate_promo_entries(self):
+        self.assertComplains(minimal(**{"1@g.us": {"promos": ["cv", "cv"]}}),
+                             "duplicates")
+
+    def test_negative_daily_cap(self):
+        self.assertComplains(minimal(**{"1@g.us": {"daily_cap": -1}}), "daily_cap")
+
+    def test_duplicate_names_are_flagged(self):
+        m = minimal(**{"1@g.us": {"name": "Same"}, "2@g.us": {"name": "Same"}})
+        self.assertComplains(m, "is also used by")
+
+    def test_non_group_jid(self):
+        self.assertComplains(minimal(**{"263785811799@s.whatsapp.net": {}}),
+                             "@g.us")
+
+    def test_wrong_version(self):
+        m = minimal()
+        m["version"] = 2
+        self.assertComplains(m, "unsupported version")
+
+    def test_weekday_ints_are_accepted(self):
+        m = minimal(**{"1@g.us": {"promos": ["cv"], "weekly": {"cv": [0, 3]}}})
+        self.assertEqual(pm.validate(m), [])
+
+
+if __name__ == "__main__":
+    unittest.main()

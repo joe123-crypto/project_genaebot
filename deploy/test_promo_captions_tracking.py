@@ -161,7 +161,7 @@ class VariantRotationTests(unittest.TestCase):
                 state = Path(tmp, "state.json")
                 rc = pb.broadcast(text=self.VARIANTS, image=str(img),
                                   targets_file=str(targets), state_file=str(state),
-                                  send_delay=0, argv=[])
+                                  send_delay=0, argv=[], start_jitter=0, caps=None)
                 self.assertEqual(rc, 0)
                 for jid in self.JIDS[:6]:
                     expected = self.VARIANTS[pb.variant_index(jid, 3, day=date(2026, 10, 9))]
@@ -187,7 +187,7 @@ class VariantRotationTests(unittest.TestCase):
                 rc = pb.broadcast(text=self.VARIANTS, image=str(img),
                                   targets_file=str(targets),
                                   state_file=str(Path(tmp, "state.json")),
-                                  send_delay=0, argv=[],
+                                  send_delay=0, argv=[], start_jitter=0, caps=None,
                                   variant_images={1: str(pinned)})
                 self.assertEqual(rc, 0)
                 idxs = {j: pb.variant_index(j, 3, day=date(2026, 10, 9))
@@ -211,7 +211,7 @@ class VariantRotationTests(unittest.TestCase):
                     rc = pb.broadcast(text=self.VARIANTS, image=str(img),
                                       targets_file=str(Path(tmp, "t.json")),
                                       state_file=str(Path(tmp, "s.json")),
-                                      send_delay=0, argv=[],
+                                      send_delay=0, argv=[], start_jitter=0, caps=None,
                                       variant_images={2: str(Path(tmp, "nope.png"))})
                 self.assertEqual(rc, 1)
         finally:
@@ -229,7 +229,7 @@ class VariantRotationTests(unittest.TestCase):
                 targets.write_text(json.dumps({"groups": ["1@g.us", "2@g.us"]}))
                 text = "Fixed {not a placeholder} caption"
                 pb.broadcast(text=text, image=str(img), targets_file=str(targets),
-                             state_file=str(Path(tmp, "s.json")), send_delay=0, argv=[])
+                             state_file=str(Path(tmp, "s.json")), send_delay=0, argv=[], start_jitter=0, caps=None)
                 self.assertEqual(sent, [text, text])
         finally:
             pb.send_ad = saved

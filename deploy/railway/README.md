@@ -66,6 +66,29 @@ timeout it registered is the one the gateway reports back, and the promo engine
 reads that live value at run time so a not-yet-migrated job tightens its send
 gaps rather than being killed with groups unreached (see README).
 
+The same applies to the promo **schedules**, which moved off the hour (08:13,
+08:40, 10:35, 11:39, 12:50, 14:26, 17:06 `Africa/Harare`) so the account's daily
+pattern is not perfectly periodic. Merging that change ships nothing on its own:
+run all seven installers over `railway ssh` to apply it, in any order --
+
+```sh
+for p in borehole-drilling fruit-trees appliance-repairs cv \
+         building-materials genaie genaie-leads; do
+  ./deploy/install-$p-promo.sh
+done
+```
+
+-- then confirm with `openclaw cron list --all --json`. `register_promo_cron`
+now reads the schedule and timezone back as well as the timeout and fails loudly
+(printing the job's current state) when any of them is not what it just set:
+nothing else would catch a stale schedule, which is precisely what these
+installers exist to change.
+
+Group membership and the per-group ad caps are NOT cron state: they live in
+`workspace/cron/membership.json`, which ships with the workspace overlay on a
+normal merge. Turning the caps on is a one-line edit to that file
+(`defaults.caps_enabled`), not an installer run.
+
 ## One-time wiring (must be done in the dashboards; the CLI cannot do these)
 
 1. **Railway → GitHub integration.** Railway dashboard → project `openclaw-gateway` →

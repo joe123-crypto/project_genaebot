@@ -13,7 +13,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/install-promo.sh"
 
 register_promo_cron \
   "building-materials-promo" \
-  "${BUILDING_MATERIALS_PROMO_CRON_EXPR:-0 12 * * *}" \
+  "${BUILDING_MATERIALS_PROMO_CRON_EXPR:-50 12 * * *}" \
   "${BUILDING_MATERIALS_PROMO_TZ:-Africa/Harare}" \
   "${BUILDING_MATERIALS_PROMO_FAILURE_ALERT_TO:-+213563719936}" \
   "/home/joseph/.openclaw/workspace/cron/building-materials-promo/post_ad.py"

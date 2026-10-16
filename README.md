@@ -337,43 +337,44 @@ deploys. Each has an idempotent installer under `deploy/` that registers or
 updates it; run one only when its schedule or command changes. All times are
 `Africa/Harare`.
 
-- **`cv-promo`** (`install-cv-promo.sh`, 11:00) runs
+- **`cv-promo`** (`install-cv-promo.sh`, 11:39) runs
   `workspace/cron/cv-promo/post_cv_ad.py`, a deterministic (no-agent) job that
-  posts the fixed CV-service ad to the WhatsApp group JIDs listed in
-  `workspace/cron/cv-promo/targets.json`. Most groups get the ad daily; groups
+  posts the fixed CV-service ad to the WhatsApp group JIDs in
+  `workspace/cron/cv-promo/targets.json` (generated from `membership.json`, see
+  *Group membership* below). Most groups get the ad daily; groups
   under the file's `weekly_groups` map are posted to only on their configured
   weekdays (the cron still runs daily and simply skips them on other days), which
   is how Vacancy Lamp advertises CV making twice a week (Mon and Thu)
-- **`building-materials-promo`** (`install-building-materials-promo.sh`, 12:00)
+- **`building-materials-promo`** (`install-building-materials-promo.sh`, 12:50)
   runs `workspace/cron/building-materials-promo/post_ad.py`, a deterministic
   (no-agent) job that posts the fixed building-materials for-sale ad to the WhatsApp group
   JIDs listed in `workspace/cron/building-materials-promo/targets.json`
-- **`genaie-promo`** (`install-genaie-promo.sh`, 14:00) runs
+- **`genaie-promo`** (`install-genaie-promo.sh`, 14:26) runs
   `workspace/cron/genaie-promo/post_ad.py`, a deterministic (no-agent) job that
   posts the fixed Genaie-services ad (group advertising, poster design, WhatsApp
   bots) to the WhatsApp group JIDs listed in
   `workspace/cron/genaie-promo/targets.json` (every group the bot is in except
   Vacancy Lamp)
-- **`genaie-leads-promo`** (`install-genaie-leads-promo.sh`, 17:00) runs
+- **`genaie-leads-promo`** (`install-genaie-leads-promo.sh`, 17:06) runs
   `workspace/cron/genaie-leads-promo/post_ad.py`, a deterministic (no-agent) job
   that posts the fixed Genaie lead-generation ad ("we generate potential customers;
   you choose how you pay" — pay per lead, fixed monthly, or a % of revenue) to the
   WhatsApp group JIDs listed in `workspace/cron/genaie-leads-promo/targets.json`.
   This is a separate campaign from `genaie-promo` above (later slot, own image and
   copy), reusing the same shared `promo_broadcast` delivery engine
-- **`fruit-trees-promo`** (`install-fruit-trees-promo.sh`, 09:00) runs
+- **`fruit-trees-promo`** (`install-fruit-trees-promo.sh`, 08:40) runs
   `workspace/cron/fruit-trees-promo/post_ad.py`, a deterministic (no-agent) job that
   posts the fixed grafted-fruit-tree for-sale ad (mango, pawpaw, orange, naartjie,
   lemon; retail/wholesale pricing) to the WhatsApp group JIDs listed in
   `workspace/cron/fruit-trees-promo/targets.json`, reusing the same shared
   `promo_broadcast` delivery engine
-- **`appliance-repairs-promo`** (`install-appliance-repairs-promo.sh`, 10:00) runs
+- **`appliance-repairs-promo`** (`install-appliance-repairs-promo.sh`, 10:35) runs
   `workspace/cron/appliance-repairs-promo/post_ad.py`, a deterministic (no-agent) job
   that posts the fixed APPLIANCE REPAIRS PL ad (a Harare repair shop: TVs, inverters,
   batteries, welding machines, borehole drives, microwaves, PA systems) to the
   WhatsApp group JIDs listed in `workspace/cron/appliance-repairs-promo/targets.json`,
   reusing the same shared `promo_broadcast` delivery engine
-- **`borehole-drilling-promo`** (`install-borehole-drilling-promo.sh`, 08:00) runs
+- **`borehole-drilling-promo`** (`install-borehole-drilling-promo.sh`, 08:13) runs
   `workspace/cron/borehole-drilling-promo/post_ad.py`, a deterministic (no-agent) job
   that posts the fixed solar-borehole installation ad (0.75HP/1HP/1.5HP/2HP DC pump
   packages, each with tank, stand, solar and installation) to the WhatsApp group JIDs
@@ -419,6 +420,96 @@ part-way and re-run the same day skips the groups it already reached.
 The daily Job Scout turn (`install-job-scout.sh`, 08:00), the five-minute
 `job-scout-approvals` worker, the hourly `job-scout-cv-conversion` pass and the
 two group feeds have their own installers and are described above.
+
+Each promo also waits a **random 0-900 s before its first send**
+(`PROMO_START_JITTER_SECONDS`; `0` disables it). The gaps inside a run were
+already random, but every cron used to fire exactly on the hour, so the
+account's day-to-day pattern stayed perfectly periodic. The seven schedules are
+now spread off the hour as well (08:13, 08:40, 10:35, 11:39, 12:50, 14:26,
+17:06), chosen so a campaign's latest possible finish -- base minute plus the
+full jitter plus a worst-case run -- never reaches the next campaign's slot. The
+wait is charged against the job's timeout budget, so the gap planning above sees
+only what is left; at today's largest promo (20 groups) that still leaves room
+for the full 20-60 s gaps, and it only starts tightening them past ~37 groups.
+It is capped at a quarter of the job timeout, so a stale short timeout clamps the
+wait instead of burning the run before its first send, and it is never taken on
+`--dry-run` / `--refs` or when no group is pending.
+
+### Group membership (one file, generated targets)
+
+`workspace/cron/membership.json` is the **single source of truth** for the groups
+the bot advertises in: one entry per group with its name, `source`, `status`,
+activity tier and the promos that target it. The seven
+`workspace/cron/*-promo/targets.json` files are **generated** from it by
+`workspace/bin/make-promo-targets`, and `deploy/test_promo_targets_generated.py`
+fails CI if they drift. So:
+
+```sh
+# edit workspace/cron/membership.json, then
+./workspace/bin/make-promo-targets --write   # rewrite the seven targets files
+./workspace/bin/make-promo-targets --check   # what CI runs; 1 on drift
+```
+
+This replaces the old `group-names.json` and the prose exclusion lists that each
+`targets.json` carried in its `_comment`. `status` now does that work: only
+`active` groups reach a targets file, so an `admin-only` (sends return
+`forbidden`), `not-a-member` (`item-not-found`) or `on-hold` group is excluded by
+its record while **keeping** its `promos` list, which is what makes resuming one
+a status flip rather than a rediscovery. Group names still live in the repo
+because the gateway only learns a name from WhatsApp itself and shows most of
+these groups blank -- and names must NOT be written into the gateway's session
+database (doing so took the bot down on 2026-10-14).
+
+Membership still cannot be listed via the gateway, so newly-joined groups are
+discovered by hand from the WhatsApp sender-key store
+(`credentials/whatsapp/default/sender-key-<jid>...`) and recorded in
+membership.json. `workspace/bin/list-groups` prints the whole picture
+(`--caps` adds today's allowance, `--json` one object per group); it is
+read-only and never contacts the gateway.
+
+### Per-group daily ad caps
+
+How many ads a group got used to be an accident of how many promos listed it: a
+group in six of the seven campaigns took six ads a day whatever its appetite.
+Each group now has a **daily allowance**:
+
+- the operator's `activity` tier picks a band -- `busy` 6-10, `normal` 4-6,
+  `quiet` 1-3 (`defaults.bands`, and `daily_cap` on a group overrides the band
+  outright);
+- the **ad-reply signal the bot already records** moves the cap inside that
+  band. `runtime/public-service-gate/ad-refs.json` counts inbound DMs carrying an
+  ad ref, and a ref's suffix is a pure function of the group JID, so replies are
+  attributable per group: one weighted unique replier earns one ad a day above
+  the floor, decaying as the newest reply ages (full weight ≤7 days, half ≤14,
+  a quarter ≤30, nothing after). That is why the cap moves day to day. A cap
+  moves at most ±1 per day, so allowances drift instead of whipsawing.
+
+Note what the signal is *not*: group chatter. Group events are dropped before
+anything counts them, so there is no per-group message volume to read -- the tier
+is the operator's judgement of that, and the replies modulate it. The
+appliance-repairs ad contributes nothing either, because its `AR` prefix is
+deliberately absent from the plugin's `AD_REF_PREFIXES` (that link points at the
+repair shop's own number, so those replies never reach the bot).
+
+When a group's cap is smaller than the number of campaigns targeting it,
+`workspace/lib/promo_caps.py` picks the day's winners by **rotation**: a window
+of `cap` entries over the group's fixed circular order, sliding by one per day,
+so across one cycle every campaign gets exactly `cap` turns and none starves. It
+is a pure function of `(day, jid, promo set, cap)` -- identical in every cron
+process, needing no shared state and no lock, which matters because
+`json_store` is last-writer-wins and the seven crons can overlap.
+
+Caps are **off** until `defaults.caps_enabled` is `true` in membership.json, and
+the engine fails open: a missing or broken membership file logs a warning and
+sends to every eligible group. Preview the effect before enabling it with
+`./workspace/bin/list-groups --caps` (and `--date YYYY-MM-DD` for another day) or
+a promo's `--dry-run`, which prints each group's tier, cap, reply score and the
+campaigns today's rotation gives the allowance to. With every group left at the
+`normal` default and no reply history, turning caps on cuts the daily total by
+roughly 15%: the seven daily lists hold 99 sends, and a measured Friday (when
+the Mon/Wed/Fri weekly group posts) goes from 101 ads to 86. The band *floor*
+(4) is what a group with no replies gets, so the groups in five and six
+campaigns are the ones that come down.
 
 ### Promo caption rotation and ad ref tracking
 

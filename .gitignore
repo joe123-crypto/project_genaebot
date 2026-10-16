@@ -71,23 +71,26 @@
 !workspace/cron/genaie-leads-promo/assets/*.png
 
 # Fruit-trees promo campaign: editable target list + the ad image (developer-owned,
-# deployed with the workspace). Daily 09:00 Africa/Harare cron.
+# deployed with the workspace). Daily 08:40 Africa/Harare cron.
 !workspace/cron/fruit-trees-promo/targets.json
 !workspace/cron/fruit-trees-promo/assets/
 !workspace/cron/fruit-trees-promo/assets/*.jpg
 
-# Group JID -> name map shared by all the promos (read by workspace/bin/list-groups).
-!workspace/cron/group-names.json
+# Single source of truth for the groups the bot advertises in: names, statuses,
+# activity tiers and promo membership. The seven promo targets.json files are
+# generated from it by workspace/bin/make-promo-targets (read by that generator,
+# workspace/bin/list-groups and the promo crons' per-group caps).
+!workspace/cron/membership.json
 
 # Appliance-repairs promo campaign (APPLIANCE REPAIRS PL): editable target list +
-# the ad image (developer-owned, deployed with the workspace). Daily 10:00
+# the ad image (developer-owned, deployed with the workspace). Daily 10:35
 # Africa/Harare cron.
 !workspace/cron/appliance-repairs-promo/targets.json
 !workspace/cron/appliance-repairs-promo/assets/
 !workspace/cron/appliance-repairs-promo/assets/*.jpg
 
 # Borehole-drilling promo campaign: editable target list + the rotating ad images
-# (developer-owned, deployed with the workspace). Daily 08:00 Africa/Harare cron.
+# (developer-owned, deployed with the workspace). Daily 08:13 Africa/Harare cron.
 !workspace/cron/borehole-drilling-promo/targets.json
 !workspace/cron/borehole-drilling-promo/assets/
 !workspace/cron/borehole-drilling-promo/assets/*.jpg

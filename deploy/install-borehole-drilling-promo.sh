@@ -13,7 +13,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/install-promo.sh"
 
 register_promo_cron \
   "borehole-drilling-promo" \
-  "${BOREHOLE_PROMO_CRON_EXPR:-0 8 * * *}" \
+  "${BOREHOLE_PROMO_CRON_EXPR:-13 8 * * *}" \
   "${BOREHOLE_PROMO_TZ:-Africa/Harare}" \
   "${BOREHOLE_PROMO_FAILURE_ALERT_TO:-+263785632943}" \
   "/home/joseph/.openclaw/workspace/cron/borehole-drilling-promo/post_ad.py"
