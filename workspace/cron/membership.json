@@ -46,6 +46,42 @@
     }
   },
   "groups": {
+    "120363432743348648@g.us": {
+      "name": "KWEKWE BUSINESS PLUG 4",
+      "source": "operator",
+      "status": "active",
+      "daily_cap": null,
+      "promos": [
+        "cv",
+        "genaie",
+        "genaie-leads",
+        "fruit-trees"
+      ]
+    },
+    "120363421153578257@g.us": {
+      "name": "LOWVELD HUSTLERS",
+      "source": "operator",
+      "status": "active",
+      "daily_cap": null,
+      "promos": [
+        "cv",
+        "genaie",
+        "genaie-leads",
+        "fruit-trees"
+      ]
+    },
+    "120363286085033663@g.us": {
+      "name": "Gweru Market Mall",
+      "source": "operator",
+      "status": "active",
+      "daily_cap": null,
+      "promos": [
+        "cv",
+        "genaie",
+        "genaie-leads",
+        "fruit-trees"
+      ]
+    },
     "120363275485319265@g.us": {
       "name": "Bindura Town  Business💰💻📱🚙",
       "source": "whatsapp",
@@ -166,10 +202,10 @@
     "120363422964450745@g.us": {
       "name": "UNI-MARKETING HUB",
       "source": "whatsapp",
-      "status": "on-hold",
+      "status": "not-a-member",
       "daily_cap": null,
       "promos": [],
-      "note": "suspended since 2026-10-14; removed from every promo until the operator says to resume, and do NOT re-add it from the sender-key-store discovery sweep"
+      "note": "operator exited this group 2026-10-16 (was on-hold/suspended since 2026-10-14); the bot is no longer a member -- do NOT re-add it from the sender-key-store discovery sweep"
     },
     "120363403898552868@g.us": {
       "name": "Hatcliffe Community Newspaper..(HCN)",
@@ -328,7 +364,12 @@
       "source": "operator",
       "status": "active",
       "daily_cap": null,
-      "promos": []
+      "promos": [
+        "cv",
+        "genaie",
+        "genaie-leads",
+        "fruit-trees"
+      ]
     },
     "263785811799-1594293610@g.us": {
       "name": "God Did",
@@ -343,11 +384,11 @@
       ]
     },
     "120363427221695541@g.us": {
-      "name": "CHIKOMBEDZI MARKETPLACE",
-      "source": "operator",
+      "name": null,
       "status": "active",
       "daily_cap": null,
-      "promos": []
+      "promos": [],
+      "note": "was mislabeled CHIKOMBEDZI MARKETPLACE until 2026-10-16; operator confirmed that name belongs to 120363428938298524. Actual name of this low-traffic group unknown."
     },
     "120363412391036323@g.us": {
       "name": "MAGWEGWE DEALS BUY AND SELL GROUP 2",
@@ -394,10 +435,16 @@
       ]
     },
     "120363428938298524@g.us": {
-      "name": null,
+      "name": "CHIKOMBEDZI MARKETPLACE",
+      "source": "operator",
       "status": "active",
       "daily_cap": null,
-      "promos": []
+      "promos": [
+        "cv",
+        "genaie",
+        "genaie-leads",
+        "fruit-trees"
+      ]
     },
     "120363413442071640@g.us": {
       "name": null,
