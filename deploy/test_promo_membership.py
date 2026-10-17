@@ -44,10 +44,15 @@ EXPECTED_DAILY = {
     # sender-key store (one in-roster with empty promos, nine new, seven of
     # them legacy <creator>-<timestamp> JIDs from the 2026-10-17 burst): cv
     # 23 -> 33, fruit-trees 22 -> 32, genaie-leads 25 -> 35, genaie 26 -> 36.
-    "cv": 33,
-    "fruit-trees": 32,
-    "genaie-leads": 35,
-    "genaie": 36,
+    # Then three groups started answering every send with 'forbidden' and were
+    # marked admin-only: ZIMBABWE UPDATE BYO (fruit-trees, cv, genaie,
+    # genaie-leads), 120363168421689199 (cv, genaie, genaie-leads) and
+    # 263713652561-1592027591 (cv, fruit-trees, genaie, genaie-leads): cv
+    # 33 -> 30, fruit-trees 32 -> 30, genaie-leads 35 -> 32, genaie 36 -> 33.
+    "cv": 30,
+    "fruit-trees": 30,
+    "genaie-leads": 32,
+    "genaie": 33,
 }
 EXPECTED_WEEKLY = {
     "borehole-drilling": {"120363166672509962@g.us": ["mon", "wed", "fri"]},
