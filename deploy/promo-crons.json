@@ -1,0 +1,85 @@
+{
+  "_comment": "Declared gateway cron state for the seven WhatsApp promo campaigns -- the single source of truth for their schedule, timezone, failure-alert target, command and shared job timeout. deploy/reinstall-promo-crons.sh applies and verifies it; deploy/test_promo_cron_reinstall.py fails CI when a wrapper, install-promo.sh's timeout default or either README drifts from it. Cron state lives on the gateway's Railway volume, so merging a change here ships NOTHING until the installers are re-run.",
+  "version": 1,
+  "commandCwd": "/home/joseph/.openclaw/workspace",
+  "timeoutSeconds": 3600,
+  "promos": [
+    {
+      "slug": "borehole-drilling",
+      "name": "borehole-drilling-promo",
+      "installer": "deploy/install-borehole-drilling-promo.sh",
+      "envPrefix": "BOREHOLE_PROMO",
+      "cron": "13 8 * * *",
+      "tz": "Africa/Harare",
+      "failureAlertTo": "+263785632943",
+      "script": "/home/joseph/.openclaw/workspace/cron/borehole-drilling-promo/post_ad.py",
+      "legacyNames": []
+    },
+    {
+      "slug": "fruit-trees",
+      "name": "fruit-trees-promo",
+      "installer": "deploy/install-fruit-trees-promo.sh",
+      "envPrefix": "FRUIT_TREES_PROMO",
+      "cron": "40 8 * * *",
+      "tz": "Africa/Harare",
+      "failureAlertTo": "+263785632943",
+      "script": "/home/joseph/.openclaw/workspace/cron/fruit-trees-promo/post_ad.py",
+      "legacyNames": []
+    },
+    {
+      "slug": "appliance-repairs",
+      "name": "appliance-repairs-promo",
+      "installer": "deploy/install-appliance-repairs-promo.sh",
+      "envPrefix": "APPLIANCE_REPAIRS_PROMO",
+      "cron": "35 10 * * *",
+      "tz": "Africa/Harare",
+      "failureAlertTo": "+263785632943",
+      "script": "/home/joseph/.openclaw/workspace/cron/appliance-repairs-promo/post_ad.py",
+      "legacyNames": []
+    },
+    {
+      "slug": "cv",
+      "name": "cv-promo",
+      "installer": "deploy/install-cv-promo.sh",
+      "envPrefix": "CV_PROMO",
+      "cron": "39 11 * * *",
+      "tz": "Africa/Harare",
+      "failureAlertTo": "+213563719936",
+      "script": "/home/joseph/.openclaw/workspace/cron/cv-promo/post_cv_ad.py",
+      "legacyNames": []
+    },
+    {
+      "slug": "building-materials",
+      "name": "building-materials-promo",
+      "installer": "deploy/install-building-materials-promo.sh",
+      "envPrefix": "BUILDING_MATERIALS_PROMO",
+      "cron": "50 12 * * *",
+      "tz": "Africa/Harare",
+      "failureAlertTo": "+213563719936",
+      "script": "/home/joseph/.openclaw/workspace/cron/building-materials-promo/post_ad.py",
+      "legacyNames": []
+    },
+    {
+      "slug": "genaie",
+      "name": "genaie-promo",
+      "installer": "deploy/install-genaie-promo.sh",
+      "envPrefix": "GENAIE_PROMO",
+      "cron": "26 14 * * *",
+      "tz": "Africa/Harare",
+      "failureAlertTo": "+213563719936",
+      "script": "/home/joseph/.openclaw/workspace/cron/genaie-promo/post_ad.py",
+      "legacyNames": []
+    },
+    {
+      "slug": "genaie-leads",
+      "name": "genaie-leads-promo",
+      "installer": "deploy/install-genaie-leads-promo.sh",
+      "envPrefix": "GENAIE_LEADS_PROMO",
+      "cron": "6 17 * * *",
+      "tz": "Africa/Harare",
+      "failureAlertTo": "+213563719936",
+      "script": "/home/joseph/.openclaw/workspace/cron/genaie-leads-promo/post_ad.py",
+      "legacyNames": []
+    }
+  ]
+}

@@ -68,21 +68,45 @@ gaps rather than being killed with groups unreached (see README).
 
 The same applies to the promo **schedules**, which moved off the hour (08:13,
 08:40, 10:35, 11:39, 12:50, 14:26, 17:06 `Africa/Harare`) so the account's daily
-pattern is not perfectly periodic. Merging that change ships nothing on its own:
-run all seven installers over `railway ssh` to apply it, in any order --
+pattern is not perfectly periodic. Merging that change ships nothing on its own.
+`deploy/promo-crons.json` is the declared cron state for all seven campaigns --
+schedule, timezone, failure-alert target, command and the shared 3600 s job
+timeout -- and `deploy/reinstall-promo-crons.sh` is the one command that compares
+it to the gateway and applies it:
 
 ```sh
-for p in borehole-drilling fruit-trees appliance-repairs cv \
-         building-materials genaie genaie-leads; do
-  ./deploy/install-$p-promo.sh
-done
+./deploy/reinstall-promo-crons.sh --check   # read-only: live state vs. what the repo declares
+./deploy/reinstall-promo-crons.sh           # re-run all seven installers, then re-check
 ```
 
--- then confirm with `openclaw cron list --all --json`. `register_promo_cron`
-now reads the schedule and timezone back as well as the timeout and fails loudly
-(printing the job's current state) when any of them is not what it just set:
-nothing else would catch a stale schedule, which is precisely what these
-installers exist to change.
+`--check` makes a single `openclaw cron list --all --json` read and changes
+nothing. It exits 0 when the gateway matches the manifest, 1 on drift, 2 when the
+manifest or the live payload is unreadable, and 75 when the gateway is
+unreachable and nothing was inspected. Drift is reported per field, along with
+any job the manifest does not declare.
+
+**Run `--check` first and delete anything it reports as undeclared before
+reinstalling, or the ad goes out twice.** `register_promo_cron` matches on the
+job *name* only, so a leftover job under a different name — a rename, a
+hand-created job, an abandoned experiment — keeps firing the same ad on its old
+schedule and the installers would never notice it.
+
+`--only <promo>` retries a single campaign, `--dry-run` prints the plan without
+contacting the gateway, and `--json` is for an automated caller.
+
+The installers are unchanged and still do all the writing: the orchestrator execs
+`deploy/install-<promo>-promo.sh` one at a time in schedule order, continues past
+a failure, and exits 1 with a summary naming what failed -- so one stale promo
+cannot leave the other six unmigrated. `register_promo_cron` reads the schedule,
+timezone, enabled flag and timeout back and fails loudly (printing the job's
+current state) when any of them is not what it just set: nothing else would catch
+a stale schedule, which is precisely what these installers exist to change.
+
+Reconcile **outside the campaigns' window** -- before 08:13 or after 17:06
+`Africa/Harare` (06:13 / 15:06 UTC; Harare has no DST) -- so no promo's schedule
+moves while that promo is mid-run. A same-day second firing is safe in itself:
+each delivered group is committed immediately, so the re-run skips the groups it
+already reached.
 
 Group membership and the per-group ad caps are NOT cron state: they live in
 `workspace/cron/membership.json`, which ships with the workspace overlay on a
@@ -156,4 +180,5 @@ railway logs        # expect: [whatsapp] ... starting provider, [gateway] ready,
 ```
 
 Do **not** trigger a manual ad send to test — the CV-promo campaign delivers on its own
-cron at 11:00 Africa/Harare.
+cron at 11:39 Africa/Harare (declared in `deploy/promo-crons.json`; confirm the live
+schedule with `./deploy/reinstall-promo-crons.sh --check`).

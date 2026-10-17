@@ -21,6 +21,9 @@
         "deploy/stage-workspace.rsync",
         "deploy/gateway-exec.sh",
         "deploy/install-*.sh",
+        "deploy/promo-crons.json",
+        "deploy/reinstall-promo-crons.sh",
+        "deploy/promo-cron-drift.py",
         "deploy/job-scout-browser.Dockerfile",
         "deploy/job-scout-channel-listener.Dockerfile"
       ],
