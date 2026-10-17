@@ -2,7 +2,7 @@
   "_comment": "Declared gateway cron state for the seven WhatsApp promo campaigns -- the single source of truth for their schedule, timezone, failure-alert target, command and shared job timeout. deploy/reinstall-promo-crons.sh applies and verifies it; deploy/test_promo_cron_reinstall.py fails CI when a wrapper, install-promo.sh's timeout default or either README drifts from it. Cron state lives on the gateway's Railway volume, so merging a change here ships NOTHING until the installers are re-run.",
   "version": 1,
   "commandCwd": "/home/joseph/.openclaw/workspace",
-  "timeoutSeconds": 3600,
+  "timeoutSeconds": 5400,
   "promos": [
     {
       "slug": "borehole-drilling",

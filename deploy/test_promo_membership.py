@@ -40,10 +40,14 @@ EXPECTED_DAILY = {
     # Business in Mutare, CHIKOMBEDZI MARKETPLACE, Gweru Market Mall, KWEKWE
     # BUSINESS PLUG 4 and LOWVELD HUSTLERS (#115): cv 18 -> 23, fruit-trees
     # 17 -> 22, genaie-leads 20 -> 25, genaie 21 -> 26.
-    "cv": 23,
-    "fruit-trees": 22,
-    "genaie-leads": 25,
-    "genaie": 26,
+    # Then each gained the same ten newly-joined groups discovered in the
+    # sender-key store (one in-roster with empty promos, nine new, seven of
+    # them legacy <creator>-<timestamp> JIDs from the 2026-10-17 burst): cv
+    # 23 -> 33, fruit-trees 22 -> 32, genaie-leads 25 -> 35, genaie 26 -> 36.
+    "cv": 33,
+    "fruit-trees": 32,
+    "genaie-leads": 35,
+    "genaie": 36,
 }
 EXPECTED_WEEKLY = {
     "borehole-drilling": {"120363166672509962@g.us": ["mon", "wed", "fri"]},
