@@ -394,8 +394,14 @@
       "name": null,
       "status": "active",
       "daily_cap": null,
-      "promos": [],
-      "note": "was mislabeled CHIKOMBEDZI MARKETPLACE until 2026-10-16; operator confirmed that name belongs to 120363428938298524. Actual name of this low-traffic group unknown."
+      "promos": [
+        "cv",
+        "genaie",
+        "genaie-leads",
+        "fruit-trees"
+      ],
+      "note": "was mislabeled CHIKOMBEDZI MARKETPLACE until 2026-10-16; operator confirmed that name belongs to 120363428938298524. Actual name of this low-traffic group unknown.",
+      "source": "whatsapp"
     },
     "120363412391036323@g.us": {
       "name": "MAGWEGWE DEALS BUY AND SELL GROUP 2",
@@ -520,6 +526,123 @@
       "daily_cap": null,
       "promos": [],
       "note": "sends return 'item-not-found'; the bot is probably no longer in it"
+    },
+    "120363028860116559@g.us": {
+      "name": null,
+      "source": "whatsapp",
+      "status": "active",
+      "daily_cap": null,
+      "promos": [
+        "cv",
+        "genaie",
+        "genaie-leads",
+        "fruit-trees"
+      ],
+      "note": "discovered in the sender-key store 2026-10-15"
+    },
+    "263713652561-1592027591@g.us": {
+      "name": null,
+      "source": "whatsapp",
+      "status": "active",
+      "daily_cap": null,
+      "promos": [
+        "cv",
+        "genaie",
+        "genaie-leads",
+        "fruit-trees"
+      ],
+      "note": "discovered in the sender-key store 2026-10-14 (legacy-format JID)"
+    },
+    "263773773025-1613202843@g.us": {
+      "name": null,
+      "source": "whatsapp",
+      "status": "active",
+      "daily_cap": null,
+      "promos": [
+        "cv",
+        "genaie",
+        "genaie-leads",
+        "fruit-trees"
+      ],
+      "note": "discovered in the sender-key store 2026-10-17 (legacy-format JID, added in the 03:2x burst)"
+    },
+    "263719296677-1595680316@g.us": {
+      "name": null,
+      "source": "whatsapp",
+      "status": "active",
+      "daily_cap": null,
+      "promos": [
+        "cv",
+        "genaie",
+        "genaie-leads",
+        "fruit-trees"
+      ],
+      "note": "discovered in the sender-key store 2026-10-17 (legacy-format JID, added in the 03:2x burst)"
+    },
+    "263782033305-1591803021@g.us": {
+      "name": null,
+      "source": "whatsapp",
+      "status": "active",
+      "daily_cap": null,
+      "promos": [
+        "cv",
+        "genaie",
+        "genaie-leads",
+        "fruit-trees"
+      ],
+      "note": "discovered in the sender-key store 2026-10-17 (legacy-format JID, added in the 03:2x burst)"
+    },
+    "263782033305-1600422052@g.us": {
+      "name": null,
+      "source": "whatsapp",
+      "status": "active",
+      "daily_cap": null,
+      "promos": [
+        "cv",
+        "genaie",
+        "genaie-leads",
+        "fruit-trees"
+      ],
+      "note": "discovered in the sender-key store 2026-10-17 (legacy-format JID, added in the 03:2x burst)"
+    },
+    "263782033305-1603812621@g.us": {
+      "name": null,
+      "source": "whatsapp",
+      "status": "active",
+      "daily_cap": null,
+      "promos": [
+        "cv",
+        "genaie",
+        "genaie-leads",
+        "fruit-trees"
+      ],
+      "note": "discovered in the sender-key store 2026-10-17 (legacy-format JID, added in the 03:2x burst)"
+    },
+    "263778725760-1600450121@g.us": {
+      "name": null,
+      "source": "whatsapp",
+      "status": "active",
+      "daily_cap": null,
+      "promos": [
+        "cv",
+        "genaie",
+        "genaie-leads",
+        "fruit-trees"
+      ],
+      "note": "discovered in the sender-key store 2026-10-17 (legacy-format JID, added in the 03:2x burst)"
+    },
+    "263776921145-1522596171@g.us": {
+      "name": null,
+      "source": "whatsapp",
+      "status": "active",
+      "daily_cap": null,
+      "promos": [
+        "cv",
+        "genaie",
+        "genaie-leads",
+        "fruit-trees"
+      ],
+      "note": "discovered in the sender-key store 2026-10-17 (legacy-format JID, added in the 03:2x burst)"
     }
   }
 }
