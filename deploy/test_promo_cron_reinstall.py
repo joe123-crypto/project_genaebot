@@ -323,6 +323,23 @@ class DriftComparatorTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("unknown promo", err)
 
+    def test_a_closed_pipe_does_not_print_a_traceback(self):
+        """`--check | head` is how anyone reads a seven-promo drift report."""
+        patch = {p["name"]: {"payload.timeoutSeconds": 600} for p in MANIFEST["promos"]}
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
+            json.dump(live_jobs(patch=patch), handle)
+            path = handle.name
+        try:
+            proc = subprocess.run(
+                "%s %s --manifest %s --live %s | head -3"
+                % (sys.executable, COMPARATOR, MANIFEST_PATH, path),
+                shell=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                check=False)
+        finally:
+            os.unlink(path)
+        self.assertNotIn("Traceback", proc.stderr)
+        self.assertNotIn("BrokenPipeError", proc.stderr)
+
     def test_json_output_lists_every_class_and_the_drifted_field_names(self):
         code, out, _ = run_comparator(
             live_jobs(patch={"cv-promo": {"payload.timeoutSeconds": 600}}), "--json")

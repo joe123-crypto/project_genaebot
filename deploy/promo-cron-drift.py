@@ -22,6 +22,7 @@ Exit codes: 0 in sync, 1 drift/missing/legacy/undeclared, 2 bad input or manifes
 
 import argparse
 import json
+import os
 import re
 import sys
 
@@ -258,4 +259,11 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    try:
+        sys.exit(main(sys.argv))
+    except BrokenPipeError:
+        # `--check | head` and `| less` are the obvious ways to read a long report;
+        # neither should end in a traceback. Redirect the dangling stdout so the
+        # interpreter's own flush at exit cannot raise a second time.
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        sys.exit(141)  # 128 + SIGPIPE, the status a shell reports for this
