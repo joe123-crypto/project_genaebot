@@ -7,10 +7,11 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 TARGETS = ROOT / "workspace/cron/building-materials-promo/targets.json"
 
-# WhatsApp group JID: a numeric id suffixed with @g.us. The daily building-materials
+# WhatsApp group JID: a numeric id suffixed with @g.us (old-style groups carry
+# a second numeric part, e.g. 263785811799-1594293610@g.us). The daily building-materials
 # ad only delivers when every target is a group the bot is a member of; invite
 # links are not resolvable on this gateway, so the list must be JIDs.
-GROUP_JID = re.compile(r"^\d+@g\.us$")
+GROUP_JID = re.compile(r"^\d+(-\d+)?@g\.us$")
 
 
 class BuildingMaterialsPromoTargetsTests(unittest.TestCase):
