@@ -18,6 +18,7 @@ import {
 import { clearServiceState } from "./lib/state.js";
 import { clearHandoff, isHandedOff } from "./lib/handoffs.js";
 import { recordAdRefs } from "./lib/ad-refs.js";
+import { containsDash, stripDashes } from "./lib/style.js";
 import {
   FAILSAFE_STOP_PRIORITY,
   clearFailsafeStopSuppression,
@@ -251,6 +252,21 @@ export default {
       },
       { priority: FAILSAFE_STOP_PRIORITY },
     );
+
+    // Runs below the failsafe priority so a cancelled delivery stays cancelled:
+    // this only rewrites a message that is already on its way out.
+    api.on("message_sending", async (event, ctx) => {
+      if (!isEnabled(api)) return;
+      const channel = getEventChannel(event, ctx);
+      if (!isWhatsAppChannel(channel)) return;
+      const content = typeof event?.content === "string" ? event.content : "";
+      if (!containsDash(content)) return;
+
+      const rewritten = stripDashes(content);
+      if (rewritten === content) return;
+      api.logger?.info?.("public-service-gate: rewrote em dashes out of a WhatsApp reply");
+      return { content: rewritten };
+    });
 
     api.on("before_dispatch", async (event, ctx) => {
       if (!isEnabled(api)) return;

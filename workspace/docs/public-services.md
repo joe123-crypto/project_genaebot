@@ -56,7 +56,9 @@ above is actually in force:
 - The agent chats like the business owner: short, natural replies in the
   customer's language (English, Shona or a mix), rarely any emoji, and answers
   only from `business_info`. Anything not on that page is never guessed; the
-  customer is handed off instead.
+  customer is handed off instead. The prompt carries real chats as tone
+  references; they show wording only, and `business_info` remains the only
+  source for facts and prices.
 - Location questions: we are based in Bindura and mobile. The customer orders
   and we come to them. The bot never gives anything more specific than Bindura.
 - Handoff happens when a customer is ready to order, or asks something the
@@ -91,8 +93,18 @@ do offer and ask what the customer needs.
 
 ## Request Handling
 
-- Keep replies short: one or two short sentences by default. No menus, no
-  markdown tables, no em dashes, no service-desk phrasing.
+- Keep replies short: one or two short sentences by default. Answer the
+  question asked and stop. No menus, no markdown tables, no service-desk
+  phrasing.
+- Em and en dashes are banned outbound, not merely discouraged. The prompt
+  forbids them and `lib/style.js` rewrites any that survive into the
+  punctuation a person would have typed, on every outbound WhatsApp message.
+  URLs are excluded from that rewrite so a Job Scout sign-in link reaches the
+  customer character for character.
+- Never pitch a service the customer did not ask about, and never tack a sales
+  question onto an answer about something else. A question is only for a detail
+  needed to take the order, or the next step on the thing the customer actually
+  asked about.
 - Never say the bot is a bot or that "a human" or "a team member" will contact
   the customer; the handoff reply is the only handoff wording.
 - No narration: send only one final reply per turn.
