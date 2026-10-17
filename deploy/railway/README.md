@@ -59,7 +59,7 @@ The rest of `config/openclaw.template.json` is still not applied (see README).
 Cron job definitions (schedule, command, job timeout) are the exception to "merge and
 it ships": they live in the gateway's cron state on the volume and change only when
 their `deploy/install-*.sh` installer is re-run (via `deploy/gateway-exec.sh`, i.e.
-`railway ssh`). For example, the promo crons' 3600 s job timeout set in
+`railway ssh`). For example, the promo crons' 5400 s job timeout set in
 `deploy/install-promo.sh` reaches production only after the seven
 `install-*-promo.sh` installers run again; each installer now verifies the
 timeout it registered is the one the gateway reports back, and the promo engine
@@ -70,7 +70,7 @@ The same applies to the promo **schedules**, which moved off the hour (08:13,
 08:40, 10:35, 11:39, 12:50, 14:26, 17:06 `Africa/Harare`) so the account's daily
 pattern is not perfectly periodic. Merging that change ships nothing on its own.
 `deploy/promo-crons.json` is the declared cron state for all seven campaigns --
-schedule, timezone, failure-alert target, command and the shared 3600 s job
+schedule, timezone, failure-alert target, command and the shared 5400 s job
 timeout -- and `deploy/reinstall-promo-crons.sh` is the one command that compares
 it to the gateway and applies it:
 

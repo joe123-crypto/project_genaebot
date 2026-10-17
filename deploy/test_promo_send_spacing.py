@@ -253,7 +253,7 @@ class CallerWiringTests(unittest.TestCase):
     def test_promo_cron_timeout_covers_worst_case_run(self):
         installer = (ROOT / "deploy/install-promo.sh").read_text(encoding="utf-8")
         self.assertNotIn("--timeout-seconds 600", installer)
-        self.assertIn('PROMO_CRON_TIMEOUT_SECONDS="${PROMO_CRON_TIMEOUT_SECONDS:-3600}"',
+        self.assertIn('PROMO_CRON_TIMEOUT_SECONDS="${PROMO_CRON_TIMEOUT_SECONDS:-5400}"',
                       installer)
         # Re-running an installer must prove the timeout reached the volume's
         # cron state, not just that the job exists.
@@ -265,7 +265,7 @@ class CallerWiringTests(unittest.TestCase):
             largest = max(largest, len(jids))
         # Every gap at the 60 s max plus a generous 60 s per send must still fit.
         worst = (largest - 1) * pb.DEFAULT_SEND_DELAY_MAX + largest * 60
-        self.assertLess(worst, 3600, "largest promo (%d groups) may exceed the timeout"
+        self.assertLess(worst, 5400, "largest promo (%d groups) may exceed the timeout"
                         % largest)
 
 

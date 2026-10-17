@@ -9,10 +9,11 @@ ROOT = Path(__file__).resolve().parents[1]
 TARGETS = ROOT / "workspace/cron/borehole-drilling-promo/targets.json"
 LIB_DIR = ROOT / "workspace/lib"
 
-# WhatsApp group JID: a numeric id suffixed with @g.us. The daily borehole ad only
-# delivers when every target is a group the bot is a member of; invite links are
-# not resolvable on this gateway, so the list must be JIDs.
-GROUP_JID = re.compile(r"^\d+@g\.us$")
+# WhatsApp group JID: a numeric id suffixed with @g.us (old-style groups carry
+# a second numeric part, e.g. 263785811799-1594293610@g.us). The daily borehole ad
+# only delivers when every target is a group the bot is a member of; invite links
+# are not resolvable on this gateway, so the list must be JIDs.
+GROUP_JID = re.compile(r"^\d+(-\d+)?@g\.us$")
 
 # MUTANDIRI VILLAGE RESIDENTS gets the borehole ad only three times a week
 # (Mon/Wed/Fri), so it lives under weekly_groups rather than the daily list.
