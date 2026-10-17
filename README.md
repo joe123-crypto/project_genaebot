@@ -335,7 +335,10 @@ for the other; each group only ever receives a given advert once.
 Cron jobs live in the gateway's own state on the Railway volume, so they survive
 deploys. Each has an idempotent installer under `deploy/` that registers or
 updates it; run one only when its schedule or command changes. All times are
-`Africa/Harare`.
+`Africa/Harare`. The seven promo crons are declared together in
+`deploy/promo-crons.json` and reconciled with `./deploy/reinstall-promo-crons.sh`
+(see *Reconciling the seven promo crons* below); the Job Scout jobs keep their
+individual installers.
 
 - **`cv-promo`** (`install-cv-promo.sh`, 11:39) runs
   `workspace/cron/cv-promo/post_cv_ad.py`, a deterministic (no-agent) job that
@@ -387,6 +390,20 @@ updates it; run one only when its schedule or command changes. All times are
   to only on their configured weekdays, which is how MUTANDIRI VILLAGE RESIDENTS gets
   the ad three times a week (Mon, Wed and Fri)
 
+### Reconciling the seven promo crons
+
+A promo cron's schedule, timezone and job timeout live in the gateway's cron state
+on the Railway volume, not in this repo, so merging a change to any of them ships
+nothing on its own. `deploy/promo-crons.json` declares what the seven should be;
+`./deploy/reinstall-promo-crons.sh --check` reports what the gateway actually has,
+and `./deploy/reinstall-promo-crons.sh` applies the manifest by re-running the
+installers and re-checking. Both need `railway` (or a local container) and run from
+a checkout, not from CI — CI has no gateway access, so what it enforces is that the
+manifest, the seven wrappers, `install-promo.sh`'s timeout default and these READMEs
+all agree. Run `--check` first and remove anything it reports as undeclared before
+reinstalling, or that campaign posts twice a day. Full procedure, including when in
+the day it is safe to run, is in `deploy/railway/README.md`.
+
 All seven promo crons rotate between caption variants (the original operator copy
 plus rewordings with identical facts; three each, four for the borehole promo) and
 carry a per-group tracking link. See *Promo caption rotation and ad ref tracking*
@@ -403,7 +420,9 @@ weekly day, and never on `--dry-run` / `--refs`. Override the bounds with
 `install-promo.sh` registers every promo cron with a 3600 s job timeout
 (`PROMO_CRON_TIMEOUT_SECONDS`; it was 600 s, which would kill a long run). That
 timeout is cron state on the volume: it only changes in production when the seven
-`install-*-promo.sh` installers are re-run, and no deploy step runs them. So the
+`install-*-promo.sh` installers are re-run, and no deploy step runs them —
+`./deploy/reinstall-promo-crons.sh` is the one command that does, and `--check`
+says whether it needs running. So the
 engine does not assume it: at run time it asks the gateway for its own job's
 timeout and, if the run would not fit, tightens the gaps proportionally (keeping
 them random, never below 5 s) and logs a warning naming the installer to re-run.
@@ -426,7 +445,8 @@ Each promo also waits a **random 0-900 s before its first send**
 already random, but every cron used to fire exactly on the hour, so the
 account's day-to-day pattern stayed perfectly periodic. The seven schedules are
 now spread off the hour as well (08:13, 08:40, 10:35, 11:39, 12:50, 14:26,
-17:06), chosen so a campaign's latest possible finish -- base minute plus the
+17:06 — declared in `deploy/promo-crons.json`, which CI checks these times
+against), chosen so a campaign's latest possible finish -- base minute plus the
 full jitter plus a worst-case run -- never reaches the next campaign's slot. The
 wait is charged against the job's timeout budget, so the gap planning above sees
 only what is left; at today's largest promo (20 groups) that still leaves room
