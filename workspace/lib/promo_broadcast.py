@@ -45,6 +45,12 @@ than in this repo, the engine asks the gateway for its own job's timeout and
 tightens the gaps (keeping them random) when the run would not fit, so a stale
 timeout delays groups instead of dropping them.
 
+Run lock: a non-dry run holds a non-blocking ``fcntl.flock`` on
+``<state_file>.lock`` for its whole duration, so two concurrent runs of the SAME
+promo (a scheduled cron firing while the boot-time catch-up in
+deploy/railway/promo-catchup.py is running it) cannot both read "not sent
+today" and double-post. The second run logs "already running" and exits 0.
+
 Std-lib only (plus the sibling :mod:`json_store` helper), so it stays importable
 from the OpenClaw ``--command`` cron scripts, which are std-lib only by contract.
 """
@@ -52,6 +58,7 @@ from the OpenClaw ``--command`` cron scripts, which are std-lib only by contract
 import os
 import sys
 import json
+import fcntl
 import time
 import math
 import random
@@ -828,11 +835,82 @@ def apply_caps(promo_name, jids, day, caps=_PROBE_CAPS, membership_path=None,
     return kept, decisions
 
 
-def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=None,
-              tracking=None, promo_name=None, variant_images=None,
-              send_delay_min=None, send_delay_max=None, rng=None, sleep=None,
-              cron_timeout=_PROBE_CRON_TIMEOUT, start_jitter=None,
-              caps=_PROBE_CAPS, membership_path=None):
+# ---------------------------------------------------------------- run lock ----
+def lock_path(state_file):
+    """Lock file guarding one promo's runs: next to its state file."""
+    return str(state_file) + ".lock"
+
+
+def acquire_run_lock(state_file):
+    """Take this promo's run lock without blocking.
+
+    Returns ``(True, fd)`` when acquired (``fd`` may be None when the lock file
+    could not be opened at all, in which case the run proceeds unlocked with a
+    warning -- a lock problem must not be the reason a day's ads do not go out),
+    or ``(False, None)`` when another process already holds it."""
+    path = lock_path(state_file)
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    except OSError as ex:
+        sys.stderr.write("WARN: could not open run lock %s (%s); running "
+                         "unlocked.\n" % (path, ex))
+        return (True, None)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        return (False, None)
+    except OSError as ex:
+        os.close(fd)
+        sys.stderr.write("WARN: could not take run lock %s (%s); running "
+                         "unlocked.\n" % (path, ex))
+        return (True, None)
+    return (True, fd)
+
+
+def release_run_lock(fd):
+    if fd is None:
+        return
+    try:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+def broadcast(*, text, image, targets_file, state_file, argv=None, promo_name=None,
+              **kwargs):
+    """Run :func:`_broadcast` under this promo's run lock (see the module
+    docstring). ``--dry-run`` / ``--refs`` send nothing and mutate no state, so
+    they skip the lock. A run that finds the lock held prints "already running"
+    and returns 0 without touching state: the run holding the lock is already
+    delivering today's ad to the pending groups."""
+    args = sys.argv[1:] if argv is None else argv
+    if "--dry-run" in args or "--refs" in args:
+        return _broadcast(text=text, image=image, targets_file=targets_file,
+                          state_file=state_file, argv=argv, promo_name=promo_name,
+                          **kwargs)
+    acquired, fd = acquire_run_lock(state_file)
+    if not acquired:
+        name = promo_name or os.path.basename(
+            os.path.dirname(os.path.abspath(targets_file)))
+        sys.stderr.write("%s already running (lock %s held); this run exits "
+                         "without sending.\n" % (name, lock_path(state_file)))
+        print("NO_REPLY")
+        return 0
+    try:
+        return _broadcast(text=text, image=image, targets_file=targets_file,
+                          state_file=state_file, argv=argv, promo_name=promo_name,
+                          **kwargs)
+    finally:
+        release_run_lock(fd)
+
+
+def _broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=None,
+               tracking=None, promo_name=None, variant_images=None,
+               send_delay_min=None, send_delay_max=None, rng=None, sleep=None,
+               cron_timeout=_PROBE_CRON_TIMEOUT, start_jitter=None,
+               caps=_PROBE_CAPS, membership_path=None):
     """Resolve targets, skip groups already sent today (and weekly-limited groups
     off their configured weekday), then send the advert to each pending group,
     committing state per group so a crash or retry never double-posts. Returns a

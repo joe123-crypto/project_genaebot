@@ -618,7 +618,46 @@ in `state/openclaw.sqlite` for up to its 300 s TTL, and the next container (a ne
 hostname) cannot reclaim it, so the gateway refuses to start and Railway's 10 quick
 restarts run out (2026-10-18 outage). The script waits for such a lease to expire,
 at most 330 s, then lets the gateway start; it is never fatal. Avoid merging to
-`main` during promo windows anyway: a deploy cuts off the run in progress.
+`main` during promo windows anyway: a deploy cuts off the run in progress (the
+catch-up below resumes it on the next boot, but the cut-off run's spacing is lost).
+
+Just before the gateway starts, the entrypoint also launches
+`deploy/railway/promo-catchup.py` (baked at `/usr/local/bin/`, with the manifest at
+`/usr/local/share/genaebot/promo-crons.json`) in the background. Promo crons fire
+once a day and nothing re-runs a slot the gateway was down for: on 2026-10-18 the
+gateway crash-looped from about 10:09 to 17:18 UTC and that day's later ads were
+simply lost. On every boot the catch-up:
+
+1. stands down at once if `PROMO_CATCHUP=0`, if Harare local time is at or past the
+   posting cutoff (`PROMO_CATCHUP_CUTOFF`, default `20:00`), or if no promo slot in
+   `deploy/promo-crons.json` has arrived yet today;
+2. waits for the gateway port to accept connections and for `openclaw cron list` to
+   answer as a gateway client (up to `PROMO_CATCHUP_READY_TIMEOUT_SECONDS`, default
+   900), then `PROMO_CATCHUP_SETTLE_SECONDS` (default 120) for WhatsApp to link;
+3. runs every promo whose slot has already passed today, one at a time in schedule
+   order, exactly as its cron does (`python3 <script>` in the manifest's
+   `commandCwd`, with the gateway's environment). The run therefore goes through
+   `promo_broadcast`: per-group "sent today" state, membership caps, the random
+   start jitter and 20-60 s send spacing. A promo already delivered today just
+   reports `NO_REPLY` (one quiet log line). Promos whose slot is still to come are
+   left to their cron, and a promo whose cron is disabled or missing in the live
+   cron state is skipped. Each run is killed at the cutoff (or at the manifest's
+   job timeout, if that comes first), so nothing is sent after the cutoff.
+
+Its log lines carry a `[promo-catchup]` prefix, for example `[promo-catchup] running
+fruit-trees-promo (scheduled 08:40, missed)`, `[promo-catchup] skip genaie-promo
+(scheduled 14:26, not yet due; its cron will fire)` and `[promo-catchup] done: 2
+promos`. It is fully detached and never fatal: a failure is logged and the gateway
+carries on. To stop it, set the Railway variable `PROMO_CATCHUP=0`.
+
+Two runs of the same promo (a cron firing while the catch-up is running that promo)
+cannot double-post: `promo_broadcast.broadcast` holds a non-blocking `flock` on
+`<state file>.lock` (for example
+`runtime/cron-state/fruit-trees-promo/state.json.lock`) for the whole run, and a
+second run that finds it held logs `already running` and exits 0 without sending.
+`--dry-run` and `--refs` do not take the lock. Different promos are not serialized
+against each other: a cron whose slot arrives while the catch-up is still sending
+another promo runs at the same time, as it would if two slots overlapped.
 
 Any other config change has to be applied to the volume deliberately until the
 full applier is wired up (see the warning below), for example by running the

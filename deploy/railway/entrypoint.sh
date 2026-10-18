@@ -370,6 +370,25 @@ runuser -u joseph -- python3 /usr/local/bin/wait-gateway-lease.py \
   "$OC_DIR/state/openclaw.sqlite" \
   | while IFS= read -r line; do log "$line"; done || true
 
+# Promo catch-up. Promo crons fire once a day and nothing re-runs a slot the
+# gateway was down for (2026-10-18: down ~10:09-17:18 UTC, that day's ads lost).
+# Started in the background just before the gateway: it waits for the gateway to
+# answer, settles, then runs (one at a time, in schedule order) each promo whose
+# Africa/Harare slot already passed today, through the same promo_broadcast path
+# as the cron, so groups already sent today are skipped. Inside the posting
+# window only (PROMO_CATCHUP_CUTOFF, default 20:00). PROMO_CATCHUP=0 disables it.
+# Fully detached and never fatal: its failures are logged, never the gateway's.
+if [ "${PROMO_CATCHUP:-1}" != "0" ]; then
+  (
+    runuser -u joseph -- python3 -u /usr/local/bin/promo-catchup.py \
+      --manifest /usr/local/share/genaebot/promo-crons.json --port "$PORT" 2>&1 \
+      || echo "[promo-catchup] exited abnormally; the gateway is unaffected"
+  ) </dev/null &
+  log "promo catch-up started in the background (pid $!)"
+else
+  log "promo catch-up disabled (PROMO_CATCHUP=0)"
+fi
+
 # --bind lan  : listen on all container interfaces so the platform can reach us.
 # --tailscale off : no tailscaled in the container; remote access is via ingress.
 log "starting openclaw gateway on port $PORT as joseph (bind=lan, tailscale=off)"

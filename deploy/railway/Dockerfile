@@ -76,8 +76,12 @@ COPY --from=stage /opt/live-source /opt/live-source
 COPY deploy/railway/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY deploy/railway/sync-public-prompt.py /usr/local/bin/sync-public-prompt.py
 COPY deploy/railway/wait-gateway-lease.py /usr/local/bin/wait-gateway-lease.py
+COPY deploy/railway/promo-catchup.py /usr/local/bin/promo-catchup.py
+# The promo manifest drives the boot-time catch-up of missed promo slots.
+COPY deploy/promo-crons.json /usr/local/share/genaebot/promo-crons.json
 RUN chmod 0755 /usr/local/bin/entrypoint.sh /usr/local/bin/sync-public-prompt.py \
-    /usr/local/bin/wait-gateway-lease.py
+    /usr/local/bin/wait-gateway-lease.py /usr/local/bin/promo-catchup.py \
+ && chmod 0644 /usr/local/share/genaebot/promo-crons.json
 
 EXPOSE 18789
 

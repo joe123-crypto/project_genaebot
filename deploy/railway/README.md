@@ -59,6 +59,19 @@ The rest of `config/openclaw.template.json` is still not applied (see README).
 before the gateway and waits up to 330 s for a stale gateway owner lease left by a
 killed container to expire, so a deploy that lands mid-cron-run does not crash-loop
 (look for `[entrypoint] gateway owner lease held by another host` in the boot log).
+`deploy/railway/promo-catchup.py` (also baked at `/usr/local/bin/`, reading
+`deploy/promo-crons.json` baked at `/usr/local/share/genaebot/`) is started in the
+background just before the gateway. Once the gateway answers and WhatsApp has had
+120 s to link, it runs, one at a time in schedule order, each promo whose
+`Africa/Harare` slot already passed today, through the same script and
+`promo_broadcast` path as the cron, so groups already sent today are skipped and
+only the ads a down gateway missed go out. It does nothing at or after the
+20:00 Harare cutoff (`PROMO_CATCHUP_CUTOFF`), kills a run that reaches the cutoff,
+leaves promos whose slot is still to come to their cron, and never affects the
+gateway if it fails. Disable it with the service variable `PROMO_CATCHUP=0`. A
+per-promo run lock (`<state file>.lock`) makes a cron that fires while the
+catch-up runs the same promo exit with `already running` instead of double-posting.
+Look for `[promo-catchup]` lines in the boot log (see README for the details).
 
 Cron job definitions (schedule, command, job timeout) are the exception to "merge and
 it ships": they live in the gateway's cron state on the volume and change only when
@@ -180,7 +193,9 @@ the project memory notes for the full seed/stuck-session recovery procedure.
 ```sh
 railway logs        # expect: [whatsapp] ... starting provider, [gateway] ready,
                     #         [entrypoint] synced source overlay from /opt/live-source/workspace,
-                    #         [entrypoint] public WhatsApp prompt updated|unchanged
+                    #         [entrypoint] public WhatsApp prompt updated|unchanged,
+                    #         [entrypoint] promo catch-up started in the background,
+                    #         [promo-catchup] nothing to catch up: ... | done: N promos
 ```
 
 Do **not** trigger a manual ad send to test — the CV-promo campaign delivers on its own
