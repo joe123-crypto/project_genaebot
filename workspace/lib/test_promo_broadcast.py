@@ -76,6 +76,71 @@ def test_hard_send_failure_returns_nonzero(tmp_path, monkeypatch):
     assert rc == 1
 
 
+def _sequence_sender(sink, outs):
+    """send_ad stub returning the ``outs`` pairs in order; the last repeats."""
+    calls = {"n": 0}
+
+    def _send(target, text, image_path):
+        sink.append(target)
+        pair = outs[min(calls["n"], len(outs) - 1)]
+        calls["n"] += 1
+        return pair
+    return _send
+
+
+def test_not_dispatched_error_retries_then_succeeds(tmp_path, monkeypatch):
+    # The WhatsApp link was down at dispatch (status 428/500/503 reconnect gap);
+    # the send is retried after a wait and goes through on the next attempt.
+    sent = []
+    down = (False, "OutboundDeliveryError: No active WhatsApp Web listener (account: default)")
+    up = (True, '{"messageId":"m"}')
+    monkeypatch.setattr(pb, "send_ad", _sequence_sender(sent, [down, up]))
+    waits = []
+    targets = _targets(tmp_path, ["1@g.us"])
+    state = str(tmp_path / "state.json")
+    rc = pb.broadcast(text="hi", image=_image(tmp_path), targets_file=targets,
+                      state_file=state, send_delay=0, argv=[], sleep=waits.append,
+                      start_jitter=0, cron_timeout=None)
+    assert rc == 0
+    assert sent == ["1@g.us", "1@g.us"]  # retried once, then delivered
+    assert waits == [pb.SEND_RETRY_WAIT]  # waited for the reconnect
+    assert set(json_store.load_json(state, {})["sent"]) == {"1@g.us"}
+
+
+def test_not_dispatched_error_exhausts_retries_and_still_fails(tmp_path, monkeypatch):
+    sent = []
+    down = "PlatformMessageNotDispatchedError: No active WhatsApp Web listener"
+    monkeypatch.setattr(pb, "send_ad", _record_sender(sent, False, down))
+    waits = []
+    targets = _targets(tmp_path, ["1@g.us"])
+    state = str(tmp_path / "state.json")
+    rc = pb.broadcast(text="hi", image=_image(tmp_path), targets_file=targets,
+                      state_file=state, send_delay=0, argv=[], sleep=waits.append,
+                      start_jitter=0, cron_timeout=None)
+    assert rc == 1  # a persistent outage is still a failure after the bounded retries
+    assert len(sent) == 1 + pb.SEND_RETRY_MAX  # initial attempt + bounded retries
+    assert len(waits) == pb.SEND_RETRY_MAX
+    assert json_store.load_json(state, {})["sent"] == {}
+
+
+def test_ambiguous_errors_are_not_retried(tmp_path, monkeypatch):
+    # A subprocess timeout or an unknown_after_send state might have gone out, so
+    # retrying could double-post: these stay single-attempt hard failures.
+    for out in ("exec error: timeout after 180s",
+                "delivery state is unknown_after_send"):
+        sent = []
+        monkeypatch.setattr(pb, "send_ad", _record_sender(sent, False, out))
+        waits = []
+        targets = _targets(tmp_path, ["1@g.us"])
+        state = str(tmp_path / "state.json")
+        rc = pb.broadcast(text="hi", image=_image(tmp_path), targets_file=targets,
+                          state_file=state, send_delay=0, argv=[], sleep=waits.append,
+                          start_jitter=0, cron_timeout=None)
+        assert rc == 1
+        assert sent == ["1@g.us"]  # no retry
+        assert waits == []
+
+
 def test_missing_image_returns_nonzero(tmp_path):
     targets = _targets(tmp_path, ["1@g.us"])
     rc = pb.broadcast(text="hi", image=str(tmp_path / "absent.png"), targets_file=targets,
