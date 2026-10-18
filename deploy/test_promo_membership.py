@@ -33,7 +33,7 @@ MEMBERSHIP = CRON / "membership.json"
 # changed: intended edits update these numbers in the same commit, accidents
 # show up as a failure.
 EXPECTED_DAILY = {
-    "appliance-repairs": 5,
+    "appliance-repairs": 6,
     "borehole-drilling": 8,
     "building-materials": 10,
     # cv/fruit-trees/genaie/genaie-leads each gained the same five groups --
