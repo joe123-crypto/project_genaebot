@@ -23,12 +23,12 @@
 source "$(dirname "${BASH_SOURCE[0]}")/gateway-exec.sh"
 
 # Job timeout for every promo run. promo_broadcast spaces sends 20-60 s apart
-# (random), so the largest lists (~36 groups) take ~30 min typically and ~71 min
-# worst case (35 gaps x 60 s + sends); the old 600 s limit would kill them
-# mid-run. 5400 s (90 min) leaves headroom for slow sends and fits promos up to
-# ~45 groups at full spacing while staying clear of the next promo's slot.
+# (random), so the largest lists (~50 groups) take ~45 min typically and ~99 min
+# worst case (49 gaps x 60 s + sends); the old 600 s limit would kill them
+# mid-run. 7200 s (120 min) leaves headroom for slow sends and fits promos up to
+# ~60 groups at full spacing while staying clear of the next promo's slot.
 # Changing this only reaches the live gateway when the promo installers are re-run.
-PROMO_CRON_TIMEOUT_SECONDS="${PROMO_CRON_TIMEOUT_SECONDS:-5400}"
+PROMO_CRON_TIMEOUT_SECONDS="${PROMO_CRON_TIMEOUT_SECONDS:-7200}"
 
 register_promo_cron() {
   local name="$1" cron_expr="$2" tz="$3" alert_to="$4" script="$5"

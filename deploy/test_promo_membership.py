@@ -33,7 +33,7 @@ MEMBERSHIP = CRON / "membership.json"
 # changed: intended edits update these numbers in the same commit, accidents
 # show up as a failure.
 EXPECTED_DAILY = {
-    "appliance-repairs": 5,
+    "appliance-repairs": 6,
     "borehole-drilling": 8,
     "building-materials": 10,
     # cv/fruit-trees/genaie/genaie-leads each gained the same five groups --
@@ -49,10 +49,16 @@ EXPECTED_DAILY = {
     # genaie-leads), 120363168421689199 (cv, genaie, genaie-leads) and
     # 263713652561-1592027591 (cv, fruit-trees, genaie, genaie-leads): cv
     # 33 -> 30, fruit-trees 32 -> 30, genaie-leads 35 -> 32, genaie 36 -> 33.
-    "cv": 30,
-    "fruit-trees": 30,
-    "genaie-leads": 32,
-    "genaie": 33,
+    # Then each gained the same fourteen groups from the 2026-10-18 Bulawayo
+    # burst (fifteen new joins named that day, all except Harare business
+    # classifie, all legacy <creator>-<timestamp> JIDs): cv 30 -> 44, fruit-trees
+    # 30 -> 44, genaie-leads 32 -> 46, genaie 33 -> 47. The shared promo cron
+    # timeout was raised 5400 -> 7200 s to hold promos up to ~60 groups.
+    # (Harare business classifie instead took appliance-repairs: 5 -> 6.)
+    "cv": 44,
+    "fruit-trees": 44,
+    "genaie-leads": 46,
+    "genaie": 47,
 }
 EXPECTED_WEEKLY = {
     "borehole-drilling": {"120363166672509962@g.us": ["mon", "wed", "fri"]},

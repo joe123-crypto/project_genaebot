@@ -416,8 +416,8 @@ machine-regular send intervals (before this change the logs showed one send ever
 before the first or after the last, not for groups already sent today or off their
 weekly day, and never on `--dry-run` / `--refs`. Override the bounds with
 `PROMO_SEND_DELAY_MIN` / `PROMO_SEND_DELAY_MAX` (seconds) in the gateway env. A
-~36-group promo therefore runs for ~30 min typically and ~71 min at worst, so
-`install-promo.sh` registers every promo cron with a 5400 s job timeout
+~50-group promo therefore runs for ~45 min typically and ~99 min at worst, so
+`install-promo.sh` registers every promo cron with a 7200 s job timeout
 (`PROMO_CRON_TIMEOUT_SECONDS`; it was 600 s, which would kill a long run). That
 timeout is cron state on the volume: it only changes in production when the seven
 `install-*-promo.sh` installers are re-run, and no deploy step runs them —

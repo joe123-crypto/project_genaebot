@@ -147,7 +147,7 @@ class ManifestContractTests(unittest.TestCase):
 
     def test_manifest_timeout_matches_the_install_promo_default(self):
         text = (ROOT / "deploy/install-promo.sh").read_text(encoding="utf-8")
-        self.assertEqual(MANIFEST["timeoutSeconds"], 5400)
+        self.assertEqual(MANIFEST["timeoutSeconds"], 7200)
         self.assertIn('PROMO_CRON_TIMEOUT_SECONDS="${PROMO_CRON_TIMEOUT_SECONDS:-%d}"'
                       % MANIFEST["timeoutSeconds"], text)
         self.assertNotIn("--timeout-seconds 600", text)
