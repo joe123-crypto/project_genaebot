@@ -373,6 +373,7 @@
       "name": "ZVIRIKUITIKA MUSHAMVA",
       "source": "whatsapp",
       "status": "active",
+      "activity": "quiet",
       "daily_cap": null,
       "promos": [
         "borehole-drilling",
