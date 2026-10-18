@@ -44,10 +44,15 @@ EXPECTED_DAILY = {
     # sender-key store (one in-roster with empty promos, nine new, seven of
     # them legacy <creator>-<timestamp> JIDs from the 2026-10-17 burst): cv
     # 23 -> 33, fruit-trees 22 -> 32, genaie-leads 25 -> 35, genaie 26 -> 36.
-    "cv": 33,
-    "fruit-trees": 32,
-    "genaie-leads": 35,
-    "genaie": 36,
+    # Then each gained the same fourteen groups from the 2026-10-18 Bulawayo
+    # burst (fifteen new joins named that day, all except Harare business
+    # classifie, all legacy <creator>-<timestamp> JIDs): cv 33 -> 47, fruit-trees
+    # 32 -> 46, genaie-leads 35 -> 49, genaie 36 -> 50. The shared promo cron
+    # timeout was raised 5400 -> 7200 s to hold promos up to ~60 groups.
+    "cv": 47,
+    "fruit-trees": 46,
+    "genaie-leads": 49,
+    "genaie": 50,
 }
 EXPECTED_WEEKLY = {
     "borehole-drilling": {"120363166672509962@g.us": ["mon", "wed", "fri"]},
