@@ -361,6 +361,15 @@ runuser -u joseph -- python3 /usr/local/bin/sync-public-prompt.py \
   "$LIVE_SOURCE/deploy/patch-openclaw-config.py" \
   | while IFS= read -r line; do log "$line"; done || true
 
+# A container killed mid-drain (a deploy landing during a promo cron run) leaves
+# its gateway owner lease in the state DB for up to its 300 s TTL. The new
+# container has a new hostname, so OpenClaw cannot reclaim it early and refuses to
+# start; Railway's 10 quick restarts run out in ~2 min and the deploy CRASHES
+# (2026-10-18 10:09 UTC). Wait the stale lease out here instead. Never fatal.
+runuser -u joseph -- python3 /usr/local/bin/wait-gateway-lease.py \
+  "$OC_DIR/state/openclaw.sqlite" \
+  | while IFS= read -r line; do log "$line"; done || true
+
 # --bind lan  : listen on all container interfaces so the platform can reach us.
 # --tailscale off : no tailscaled in the container; remote access is via ingress.
 log "starting openclaw gateway on port $PORT as joseph (bind=lan, tailscale=off)"
