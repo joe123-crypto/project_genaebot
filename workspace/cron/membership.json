@@ -496,7 +496,7 @@
     "120363414718035443@g.us": {
       "name": "ZIMBABWE UPDATE BYO",
       "source": "operator",
-      "status": "active",
+      "status": "admin-only",
       "daily_cap": null,
       "promos": [
         "fruit-trees",
@@ -504,7 +504,7 @@
         "genaie",
         "genaie-leads"
       ],
-      "note": "discovered via the WhatsApp sender-key store on 2026-10-11"
+      "note": "discovered via the WhatsApp sender-key store on 2026-10-11. Sends return 'forbidden' since 2026-10-17 07:04 UTC (posted fine through 2026-10-16): only admins can post now, or the bot was removed. Promos kept so resuming is a status flip."
     },
     "120363410412233096@g.us": {
       "name": "CHIREDZI LOWVELD HUSTLERS GRP 7",
@@ -616,13 +616,14 @@
     },
     "120363168421689199@g.us": {
       "name": null,
-      "status": "active",
+      "status": "admin-only",
       "daily_cap": null,
       "promos": [
         "cv",
         "genaie",
         "genaie-leads"
-      ]
+      ],
+      "note": "sends return 'forbidden' since 2026-10-16 (posted fine through 2026-10-15); only admins can post now, or the bot was removed. Promos kept so resuming is a status flip."
     },
     "120363428938298524@g.us": {
       "name": "CHIKOMBEDZI MARKETPLACE",
@@ -720,7 +721,7 @@
     "263713652561-1592027591@g.us": {
       "name": null,
       "source": "whatsapp",
-      "status": "active",
+      "status": "admin-only",
       "daily_cap": null,
       "promos": [
         "cv",
@@ -728,7 +729,7 @@
         "genaie-leads",
         "fruit-trees"
       ],
-      "note": "discovered in the sender-key store 2026-10-14 (legacy-format JID)"
+      "note": "discovered in the sender-key store 2026-10-14 (legacy-format JID). Its first ad on 2026-10-17 returned 'forbidden': only admins can post. Promos kept so resuming is a status flip."
     },
     "263773773025-1613202843@g.us": {
       "name": null,
