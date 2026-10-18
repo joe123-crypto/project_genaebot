@@ -324,6 +324,37 @@ def is_permission_error(out):
     return any(marker in low for marker in PERMISSION_MARKERS)
 
 
+# A send can also fail because the WhatsApp Web link is momentarily down: the
+# gateway drops and reconnects every few minutes (``Web connection closed`` status
+# 428/500/503, auto-retry in ~2 s). The CLI rejects such a send BEFORE dispatch
+# with these markers, so nothing was delivered and re-sending cannot double-post.
+# That is transient, not permanent -- wait for the reconnect and retry rather than
+# losing the post for the day (crons run once daily, with no same-day retry).
+# Deliberately NOT matched: ``unknown_after_send`` (the gateway's own delivery
+# recovery refuses blind replay there) and a subprocess timeout -- both are
+# ambiguous about whether the message went out, so they must stay hard failures.
+NOT_DISPATCHED_MARKERS = (
+    "no active whatsapp web listener",
+    "platformmessagenotdispatchederror",
+    "channel is unavailable",
+    "not dispatched",
+)
+
+
+def is_not_dispatched_error(out):
+    low = (out or "").casefold()
+    return any(marker in low for marker in NOT_DISPATCHED_MARKERS)
+
+
+# How many times, and how long to wait, to retry a send that failed because the
+# link was momentarily down (see NOT_DISPATCHED_MARKERS). The reconnect usually
+# completes within seconds; a few ~20 s waits comfortably ride out the gap. Worst
+# case adds SEND_RETRY_MAX * SEND_RETRY_WAIT seconds for an affected group, which
+# is negligible against the promo cron timeout and only happens on a real drop.
+SEND_RETRY_MAX = int(os.environ.get("PROMO_SEND_RETRY_MAX", "4"))
+SEND_RETRY_WAIT = float(os.environ.get("PROMO_SEND_RETRY_WAIT", "20"))
+
+
 def send_ad(target, text, image_path):
     """Send the ad (caption + image) to one group. Returns (ok, combined_output)."""
     cmd = ["openclaw", "message", "send", "--channel", "whatsapp",
@@ -952,6 +983,18 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
         idx, caption, _ = caption_for(jid, variants, day=day, allowed=weekly.get(jid),
                                       tracking=tracking)
         ok, out = send_ad(jid, caption, variant_images.get(idx, image_path))
+        attempts = 0
+        while (not ok) and (not is_permission_error(out)) \
+                and is_not_dispatched_error(out) and attempts < SEND_RETRY_MAX:
+            # Link was down at dispatch time (not a permission problem): wait for
+            # the reconnect and re-send. Safe from double-posting because a
+            # not-dispatched error means nothing went out (see the marker list).
+            attempts += 1
+            sys.stderr.write(
+                "WhatsApp link down; waiting %.0fs then retry %d/%d for %s:\n%s\n"
+                % (SEND_RETRY_WAIT, attempts, SEND_RETRY_MAX, jid, out))
+            sleep(SEND_RETRY_WAIT)
+            ok, out = send_ad(jid, caption, variant_images.get(idx, image_path))
         if ok:
             sent_map[jid] = today
             save_state(state_file, st)  # commit per group: crash/retry never double-posts

@@ -55,6 +55,10 @@ piece of `openclaw.json` the boot rewrites: `deploy/railway/sync-public-prompt.p
 (baked at `/usr/local/bin/`) copies `workspace/docs/public-whatsapp-system-prompt.txt`
 into `channels.whatsapp.direct["*"].systemPrompt` just before the gateway starts.
 The rest of `config/openclaw.template.json` is still not applied (see README).
+`deploy/railway/wait-gateway-lease.py` (also baked at `/usr/local/bin/`) runs just
+before the gateway and waits up to 330 s for a stale gateway owner lease left by a
+killed container to expire, so a deploy that lands mid-cron-run does not crash-loop
+(look for `[entrypoint] gateway owner lease held by another host` in the boot log).
 
 Cron job definitions (schedule, command, job timeout) are the exception to "merge and
 it ships": they live in the gateway's cron state on the volume and change only when
