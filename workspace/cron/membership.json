@@ -498,13 +498,8 @@
       "source": "operator",
       "status": "admin-only",
       "daily_cap": null,
-      "promos": [
-        "fruit-trees",
-        "cv",
-        "genaie",
-        "genaie-leads"
-      ],
-      "note": "discovered via the WhatsApp sender-key store on 2026-10-11. Sends return 'forbidden' since 2026-10-17 07:04 UTC (posted fine through 2026-10-16): only admins can post now, or the bot was removed. Promos kept so resuming is a status flip."
+      "promos": [],
+      "note": "discovered via the WhatsApp sender-key store on 2026-10-11. Sends return 'forbidden' since 2026-10-17 07:04 UTC (posted fine through 2026-10-16): only admins can post now, or the bot was removed. Promos cleared 2026-10-18 (terminal decommission): kept admin-only so the record survives, but no longer resumes on a status flip, and stays silent even if a discovery sweep re-activates it."
     },
     "120363410412233096@g.us": {
       "name": "CHIREDZI LOWVELD HUSTLERS GRP 7",
@@ -618,12 +613,8 @@
       "name": null,
       "status": "admin-only",
       "daily_cap": null,
-      "promos": [
-        "cv",
-        "genaie",
-        "genaie-leads"
-      ],
-      "note": "sends return 'forbidden' since 2026-10-16 (posted fine through 2026-10-15); only admins can post now, or the bot was removed. Promos kept so resuming is a status flip."
+      "promos": [],
+      "note": "sends return 'forbidden' since 2026-10-16 (posted fine through 2026-10-15); only admins can post now, or the bot was removed. Promos cleared 2026-10-18 (terminal decommission): kept admin-only so the record survives, but no longer resumes on a status flip, and stays silent even if a discovery sweep re-activates it."
     },
     "120363428938298524@g.us": {
       "name": "CHIKOMBEDZI MARKETPLACE",
@@ -723,13 +714,8 @@
       "source": "whatsapp",
       "status": "admin-only",
       "daily_cap": null,
-      "promos": [
-        "cv",
-        "genaie",
-        "genaie-leads",
-        "fruit-trees"
-      ],
-      "note": "discovered in the sender-key store 2026-10-14 (legacy-format JID). Its first ad on 2026-10-17 returned 'forbidden': only admins can post. Promos kept so resuming is a status flip."
+      "promos": [],
+      "note": "discovered in the sender-key store 2026-10-14 (legacy-format JID). Its first ad on 2026-10-17 returned 'forbidden': only admins can post. Promos cleared 2026-10-18 (terminal decommission): kept admin-only so the record survives, but no longer resumes on a status flip, and stays silent even if a discovery sweep re-activates it."
     },
     "263773773025-1613202843@g.us": {
       "name": null,

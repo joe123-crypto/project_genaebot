@@ -49,6 +49,9 @@ EXPECTED_DAILY = {
     # genaie-leads), 120363168421689199 (cv, genaie, genaie-leads) and
     # 263713652561-1592027591 (cv, fruit-trees, genaie, genaie-leads): cv
     # 33 -> 30, fruit-trees 32 -> 30, genaie-leads 35 -> 32, genaie 36 -> 33.
+    # Those three admin-only groups then had their promo lists cleared to [] on
+    # 2026-10-18 (terminal decommission); the counts above are unchanged because
+    # admin-only had already excluded them.
     # Then each gained the same fourteen groups from the 2026-10-18 Bulawayo
     # burst (fifteen new joins named that day, all except Harare business
     # classifie, all legacy <creator>-<timestamp> JIDs): cv 30 -> 44, fruit-trees
