@@ -611,6 +611,15 @@ config (peer overrides included). It logs `public WhatsApp prompt updated` or
 reaches the live agent on the next deploy, and the business facts it reads
 (`workspace/docs/business-info.md`) are synced with the rest of `workspace/`.
 
+Right before `openclaw gateway` starts, the entrypoint also runs
+`deploy/railway/wait-gateway-lease.py`. A container killed mid-drain (for example a
+deploy that lands while a promo cron run is sending) leaves its gateway owner lease
+in `state/openclaw.sqlite` for up to its 300 s TTL, and the next container (a new
+hostname) cannot reclaim it, so the gateway refuses to start and Railway's 10 quick
+restarts run out (2026-10-18 outage). The script waits for such a lease to expire,
+at most 330 s, then lets the gateway start; it is never fatal. Avoid merging to
+`main` during promo windows anyway: a deploy cuts off the run in progress.
+
 Any other config change has to be applied to the volume deliberately until the
 full applier is wired up (see the warning below), for example by running the
 applier inside the container:
