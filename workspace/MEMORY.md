@@ -57,7 +57,7 @@
 ## Cron Jobs
 Admin failure alerts go to the admin WhatsApp: **+213563719936** (Joe's day-to-day admin number; +263785632943 is the Zimbabwe number and is NOT in WhatsApp allowFrom).
 
-The live jobs are the seven promo ad crons, the daily Job Scout turn, the
+The live jobs are the eight promo ad crons, the daily Job Scout turn, the
 `job-scout-approvals` and `job-scout-cv-conversion` workers, and the two group
 feeds. Each has an installer under `deploy/` and is documented in the repo README.
 Query the gateway for actual state rather than trusting this file: `openclaw cron

@@ -2,7 +2,7 @@
 
 The gateway's cron state is the one part of this system a merge to main cannot change,
 so these tests guard the two things that can still rot silently: the repo disagreeing
-with itself (manifest vs. the seven wrappers vs. install-promo.sh vs. the READMEs), and
+with itself (manifest vs. the eight wrappers vs. install-promo.sh vs. the READMEs), and
 the comparator mis-reading a live payload. Nothing here contacts a gateway -- the
 orchestrator tests drive it through the docker shim that deploy/gateway-exec.sh:10-13
 keeps for exactly this purpose.
@@ -32,6 +32,7 @@ MANIFEST = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
 EXPECTED_SCHEDULES = {
     "borehole-drilling": "13 8 * * *",
     "fruit-trees": "40 8 * * *",
+    "skylight-solar": "17 9 * * *",
     "appliance-repairs": "35 10 * * *",
     "cv": "39 11 * * *",
     "building-materials": "50 12 * * *",
@@ -108,7 +109,7 @@ def run_comparator(payload, *args):
 
 
 class ManifestContractTests(unittest.TestCase):
-    def test_manifest_declares_exactly_the_seven_promo_installers(self):
+    def test_manifest_declares_exactly_the_promo_installers(self):
         slugs = {p["slug"] for p in MANIFEST["promos"]}
         installers = {p.name[len("install-"):-len("-promo.sh")]
                       for p in ROOT.glob("deploy/install-*-promo.sh")}
@@ -119,7 +120,7 @@ class ManifestContractTests(unittest.TestCase):
             declared.update(group.get("promos", []))
         self.assertEqual(slugs, installers, "manifest and installer files disagree")
         self.assertEqual(slugs, declared, "manifest and membership.json disagree")
-        self.assertEqual(len(slugs), 7)
+        self.assertEqual(len(slugs), 8)
 
     def test_each_wrapper_passes_the_manifest_values_to_register_promo_cron(self):
         for promo in MANIFEST["promos"]:
@@ -222,17 +223,17 @@ class DriftComparatorTests(unittest.TestCase):
     def test_in_sync_gateway_state_reports_no_drift(self):
         code, out, _ = run_comparator(live_jobs())
         self.assertEqual(code, 0)
-        self.assertIn("7 ok, 0 drifted, 0 missing", out)
+        self.assertIn("8 ok, 0 drifted, 0 missing", out)
 
     def test_the_recorded_2026_10_16_state_is_reported_as_drift(self):
-        # All seven on the hour with the old 600 s timeout: what production ran the
+        # All eight on the hour with the old 600 s timeout: what production ran the
         # day after #114 merged.
         patch = {p["name"]: {"schedule.expr": "0 %s * * *" % p["cron"].split()[1],
                              "payload.timeoutSeconds": 600}
                  for p in MANIFEST["promos"]}
         code, out, _ = run_comparator(live_jobs(patch=patch))
         self.assertEqual(code, 1)
-        self.assertIn("0 ok, 7 drifted", out)
+        self.assertIn("0 ok, 8 drifted", out)
         self.assertIn("schedule.expr", out)
         self.assertIn("payload.timeoutSeconds", out)
         self.assertIn("reinstall-promo-crons.sh", out)
@@ -240,7 +241,7 @@ class DriftComparatorTests(unittest.TestCase):
     def test_a_stale_timeout_alone_is_drift(self):
         code, out, _ = run_comparator(live_jobs(patch={"cv-promo": {"payload.timeoutSeconds": 600}}))
         self.assertEqual(code, 1)
-        self.assertIn("6 ok, 1 drifted", out)
+        self.assertIn("7 ok, 1 drifted", out)
 
     def test_a_stale_schedule_alone_is_drift(self):
         code, _, _ = run_comparator(live_jobs(patch={"cv-promo": {"schedule.expr": "0 11 * * *"}}))
@@ -324,7 +325,7 @@ class DriftComparatorTests(unittest.TestCase):
         self.assertIn("unknown promo", err)
 
     def test_a_closed_pipe_does_not_print_a_traceback(self):
-        """`--check | head` is how anyone reads a seven-promo drift report."""
+        """`--check | head` is how anyone reads an eight-promo drift report."""
         patch = {p["name"]: {"payload.timeoutSeconds": 600} for p in MANIFEST["promos"]}
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
             json.dump(live_jobs(patch=patch), handle)
@@ -387,14 +388,14 @@ class OrchestratorTests(unittest.TestCase):
     def test_dry_run_plans_every_promo_without_touching_the_gateway(self):
         proc, calls = self.run_orchestrator("--dry-run", env={"DOCKER": "/nonexistent"})
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("7 promo(s) planned", proc.stdout)
+        self.assertIn("8 promo(s) planned", proc.stdout)
         self.assertEqual(calls.strip(), "")
 
-    def test_apply_runs_all_seven_installers_in_schedule_order(self):
+    def test_apply_runs_all_installers_in_schedule_order(self):
         proc, calls = self.run_orchestrator()
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("7 of 7 installer(s) succeeded", proc.stdout)
-        self.assertIn("7 ok, 0 drifted", proc.stdout)
+        self.assertIn("8 of 8 installer(s) succeeded", proc.stdout)
+        self.assertIn("8 ok, 0 drifted", proc.stdout)
         seen = [p["name"] for p in MANIFEST["promos"]
                 if re.search(r"--name %s\b" % re.escape(p["name"]), calls)]
         self.assertEqual(seen, [p["name"] for p in MANIFEST["promos"]])
@@ -404,7 +405,7 @@ class OrchestratorTests(unittest.TestCase):
         payload = live_jobs(patch={"cv-promo": {"schedule.expr": "0 11 * * *"}})
         proc, calls = self.run_orchestrator(payload=payload)
         self.assertEqual(proc.returncode, 1)
-        self.assertIn("6 of 7 installer(s) succeeded", proc.stdout)
+        self.assertIn("7 of 8 installer(s) succeeded", proc.stdout)
         self.assertIn("cv-promo", proc.stderr)
         for promo in MANIFEST["promos"]:
             self.assertRegex(calls, r"--name %s\b" % re.escape(promo["name"]))
@@ -429,7 +430,7 @@ class OrchestratorTests(unittest.TestCase):
                  for p in MANIFEST["promos"]}
         proc, _ = self.run_orchestrator("--check", payload=live_jobs(patch=patch))
         self.assertEqual(proc.returncode, 1)
-        self.assertIn("0 ok, 7 drifted", proc.stdout)
+        self.assertIn("0 ok, 8 drifted", proc.stdout)
 
     def test_only_limits_the_run_to_the_named_promos(self):
         proc, calls = self.run_orchestrator("--only", "cv", "--only", "genaie-leads-promo")

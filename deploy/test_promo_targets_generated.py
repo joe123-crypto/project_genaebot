@@ -1,4 +1,4 @@
-"""The seven promo targets.json files are GENERATED from
+"""The promo targets.json files are GENERATED from
 workspace/cron/membership.json by workspace/bin/make-promo-targets.
 
 This is the drift gate: if someone hand-edits a targets file, or edits
