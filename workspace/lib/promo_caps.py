@@ -1,7 +1,7 @@
 """Per-group daily ad cap, derived from how active a group is.
 
 How many ads a group used to get was an accident of how many promos happened to
-list it: a group in six of the seven promos took six ads a day whether or not it
+list it: a group in six of the eight promos took six ads a day whether or not it
 was busy enough to absorb them. This module gives every group a daily allowance
 and decides, for one day, which campaigns may use it.
 
@@ -31,7 +31,7 @@ key advances by one per day over a fixed circular order, so the selected set is 
 sliding window and over ``len(promos)`` days every campaign gets exactly ``cap``
 turns. It is a pure function of ``(day, jid, promo set, cap)`` -- identical in
 every cron process, with no shared state and no lock, which matters because
-:mod:`json_store` is last-writer-wins and the seven crons can overlap.
+:mod:`json_store` is last-writer-wins and the eight crons can overlap.
 
 Std-lib only (plus the sibling :mod:`promo_broadcast` and :mod:`json_store`), so
 it stays importable from the OpenClaw ``--command`` cron scripts.
@@ -49,7 +49,7 @@ import promo_membership
 # workspace/plugins/public-service-gate/lib/ad-refs.js; "AR" is absent there on
 # purpose (that ad links to the repair shop's number, not the bot's), so it is
 # absent here too. deploy/test_promo_caps.py pins this list.
-AD_REF_PREFIXES = ("BH", "BM", "CV", "FT", "GL", "GN")
+AD_REF_PREFIXES = ("BH", "BM", "CV", "FT", "GL", "GN", "SK")
 
 AD_REFS_PATH = os.environ.get(
     "PROMO_AD_REFS_PATH",

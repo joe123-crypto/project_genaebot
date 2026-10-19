@@ -1,5 +1,5 @@
 """Caption rotation + per-group tracking links in the shared promo engine
-(workspace/lib/promo_broadcast.py) and their wiring in the seven promo crons.
+(workspace/lib/promo_broadcast.py) and their wiring in the eight promo crons.
 
 unittest-style (not pytest fixtures) so deploy/ci-check.sh, which runs each test
 file with plain ``python3``, actually executes these.
@@ -42,6 +42,7 @@ PROMOS = {
     "fruit-trees-promo": ("post_ad.py", "FT", BOT_NUMBER),
     "genaie-leads-promo": ("post_ad.py", "GL", BOT_NUMBER),
     "genaie-promo": ("post_ad.py", "GN", BOT_NUMBER),
+    "skylight-solar-promo": ("post_ad.py", "SK", BOT_NUMBER),
 }
 
 PLUGIN_AD_REFS = ROOT / "workspace/plugins/public-service-gate/lib/ad-refs.js"
@@ -367,6 +368,7 @@ class PromoWiringTests(unittest.TestCase):
                 "fruit-trees-promo": "FRUIT_TREES_STATE",
                 "genaie-leads-promo": "GENAIE_LEADS_PROMO_STATE",
                 "genaie-promo": "GENAIE_PROMO_STATE",
+                "skylight-solar-promo": "SKYLIGHT_STATE",
             }[name]
             m.STATE_FILE = str(Path(tmp, "state.json"))
             sys.argv = [name] + args

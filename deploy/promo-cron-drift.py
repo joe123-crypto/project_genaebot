@@ -14,7 +14,7 @@ self-verify does not cover it.
 
 Reported but NOT gated: payload.cwd and failureAlert.*. Nothing in this repo observes
 which JSON keys the gateway reports those under, and gating on a guessed path would
-report false drift on all seven promos, which is worse than today's silence. The first
+report false drift on all the promos, which is worse than today's silence. The first
 live --check reveals the real shape; promoting them to the gate is then a one-liner.
 
 Exit codes: 0 in sync, 1 drift/missing/legacy/undeclared, 2 bad input or manifest.

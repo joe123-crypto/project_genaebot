@@ -36,6 +36,10 @@ EXPECTED_DAILY = {
     "appliance-repairs": 6,
     "borehole-drilling": 8,
     "building-materials": 10,
+    # skylight-solar launched (2026-10-19) targeting the Bulawayo/BYO groups plus
+    # Kwekwe, Gweru, both lowveld/Chiredzi groups, Mutare, Magwegwe, Lobengula West
+    # and Chikombedzi: 23 groups, no weekly cadence.
+    "skylight-solar": 23,
     # cv/fruit-trees/genaie/genaie-leads each gained the same five groups --
     # Business in Mutare, CHIKOMBEDZI MARKETPLACE, Gweru Market Mall, KWEKWE
     # BUSINESS PLUG 4 and LOWVELD HUSTLERS (#115): cv 18 -> 23, fruit-trees
@@ -89,7 +93,7 @@ class MembershipFileTests(unittest.TestCase):
     def test_the_committed_file_is_valid(self):
         self.assertEqual(pm.validate(self.m), [])
 
-    def test_declares_exactly_the_seven_promo_directories(self):
+    def test_declares_exactly_the_promo_directories(self):
         on_disk = sorted(p.name[: -len("-promo")] for p in CRON.glob("*-promo"))
         self.assertEqual(sorted(self.m["promos"]), on_disk)
 

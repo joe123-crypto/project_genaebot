@@ -335,9 +335,9 @@ for the other; each group only ever receives a given advert once.
 Cron jobs live in the gateway's own state on the Railway volume, so they survive
 deploys. Each has an idempotent installer under `deploy/` that registers or
 updates it; run one only when its schedule or command changes. All times are
-`Africa/Harare`. The seven promo crons are declared together in
+`Africa/Harare`. The eight promo crons are declared together in
 `deploy/promo-crons.json` and reconciled with `./deploy/reinstall-promo-crons.sh`
-(see *Reconciling the seven promo crons* below); the Job Scout jobs keep their
+(see *Reconciling the promo crons* below); the Job Scout jobs keep their
 individual installers.
 
 - **`cv-promo`** (`install-cv-promo.sh`, 11:39) runs
@@ -389,22 +389,30 @@ individual installers.
   Most groups get the ad daily; groups under the file's `weekly_groups` map are posted
   to only on their configured weekdays, which is how MUTANDIRI VILLAGE RESIDENTS gets
   the ad three times a week (Mon, Wed and Fri)
+- **`skylight-solar-promo`** (`install-skylight-solar-promo.sh`, 09:17) runs
+  `workspace/cron/skylight-solar-promo/post_ad.py`, a deterministic (no-agent) job
+  that posts the fixed Skylight Solar ad (solar system packages and complete
+  water/borehole solutions: survey, drilling, flushing, installation) to the WhatsApp
+  group JIDs listed in `workspace/cron/skylight-solar-promo/targets.json`, rotating
+  through two bundled posters daily and reusing the same shared `promo_broadcast`
+  delivery engine. The posters carry the prices, so the captions stay price-free and
+  route replies to the bot's own number
 
-### Reconciling the seven promo crons
+### Reconciling the promo crons
 
 A promo cron's schedule, timezone and job timeout live in the gateway's cron state
 on the Railway volume, not in this repo, so merging a change to any of them ships
-nothing on its own. `deploy/promo-crons.json` declares what the seven should be;
+nothing on its own. `deploy/promo-crons.json` declares what the eight should be;
 `./deploy/reinstall-promo-crons.sh --check` reports what the gateway actually has,
 and `./deploy/reinstall-promo-crons.sh` applies the manifest by re-running the
 installers and re-checking. Both need `railway` (or a local container) and run from
 a checkout, not from CI — CI has no gateway access, so what it enforces is that the
-manifest, the seven wrappers, `install-promo.sh`'s timeout default and these READMEs
+manifest, the eight wrappers, `install-promo.sh`'s timeout default and these READMEs
 all agree. Run `--check` first and remove anything it reports as undeclared before
 reinstalling, or that campaign posts twice a day. Full procedure, including when in
 the day it is safe to run, is in `deploy/railway/README.md`.
 
-All seven promo crons rotate between caption variants (the original operator copy
+All eight promo crons rotate between caption variants (the original operator copy
 plus rewordings with identical facts; three each, four for the borehole promo) and
 carry a per-group tracking link. See *Promo caption rotation and ad ref tracking*
 below.
@@ -419,7 +427,7 @@ weekly day, and never on `--dry-run` / `--refs`. Override the bounds with
 ~50-group promo therefore runs for ~45 min typically and ~99 min at worst, so
 `install-promo.sh` registers every promo cron with a 7200 s job timeout
 (`PROMO_CRON_TIMEOUT_SECONDS`; it was 600 s, which would kill a long run). That
-timeout is cron state on the volume: it only changes in production when the seven
+timeout is cron state on the volume: it only changes in production when the eight
 `install-*-promo.sh` installers are re-run, and no deploy step runs them —
 `./deploy/reinstall-promo-crons.sh` is the one command that does, and `--check`
 says whether it needs running. So the
@@ -443,8 +451,8 @@ two group feeds have their own installers and are described above.
 Each promo also waits a **random 0-900 s before its first send**
 (`PROMO_START_JITTER_SECONDS`; `0` disables it). The gaps inside a run were
 already random, but every cron used to fire exactly on the hour, so the
-account's day-to-day pattern stayed perfectly periodic. The seven schedules are
-now spread off the hour as well (08:13, 08:40, 10:35, 11:39, 12:50, 14:26,
+account's day-to-day pattern stayed perfectly periodic. The eight schedules are
+now spread off the hour as well (08:13, 08:40, 09:17, 10:35, 11:39, 12:50, 14:26,
 17:06 — declared in `deploy/promo-crons.json`, which CI checks these times
 against), chosen so a campaign's latest possible finish -- base minute plus the
 full jitter plus a worst-case run -- never reaches the next campaign's slot. The
@@ -459,14 +467,14 @@ wait instead of burning the run before its first send, and it is never taken on
 
 `workspace/cron/membership.json` is the **single source of truth** for the groups
 the bot advertises in: one entry per group with its name, `source`, `status`,
-activity tier and the promos that target it. The seven
+activity tier and the promos that target it. The eight
 `workspace/cron/*-promo/targets.json` files are **generated** from it by
 `workspace/bin/make-promo-targets`, and `deploy/test_promo_targets_generated.py`
 fails CI if they drift. So:
 
 ```sh
 # edit workspace/cron/membership.json, then
-./workspace/bin/make-promo-targets --write   # rewrite the seven targets files
+./workspace/bin/make-promo-targets --write   # rewrite the targets files
 ./workspace/bin/make-promo-targets --check   # what CI runs; 1 on drift
 ```
 
@@ -490,7 +498,7 @@ read-only and never contacts the gateway.
 ### Per-group daily ad caps
 
 How many ads a group got used to be an accident of how many promos listed it: a
-group in six of the seven campaigns took six ads a day whatever its appetite.
+group in six of the eight campaigns took six ads a day whatever its appetite.
 Each group now has a **daily allowance**:
 
 - the operator's `activity` tier picks a band -- `busy` 6-10, `normal` 4-6,
@@ -517,7 +525,7 @@ of `cap` entries over the group's fixed circular order, sliding by one per day,
 so across one cycle every campaign gets exactly `cap` turns and none starves. It
 is a pure function of `(day, jid, promo set, cap)` -- identical in every cron
 process, needing no shared state and no lock, which matters because
-`json_store` is last-writer-wins and the seven crons can overlap.
+`json_store` is last-writer-wins and the eight crons can overlap.
 
 Caps are **off** until `defaults.caps_enabled` is `true` in membership.json, and
 the engine fails open: a missing or broken membership file logs a warning and

@@ -27,6 +27,9 @@
     "fruit-trees": {
       "comment": "GENERATED from workspace/cron/membership.json by workspace/bin/make-promo-targets -- do not hand-edit. Add or remove a group by editing its 'promos' list in membership.json and regenerating (CI fails if this file drifts). Only groups with status 'active' reach this list, which is why admin-only, not-a-member and on-hold groups are absent. Invite links are NOT reliably resolvable on this gateway, so membership.json records group JIDs."
     },
+    "skylight-solar": {
+      "comment": "GENERATED from workspace/cron/membership.json by workspace/bin/make-promo-targets -- do not hand-edit. Add or remove a group by editing its 'promos' list in membership.json and regenerating (CI fails if this file drifts). Only groups with status 'active' reach this list, which is why admin-only, not-a-member and on-hold groups are absent. Invite links are NOT reliably resolvable on this gateway, so membership.json records group JIDs."
+    },
     "appliance-repairs": {
       "comment": "GENERATED from workspace/cron/membership.json by workspace/bin/make-promo-targets -- do not hand-edit. Add or remove a group by editing its 'promos' list in membership.json and regenerating (CI fails if this file drifts). Only groups with status 'active' reach this list, which is why admin-only, not-a-member and on-hold groups are absent. Invite links are NOT reliably resolvable on this gateway, so membership.json records group JIDs."
     },
@@ -55,7 +58,8 @@
         "cv",
         "genaie",
         "genaie-leads",
-        "fruit-trees"
+        "fruit-trees",
+        "skylight-solar"
       ]
     },
     "263786627810-1599925540@g.us": {
@@ -67,7 +71,8 @@
         "cv",
         "genaie",
         "genaie-leads",
-        "fruit-trees"
+        "fruit-trees",
+        "skylight-solar"
       ]
     },
     "263788965610-1586021253@g.us": {
@@ -79,7 +84,8 @@
         "cv",
         "genaie",
         "genaie-leads",
-        "fruit-trees"
+        "fruit-trees",
+        "skylight-solar"
       ]
     },
     "263786627810-1602907634@g.us": {
@@ -91,7 +97,8 @@
         "cv",
         "genaie",
         "genaie-leads",
-        "fruit-trees"
+        "fruit-trees",
+        "skylight-solar"
       ]
     },
     "263713263553-1525083448@g.us": {
@@ -103,7 +110,8 @@
         "cv",
         "genaie",
         "genaie-leads",
-        "fruit-trees"
+        "fruit-trees",
+        "skylight-solar"
       ]
     },
     "263713263553-1534001994@g.us": {
@@ -115,7 +123,8 @@
         "cv",
         "genaie",
         "genaie-leads",
-        "fruit-trees"
+        "fruit-trees",
+        "skylight-solar"
       ]
     },
     "263782033305-1606359163@g.us": {
@@ -127,7 +136,8 @@
         "cv",
         "genaie",
         "genaie-leads",
-        "fruit-trees"
+        "fruit-trees",
+        "skylight-solar"
       ]
     },
     "263712716631-1612799459@g.us": {
@@ -139,7 +149,8 @@
         "cv",
         "genaie",
         "genaie-leads",
-        "fruit-trees"
+        "fruit-trees",
+        "skylight-solar"
       ]
     },
     "263771610054-1606277509@g.us": {
@@ -151,7 +162,8 @@
         "cv",
         "genaie",
         "genaie-leads",
-        "fruit-trees"
+        "fruit-trees",
+        "skylight-solar"
       ]
     },
     "263783787925-1612945522@g.us": {
@@ -172,7 +184,8 @@
         "cv",
         "genaie",
         "genaie-leads",
-        "fruit-trees"
+        "fruit-trees",
+        "skylight-solar"
       ]
     },
     "263782033305-1590488184@g.us": {
@@ -184,7 +197,8 @@
         "cv",
         "genaie",
         "genaie-leads",
-        "fruit-trees"
+        "fruit-trees",
+        "skylight-solar"
       ]
     },
     "263774484671-1608274743@g.us": {
@@ -196,7 +210,8 @@
         "cv",
         "genaie",
         "genaie-leads",
-        "fruit-trees"
+        "fruit-trees",
+        "skylight-solar"
       ]
     },
     "263773818895-1590868294@g.us": {
@@ -208,7 +223,8 @@
         "cv",
         "genaie",
         "genaie-leads",
-        "fruit-trees"
+        "fruit-trees",
+        "skylight-solar"
       ]
     },
     "263773773025-1613206558@g.us": {
@@ -220,7 +236,8 @@
         "cv",
         "genaie",
         "genaie-leads",
-        "fruit-trees"
+        "fruit-trees",
+        "skylight-solar"
       ]
     },
     "120363432832732537@g.us": {
@@ -239,7 +256,8 @@
         "cv",
         "genaie",
         "genaie-leads",
-        "fruit-trees"
+        "fruit-trees",
+        "skylight-solar"
       ]
     },
     "120363421153578257@g.us": {
@@ -251,7 +269,8 @@
         "cv",
         "genaie",
         "genaie-leads",
-        "fruit-trees"
+        "fruit-trees",
+        "skylight-solar"
       ]
     },
     "120363286085033663@g.us": {
@@ -263,7 +282,8 @@
         "cv",
         "genaie",
         "genaie-leads",
-        "fruit-trees"
+        "fruit-trees",
+        "skylight-solar"
       ]
     },
     "120363275485319265@g.us": {
@@ -453,7 +473,8 @@
       "promos": [
         "fruit-trees",
         "cv",
-        "genaie"
+        "genaie",
+        "skylight-solar"
       ]
     },
     "120363426924923592@g.us": {
@@ -511,7 +532,8 @@
         "fruit-trees",
         "cv",
         "genaie",
-        "genaie-leads"
+        "genaie-leads",
+        "skylight-solar"
       ],
       "note": "discovered via the WhatsApp sender-key store on 2026-10-11"
     },
@@ -548,7 +570,8 @@
         "cv",
         "genaie",
         "genaie-leads",
-        "fruit-trees"
+        "fruit-trees",
+        "skylight-solar"
       ]
     },
     "263785811799-1594293610@g.us": {
@@ -582,7 +605,8 @@
       "status": "active",
       "daily_cap": null,
       "promos": [
-        "fruit-trees"
+        "fruit-trees",
+        "skylight-solar"
       ],
       "note": "joined 2026-10-14; the bot has not posted here yet, so posting permission is unverified until the first run"
     },
@@ -594,7 +618,8 @@
       "promos": [
         "fruit-trees",
         "genaie",
-        "genaie-leads"
+        "genaie-leads",
+        "skylight-solar"
       ],
       "note": "joined 2026-10-14; the bot has not posted here yet, so posting permission is unverified until the first run"
     },
@@ -626,7 +651,8 @@
         "cv",
         "genaie",
         "genaie-leads",
-        "fruit-trees"
+        "fruit-trees",
+        "skylight-solar"
       ]
     },
     "120363413442071640@g.us": {
