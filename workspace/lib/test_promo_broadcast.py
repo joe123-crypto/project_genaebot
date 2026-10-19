@@ -88,39 +88,45 @@ def _sequence_sender(sink, outs):
     return _send
 
 
-def test_not_dispatched_error_retries_then_succeeds(tmp_path, monkeypatch):
-    # The WhatsApp link was down at dispatch (status 428/500/503 reconnect gap);
-    # the send is retried after a wait and goes through on the next attempt.
+def test_not_dispatched_error_is_not_resent_and_marked_sent(tmp_path, monkeypatch):
+    # The WhatsApp link was mid-reconnect (status 428/500/503). The gateway queues
+    # the send and replays it on reconnect (live: 2026-10-18 06:24 and 2026-10-19
+    # 15:17 UTC, where our own re-send posted the ad to OnPoint ZW Ads twice), so
+    # the engine must NOT re-send: one attempt, group recorded as sent, run ok.
     sent = []
-    down = (False, "OutboundDeliveryError: No active WhatsApp Web listener (account: default)")
+    down = (False, "OutboundDeliveryError: No active WhatsApp Web listener (account: default)"
+                   " <- PlatformMessageNotDispatchedError")
     up = (True, '{"messageId":"m"}')
     monkeypatch.setattr(pb, "send_ad", _sequence_sender(sent, [down, up]))
     waits = []
-    targets = _targets(tmp_path, ["1@g.us"])
+    targets = _targets(tmp_path, ["1@g.us", "2@g.us"])
     state = str(tmp_path / "state.json")
     rc = pb.broadcast(text="hi", image=_image(tmp_path), targets_file=targets,
                       state_file=state, send_delay=0, argv=[], sleep=waits.append,
                       start_jitter=0, cron_timeout=None)
     assert rc == 0
-    assert sent == ["1@g.us", "1@g.us"]  # retried once, then delivered
-    assert waits == [pb.SEND_RETRY_WAIT]  # waited for the reconnect
-    assert set(json_store.load_json(state, {})["sent"]) == {"1@g.us"}
+    assert sent == ["1@g.us", "2@g.us"]  # 1@g.us attempted once only, never re-sent
+    assert len(waits) == 1  # just the normal inter-group gap, no retry wait
+    assert set(json_store.load_json(state, {})["sent"]) == {"1@g.us", "2@g.us"}
 
 
-def test_not_dispatched_error_exhausts_retries_and_still_fails(tmp_path, monkeypatch):
+def test_not_dispatched_group_is_not_reposted_on_a_same_day_rerun(tmp_path, monkeypatch):
     sent = []
-    down = "PlatformMessageNotDispatchedError: No active WhatsApp Web listener"
-    monkeypatch.setattr(pb, "send_ad", _record_sender(sent, False, down))
-    waits = []
+    monkeypatch.setattr(pb, "send_ad", _record_sender(
+        sent, False, "PlatformMessageNotDispatchedError: No active WhatsApp Web listener"))
     targets = _targets(tmp_path, ["1@g.us"])
     state = str(tmp_path / "state.json")
-    rc = pb.broadcast(text="hi", image=_image(tmp_path), targets_file=targets,
-                      state_file=state, send_delay=0, argv=[], sleep=waits.append,
-                      start_jitter=0, cron_timeout=None)
-    assert rc == 1  # a persistent outage is still a failure after the bounded retries
-    assert len(sent) == 1 + pb.SEND_RETRY_MAX  # initial attempt + bounded retries
-    assert len(waits) == pb.SEND_RETRY_MAX
-    assert json_store.load_json(state, {})["sent"] == {}
+    kw = dict(text="hi", image=_image(tmp_path), targets_file=targets, state_file=state,
+              send_delay=0, argv=[], sleep=lambda s: None, start_jitter=0, cron_timeout=None)
+    assert pb.broadcast(**kw) == 0
+    assert pb.broadcast(**kw) == 0
+    assert sent == ["1@g.us"]  # the rerun skips it: the gateway already has it
+
+
+def test_engine_has_no_resend_retry_knobs():
+    # Guard against reintroducing the #124 re-send loop.
+    assert not hasattr(pb, "SEND_RETRY_MAX")
+    assert not hasattr(pb, "SEND_RETRY_WAIT")
 
 
 def test_ambiguous_errors_are_not_retried(tmp_path, monkeypatch):
