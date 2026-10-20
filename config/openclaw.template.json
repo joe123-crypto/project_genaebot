@@ -134,7 +134,16 @@
           "cvMakerEnabled": true,
           "cvMakerPriceText": "US$5",
           "cvMakerPaymentDetails": "EcoCash +263783496308 (Charlene Anika)",
-          "cvMakerPaymentMethod": "EcoCash"
+          "cvMakerPaymentMethod": "EcoCash",
+          "siblingLineGuardEnabled": true,
+          "whatsappLines": {
+            "default": "+263785632943",
+            "ads": "+263790453292"
+          },
+          "siblingLineMaxEventsPerWindow": 8,
+          "siblingLineWindowSeconds": 900,
+          "siblingLineCooldownSeconds": 21600,
+          "siblingLineMaxBurstsPerDay": 3
         }
       },
       "whatsapp-relevance-gate": {
@@ -219,7 +228,7 @@
       "defaultAccount": "default",
       "accounts": {
         "default": { "enabled": true },
-        "ads": { "enabled": true }
+        "ads": { "enabled": false }
       },
       "streaming": {
         "block": {
