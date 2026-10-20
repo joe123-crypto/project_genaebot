@@ -71,7 +71,7 @@ reads that live value at run time so a not-yet-migrated job tightens its send
 gaps rather than being killed with groups unreached (see README).
 
 The same applies to the promo **schedules**, which moved off the hour (08:13,
-08:40, 09:17, 10:35, 11:39, 12:50, 14:26, 17:06 `Africa/Harare`) so the account's
+08:40, 10:35, 11:39, 12:50, 13:21, 14:26, 17:06 `Africa/Harare`) so the account's
 daily pattern is not perfectly periodic. Merging that change ships nothing on its
 own. `deploy/promo-crons.json` is the declared cron state for all eight campaigns --
 schedule, timezone, failure-alert target, command and the shared 7200 s job

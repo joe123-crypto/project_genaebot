@@ -389,7 +389,7 @@ individual installers.
   Most groups get the ad daily; groups under the file's `weekly_groups` map are posted
   to only on their configured weekdays, which is how MUTANDIRI VILLAGE RESIDENTS gets
   the ad three times a week (Mon, Wed and Fri)
-- **`skylight-solar-promo`** (`install-skylight-solar-promo.sh`, 09:17) runs
+- **`skylight-solar-promo`** (`install-skylight-solar-promo.sh`, 13:21) runs
   `workspace/cron/skylight-solar-promo/post_ad.py`, a deterministic (no-agent) job
   that posts the fixed Skylight Solar ad (solar system packages and complete
   water/borehole solutions: survey, drilling, flushing, installation) to the WhatsApp
@@ -452,7 +452,7 @@ Each promo also waits a **random 0-900 s before its first send**
 (`PROMO_START_JITTER_SECONDS`; `0` disables it). The gaps inside a run were
 already random, but every cron used to fire exactly on the hour, so the
 account's day-to-day pattern stayed perfectly periodic. The eight schedules are
-now spread off the hour as well (08:13, 08:40, 09:17, 10:35, 11:39, 12:50, 14:26,
+now spread off the hour as well (08:13, 08:40, 10:35, 11:39, 12:50, 13:21, 14:26,
 17:06 — declared in `deploy/promo-crons.json`, which CI checks these times
 against), chosen so a campaign's latest possible finish -- base minute plus the
 full jitter plus a worst-case run -- never reaches the next campaign's slot. The

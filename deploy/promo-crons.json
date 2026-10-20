@@ -27,17 +27,6 @@
       "legacyNames": []
     },
     {
-      "slug": "skylight-solar",
-      "name": "skylight-solar-promo",
-      "installer": "deploy/install-skylight-solar-promo.sh",
-      "envPrefix": "SKYLIGHT_SOLAR_PROMO",
-      "cron": "17 9 * * *",
-      "tz": "Africa/Harare",
-      "failureAlertTo": "+263785632943",
-      "script": "/home/joseph/.openclaw/workspace/cron/skylight-solar-promo/post_ad.py",
-      "legacyNames": []
-    },
-    {
       "slug": "appliance-repairs",
       "name": "appliance-repairs-promo",
       "installer": "deploy/install-appliance-repairs-promo.sh",
@@ -68,6 +57,17 @@
       "tz": "Africa/Harare",
       "failureAlertTo": "+213563719936",
       "script": "/home/joseph/.openclaw/workspace/cron/building-materials-promo/post_ad.py",
+      "legacyNames": []
+    },
+    {
+      "slug": "skylight-solar",
+      "name": "skylight-solar-promo",
+      "installer": "deploy/install-skylight-solar-promo.sh",
+      "envPrefix": "SKYLIGHT_SOLAR_PROMO",
+      "cron": "21 13 * * *",
+      "tz": "Africa/Harare",
+      "failureAlertTo": "+263785632943",
+      "script": "/home/joseph/.openclaw/workspace/cron/skylight-solar-promo/post_ad.py",
       "legacyNames": []
     },
     {

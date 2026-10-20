@@ -32,7 +32,7 @@ MANIFEST = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
 EXPECTED_SCHEDULES = {
     "borehole-drilling": "13 8 * * *",
     "fruit-trees": "40 8 * * *",
-    "skylight-solar": "17 9 * * *",
+    "skylight-solar": "21 13 * * *",
     "appliance-repairs": "35 10 * * *",
     "cv": "39 11 * * *",
     "building-materials": "50 12 * * *",

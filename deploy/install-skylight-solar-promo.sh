@@ -13,7 +13,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/install-promo.sh"
 
 register_promo_cron \
   "skylight-solar-promo" \
-  "${SKYLIGHT_SOLAR_PROMO_CRON_EXPR:-17 9 * * *}" \
+  "${SKYLIGHT_SOLAR_PROMO_CRON_EXPR:-21 13 * * *}" \
   "${SKYLIGHT_SOLAR_PROMO_TZ:-Africa/Harare}" \
   "${SKYLIGHT_SOLAR_PROMO_FAILURE_ALERT_TO:-+263785632943}" \
   "/home/joseph/.openclaw/workspace/cron/skylight-solar-promo/post_ad.py"

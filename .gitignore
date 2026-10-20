@@ -96,7 +96,7 @@
 !workspace/cron/borehole-drilling-promo/assets/*.jpg
 
 # Skylight-solar promo campaign: editable target list + the rotating ad posters
-# (developer-owned, deployed with the workspace). Daily 09:17 Africa/Harare cron.
+# (developer-owned, deployed with the workspace). Daily 13:21 Africa/Harare cron.
 !workspace/cron/skylight-solar-promo/targets.json
 !workspace/cron/skylight-solar-promo/assets/
 !workspace/cron/skylight-solar-promo/assets/*.jpg

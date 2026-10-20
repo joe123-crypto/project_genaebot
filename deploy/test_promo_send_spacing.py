@@ -268,6 +268,34 @@ class CallerWiringTests(unittest.TestCase):
         self.assertLess(worst, 7200, "largest promo (%d groups) may exceed the timeout"
                         % largest)
 
+    def test_no_promo_can_still_be_running_at_the_next_promos_slot(self):
+        """Two promo runs posting at once double the account's send rate and
+        defeat the 20-60 s spacing. On 2026-10-20 fruit-trees (44 groups, 08:40)
+        was still sending when skylight-solar (then 09:17) started: from 09:27
+        to 09:30 Harare the two interleaved, with sends 2 s apart. The READMEs
+        promise each slot clears its predecessor's latest possible finish
+        (base minute + full start jitter + every gap at its max + a per-send
+        allowance); this pins that promise against today's group counts."""
+        manifest = json.loads((ROOT / "deploy/promo-crons.json").read_text(encoding="utf-8"))
+        runs = []
+        for promo in manifest["promos"]:
+            minute, hour = promo["cron"].split()[:2]
+            data = json.loads((CRON / ("%s-promo" % promo["slug"]) / "targets.json")
+                              .read_text(encoding="utf-8"))
+            count = len(set(data.get("groups", [])) | set(data.get("weekly_groups", {})))
+            runs.append((int(hour) * 60 + int(minute), promo["slug"], count))
+        runs.sort()
+        for (start, slug, count), (next_start, next_slug, _) in zip(runs, runs[1:]):
+            latest = start * 60 + (pb.DEFAULT_START_JITTER_SECONDS
+                                   + (count - 1) * pb.DEFAULT_SEND_DELAY_MAX
+                                   + count * pb.SEND_ALLOWANCE_SECONDS)
+            with self.subTest(promo=slug):
+                self.assertLess(latest, next_start * 60,
+                                "%s (%d groups) can still be sending at %02d:%02d "
+                                "when %s starts at %02d:%02d"
+                                % (slug, count, latest // 3600, latest % 3600 // 60,
+                                   next_slug, next_start // 60, next_start % 60))
+
 
 class RunTimeoutFitTests(unittest.TestCase):
     """A promo cron's job timeout lives in the gateway's cron state on the
