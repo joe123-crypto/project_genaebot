@@ -24,7 +24,7 @@ def _targets(tmp_path, groups, weekly=None):
 
 
 def _record_sender(sink, ok, out):
-    def _send(target, text, image_path):
+    def _send(target, text, image_path, account=None):
         sink.append(target)
         return (ok, out)
     return _send
@@ -80,7 +80,7 @@ def _sequence_sender(sink, outs):
     """send_ad stub returning the ``outs`` pairs in order; the last repeats."""
     calls = {"n": 0}
 
-    def _send(target, text, image_path):
+    def _send(target, text, image_path, account=None):
         sink.append(target)
         pair = outs[min(calls["n"], len(outs) - 1)]
         calls["n"] += 1

@@ -67,7 +67,7 @@ POST_TEXT = (
     "\U0001F3A8 Poster Design\n"
     "\U0001F916 Customer Service WhatsApp Bots\n"
     "\n"
-    "\U0001F4DE WhatsApp us: +263785632943"
+    "\U0001F4DE WhatsApp us: {bot_number}"
 )
 
 # Caption variants that rotate per group per day (see promo_broadcast) so the ad
@@ -88,7 +88,7 @@ POST_TEXT_V2 = (
     "Get your business noticed, get customers ready to buy, and get 24/7 "
     "customer service for your business.\n"
     "\n"
-    "\U0001F4DE WhatsApp us: +263785632943"
+    "\U0001F4DE WhatsApp us: {bot_number}"
 )
 
 POST_TEXT_V3 = (
@@ -104,17 +104,17 @@ POST_TEXT_V3 = (
     "\U0001F7E2 WhatsApp Group Ads\n"
     "\U0001F3A8 Poster Design\n"
     "\n"
-    "\U0001F4DE WhatsApp us: +263785632943"
+    "\U0001F4DE WhatsApp us: {bot_number}"
 )
 
 POST_TEXTS = [POST_TEXT, POST_TEXT_V2, POST_TEXT_V3]
 
-# Per-group ref-coded wa.me link to Genaie's own number (+263785632943, the
-# bot's WhatsApp number), so replies reach the bot and the public-service-gate
-# ad-ref recorder counts them.
+# Per-group ref-coded wa.me link to the posting account's own WhatsApp number
+# ({bot_number} in the copy and the link both resolve to membership.json's
+# defaults.accounts entry for the account that posts to each group), so replies
+# reach the bot and the public-service-gate ad-ref recorder counts them.
 TRACKING = {
     "prefix": "GN",
-    "number": "+263785632943",
     "label": "Genaie",
 }
 

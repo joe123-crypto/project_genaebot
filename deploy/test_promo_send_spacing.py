@@ -69,7 +69,7 @@ class SendSpacingTests(unittest.TestCase):
                 os.environ[k] = v
         self._tmp.cleanup()
 
-    def _fake_send(self, target, text, image):
+    def _fake_send(self, target, text, image, account=None):
         self.events.append(("send", target))
         return self.send_result(target)
 

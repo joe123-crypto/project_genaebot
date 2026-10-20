@@ -65,10 +65,12 @@ def all_target_jids(name):
 
 def facts(text):
     """Every number (prices, HP, sizes, quantities, phone digits, 24/7), dollar
-    amount, % and link -- the facts that must not drift between caption variants.
-    Spaces inside phone numbers ("+263 775 489 417") are collapsed first."""
+    amount, %, link and the ``{bot_number}`` placeholder -- the facts that must
+    not drift between caption variants. Spaces inside phone numbers
+    ("+263 775 489 417") are collapsed first."""
     flat = re.sub(r"(?<=\d) (?=\d)", "", text)
-    return set(re.findall(r"\$\d+|\+?\d+(?:\.\d+)?|%|genaie\.site", flat))
+    return set(re.findall(r"\$\d+|\+?\d+(?:\.\d+)?|%|genaie\.site|\{bot_number\}",
+                          flat))
 
 
 class _PinnedDate(date):
@@ -150,8 +152,8 @@ class VariantRotationTests(unittest.TestCase):
     def test_send_loop_sends_per_group_variant(self):
         sent = {}
         saved_send, saved_date = pb.send_ad, pb.date
-        pb.send_ad = lambda target, text, image: (sent.__setitem__(target, text)
-                                                  or (True, '{"messageId":"m"}'))
+        pb.send_ad = lambda target, text, image, account=None: (
+            sent.__setitem__(target, text) or (True, '{"messageId":"m"}'))
         pb.date = pin(date(2026, 10, 9))
         try:
             with tempfile.TemporaryDirectory() as tmp:
@@ -175,8 +177,8 @@ class VariantRotationTests(unittest.TestCase):
     def test_variant_images_pin_an_image_to_a_variant(self):
         sent = {}
         saved_send, saved_date = pb.send_ad, pb.date
-        pb.send_ad = lambda target, text, image: (sent.__setitem__(target, image)
-                                                  or (True, '{"messageId":"m"}'))
+        pb.send_ad = lambda target, text, image, account=None: (
+            sent.__setitem__(target, image) or (True, '{"messageId":"m"}'))
         pb.date = pin(date(2026, 10, 9))
         try:
             with tempfile.TemporaryDirectory() as tmp:
@@ -221,7 +223,7 @@ class VariantRotationTests(unittest.TestCase):
     def test_string_caption_is_sent_verbatim(self):
         sent = []
         saved = pb.send_ad
-        pb.send_ad = lambda target, text, image: (sent.append(text) or (True, '{"messageId":"m"}'))
+        pb.send_ad = lambda target, text, image, account=None: (sent.append(text) or (True, '{"messageId":"m"}'))
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 img = Path(tmp, "ad.png")
@@ -301,13 +303,155 @@ class LinkAndPlaceholderTests(unittest.TestCase):
     def test_untracked_caption_unchanged_even_with_braces(self):
         self.assertEqual(pb.render_caption("a {ref} {x}"), "a {ref} {x}")
 
-    def test_tracking_requires_prefix_and_number(self):
+    def test_tracking_requires_prefix(self):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(ValueError):
                 pb.broadcast(text="x", image=str(Path(tmp, "a.png")),
                              targets_file=str(Path(tmp, "t.json")),
                              state_file=str(Path(tmp, "s.json")),
-                             argv=[], tracking={"prefix": "BH"})
+                             argv=[], tracking={"number": "+263785632943"})
+
+    def test_bot_number_promo_requires_account_numbers(self):
+        # A promo whose copy uses {bot_number} (or whose tracking pins no number)
+        # must have an account_numbers map to resolve each group's advertised
+        # number; an un-regenerated targets.json that lacks it fails loudly.
+        with tempfile.TemporaryDirectory() as tmp:
+            img = Path(tmp, "a.png")
+            img.write_bytes(b"img")
+            targets = Path(tmp, "t.json")
+            targets.write_text(json.dumps({"groups": ["1@g.us"]}))
+            with self.assertRaises(ValueError):
+                pb.broadcast(text="Call {bot_number}", image=str(img),
+                             targets_file=str(targets),
+                             state_file=str(Path(tmp, "s.json")),
+                             argv=[], start_jitter=0, caps=None)
+
+
+class AccountRoutingTests(unittest.TestCase):
+    """Each WhatsApp line posts to its own groups and advertises its own number,
+    so the promo group-load can be split across two accounts."""
+
+    DEFAULT_NUM = BOT_NUMBER
+    ADS_NUM = "+263790453292"
+    # A bot promo pins no number: the link target comes from the posting account.
+    TRACK = {"prefix": "GN", "label": "Genaie"}
+
+    def _targets(self, tmp):
+        targets = Path(tmp, "targets.json")
+        targets.write_text(json.dumps({
+            "groups": ["1@g.us", "2@g.us"],
+            "accounts": {"2@g.us": "ads"},
+            "account_numbers": {"default": self.DEFAULT_NUM, "ads": self.ADS_NUM},
+        }))
+        return targets
+
+    def _run(self, tmp, **kwargs):
+        sent = {}
+        saved = pb.send_ad
+        pb.send_ad = lambda target, text, image, account=None: (
+            sent.__setitem__(target, (text, account)) or (True, '{"messageId":"m"}'))
+        try:
+            img = Path(tmp, "ad.png")
+            img.write_bytes(b"img")
+            rc = pb.broadcast(image=str(img), targets_file=str(self._targets(tmp)),
+                              state_file=str(Path(tmp, "s.json")),
+                              send_delay=0, argv=[], start_jitter=0, caps=None,
+                              **kwargs)
+        finally:
+            pb.send_ad = saved
+        return rc, sent
+
+    def test_only_a_non_default_account_is_passed_to_the_gateway(self):
+        # The gateway rejects an account id it has no registry entry for
+        # ("Unknown account ..."), and channels.whatsapp.accounts is legitimately
+        # absent on a single-account gateway, so the default must stay implicit or
+        # every send breaks there. Correct routing for the default line comes from
+        # defaultAccount in config instead (asserted below).
+        seen = {}
+
+        class _Done:
+            returncode = 0
+            stdout = '{"messageId":"m"}'
+            stderr = ""
+
+        saved = pb.subprocess.run
+        pb.subprocess.run = lambda cmd, **kw: (seen.__setitem__("cmd", cmd) or _Done())
+        try:
+            ok, _ = pb.send_ad("1@g.us", "hi", str(Path(os.devnull)), account="ads")
+            self.assertTrue(ok)
+            cmd = seen["cmd"]
+            self.assertEqual(cmd[cmd.index("--account") + 1], "ads")
+
+            for implicit in (pb.DEFAULT_ACCOUNT, None):
+                seen.clear()
+                ok, _ = pb.send_ad("1@g.us", "hi", str(Path(os.devnull)),
+                                   account=implicit)
+                self.assertTrue(ok, implicit)
+                self.assertNotIn("--account", seen["cmd"], implicit)
+        finally:
+            pb.subprocess.run = saved
+
+    def test_config_pins_the_default_account(self):
+        # send_ad leaves the default account implicit, so the config must say
+        # which account that is: without defaultAccount the gateway picks
+        # "default" if present else the first id sorted, and "ads" sorts first --
+        # which would post every untagged group from the second number.
+        wa = json.loads((ROOT / "config/openclaw.template.json").read_text(
+            encoding="utf-8"))["channels"]["whatsapp"]
+        self.assertEqual(wa.get("defaultAccount"), pb.DEFAULT_ACCOUNT)
+        self.assertIn(pb.DEFAULT_ACCOUNT, wa.get("accounts") or {})
+
+    def test_each_group_posts_from_and_advertises_its_own_account(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, sent = self._run(tmp, text="Call {bot_number}", tracking=self.TRACK,
+                                 promo_name="genaie-promo")
+        self.assertEqual(rc, 0)
+        default_text, default_account = sent["1@g.us"]
+        ads_text, ads_account = sent["2@g.us"]
+        self.assertEqual(default_account, "default")
+        self.assertEqual(ads_account, "ads")
+        for text, mine, theirs in ((default_text, self.DEFAULT_NUM, self.ADS_NUM),
+                                   (ads_text, self.ADS_NUM, self.DEFAULT_NUM)):
+            self.assertIn(mine, text)                       # copy advertises itself
+            self.assertIn("wa.me/%s?" % pb.wa_digits(mine), text)   # so does the link
+            self.assertNotIn(theirs, text)                  # and never the other line
+            self.assertNotIn("wa.me/%s?" % pb.wa_digits(theirs), text)
+
+    def test_pinned_tracking_number_wins_over_the_posting_account(self):
+        # appliance-repairs routes replies to a fixed shop line whichever account
+        # posts the ad, so a per-account number must not override it.
+        shop = APPLIANCE_REPAIRS_NUMBER
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, sent = self._run(tmp, text="Repairs",
+                                 tracking={"prefix": "AR", "number": shop,
+                                           "label": "repairs"},
+                                 promo_name="appliance-repairs-promo")
+        self.assertEqual(rc, 0)
+        ads_text, ads_account = sent["2@g.us"]
+        self.assertEqual(ads_account, "ads")  # posted from the second line...
+        # ...but the link still goes to the shop, not to that line's number.
+        self.assertIn("wa.me/%s?" % pb.wa_digits(shop), ads_text)
+        self.assertNotIn("wa.me/%s?" % pb.wa_digits(self.ADS_NUM), ads_text)
+
+    def test_missing_targets_file_stays_a_quiet_no_op(self):
+        # A missing/unreadable targets file has nothing to send and must not be
+        # misreported as a stale, un-regenerated one.
+        saved = pb.send_ad
+        pb.send_ad = lambda *a, **k: self.fail("must not send")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                img = Path(tmp, "ad.png")
+                img.write_bytes(b"img")
+                with redirect_stdout(io.StringIO()) as buf:
+                    rc = pb.broadcast(text="Call {bot_number}", image=str(img),
+                                      targets_file=str(Path(tmp, "missing.json")),
+                                      state_file=str(Path(tmp, "s.json")),
+                                      tracking=self.TRACK, promo_name="genaie-promo",
+                                      send_delay=0, argv=[], start_jitter=0, caps=None)
+                self.assertEqual(rc, 0)
+                self.assertIn("NO_REPLY", buf.getvalue())
+        finally:
+            pb.send_ad = saved
 
 
 class PromoWiringTests(unittest.TestCase):
@@ -346,15 +490,21 @@ class PromoWiringTests(unittest.TestCase):
         for name, (_, prefix, number) in PROMOS.items():
             m = load_promo(name)
             self.assertEqual(m.TRACKING["prefix"], prefix, name)
-            self.assertEqual(m.TRACKING["number"], number, name)
-            # The link must point at a number the ad itself already advertises,
-            # printed either internationally (+263 71 ...) or locally (071 ...).
-            digits = pb.wa_digits(number)
-            printed = pb.wa_digits(m.POST_TEXT)
-            self.assertTrue(
-                digits in printed
-                or (digits.startswith("263") and "0" + digits[3:] in printed),
-                "%s: link number is not in the ad" % name)
+            if number == BOT_NUMBER:
+                # Bot promos no longer pin a number: each account advertises its
+                # own, substituted into the {bot_number} placeholder in the copy.
+                self.assertIsNone(m.TRACKING.get("number"), name)
+                self.assertIn("{bot_number}", m.POST_TEXT, name)
+            else:
+                # A promo that pins its own contact (appliance-repairs -> shop)
+                # keeps that number, and it must be printed in the ad copy.
+                self.assertEqual(m.TRACKING["number"], number, name)
+                digits = pb.wa_digits(number)
+                printed = pb.wa_digits(m.POST_TEXT)
+                self.assertTrue(
+                    digits in printed
+                    or (digits.startswith("263") and "0" + digits[3:] in printed),
+                    "%s: link number is not in the ad" % name)
 
     def _run(self, name, args, day=date(2026, 10, 9)):
         m = load_promo(name)

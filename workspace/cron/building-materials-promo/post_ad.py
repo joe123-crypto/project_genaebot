@@ -71,7 +71,7 @@ POST_TEXT = (
     "\U0001F4DE Contact us:\n"
     "\n"
     "\U0001F4AC WhatsApp & Calls: +263 775 489 417\n"
-    "\U0001F4DE Phone Calls Only: +263 785 632 943\n"
+    "\U0001F4DE Phone Calls Only: {bot_number}\n"
     "\n"
     "\U0001F4E9 Contact us now to place your order!"
 )
@@ -96,7 +96,7 @@ POST_TEXT_V2 = (
     "\U0001F4E6 Bulk quantities available\n"
     "\n"
     "\U0001F4AC WhatsApp & Calls: +263 775 489 417\n"
-    "\U0001F4DE Phone Calls Only: +263 785 632 943\n"
+    "\U0001F4DE Phone Calls Only: {bot_number}\n"
     "\n"
     "Place your order today! \U0001F4E9"
 )
@@ -120,18 +120,19 @@ POST_TEXT_V3 = (
     "\n"
     "To order:\n"
     "\U0001F4AC WhatsApp & Calls: +263 775 489 417\n"
-    "\U0001F4DE Phone Calls Only: +263 785 632 943"
+    "\U0001F4DE Phone Calls Only: {bot_number}"
 )
 
 POST_TEXTS = [POST_TEXT, POST_TEXT_V2, POST_TEXT_V3]
 
-# Per-group ref-coded wa.me link to Genaie's own number (+263785632943, the
-# bot's WhatsApp number), like every other promo: replies reach the bot, the
-# public-service-gate ad-ref recorder counts them, and the bot forwards the order
-# to the seller when it hands the customer off (services/handoff.js).
+# Per-group ref-coded wa.me link to the posting account's own WhatsApp number
+# ({bot_number} resolves to membership.json's defaults.accounts entry for the
+# account that posts to each group), like every other bot promo: replies reach
+# the bot, the public-service-gate ad-ref recorder counts them, and the bot
+# forwards the order to the seller when it hands the customer off
+# (services/handoff.js).
 TRACKING = {
     "prefix": "BM",
-    "number": "+263785632943",
     "label": "building materials",
 }
 

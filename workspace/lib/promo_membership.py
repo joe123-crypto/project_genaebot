@@ -23,7 +23,9 @@ Schema (``version: 1``)::
     {
       "version": 1,
       "defaults": {"activity": "normal", "caps_enabled": false,
-                   "bands": {"busy": [6, 10], "normal": [4, 6], "quiet": [1, 3]}},
+                   "bands": {"busy": [6, 10], "normal": [4, 6], "quiet": [1, 3]},
+                   "accounts": {"default": {"number": "+263785632943"},
+                                "ads": {"number": "+2637..."}}},
       "promos": {"cv": {"comment": "...", "weekly_comment": "..."}, ...},
       "groups": {
         "<jid>": {
@@ -31,6 +33,7 @@ Schema (``version: 1``)::
           "source": "whatsapp" | "operator" | "git",
           "status": "active" | "on-hold" | "admin-only" | "not-a-member",
           "activity": "busy" | "normal" | "quiet",
+          "account": "default" | "ads",   # which WhatsApp line posts here
           "daily_cap": null | int,
           "promos": ["cv", "genaie", ...],
           "weekly": {"cv": ["mon", "thu"]},
@@ -38,6 +41,12 @@ Schema (``version: 1``)::
         }
       }
     }
+
+``defaults.accounts`` maps each WhatsApp line the bot advertises from to the
+number it advertises (each line advertises itself). A group's ``account`` names
+its line; absent ⇒ the ``default`` line. Spreading groups across two accounts
+keeps any one account from being a member of a suspiciously large number of
+groups.
 
 ``status`` is what gates generation: only ``active`` groups reach a targets
 file. ``promos`` is the *intent* and is kept even while a group is paused, so
@@ -60,6 +69,10 @@ STATUSES = ("active", "on-hold", "admin-only", "not-a-member")
 SOURCES = ("whatsapp", "operator", "git")
 DEFAULT_ACTIVITY = "normal"
 DEFAULT_BANDS = {"busy": (6, 10), "normal": (4, 6), "quiet": (1, 3)}
+# The bot's original WhatsApp line. A group with no explicit ``account`` is
+# advertised from, and advertises, this line; a second line is tagged per group
+# under ``defaults.accounts`` so the group-load can be split across two numbers.
+DEFAULT_ACCOUNT = "default"
 
 
 def default_path(workspace=None):
@@ -146,6 +159,39 @@ def caps_enabled(m):
     return bool(((m or {}).get("defaults") or {}).get("caps_enabled"))
 
 
+def accounts(m):
+    """``{account_id: {"number": "+263..."}}`` from ``defaults.accounts``. The
+    WhatsApp lines the bot advertises from; each line advertises its own number.
+    Empty when none are configured (then every group stays on the implicit
+    default line and no per-account number is emitted)."""
+    raw = ((m or {}).get("defaults") or {}).get("accounts") or {}
+    out = {}
+    if isinstance(raw, dict):
+        for acct, cfg in raw.items():
+            acct = str(acct).strip()
+            if acct and isinstance(cfg, dict):
+                out[acct] = cfg
+    return out
+
+
+def account_numbers(m):
+    """``{account_id: advertised_number}`` for every configured account, in file
+    order. This is carried verbatim into each targets.json so the send engine can
+    render a group's caption with the number of the account that posts it."""
+    out = {}
+    for acct, cfg in accounts(m).items():
+        number = str(cfg.get("number") or "").strip()
+        if number:
+            out[acct] = number
+    return out
+
+
+def account_of(entry):
+    """The WhatsApp account a group is advertised from. Absent ⇒ the default
+    line."""
+    return str((entry or {}).get("account") or DEFAULT_ACCOUNT)
+
+
 def promos_for_group(m, jid):
     """Promo keys targeting ``jid``, in the order listed on the group. Empty for
     a group whose status is not ``active`` -- a paused group is in no campaign
@@ -187,6 +233,19 @@ def targets_payload(m, promo):
         if meta.get("weekly_comment"):
             payload["_weekly_comment"] = meta["weekly_comment"]
         payload["weekly_groups"] = weekly
+    # Per-group account tag (only for groups not on the default line) and the
+    # account->number map, so the engine advertises each line's own number.
+    all_groups = groups(m)
+    acct_map = {}
+    for jid in list(jids) + list(weekly):
+        acct = account_of(all_groups.get(jid) or {})
+        if acct != DEFAULT_ACCOUNT:
+            acct_map[jid] = acct
+    if acct_map:
+        payload["accounts"] = acct_map
+    numbers = account_numbers(m)
+    if numbers:
+        payload["account_numbers"] = numbers
     return payload
 
 
@@ -236,6 +295,19 @@ def validate(m):
     for promo in sorted(known - declared):
         errors.append("promo %r is used by a group but not declared under 'promos'"
                       % promo)
+    raw_accounts = ((m or {}).get("defaults") or {}).get("accounts")
+    if raw_accounts is not None and not isinstance(raw_accounts, dict):
+        errors.append("defaults.accounts must be an object")
+        raw_accounts = {}
+    for acct, cfg in (raw_accounts or {}).items():
+        if not isinstance(cfg, dict):
+            errors.append("defaults.accounts[%r] must be an object" % acct)
+            continue
+        number = cfg.get("number")
+        if not isinstance(number, str) or not number.strip():
+            errors.append("defaults.accounts[%r] must have a non-empty string "
+                          "'number'" % acct)
+    declared_accounts = set(accounts(m)) | {DEFAULT_ACCOUNT}
     seen_names = {}
     for jid, entry in groups(m).items():
         where = "group %s" % jid
@@ -252,6 +324,11 @@ def validate(m):
         if source is not None and str(source) not in SOURCES:
             errors.append("%s: unknown source %r (expected one of %s)"
                           % (where, source, ", ".join(SOURCES)))
+        account = entry.get("account")
+        if account is not None and str(account) not in declared_accounts:
+            errors.append("%s: unknown account %r (declare it under "
+                          "defaults.accounts; known: %s)"
+                          % (where, account, ", ".join(sorted(declared_accounts))))
         tier = activity_of(m, entry)
         if tier not in bands(m):
             errors.append("%s: unknown activity tier %r (no band defined)"

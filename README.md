@@ -564,13 +564,29 @@ may instead place the link itself with the `{ref_link}` / `{ref}` placeholders.
 
 | Promo | Prefix | Link target |
 |---|---|---|
-| appliance-repairs-promo | AR | +263713911390 (the repair shop) |
-| borehole-drilling-promo | BH | +263785632943 (bot) |
-| building-materials-promo | BM | +263785632943 (bot) |
-| cv-promo | CV | +263785632943 (bot) |
-| fruit-trees-promo | FT | +263785632943 (bot) |
-| genaie-leads-promo | GL | +263785632943 (bot) |
-| genaie-promo | GN | +263785632943 (bot) |
+| appliance-repairs-promo | AR | +263713911390 (the repair shop, pinned) |
+| borehole-drilling-promo | BH | the posting account (bot) |
+| building-materials-promo | BM | the posting account (bot) |
+| cv-promo | CV | the posting account (bot) |
+| fruit-trees-promo | FT | the posting account (bot) |
+| genaie-leads-promo | GL | the posting account (bot) |
+| genaie-promo | GN | the posting account (bot) |
+| skylight-solar-promo | SK | the posting account (bot) |
+
+The bot advertises from two WhatsApp lines so neither account is a member of a
+suspiciously large number of groups. `membership.json` maps each account to the
+number it advertises (`defaults.accounts`) and tags each group with the account
+that joined it (`account`, absent means the `default` line); a group can only be
+posted to by the line that is actually a member of it. Each line advertises
+itself: the engine sends the group's ad from its account and renders that
+account's number into both the `{bot_number}` placeholder in the copy and the
+`wa.me` link. A promo that pins its own `TRACKING` number (appliance-repairs)
+keeps that number whichever line posts the ad.
+
+| Account | Number | Role |
+|---|---|---|
+| `default` | +263785632943 | the original line; also the admin/self-chat number |
+| `ads` | +263790453292 | second line, added to share the group load |
 
 Decode refs with `--refs`, which prints `ref  promo  group_jid  link` for every
 target and exits without sending or touching state:
@@ -584,9 +600,11 @@ in `runtime/public-service-gate/ad-refs.json` (`count`, `uniqueSenders`,
 `firstSeen`, `lastSeen` per ref; senders stored only as a short one-way hash).
 Recording is observe-only and never changes the reply; admin DMs and group
 messages are not counted. Every promo except `appliance-repairs-promo` links to
-the bot's own number, so every reply is counted and answered by the bot, which
-forwards partner orders (fruit trees, building materials) to the partner when it
-hands the customer off. The appliance-repairs link goes to the repair shop's own
+one of the bot's own lines, so every reply is counted and answered by the bot
+whichever line it arrives on (both accounts route through the same bindings and
+the same ad-ref store), and the bot forwards partner orders (fruit trees,
+building materials) to the partner when it hands the customer off. The
+appliance-repairs link goes to the repair shop's own
 number with the prefilled text `Saw your post from Genaie ads (ref AR-XXX)`, so
 those replies never reach the bot and are not counted here; the shop sees the ref.
 Keep the prefix list in `workspace/plugins/public-service-gate/lib/ad-refs.js` in
