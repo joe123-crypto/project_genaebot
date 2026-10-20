@@ -369,15 +369,21 @@ def is_permission_error(out):
     return any(marker in low for marker in PERMISSION_MARKERS)
 
 
-# A send can also fail because the WhatsApp Web link is momentarily down: the
-# gateway drops and reconnects every few minutes (``Web connection closed`` status
-# 428/500/503, auto-retry in ~2 s). The CLI rejects such a send BEFORE dispatch
-# with these markers, so nothing was delivered and re-sending cannot double-post.
-# That is transient, not permanent -- wait for the reconnect and retry rather than
-# losing the post for the day (crons run once daily, with no same-day retry).
-# Deliberately NOT matched: ``unknown_after_send`` (the gateway's own delivery
-# recovery refuses blind replay there) and a subprocess timeout -- both are
-# ambiguous about whether the message went out, so they must stay hard failures.
+# A send can also be rejected because the WhatsApp Web link is momentarily down:
+# the gateway drops and reconnects every ~30-50 min (``Web connection closed``
+# status 428/500/503, auto-retry in ~2 s) and a send landing in that gap returns
+# these markers. The rejection is NOT final, though: the gateway keeps the
+# request in its outbound delivery queue and replays it as soon as the listener
+# is back. Live logs show it both times this happened -- 2026-10-18 06:24:02 UTC
+# (error, then the same group's ad "Sent" 1.2 s later with no new CLI request)
+# and 2026-10-19 15:17:07 UTC (OnPoint ZW Ads: error, gateway replay "Sent" 0.4 s
+# later, then our own 20 s retry posted the SAME ad a second time). So re-sending
+# here double-posts. Treat it as handed to the gateway: record the group as sent
+# for today and move on, never re-send. A double post in someone else's group is
+# exactly the spammy pattern that gets the number reported, whereas the rare
+# replay that never lands costs at most one ad for one day.
+# Deliberately NOT matched (still hard failures): ``unknown_after_send`` and a
+# subprocess timeout, which are ambiguous in a different way.
 NOT_DISPATCHED_MARKERS = (
     "no active whatsapp web listener",
     "platformmessagenotdispatchederror",
@@ -391,15 +397,6 @@ def is_not_dispatched_error(out):
     return any(marker in low for marker in NOT_DISPATCHED_MARKERS)
 
 
-# How many times, and how long to wait, to retry a send that failed because the
-# link was momentarily down (see NOT_DISPATCHED_MARKERS). The reconnect usually
-# completes within seconds; a few ~20 s waits comfortably ride out the gap. Worst
-# case adds SEND_RETRY_MAX * SEND_RETRY_WAIT seconds for an affected group, which
-# is negligible against the promo cron timeout and only happens on a real drop.
-SEND_RETRY_MAX = int(os.environ.get("PROMO_SEND_RETRY_MAX", "4"))
-SEND_RETRY_WAIT = float(os.environ.get("PROMO_SEND_RETRY_WAIT", "20"))
-
-
 def send_ad(target, text, image_path, account=None):
     """Send the ad (caption + image) to one group. Returns (ok, combined_output).
     ``account`` names the WhatsApp line it is sent from. A non-default account is
@@ -411,7 +408,7 @@ def send_ad(target, text, image_path, account=None):
     second account exists is ``channels.whatsapp.defaultAccount: "default"`` in
     config/openclaw.template.json: without it the default is "default" if present
     else the first account id sorted, and "ads" sorts before "default"
-    (deploy/test_patch_openclaw_config.py pins that config contract)."""
+    (deploy/test_promo_captions_tracking.py pins that config contract)."""
     cmd = ["openclaw", "message", "send", "--channel", "whatsapp",
            "--target", target, "--message", text,
            "--media", image_path, "--json"]
@@ -1085,6 +1082,7 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
 
     failures = 0
     skipped = 0
+    queued = 0
     sent = 0
     for i, jid in enumerate(pending):
         if i > 0:
@@ -1107,19 +1105,17 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
                                       tracking=tracking, bot_number=number)
         ok, out = send_ad(jid, caption, variant_images.get(idx, image_path),
                           account=account)
-        attempts = 0
-        while (not ok) and (not is_permission_error(out)) \
-                and is_not_dispatched_error(out) and attempts < SEND_RETRY_MAX:
-            # Link was down at dispatch time (not a permission problem): wait for
-            # the reconnect and re-send. Safe from double-posting because a
-            # not-dispatched error means nothing went out (see the marker list).
-            attempts += 1
+        if (not ok) and (not is_permission_error(out)) and is_not_dispatched_error(out):
+            # Link was mid-reconnect: the gateway queued this send and replays it
+            # on reconnect (see NOT_DISPATCHED_MARKERS). Re-sending would post the
+            # ad twice, so mark it sent and do not retry.
+            sent_map[jid] = today
+            save_state(state_file, st)
+            queued += 1
             sys.stderr.write(
-                "WhatsApp link down; waiting %.0fs then retry %d/%d for %s:\n%s\n"
-                % (SEND_RETRY_WAIT, attempts, SEND_RETRY_MAX, jid, out))
-            sleep(SEND_RETRY_WAIT)
-            ok, out = send_ad(jid, caption, variant_images.get(idx, image_path),
-                              account=account)
+                "QUEUED (link mid-reconnect; gateway replays it, not re-sent) %s:\n%s\n"
+                % (jid, out))
+            continue
         if ok:
             sent_map[jid] = today
             save_state(state_file, st)  # commit per group: crash/retry never double-posts
@@ -1137,5 +1133,6 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
 
     save_state(state_file, st)  # persist any newly-cached invite resolutions
 
-    print("SENT %d/%d (skipped %d, failures %d)" % (sent, len(pending), skipped, failures))
+    print("SENT %d/%d (queued %d, skipped %d, failures %d)"
+          % (sent, len(pending), queued, skipped, failures))
     return 1 if failures else 0
