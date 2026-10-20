@@ -72,7 +72,7 @@ POST_TEXT = (
     "Grafted trees fruit faster and stay true to type. "
     "Plant once, enjoy for years! \U0001F331\n"
     "\n"
-    "\U0001F4F2 Order now: +263785632943"
+    "\U0001F4F2 Order now: {bot_number}"
 )
 
 # Caption variants that rotate per group per day (see promo_broadcast) so the ad
@@ -95,7 +95,7 @@ POST_TEXT_V2 = (
     "\U0001F4E6 Wholesale: $3 per tree\n"
     "\U0001F69A Delivery available\n"
     "\n"
-    "\U0001F4F2 Order now: +263785632943"
+    "\U0001F4F2 Order now: {bot_number}"
 )
 
 POST_TEXT_V3 = (
@@ -111,17 +111,17 @@ POST_TEXT_V3 = (
     "\n"
     "Grafted trees fruit faster and stay true to type.\n"
     "\n"
-    "\U0001F4F2 Order now: +263785632943"
+    "\U0001F4F2 Order now: {bot_number}"
 )
 
 POST_TEXTS = [POST_TEXT, POST_TEXT_V2, POST_TEXT_V3]
 
-# Per-group ref-coded wa.me link to the ad's own contact number (+263785632943).
-# That number is Genaie's (the bot's WhatsApp number), so replies reach the bot
-# and the public-service-gate ad-ref recorder counts them.
+# Per-group ref-coded wa.me link to the posting account's own contact number
+# ({bot_number} resolves to membership.json's defaults.accounts entry for the
+# account that posts to each group). That is the bot's WhatsApp number, so
+# replies reach the bot and the public-service-gate ad-ref recorder counts them.
 TRACKING = {
     "prefix": "FT",
-    "number": "+263785632943",
     "label": "fruit trees",
 }
 

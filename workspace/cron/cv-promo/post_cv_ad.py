@@ -81,7 +81,7 @@ POST_TEXT = (
     "\U0001F4B5 Only $5 (EcoCash)\n"
     "\U0001F4C1 For samples, see the catalogue\n"
     "\n"
-    "\U0001F4F2 +263785632943\n"
+    "\U0001F4F2 {bot_number}\n"
     "\U0001F310 genaie.site\n"
     "\n"
     "*Your next opportunity starts with a better CV.*"
@@ -103,7 +103,7 @@ POST_TEXT_V2 = (
     "\U0001F4B5 Only $5 (EcoCash)\n"
     "\U0001F4C1 Samples are in the catalogue\n"
     "\n"
-    "\U0001F4F2 +263785632943\n"
+    "\U0001F4F2 {bot_number}\n"
     "\U0001F310 genaie.site\n"
     "\n"
     "*Your next opportunity starts with a better CV.*"
@@ -122,18 +122,18 @@ POST_TEXT_V3 = (
     "\U0001F4BC Professional presentation\n"
     "\n"
     "\U0001F4C1 See the catalogue for samples\n"
-    "\U0001F4F2 +263785632943\n"
+    "\U0001F4F2 {bot_number}\n"
     "\U0001F310 genaie.site"
 )
 
 POST_TEXTS = [POST_TEXT, POST_TEXT_V2, POST_TEXT_V3]
 
-# Per-group ref-coded wa.me link to Genaie's own number (+263785632943, the
-# bot's WhatsApp number), so replies reach the bot and the public-service-gate
-# ad-ref recorder counts them.
+# Per-group ref-coded wa.me link to the posting account's own WhatsApp number
+# ({bot_number} in the copy and the link both resolve to membership.json's
+# defaults.accounts entry for the account that posts to each group), so replies
+# reach the bot and the public-service-gate ad-ref recorder counts them.
 TRACKING = {
     "prefix": "CV",
-    "number": "+263785632943",
     "label": "CV",
 }
 

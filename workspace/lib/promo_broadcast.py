@@ -135,19 +135,26 @@ def load_targets(targets_file):
     return out
 
 
-def load_weekly_targets(targets_file):
-    """Return {jid: frozenset(weekday ints)} for groups posted to only on certain
-    weekdays. A JID listed here is posted to ONLY on its weekdays; a JID absent
-    from this map (i.e. only in "groups") is posted to every day. Entries with no
-    valid weekday, or a bad JID, are ignored."""
+def _targets_doc(targets_file):
+    """The targets file as a dict, or {} when it is absent, unreadable, not JSON
+    or not an object. Shared by the optional-section readers below, which all
+    treat a missing section as "nothing configured" rather than an error;
+    :func:`load_targets` reports its own failures instead, because a promo with
+    no resolvable group list has nothing to do."""
     try:
         with open(targets_file) as f:
             data = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         return {}
-    if not isinstance(data, dict):
-        return {}
-    raw = data.get("weekly_groups") or {}
+    return data if isinstance(data, dict) else {}
+
+
+def load_weekly_targets(targets_file):
+    """Return {jid: frozenset(weekday ints)} for groups posted to only on certain
+    weekdays. A JID listed here is posted to ONLY on its weekdays; a JID absent
+    from this map (i.e. only in "groups") is posted to every day. Entries with no
+    valid weekday, or a bad JID, are ignored."""
+    raw = _targets_doc(targets_file).get("weekly_groups") or {}
     out = {}
     if isinstance(raw, dict):
         for jid, days in raw.items():
@@ -163,6 +170,44 @@ def load_weekly_targets(targets_file):
                     parsed.add(d)
             if parsed:
                 out[jid] = frozenset(parsed)
+    return out
+
+
+# Account a group belongs to when targets.json pins none. The bot's original
+# WhatsApp line is the implicit default; a second line is tagged per group.
+DEFAULT_ACCOUNT = "default"
+
+
+def load_account_targets(targets_file):
+    """Return {jid: account_id} for groups whose ad is sent from a non-default
+    WhatsApp account. A JID absent from the map (i.e. only in "groups") is sent
+    from the default account. The map lets the promo group-load be spread across
+    two WhatsApp numbers so no single account is a member of a suspiciously large
+    number of groups."""
+    raw = _targets_doc(targets_file).get("accounts") or {}
+    out = {}
+    if isinstance(raw, dict):
+        for jid, account in raw.items():
+            jid = str(jid).strip()
+            account = str(account).strip()
+            if jid.endswith("@g.us") and account:
+                out[jid] = account
+    return out
+
+
+def load_account_numbers(targets_file):
+    """Return {account_id: advertised_number} so the engine can render each
+    group's caption + wa.me link with the number of the account that posts it
+    (each account advertises itself). Comes from membership.json's
+    defaults.accounts, carried into every targets.json by make-promo-targets."""
+    raw = _targets_doc(targets_file).get("account_numbers") or {}
+    out = {}
+    if isinstance(raw, dict):
+        for account, number in raw.items():
+            account = str(account).strip()
+            number = str(number).strip()
+            if account and number:
+                out[account] = number
     return out
 
 
@@ -355,11 +400,23 @@ SEND_RETRY_MAX = int(os.environ.get("PROMO_SEND_RETRY_MAX", "4"))
 SEND_RETRY_WAIT = float(os.environ.get("PROMO_SEND_RETRY_WAIT", "20"))
 
 
-def send_ad(target, text, image_path):
-    """Send the ad (caption + image) to one group. Returns (ok, combined_output)."""
+def send_ad(target, text, image_path, account=None):
+    """Send the ad (caption + image) to one group. Returns (ok, combined_output).
+    ``account`` names the WhatsApp line it is sent from. A non-default account is
+    passed explicitly; the default one is deliberately NOT, because the gateway
+    rejects an account id it does not have in its registry ("Unknown account
+    ...") and ``channels.whatsapp.accounts`` may legitimately be absent -- a
+    single-account gateway has only the implicit default. Omitting it there keeps
+    sends working either way. What stops the gateway picking the wrong line once a
+    second account exists is ``channels.whatsapp.defaultAccount: "default"`` in
+    config/openclaw.template.json: without it the default is "default" if present
+    else the first account id sorted, and "ads" sorts before "default"
+    (deploy/test_patch_openclaw_config.py pins that config contract)."""
     cmd = ["openclaw", "message", "send", "--channel", "whatsapp",
            "--target", target, "--message", text,
            "--media", image_path, "--json"]
+    if account and account != DEFAULT_ACCOUNT:
+        cmd += ["--account", account]
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=180,
                            env=gateway_env())
@@ -453,54 +510,72 @@ def ref_link(number, prefill):
         wa_digits(number), urllib.parse.quote(prefill, safe=""))
 
 
-def tracking_for(tracking, jid):
-    """(ref, link) for ``jid`` under a tracking config, or (None, None)."""
+def tracking_for(tracking, jid, bot_number=None):
+    """(ref, link) for ``jid`` under a tracking config, or (None, None). The
+    wa.me link points at ``bot_number`` (the account that posts to ``jid``) when
+    given, else the tracking config's own pinned ``number`` (e.g. appliance-repairs
+    routes to a fixed shop line). No number at all ⇒ (ref, None)."""
     if not tracking:
         return (None, None)
     ref = ref_code(tracking["prefix"], jid)
+    number = bot_number or tracking.get("number")
+    if not number:
+        return (ref, None)
     prefill = (tracking.get("prefill") or DEFAULT_PREFILL).replace(
         "{label}", tracking.get("label", "")).replace("{ref}", ref)
-    return (ref, ref_link(tracking["number"], prefill))
+    return (ref, ref_link(number, prefill))
 
 
-def render_caption(caption, ref=None, link=None, link_line=DEFAULT_LINK_LINE):
-    """Substitute ``{ref_link}`` / ``{ref}`` in ``caption``. Uses plain
-    ``str.replace`` (not ``str.format``), so any other braces in operator copy
-    are left alone. With tracking on and no ``{ref_link}`` placeholder in the
-    caption, ``link_line`` is appended after a blank line. With no ref/link the
-    caption is returned unchanged."""
-    if not ref and not link:
+def render_caption(caption, ref=None, link=None, link_line=DEFAULT_LINK_LINE,
+                   bot_number=None):
+    """Substitute ``{ref_link}`` / ``{ref}`` / ``{bot_number}`` in ``caption``.
+    Uses plain ``str.replace`` (not ``str.format``), so any other braces in
+    operator copy are left alone. ``{bot_number}`` renders the posting account's
+    own advertised number, so each WhatsApp line advertises itself. With tracking
+    on and no ``{ref_link}`` placeholder in the caption, ``link_line`` is appended
+    after a blank line. With nothing to substitute the caption is returned
+    unchanged."""
+    if not ref and not link and not bot_number:
         return caption
     had_link = "{ref_link}" in caption
-    out = caption.replace("{ref_link}", link or "").replace("{ref}", ref or "")
+    out = (caption.replace("{ref_link}", link or "")
+                  .replace("{ref}", ref or "")
+                  .replace("{bot_number}", bot_number or ""))
     if link and not had_link and link_line:
         line = link_line.replace("{ref_link}", link).replace("{ref}", ref or "")
         out = out.rstrip("\n") + "\n\n" + line
     return out
 
 
-def caption_for(jid, variants, day=None, allowed=None, tracking=None):
-    """(variant_index, rendered caption, ref) for one group on ``day``."""
+def caption_for(jid, variants, day=None, allowed=None, tracking=None,
+                bot_number=None):
+    """(variant_index, rendered caption, ref) for one group on ``day``.
+    ``bot_number`` is the advertised number of the account that posts to ``jid``."""
     idx = variant_index(jid, len(variants), day=day, allowed=allowed)
-    ref, link = tracking_for(tracking, jid)
+    ref, link = tracking_for(tracking, jid, bot_number=bot_number)
     line = (tracking or {}).get("link_line") or DEFAULT_LINK_LINE
-    return (idx, render_caption(variants[idx], ref, link, line), ref)
+    return (idx, render_caption(variants[idx], ref, link, line,
+                                bot_number=bot_number), ref)
 
 
-def ref_map(jids, tracking, promo_name):
-    """[(ref, promo_name, jid, link)] for decoding ref codes later."""
+def ref_map(jids, tracking, promo_name, number_for=None):
+    """[(ref, promo_name, jid, link)] for decoding ref codes later. ``number_for``
+    is an optional ``jid -> advertised number`` lookup so links reflect the
+    posting account."""
     if not tracking:
         return []
+    number_of = number_for or (lambda _jid: None)
     return [(ref, promo_name, j, link)
-            for j in jids for ref, link in [tracking_for(tracking, j)]]
+            for j in jids
+            for ref, link in [tracking_for(tracking, j, bot_number=number_of(j))]]
 
 
-def _print_refs(jids, tracking, promo_name):
+def _print_refs(jids, tracking, promo_name, number_for=None):
     if not tracking:
         print("Tracking is not enabled for %s (no ref codes)." % promo_name)
         return
     print("ref\tpromo\tgroup_jid\tlink")
-    for row in ref_map(jids, tracking, promo_name):
+    for row in ref_map(jids, tracking, promo_name, number_for=number_for):
         print("\t".join(row))
 
 
@@ -508,12 +583,14 @@ def _preview(caption, tracking):
     if not tracking:
         return caption
     line = tracking.get("link_line") or DEFAULT_LINK_LINE
-    return render_caption(caption, "<REF>", "<ref_link>", line)
+    return render_caption(caption, "<REF>", "<ref_link>", line,
+                          bot_number="<bot_number>")
 
 
 def _print_dry_run(jids, weekly, weekday, sent_map, today, image_path, rotating, text,
                    eligible, pending, variants=None, tracking=None, day=None,
-                   variant_images=None, cap_decisions=None, promo=None):
+                   variant_images=None, cap_decisions=None, promo=None,
+                   account_for=None, number_for=None):
     print("Targets (resolved JIDs): %d" % len(jids))
     variants = variants or [text]
     multi = len(variants) > 1
@@ -541,9 +618,15 @@ def _print_dry_run(jids, weekly, weekday, sent_map, today, image_path, rotating,
             extra += "  cap %s/%d (tier %s, replies %.1f)" % (
                 info.get("cap"), len(info.get("promos") or []), info.get("tier"),
                 info.get("score") or 0.0)
+        account = account_for(j) if account_for else DEFAULT_ACCOUNT
+        number = number_for(j) if number_for else None
+        if account and account != DEFAULT_ACCOUNT:
+            extra += "  account %s" % account
+            if number:
+                extra += " (%s)" % number
         if multi or tracking:
             idx, _, ref = caption_for(j, variants, day=day, allowed=allowed,
-                                      tracking=tracking)
+                                      tracking=tracking, bot_number=number)
             if multi:
                 extra += "  variant %d/%d" % (idx + 1, len(variants))
             if ref:
@@ -872,10 +955,8 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
     day = date.today()
     today = day.isoformat()
     variants = _variants(text)
-    if tracking:
-        missing = [k for k in ("prefix", "number") if not tracking.get(k)]
-        if missing:
-            raise ValueError("tracking config missing: %s" % ", ".join(missing))
+    if tracking and not tracking.get("prefix"):
+        raise ValueError("tracking config missing: prefix")
     if not promo_name:
         promo_name = os.path.basename(os.path.dirname(os.path.abspath(targets_file)))
 
@@ -893,12 +974,42 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
 
     entries = load_targets(targets_file)
     weekly = load_weekly_targets(targets_file)
+    account_map = load_account_targets(targets_file)       # {jid: account}
+    account_numbers = load_account_numbers(targets_file)   # {account: number}
+
+    # Each account advertises its own number. A group's number is its account's
+    # (from account_numbers), falling back to the tracking config's pinned number
+    # (e.g. appliance-repairs always routes to a fixed shop line).
+    def account_for(jid):
+        return account_map.get(jid, DEFAULT_ACCOUNT)
+
+    def number_for(jid):
+        # A promo that pins its own contact number (e.g. appliance-repairs routes
+        # to a fixed shop line) always advertises it, whatever account posts the
+        # ad. Otherwise the ad advertises the posting account's own number.
+        pinned = (tracking or {}).get("number")
+        if pinned:
+            return pinned
+        return account_numbers.get(account_for(jid))
+
+    # Whether this promo's copy/link needs a bot number: it uses {bot_number}, or
+    # it tracks without pinning its own number (so the link target comes from the
+    # posting account).
+    bot_number_used = (any("{bot_number}" in v for v in variants)
+                       or (bool(tracking) and not (tracking or {}).get("number")))
     # Weekly-limited groups are valid send targets too; fold them into the entry
     # list (so they get resolved/deduped), then gate them by weekday below.
     all_entries = entries + [j for j in weekly if j not in entries]
     if not all_entries:
         print("NO_REPLY")  # nothing configured -> stay silent
         return 0
+    # Checked only once there is something to send, so a missing/unreadable
+    # targets file still exits quietly above (load_targets reports it) instead of
+    # being misreported here as a stale, un-regenerated one.
+    if bot_number_used and not account_numbers:
+        raise ValueError(
+            "this promo advertises a per-account number but targets.json has no "
+            "account_numbers map; regenerate it with make-promo-targets")
 
     st = load_state(state_file)
     jids = resolve_targets(all_entries, st, dry=dry)
@@ -926,14 +1037,15 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
     pending = [j for j in eligible if sent_map.get(j) != today]
 
     if show_refs:
-        _print_refs(jids, tracking, promo_name)
+        _print_refs(jids, tracking, promo_name, number_for=number_for)
         return 0
 
     if dry:
         _print_dry_run(jids, weekly, weekday, sent_map, today, image_path, rotating,
                        text, eligible, pending, variants=variants, tracking=tracking,
                        day=day, variant_images=variant_images,
-                       cap_decisions=cap_decisions, promo=promo_key(promo_name))
+                       cap_decisions=cap_decisions, promo=promo_key(promo_name),
+                       account_for=account_for, number_for=number_for)
         return 0
 
     if not pending:
@@ -980,9 +1092,21 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
             # cadence is what WhatsApp spam detection reportedly flags. State is
             # committed per group before this sleep, so a kill mid-gap is safe.
             sleep(rng.uniform(gap_min, gap_max))
+        account = account_for(jid)
+        number = number_for(jid)
+        if bot_number_used and not number:
+            # Can't render this group's own advertised number: skip rather than
+            # post an ad with an empty number / broken link. Counts as a failure
+            # so the run exits non-zero and the gap is noticed.
+            failures += 1
+            sys.stderr.write(
+                "SEND FAILED for %s: no advertised number for account %r "
+                "(check membership.json defaults.accounts)\n" % (jid, account))
+            continue
         idx, caption, _ = caption_for(jid, variants, day=day, allowed=weekly.get(jid),
-                                      tracking=tracking)
-        ok, out = send_ad(jid, caption, variant_images.get(idx, image_path))
+                                      tracking=tracking, bot_number=number)
+        ok, out = send_ad(jid, caption, variant_images.get(idx, image_path),
+                          account=account)
         attempts = 0
         while (not ok) and (not is_permission_error(out)) \
                 and is_not_dispatched_error(out) and attempts < SEND_RETRY_MAX:
@@ -994,7 +1118,8 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
                 "WhatsApp link down; waiting %.0fs then retry %d/%d for %s:\n%s\n"
                 % (SEND_RETRY_WAIT, attempts, SEND_RETRY_MAX, jid, out))
             sleep(SEND_RETRY_WAIT)
-            ok, out = send_ad(jid, caption, variant_images.get(idx, image_path))
+            ok, out = send_ad(jid, caption, variant_images.get(idx, image_path),
+                              account=account)
         if ok:
             sent_map[jid] = today
             save_state(state_file, st)  # commit per group: crash/retry never double-posts

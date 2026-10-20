@@ -4,6 +4,14 @@
   "defaults": {
     "activity": "normal",
     "caps_enabled": false,
+    "accounts": {
+      "default": {
+        "number": "+263785632943"
+      },
+      "ads": {
+        "number": "+263790453292"
+      }
+    },
     "bands": {
       "busy": [
         6,

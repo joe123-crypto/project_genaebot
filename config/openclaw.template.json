@@ -216,6 +216,11 @@
       "groupPolicy": "disabled",
       "selfChatMode": true,
       "sendReadReceipts": false,
+      "defaultAccount": "default",
+      "accounts": {
+        "default": { "enabled": true },
+        "ads": { "enabled": true }
+      },
       "streaming": {
         "block": {
           "enabled": true,

@@ -136,7 +136,7 @@ POST_TEXT = (
     "\U0001F4B5 Price: $2400\n"
     "\n"
     "\U0001F4CD Based in Bindura - We Come To You!\n"
-    "\U0001F4DE WhatsApp: +263785632943 - Genaie"
+    "\U0001F4DE WhatsApp: {bot_number} - Genaie"
 )
 
 # Caption variants that rotate per group per day (see promo_broadcast) so the ad
@@ -165,7 +165,7 @@ POST_TEXT_V2 = (
     "4️⃣ 2HP DC Pump - $2400\n"
     "\n"
     "\U0001F4CD Based in Bindura - We Come To You!\n"
-    "\U0001F4DE WhatsApp: +263785632943 - Genaie"
+    "\U0001F4DE WhatsApp: {bot_number} - Genaie"
 )
 
 POST_TEXT_V3 = (
@@ -184,7 +184,7 @@ POST_TEXT_V3 = (
     "1 Garden Tap • All Accessories & Installation\n"
     "\n"
     "\U0001F4A7 Professional borehole drilling you can depend on.\n"
-    "\U0001F4DE WhatsApp: +263785632943 - Genaie"
+    "\U0001F4DE WhatsApp: {bot_number} - Genaie"
 )
 
 # El Nino / dry-season variant. The ONLY variant allowed an external claim: the
@@ -211,7 +211,7 @@ POST_TEXT_V4 = (
     "Pipes & Cables \u2022 1 Garden Tap \u2022 All Accessories & Installation\n"
     "\n"
     "\U0001F4CD Based in Bindura - We Come To You!\n"
-    "\U0001F4DE WhatsApp: +263785632943 - Genaie"
+    "\U0001F4DE WhatsApp: {bot_number} - Genaie"
 )
 
 POST_TEXTS = [POST_TEXT, POST_TEXT_V2, POST_TEXT_V3, POST_TEXT_V4]
@@ -223,12 +223,12 @@ VARIANT_IMAGES = (
     else {POST_TEXTS.index(POST_TEXT_V4): ELNINO_IMAGE}
 )
 
-# Per-group ref-coded wa.me link. The ad's contact number is Genaie's own
-# (+263785632943, the bot's WhatsApp number), so replies reach the bot and the
-# public-service-gate ad-ref recorder counts them.
+# Per-group ref-coded wa.me link. The ad's contact number is the posting
+# account's own ({bot_number} resolves to membership.json's defaults.accounts
+# entry for the account that posts to each group), so replies reach the bot and
+# the public-service-gate ad-ref recorder counts them.
 TRACKING = {
     "prefix": "BH",
-    "number": "+263785632943",
     "label": "borehole",
 }
 
