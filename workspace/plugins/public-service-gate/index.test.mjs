@@ -933,6 +933,7 @@ test("public canned replies use the concise style", () => {
     "services/cv-maker.js",
     "services/handoff.js",
     "lib/handoffs.js",
+    "lib/sibling-lines.js",
   ];
   for (const file of [...files, "lib/style.js"]) {
     const source = fs.readFileSync(new URL(file, import.meta.url), "utf8");
@@ -1239,4 +1240,133 @@ test("ad refs in group messages and admin DMs are not counted", async () => {
     await handler(eventFor("ref BH-7K2", ADMIN), { channelId: "whatsapp", senderId: ADMIN });
     assert.equal(fs.existsSync(path.join(dir, "ad-refs.json")), false);
   });
+});
+
+// ---------------------------------------------------------------------------
+// Sibling-line guard: the bot's two WhatsApp lines may converse, on a budget.
+// ---------------------------------------------------------------------------
+
+const LINE_DEFAULT = "+263785632943";
+const LINE_ADS = "+263790453292";
+const LINES = { default: LINE_DEFAULT, ads: LINE_ADS };
+
+// A DM from the "default" line arriving on the "ads" line.
+const crossLineCtx = { channelId: "whatsapp", senderId: LINE_DEFAULT, accountId: "ads" };
+
+test("a cross-line DM under budget is answered exactly like any other DM", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-sibling-"));
+  const handler = registerHandler({
+    serviceStatePath: path.join(dir, "state.json"),
+    whatsappLines: LINES,
+  });
+  const control = registerHandler({});
+
+  const reply = await handler(eventFor("how are you holding up?", LINE_DEFAULT), crossLineCtx);
+  const baseline = await control(eventFor("how are you holding up?", UNKNOWN), {
+    channelId: "whatsapp",
+    senderId: UNKNOWN,
+  });
+  assert.deepEqual(reply, baseline, "the two lines should be free to talk below the budget");
+
+  // A sibling line is not a customer, so its refs are not counted as ad replies.
+  await handler(eventFor("ref BH-7K2", LINE_DEFAULT), crossLineCtx);
+  assert.equal(fs.existsSync(path.join(dir, "ad-refs.json")), false);
+});
+
+test("a cross-line DM over budget is held silently", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-sibling-"));
+  const handler = registerHandler({
+    serviceStatePath: path.join(dir, "state.json"),
+    whatsappLines: LINES,
+    siblingLineMaxEventsPerWindow: 3,
+  });
+
+  for (let i = 0; i < 3; i += 1) {
+    const reply = await handler(eventFor(`chat ${i}`, LINE_DEFAULT), crossLineCtx);
+    assert.notDeepEqual(reply, { handled: true }, `message ${i + 1} should still get through`);
+  }
+  const held = await handler(eventFor("chat 4", LINE_DEFAULT), crossLineCtx);
+  assert.deepEqual(held, { handled: true }, "over budget the message is claimed with no reply");
+
+  const { pairs } = JSON.parse(fs.readFileSync(path.join(dir, "sibling-lines.json"), "utf8"));
+  const entry = Object.values(pairs)[0];
+  assert.equal(entry.totalMessages, 3);
+  assert.equal(entry.totalSuppressed, 1);
+});
+
+test("admin self-chat is never held, however much the admin says", async () => {
+  await withAdminMode("true", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-sibling-"));
+    const handler = registerHandler({
+      serviceStatePath: path.join(dir, "state.json"),
+      whatsappLines: LINES,
+      whatsappAdminUsers: [LINE_DEFAULT],
+      siblingLineMaxEventsPerWindow: 2,
+    });
+    // the operator messaging the bot on its own number, on that same line
+    const selfCtx = { channelId: "whatsapp", senderId: LINE_DEFAULT, accountId: "default" };
+    for (let i = 0; i < 6; i += 1) {
+      const reply = await handler(eventFor(`admin note ${i}`, LINE_DEFAULT), selfCtx);
+      assert.notDeepEqual(reply, { handled: true }, `self-chat message ${i + 1} must not be held`);
+    }
+    assert.equal(fs.existsSync(path.join(dir, "sibling-lines.json")), false);
+  });
+});
+
+test("one line cannot run the other line's admin commands", async () => {
+  await withAdminMode("true", async () => {
+    const handler = registerHandler({
+      whatsappLines: LINES,
+      whatsappAdminUsers: [LINE_DEFAULT],
+    });
+    const command = `allow ${UNKNOWN}`;
+    // Same sender, same text: as admin self-chat it is an operator command, but
+    // arriving on the OTHER line it must not be, since the admin number is also
+    // the "default" line's number.
+    const asAdmin = await handler(eventFor(command, LINE_DEFAULT), {
+      channelId: "whatsapp",
+      senderId: LINE_DEFAULT,
+      accountId: "default",
+    });
+    const asSibling = await handler(eventFor(command, LINE_DEFAULT), crossLineCtx);
+    assert.notDeepEqual(asSibling, asAdmin, "a sibling line must not be treated as the operator");
+  });
+});
+
+test("a customer DM is never touched by the sibling-line guard", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-sibling-"));
+  const handler = registerHandler({
+    serviceStatePath: path.join(dir, "state.json"),
+    whatsappLines: LINES,
+    siblingLineMaxEventsPerWindow: 1,
+  });
+  const control = registerHandler({});
+  for (let i = 0; i < 4; i += 1) {
+    const reply = await handler(eventFor("hello", MEMBER), {
+      channelId: "whatsapp",
+      senderId: MEMBER,
+      accountId: "ads",
+    });
+    const baseline = await control(eventFor("hello", MEMBER), { channelId: "whatsapp", senderId: MEMBER });
+    assert.deepEqual(reply, baseline, `customer message ${i + 1} must be unaffected`);
+  }
+  assert.equal(fs.existsSync(path.join(dir, "sibling-lines.json")), false);
+});
+
+test("without an account id the guard stays out of the way", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-sibling-"));
+  const handler = registerHandler({
+    serviceStatePath: path.join(dir, "state.json"),
+    whatsappLines: LINES,
+    siblingLineMaxEventsPerWindow: 1,
+  });
+  const control = registerHandler({});
+  // No accountId: self-chat and cross-line are indistinguishable, so fail open
+  // rather than risk silencing the admin.
+  for (let i = 0; i < 3; i += 1) {
+    const reply = await handler(eventFor("hi", LINE_DEFAULT), { channelId: "whatsapp", senderId: LINE_DEFAULT });
+    const baseline = await control(eventFor("hi", UNKNOWN), { channelId: "whatsapp", senderId: UNKNOWN });
+    assert.deepEqual(reply, baseline, `message ${i + 1} must fall through`);
+  }
+  assert.equal(fs.existsSync(path.join(dir, "sibling-lines.json")), false);
 });

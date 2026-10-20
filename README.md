@@ -588,6 +588,41 @@ keeps that number whichever line posts the ad.
 | `default` | +263785632943 | the original line; also the admin/self-chat number |
 | `ads` | +263790453292 | second line, added to share the group load |
 
+### The two lines talking to each other
+
+Both lines auto-reply, so the moment one DMs the other they answer each other
+forever: on 2026-10-20 a single test message produced an endless "Silent." /
+"👌" exchange until one account was disabled. Nothing upstream prevents it.
+OpenClaw's pair loop protection needs a reliable inbound bot identity
+(`allowBots`), which a WhatsApp DM cannot provide, so WhatsApp is not a supported
+channel for it and `botLoopProtection` is rejected by the strict WhatsApp config
+schema. There is no deny list for WhatsApp DMs either, and an allowlist is
+unusable because an advertising line must accept DMs from strangers.
+
+The lines are allowed to talk, on a budget enforced by
+`workspace/plugins/public-service-gate/lib/sibling-lines.js`: **8 messages per
+15-minute window, then a 6-hour cooldown, at most 3 bursts per UTC day**
+(`siblingLine*` options, named after core's `botLoopProtection`). Under the
+budget a cross-line DM is answered normally; over it the message is claimed
+silently, so there is no reply and no model spend.
+
+The rule that makes this safe: a DM is held only when the sender is one of our
+own line numbers **and** is not the number of the account that received it. The
+admin number is also the `default` line's number, so admin self-chat is never
+caught. Telling the two apart needs the receiving account id, which comes from
+the `before_dispatch` context (`getEventAccountId`); when it or `whatsappLines`
+is missing the guard fails open and warns, because wrongly silencing a customer
+or the operator is worse than a loop. A sibling line is also forced to
+non-admin, so one line can never run the other's admin commands.
+
+Per-pair counters and a rolling transcript of what the lines said live in
+`runtime/public-service-gate/sibling-lines.json` (agent session transcripts reset
+daily at 04:00 and prune at 30d, so this is the durable record). Suppressions log
+one `public-service-gate: sibling-line DM held` line.
+
+**Never use one line to test the other** - that is what started the loop. Verify
+a line with `openclaw channels status`, or send from a third number.
+
 Decode refs with `--refs`, which prints `ref  promo  group_jid  link` for every
 target and exits without sending or touching state:
 

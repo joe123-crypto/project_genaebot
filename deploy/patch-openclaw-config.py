@@ -35,6 +35,7 @@ PRESERVE_PATHS: list[list[str]] = [
     # publicUsers. Omitting it lets the authoritative apply prune it from live.
     ["plugins", "entries", "public-service-gate", "config", "whatsappAdminUsers"],  # PII: admin phones
     ["plugins", "entries", "public-service-gate", "config", "botWhatsappNumber"],   # operator: bot phone number
+    ["plugins", "entries", "public-service-gate", "config", "whatsappLines"],       # operator: account id -> line number
     ["plugins", "entries", "whatsapp-relevance-gate", "config", "bypassUsers"],     # PII: admin phones
     ["channels", "whatsapp", "allowFrom"],                                     # runtime: derived (admin + public)
     ["channels", "whatsapp", "groupAllowFrom"],                               # PII: allowlisted group members

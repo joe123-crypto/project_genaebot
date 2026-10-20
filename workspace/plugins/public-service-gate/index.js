@@ -1,5 +1,6 @@
 import { getPluginConfig } from "./lib/config.js";
 import {
+  getEventAccountId,
   getEventChannel,
   getEventSender,
   getEventText,
@@ -18,6 +19,7 @@ import {
 import { clearServiceState } from "./lib/state.js";
 import { clearHandoff, isHandedOff } from "./lib/handoffs.js";
 import { recordAdRefs } from "./lib/ad-refs.js";
+import { recordAndCheck as checkSiblingLine } from "./lib/sibling-lines.js";
 import { containsDash, stripDashes } from "./lib/style.js";
 import {
   FAILSAFE_STOP_PRIORITY,
@@ -279,14 +281,34 @@ export default {
         return { handled: true };
       }
 
-      const admin = isWhatsAppAdmin(api, sender);
+      // The bot's two WhatsApp lines are both auto-replying, so one DMing the
+      // other loops forever (see lib/sibling-lines.js). They are allowed to
+      // talk, but on a budget: under it the message falls through and the two
+      // agents converse, over it we claim the message silently. This runs BEFORE
+      // the admin check on purpose -- the admin number IS the "default" line's
+      // number, so on the "ads" line a sibling DM would otherwise be read as an
+      // operator command.
+      const siblingLine = checkSiblingLine(api, { accountId: getEventAccountId(event, ctx), sender, text });
+      if (siblingLine.suppressed) {
+        api.logger?.info?.(
+          `public-service-gate: sibling-line DM held (${siblingLine.reason}) pair=${siblingLine.pair ?? "?"} from=${siblingLine.from ?? "?"}`,
+        );
+        return { handled: true };
+      }
+
+      // A sibling line is never the operator: forcing admin off keeps one line
+      // from running the other's admin commands (cv approve, allow, resume).
+      // The admin number IS the "default" line's number, so without this the
+      // "ads" line would read its sibling's chat as operator instructions.
+      const admin = !siblingLine.sibling && isWhatsAppAdmin(api, sender);
 
       // Observe-only: count promo ad ref codes ("ref BH-7K2") arriving in DMs so
       // ad/group performance can be measured. Never replies, claims, or throws,
       // so every flow below behaves exactly as before. Admin DMs are skipped so
       // operator testing doesn't inflate counts; group messages never get here
-      // (claimed by the group hard block above).
-      if (!admin) recordAdRefs(api, sender, text);
+      // (claimed by the group hard block above). A sibling line is not a
+      // customer either, so its DMs are not counted.
+      if (!admin && !siblingLine.sibling) recordAdRefs(api, sender, text);
       const gateOn = memberGateEnabled(api);
 
       // Admin-only CV order settlement from chat: "cv approve <id>" / "cv deny
