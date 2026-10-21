@@ -80,6 +80,22 @@ export function getEventSender(event = {}, ctx = {}) {
   );
 }
 
+// Which WhatsApp line received this message ("default" / "ads"). Core puts it on
+// the before_dispatch CONTEXT only (the event object has no account field), and
+// it is typed optional, so callers must treat "" as unknown. The sibling-line
+// guard needs it to tell admin self-chat from one bot line DMing the other.
+export function getEventAccountId(event = {}, ctx = {}) {
+  return String(
+    ctx.accountId ??
+      ctx.account_id ??
+      ctx.account?.id ??
+      event.accountId ??
+      event.account_id ??
+      event.metadata?.accountId ??
+      "",
+  ).trim();
+}
+
 export function getOutboundRecipient(event = {}, ctx = {}) {
   return (
     event.to ??

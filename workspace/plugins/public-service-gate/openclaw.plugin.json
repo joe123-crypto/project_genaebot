@@ -92,6 +92,37 @@
       "eventScoutEnabled": {
         "type": "boolean",
         "description": "Deprecated and unread. Still present in the live openclaw.json on the volume, and configSchema is additionalProperties:false, so removing it here makes the live config invalid and the gateway refuses to start. Delete only after it is removed from the live config."
+      },
+      "siblingLineGuardEnabled": {
+        "type": "boolean",
+        "description": "Bound how much the bot's two WhatsApp lines may say to each other (default true). They auto-reply, so one DMing the other loops forever; see lib/sibling-lines.js."
+      },
+      "whatsappLines": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        },
+        "description": "Map of channels.whatsapp account id to the number that line uses, e.g. {\"default\": \"+263...\", \"ads\": \"+263...\"}. Needed to tell admin self-chat (sender is the receiving line's own number) from one line DMing another. Operator data: like botWhatsappNumber the live value is preserved when the config template is applied."
+      },
+      "siblingLineMaxEventsPerWindow": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "Messages the two lines may exchange inside one window before the pair is held (default 8)."
+      },
+      "siblingLineWindowSeconds": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "Sliding window length for the sibling-line budget, in seconds (default 900)."
+      },
+      "siblingLineCooldownSeconds": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "How long the pair stays held after it spends its window budget, in seconds (default 21600)."
+      },
+      "siblingLineMaxBurstsPerDay": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "Times per UTC day the pair may spend its budget before being held until tomorrow (default 3)."
       }
     }
   }
