@@ -586,7 +586,7 @@ keeps that number whichever line posts the ad.
 | Account | Number | Role |
 |---|---|---|
 | `default` | +263785632943 | the original line; also the admin/self-chat number |
-| `ads` | +263790453292 | second line, added to share the group load |
+| `ads` | +263790453292 | second line, added to share the group load; live and enabled since the sibling-line guard shipped |
 
 ### The two lines talking to each other
 
@@ -598,6 +598,13 @@ OpenClaw's pair loop protection needs a reliable inbound bot identity
 channel for it and `botLoopProtection` is rejected by the strict WhatsApp config
 schema. There is no deny list for WhatsApp DMs either, and an allowlist is
 unusable because an advertising line must accept DMs from strangers.
+
+To stop a loop like that again, set `REPLIES_DISABLED=1` in the Railway variables
+(it disables `channels.whatsapp.accounts.default.enabled` on every boot and is
+reversible by deleting the variable), or set
+`channels.whatsapp.accounts.<id>.enabled` to `false` in the template for the line
+you want off. Both are visible and tracked; a hand-edit to the live
+`openclaw.json` is neither, and is reverted on the next deploy.
 
 The lines are allowed to talk, on a budget enforced by
 `workspace/plugins/public-service-gate/lib/sibling-lines.js`: **8 messages per
@@ -621,7 +628,13 @@ daily at 04:00 and prune at 30d, so this is the durable record). Suppressions lo
 one `public-service-gate: sibling-line DM held` line.
 
 **Never use one line to test the other** - that is what started the loop. Verify
-a line with `openclaw channels status`, or send from a third number.
+a line with `openclaw channels status`, or send from a third number. Over
+`railway ssh` that command needs `env -u OPENCLAW_HOME` (see "Operational
+Changes"):
+
+```bash
+railway ssh -- env -u OPENCLAW_HOME runuser -u joseph -- openclaw channels status
+```
 
 Decode refs with `--refs`, which prints `ref  promo  group_jid  link` for every
 target and exits without sending or touching state:
@@ -661,7 +674,7 @@ self-hosted deploy script. The applier is still here and still tested, but nothi
 on the Railway boot path calls it, so editing the template alone changes nothing
 in production.
 
-The one exception is the public WhatsApp system prompt at
+There are two exceptions. The first is the public WhatsApp system prompt at
 `workspace/docs/public-whatsapp-system-prompt.txt`. On every boot, after the
 OpenClaw upgrade step and before the gateway starts, the entrypoint runs
 `deploy/railway/sync-public-prompt.py`, which writes that file into
@@ -671,6 +684,71 @@ config (peer overrides included). It logs `public WhatsApp prompt updated` or
 `NOT synced` and the boot carries on with the previous prompt. So a prompt edit
 reaches the live agent on the next deploy, and the business facts it reads
 (`workspace/docs/business-info.md`) are synced with the rest of `workspace/`.
+
+The second exception is the WhatsApp **reply gates**. Right after the prompt sync
+the entrypoint runs `deploy/railway/sync-reply-gates.py`, which sets each of these
+eight keys to its value in `config/openclaw.template.json`:
+
+| Path | Template |
+|---|---|
+| `channels.whatsapp.enabled` | `true` |
+| `channels.whatsapp.dmPolicy` | `"open"` |
+| `channels.whatsapp.accounts.default.enabled` | `true` |
+| `plugins.entries.whatsapp.enabled` | `true` |
+| `plugins.entries["public-service-gate"].enabled` | `true` |
+| `plugins.entries["public-service-gate"].config.enabled` | `true` |
+| `plugins.entries["whatsapp-relevance-gate"].config.enabled` | `false` |
+| `plugins.entries["whatsapp-relevance-gate"].config.relevanceMode` | `"off"` |
+
+It writes **scalar leaves only** -- no object or array is ever replaced -- so the
+live-only plugin keys the strict `configSchema` still requires survive untouched.
+That matters: replacing a config subtree is exactly what crashlooped production on
+2026-10-12 (see the warning below).
+
+`dmPolicy` and `allowFrom` are coupled: `dmPolicy="open"` drops **every** DM
+unless `channels.whatsapp.allowFrom` contains `"*"`, so the script appends `"*"`
+when it is missing. That is the one write that is not a scalar leaf, and it is an
+append -- `allowFrom` holds admin and public phone numbers and is never replaced
+or reordered.
+
+Deliberately **not** governed:
+
+- `bindings` -- the template's two entries omit the admin->`main` routes that
+  `deploy/patch-openclaw-config.py` generates from `whatsappAdminUsers` at apply
+  time, so forcing it would delete admin routing and land the operator's own DMs
+  on the restricted `public` agent. The script only *checks* that a binding routes
+  direct WhatsApp peers to `public`, and logs a `WARNING` if none does.
+- `channels.whatsapp.accounts.ads.enabled` -- a line that is legitimately on must
+  not be silenced by a deploy.
+- `channels.whatsapp.groupPolicy` -- group replies are hard-blocked in
+  `workspace/plugins/public-service-gate/index.js`, and this script only ever
+  turns replies *on*.
+- every `PRESERVE_PATHS` entry -- runtime-derived or PII, absent from the template
+  by design.
+
+It logs `reply gates unchanged (8 paths already match the template)`,
+`reply gates updated: <path> <old> -> <new>; ...`, or, on any problem,
+`reply gates NOT synced: <err>` and the boot carries on with the config unchanged.
+A non-fatal `openclaw config validate` runs straight after and only warns, because
+a fatal one here would turn a config nit into a crashloop.
+
+**To turn replies off, set the Railway variable `REPLIES_DISABLED=1`** and
+redeploy; delete the variable to restore them. Both states are enforced on every
+boot, so the switch is visible in the Railway dashboard. **Do not hand-edit
+`openclaw.json` on the volume to disable replies** -- the next deploy restores
+them, and an edit there leaves no trace in git. That is exactly what happened
+during the 2026-10-18 outage: `dmPolicy` was set to `"allowlist"` with only the
+admin number in `allowFrom`, so the bot answered the operator and nobody else, and
+nothing in the repository recorded it.
+
+`sync-reply-gates.py --dry-run` reports what it would change and writes nothing,
+which is the quickest way to diff the live config against the template:
+
+```bash
+railway ssh -- python3 /usr/local/bin/sync-reply-gates.py \
+  /opt/live-source/config/openclaw.template.json \
+  /home/joseph/.openclaw/openclaw.json --dry-run
+```
 
 Right before `openclaw gateway` starts, the entrypoint also runs
 `deploy/railway/wait-gateway-lease.py`. A container killed mid-drain (for example a
@@ -725,6 +803,21 @@ railway ssh -- /home/joseph/.openclaw/workspace/bin/openclaw-cap \
 
 `railway link` once in this checkout so `railway ssh` resolves the project,
 service and environment (see `deploy/railway/README.md`).
+
+**Running the `openclaw` CLI over `railway ssh` needs `env -u OPENCLAW_HOME`.**
+The image sets `OPENCLAW_HOME=/home/joseph/.openclaw` (`deploy/railway/Dockerfile`),
+but openclaw treats it as a *base* directory and appends `/.openclaw`, so the
+config resolves to `.openclaw/.openclaw/openclaw.json` and the command fails with
+`Config file not found`. `entrypoint.sh` unsets it for the gateway, and
+`deploy/gateway-exec.sh` strips it for installer calls, but a `railway ssh`
+session inherits the image value:
+
+```bash
+railway ssh -- env -u OPENCLAW_HOME runuser -u joseph -- openclaw config validate
+```
+
+The `openclaw-cap` commands above are unaffected — they resolve their own
+absolute paths and never read `OPENCLAW_HOME`.
 
 Rule of thumb:
 

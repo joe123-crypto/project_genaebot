@@ -50,10 +50,22 @@ GitHub-Actions deploy job that runs `railway up` with
 
 To change what the gateway ships (workspace code, cron jobs like the CV-promo ad targets,
 agent context markdown, the public WhatsApp system prompt, the business info page):
-edit it in this repo, open a PR, merge. That's the whole flow. The prompt is the one
-piece of `openclaw.json` the boot rewrites: `deploy/railway/sync-public-prompt.py`
-(baked at `/usr/local/bin/`) copies `workspace/docs/public-whatsapp-system-prompt.txt`
-into `channels.whatsapp.direct["*"].systemPrompt` just before the gateway starts.
+edit it in this repo, open a PR, merge. That's the whole flow. Two pieces of
+`openclaw.json` are rewritten on every boot, both baked at `/usr/local/bin/`:
+
+- `deploy/railway/sync-public-prompt.py` copies
+  `workspace/docs/public-whatsapp-system-prompt.txt` into
+  `channels.whatsapp.direct["*"].systemPrompt`.
+- `deploy/railway/sync-reply-gates.py` sets the eight WhatsApp reply gates
+  (`channels.whatsapp.enabled`, `dmPolicy`, `accounts.default.enabled`,
+  `plugins.entries.whatsapp.enabled`, both `public-service-gate` `enabled` flags
+  and the two `whatsapp-relevance-gate` ones) to their
+  `config/openclaw.template.json` values, and appends `"*"` to
+  `channels.whatsapp.allowFrom` when `dmPolicy` is `"open"` — without it every DM
+  is dropped. It writes scalar leaves only and never touches `bindings`,
+  `groupPolicy`, the `ads` account or any `PRESERVE_PATHS` entry. Set the Railway
+  variable `REPLIES_DISABLED=1` to turn replies off instead of editing the volume.
+
 The rest of `config/openclaw.template.json` is still not applied (see README).
 `deploy/railway/wait-gateway-lease.py` (also baked at `/usr/local/bin/`) runs just
 before the gateway and waits up to 330 s for a stale gateway owner lease left by a
@@ -181,7 +193,37 @@ the project memory notes for the full seed/stuck-session recovery procedure.
 railway logs        # expect: [whatsapp] ... starting provider, [gateway] ready,
                     #         [entrypoint] synced source overlay from /opt/live-source/workspace,
                     #         [entrypoint] public WhatsApp prompt updated|unchanged
+                    #         [entrypoint] reply gates unchanged (8 paths already match the template)
 ```
+
+A `reply gates updated: ...` line instead means the live config had drifted and was
+corrected; `reply gates NOT synced: ...` means it was left alone and the previous
+values still apply. A `WARNING: openclaw config validate failed after the
+reply-gate sync` line is never fatal but always worth reading.
+
+### Turning replies off
+
+```sh
+railway variables --set REPLIES_DISABLED=1 && railway redeploy   # replies off
+railway variables --unset REPLIES_DISABLED && railway redeploy   # replies back on
+```
+
+Both states are enforced on every boot, so this is the supported way to stop the
+bot replying. Do not hand-edit `openclaw.json` on the volume: the next deploy
+restores the tracked values, and the edit leaves no trace in git (that is how the
+2026-10-18 reply outage went unnoticed). To diff the live config against the
+template without changing anything:
+
+```sh
+railway ssh -- python3 /usr/local/bin/sync-reply-gates.py \
+  /opt/live-source/config/openclaw.template.json \
+  /home/joseph/.openclaw/openclaw.json --dry-run
+```
+
+Note that the `openclaw` CLI invoked through `railway ssh` needs
+`env -u OPENCLAW_HOME`, or it looks for the config at
+`.openclaw/.openclaw/openclaw.json` and fails; see "Operational Changes" in the
+repository README.
 
 Do **not** trigger a manual ad send to test — the CV-promo campaign delivers on its own
 cron at 11:39 Africa/Harare (declared in `deploy/promo-crons.json`; confirm the live

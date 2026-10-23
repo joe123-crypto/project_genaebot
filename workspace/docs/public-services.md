@@ -168,5 +168,7 @@ Config options, named after OpenClaw's own `botLoopProtection`:
 | `siblingLineMaxBurstsPerDay` | `3` | Budgets per UTC day before the pair is held until tomorrow. |
 
 Never use one line to test the other: that is what started the loop on
-2026-10-20. Check a line with `openclaw channels status`, or message it from a
+2026-10-20. Check a line with
+`railway ssh -- env -u OPENCLAW_HOME runuser -u joseph -- openclaw channels status`
+(the `env -u` is required; see README), or message it from a
 third number.

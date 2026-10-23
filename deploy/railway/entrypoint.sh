@@ -361,6 +361,27 @@ runuser -u joseph -- python3 /usr/local/bin/sync-public-prompt.py \
   "$LIVE_SOURCE/deploy/patch-openclaw-config.py" \
   | while IFS= read -r line; do log "$line"; done || true
 
+# Reply-gate sync. The WhatsApp reply gates were turned off by hand-editing the
+# live openclaw.json on the volume during the 2026-10-18 outage, and the repo held
+# no trace of it, so it outlived every deploy. Those keys are tracked now: each is
+# set to its config/openclaw.template.json value on every boot. Scalar leaves only
+# -- no object or array is replaced -- so the live-only plugin keys that
+# openclaw.plugin.json still requires survive (the 2026-10-12 crashloop). The ads
+# line, groupPolicy and bindings are deliberately NOT governed; see README. To turn
+# replies off set the Railway variable REPLIES_DISABLED=1, which is visible in the
+# dashboard and enforced here on every boot. Never fatal.
+runuser -u joseph -- env REPLIES_DISABLED="${REPLIES_DISABLED:-}" \
+  python3 /usr/local/bin/sync-reply-gates.py \
+  "$LIVE_SOURCE/config/openclaw.template.json" \
+  "$OC_DIR/openclaw.json" \
+  --applier "$LIVE_SOURCE/deploy/patch-openclaw-config.py" \
+  | while IFS= read -r line; do log "$line"; done || true
+# Non-fatal on purpose: a fatal validate here would turn a config nit into a
+# crashloop, which is the 2026-10-12 and 2026-10-18 failure mode. The upgrade
+# block above can afford a fatal one because it has a snapshot to roll back to.
+runuser -u joseph -- env -u OPENCLAW_HOME openclaw config validate >/dev/null 2>&1 \
+  || echo "[entrypoint] WARNING: openclaw config validate failed after the reply-gate sync; see $OC_DIR/openclaw.json" >&2
+
 # A container killed mid-drain (a deploy landing during a promo cron run) leaves
 # its gateway owner lease in the state DB for up to its 300 s TTL. The new
 # container has a new hostname, so OpenClaw cannot reclaim it early and refuses to
