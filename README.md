@@ -389,6 +389,15 @@ individual installers.
   Most groups get the ad daily; groups under the file's `weekly_groups` map are posted
   to only on their configured weekdays, which is how MUTANDIRI VILLAGE RESIDENTS gets
   the ad three times a week (Mon, Wed and Fri)
+- **`borehole-paid-promo`** (`install-borehole-paid-promo.sh`, 07:15) runs
+  `workspace/cron/borehole-paid-promo/post_ad.py`, a deterministic (no-agent) job that
+  posts a fixed PAID ADVERT for a third-party borehole siting/drilling company to the
+  WhatsApp group JIDs listed in `workspace/cron/borehole-paid-promo/targets.json`
+  (the same Bulawayo/Kwekwe/Gweru/Chiredzi/Mutare/Masvingo cohort as skylight-solar),
+  reusing the same shared `promo_broadcast` delivery engine. The advertiser's brand,
+  taglines and catalog link are stripped and every contact number is the bot's own, so
+  replies reach the bot and the paid ad's leads are attributable (ref prefix `PB`). This
+  is separate from the operator's own `borehole-drilling-promo` above
 - **`skylight-solar-promo`** (`install-skylight-solar-promo.sh`, 13:21) runs
   `workspace/cron/skylight-solar-promo/post_ad.py`, a deterministic (no-agent) job
   that posts the fixed Skylight Solar ad (solar system packages and complete
@@ -402,7 +411,7 @@ individual installers.
 
 A promo cron's schedule, timezone and job timeout live in the gateway's cron state
 on the Railway volume, not in this repo, so merging a change to any of them ships
-nothing on its own. `deploy/promo-crons.json` declares what the eight should be;
+nothing on its own. `deploy/promo-crons.json` declares what the nine should be;
 `./deploy/reinstall-promo-crons.sh --check` reports what the gateway actually has,
 and `./deploy/reinstall-promo-crons.sh` applies the manifest by re-running the
 installers and re-checking. Both need `railway` (or a local container) and run from

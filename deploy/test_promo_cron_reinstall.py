@@ -31,6 +31,7 @@ MANIFEST = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
 # changes the manifest and a wrapper together still has to get past this table.
 EXPECTED_SCHEDULES = {
     "borehole-drilling": "13 8 * * *",
+    "borehole-paid": "15 7 * * *",
     "fruit-trees": "40 8 * * *",
     "skylight-solar": "21 13 * * *",
     "appliance-repairs": "35 10 * * *",
@@ -120,7 +121,7 @@ class ManifestContractTests(unittest.TestCase):
             declared.update(group.get("promos", []))
         self.assertEqual(slugs, installers, "manifest and installer files disagree")
         self.assertEqual(slugs, declared, "manifest and membership.json disagree")
-        self.assertEqual(len(slugs), 8)
+        self.assertEqual(len(slugs), 9)
 
     def test_each_wrapper_passes_the_manifest_values_to_register_promo_cron(self):
         for promo in MANIFEST["promos"]:
@@ -223,7 +224,7 @@ class DriftComparatorTests(unittest.TestCase):
     def test_in_sync_gateway_state_reports_no_drift(self):
         code, out, _ = run_comparator(live_jobs())
         self.assertEqual(code, 0)
-        self.assertIn("8 ok, 0 drifted, 0 missing", out)
+        self.assertIn("9 ok, 0 drifted, 0 missing", out)
 
     def test_the_recorded_2026_10_16_state_is_reported_as_drift(self):
         # All eight on the hour with the old 600 s timeout: what production ran the
@@ -233,7 +234,7 @@ class DriftComparatorTests(unittest.TestCase):
                  for p in MANIFEST["promos"]}
         code, out, _ = run_comparator(live_jobs(patch=patch))
         self.assertEqual(code, 1)
-        self.assertIn("0 ok, 8 drifted", out)
+        self.assertIn("0 ok, 9 drifted", out)
         self.assertIn("schedule.expr", out)
         self.assertIn("payload.timeoutSeconds", out)
         self.assertIn("reinstall-promo-crons.sh", out)
@@ -241,7 +242,7 @@ class DriftComparatorTests(unittest.TestCase):
     def test_a_stale_timeout_alone_is_drift(self):
         code, out, _ = run_comparator(live_jobs(patch={"cv-promo": {"payload.timeoutSeconds": 600}}))
         self.assertEqual(code, 1)
-        self.assertIn("7 ok, 1 drifted", out)
+        self.assertIn("8 ok, 1 drifted", out)
 
     def test_a_stale_schedule_alone_is_drift(self):
         code, _, _ = run_comparator(live_jobs(patch={"cv-promo": {"schedule.expr": "0 11 * * *"}}))
@@ -388,14 +389,14 @@ class OrchestratorTests(unittest.TestCase):
     def test_dry_run_plans_every_promo_without_touching_the_gateway(self):
         proc, calls = self.run_orchestrator("--dry-run", env={"DOCKER": "/nonexistent"})
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("8 promo(s) planned", proc.stdout)
+        self.assertIn("9 promo(s) planned", proc.stdout)
         self.assertEqual(calls.strip(), "")
 
     def test_apply_runs_all_installers_in_schedule_order(self):
         proc, calls = self.run_orchestrator()
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("8 of 8 installer(s) succeeded", proc.stdout)
-        self.assertIn("8 ok, 0 drifted", proc.stdout)
+        self.assertIn("9 of 9 installer(s) succeeded", proc.stdout)
+        self.assertIn("9 ok, 0 drifted", proc.stdout)
         seen = [p["name"] for p in MANIFEST["promos"]
                 if re.search(r"--name %s\b" % re.escape(p["name"]), calls)]
         self.assertEqual(seen, [p["name"] for p in MANIFEST["promos"]])
@@ -405,7 +406,7 @@ class OrchestratorTests(unittest.TestCase):
         payload = live_jobs(patch={"cv-promo": {"schedule.expr": "0 11 * * *"}})
         proc, calls = self.run_orchestrator(payload=payload)
         self.assertEqual(proc.returncode, 1)
-        self.assertIn("7 of 8 installer(s) succeeded", proc.stdout)
+        self.assertIn("8 of 9 installer(s) succeeded", proc.stdout)
         self.assertIn("cv-promo", proc.stderr)
         for promo in MANIFEST["promos"]:
             self.assertRegex(calls, r"--name %s\b" % re.escape(promo["name"]))
@@ -430,7 +431,7 @@ class OrchestratorTests(unittest.TestCase):
                  for p in MANIFEST["promos"]}
         proc, _ = self.run_orchestrator("--check", payload=live_jobs(patch=patch))
         self.assertEqual(proc.returncode, 1)
-        self.assertIn("0 ok, 8 drifted", proc.stdout)
+        self.assertIn("0 ok, 9 drifted", proc.stdout)
 
     def test_only_limits_the_run_to_the_named_promos(self):
         proc, calls = self.run_orchestrator("--only", "cv", "--only", "genaie-leads-promo")

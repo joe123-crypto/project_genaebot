@@ -744,7 +744,7 @@ def cron_timeout_seconds(script=None):
 
     A promo cron's job timeout lives in the gateway's cron state on the volume,
     NOT in this repo: merging a longer ``--timeout-seconds`` into
-    deploy/install-promo.sh changes nothing live until the seven
+    deploy/install-promo.sh changes nothing live until the nine
     ``deploy/install-*-promo.sh`` installers are re-run, and no deploy step runs
     them. A run that plans for the merged timeout would therefore be killed
     part-way by the stale one, and the groups it had not reached yet would miss

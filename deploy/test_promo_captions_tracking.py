@@ -37,6 +37,7 @@ APPLIANCE_REPAIRS_NUMBER = "+263713911390"
 PROMOS = {
     "appliance-repairs-promo": ("post_ad.py", "AR", APPLIANCE_REPAIRS_NUMBER),
     "borehole-drilling-promo": ("post_ad.py", "BH", BOT_NUMBER),
+    "borehole-paid-promo": ("post_ad.py", "PB", BOT_NUMBER),
     "building-materials-promo": ("post_ad.py", "BM", BOT_NUMBER),
     "cv-promo": ("post_cv_ad.py", "CV", BOT_NUMBER),
     "fruit-trees-promo": ("post_ad.py", "FT", BOT_NUMBER),
@@ -513,6 +514,7 @@ class PromoWiringTests(unittest.TestCase):
             state_env = {
                 "appliance-repairs-promo": "APPLIANCE_REPAIRS_STATE",
                 "borehole-drilling-promo": "BOREHOLE_STATE",
+                "borehole-paid-promo": "BOREHOLE_PAID_STATE",
                 "building-materials-promo": "BUILDING_MATERIALS_STATE",
                 "cv-promo": "CV_PROMO_STATE",
                 "fruit-trees-promo": "FRUIT_TREES_STATE",

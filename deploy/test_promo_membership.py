@@ -35,6 +35,10 @@ MEMBERSHIP = CRON / "membership.json"
 EXPECTED_DAILY = {
     "appliance-repairs": 6,
     "borehole-drilling": 8,
+    # borehole-paid (2026-10-23) is a PAID third-party borehole ad posted to the
+    # same 23-group cohort as skylight-solar (identified by sharing its promo), so
+    # it launches at skylight-solar's count. Separate from borehole-drilling above.
+    "borehole-paid": 23,
     "building-materials": 10,
     # skylight-solar launched (2026-10-19) targeting the Bulawayo/BYO groups plus
     # Kwekwe, Gweru, both lowveld/Chiredzi groups, Mutare, Magwegwe, Lobengula West
