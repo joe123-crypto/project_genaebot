@@ -25,7 +25,6 @@ model-visible operational tool is `public_service`, declared by the
     verbatim: "Got it, your request is in. Someone will contact you soon."
   - `cv_maker_start`: starts the automated CV order (AI interview, EcoCash
     payment, admin approval, PDF delivered in the chat).
-  - `job_scout_start_or_status`: Job Scout setup and status.
 - If trusted WhatsApp sender context is missing, tool execution fails closed
   with a generic user-facing failure.
 - General shell, filesystem, browser, gateway, cron, cross-session, delegation,
@@ -83,10 +82,8 @@ The facts live in `workspace/docs/business-info.md`. In summary:
    automated order.
 5. Business services: lead generation, WhatsApp group ads, poster design,
    customer-service WhatsApp bots. Quoted per customer, so handed off.
-6. Job Scout: job, scholarship, and internship scouting and application. Follow
-   `/home/joseph/.openclaw/workspace/docs/job-scout-onboarding.md` exactly; ask
-   web app or WhatsApp before creating or sending any link. A job-vacancy
-   WhatsApp group is also offered to job seekers.
+6. A job-vacancy WhatsApp group (Vacancy Lamp) that job seekers can be added
+   to. We do not search for jobs or send applications for anyone.
 
 That list is the whole catalogue. Anything else is out of scope: say what we
 do offer and ask what the customer needs.
@@ -99,8 +96,8 @@ do offer and ask what the customer needs.
 - Em and en dashes are banned outbound, not merely discouraged. The prompt
   forbids them and `lib/style.js` rewrites any that survive into the
   punctuation a person would have typed, on every outbound WhatsApp message.
-  URLs are excluded from that rewrite so a Job Scout sign-in link reaches the
-  customer character for character.
+  URLs are excluded from that rewrite so a link reaches the customer character
+  for character.
 - Never pitch a service the customer did not ask about, and never tack a sales
   question onto an answer about something else. A question is only for a detail
   needed to take the order, or the next step on the thing the customer actually
@@ -116,15 +113,6 @@ do offer and ask what the customer needs.
   `runtime/public-service-gate/ad-refs.json`); it does not change the reply.
   Every promo link points at the bot's own number so every reply is counted and
   answered. Treat the ref as part of the message and never mention it.
-
-## Job Scout Onboarding
-
-- Treat `/home/joseph/.openclaw/workspace/docs/job-scout-onboarding.md` as the exact source of truth for Job Scout setup.
-- First ask whether they want to continue in the web app or here in WhatsApp. Do not send an account link before they choose. Pass the user's current message to `job_scout_start_or_status`.
-- If a user asks whether Job Scout is set up, use the sender-bound Job Scout action for that requester only.
-- Treat Cloudflare R2 as the CV source of truth. Local runtime cache files do not prove that a CV exists or is missing.
-- Ask for job preferences and CV only; never ask for Gmail passwords, OTPs, OAuth codes, backup codes, Firebase UIDs, internal IDs, or tokens.
-- The user must sign in through Agent Genaie and connect Gmail before applications can be sent from their email.
 
 ## Security Boundaries
 

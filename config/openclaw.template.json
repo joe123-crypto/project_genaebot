@@ -130,7 +130,6 @@
           "businessInfoPath": "/home/joseph/.openclaw/workspace/docs/business-info.md",
           "botWhatsappNumber": "+263785632943",
           "memberGateEnabled": true,
-          "jobScoutOnboardingEnabled": true,
           "cvMakerEnabled": true,
           "cvMakerPriceText": "US$5",
           "cvMakerPaymentDetails": "EcoCash +263783496308 (Charlene Anika)",
@@ -150,14 +149,14 @@
         "enabled": true,
         "config": {
           "enabled": false,
-          "serviceSummary": "Job, scholarship, and internship scouting and applications, plus CV writing and revamping",
+          "serviceSummary": "CV writing and revamping, building materials, grafted fruit trees, borehole drilling, solar installation, and business marketing",
           "serviceKeywords": [
-            "job",
-            "jobs",
-            "scholarship",
-            "internship",
-            "apply",
-            "application",
+            "bricks",
+            "sand",
+            "fruit trees",
+            "borehole",
+            "solar",
+            "advert",
             "hi",
             "hello",
             "hey",
@@ -171,9 +170,9 @@
             "curriculum vitae"
           ],
           "serviceExamples": [
-            "find me a job",
-            "any scholarships",
-            "help me apply for an internship",
+            "how much are your bricks",
+            "do you sell mango trees",
+            "how much is borehole drilling",
             "make me a cv",
             "revamp my CV"
           ],
@@ -183,12 +182,12 @@
           "relevanceMargin": 0.05,
           "embeddingFailOpen": true,
           "serviceAnchors": [
-            "find me a job",
-            "any scholarships I can apply to",
-            "help me apply for an internship",
-            "ابحث لي عن وظيفة او منحة",
+            "how much are your bricks and quarry stones",
+            "do you sell grafted mango trees",
+            "how much is borehole drilling",
+            "I want a solar system installed",
             "how do I get started",
-            "help me set up my account",
+            "what services do you offer",
             "make me a professional cv",
             "can you revamp my CV"
           ],
@@ -206,7 +205,7 @@
           ],
           "useLlmFallback": false,
           "llmMaxTokens": 5,
-          "rejectionMessage": "I can help with Job Scout or making a CV. Which do you need?",
+          "rejectionMessage": "I can help with making a CV, building materials, fruit trees, boreholes, solar or business marketing. What do you need?",
           "failOpen": false,
           "maxTextLength": 400
         }
@@ -415,11 +414,7 @@
           "OPENROUTER_API_KEY",
           "AI_GATEWAY_API_KEY",
           "GATEWAY_AUTH_TOKEN",
-          "AGENT_GENAI_INTERNAL_API_KEY",
-          "JSEARCH_API_KEY",
-          "JSEARCH_RAPIDAPI_KEY",
-          "JSEARCH_RAPIDAPI_HOST",
-          "JSEARCH_PROVIDER"
+          "AGENT_GENAI_INTERNAL_API_KEY"
         ]
       }
     }

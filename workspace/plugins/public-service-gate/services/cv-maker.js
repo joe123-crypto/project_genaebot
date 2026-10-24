@@ -23,9 +23,8 @@ const DEFAULT_CV_PAYMENT_DETAILS = "EcoCash +263783496308 (Charlene Anika)";
 const DEFAULT_CV_PAYMENT_METHOD = "EcoCash";
 
 // Intent to have a CV/résumé created or revamped. This is about the CV DOCUMENT
-// itself, distinct from Job Scout (which is about finding and applying to jobs),
-// so these patterns intentionally key on cv/résumé/resume plus a make/revamp verb
-// and never on "jobs"/"apply".
+// itself, not about finding or applying to jobs, so these patterns intentionally
+// key on cv/résumé/resume plus a make/revamp verb and never on "jobs"/"apply".
 // The verb stems carry a trailing \w* so inflected forms match too (revamp ->
 // revamped/revamping, write -> writing, and the writ/wrote stems cover written).
 const CV_MAKER_REQUEST_PATTERNS = [
@@ -55,15 +54,11 @@ export async function handleCvMakerRequest(api, sender, text = "") {
   if (getPluginConfig(api).cvMakerEnabled !== true) {
     return { handled: true, text: CV_MAKER_UNAVAILABLE };
   }
-  // The deterministic entry point just offers the two paths. The agent, guided by
-  // the cv-maker skill/doc, collects the CV (an uploaded PDF or a short question
-  // set), runs `job-scout make-cv`, and that command renders and sends the
-  // finished PDF back on WhatsApp. No account link, Gmail, or stored profile.
+  // The deterministic entry point just offers the two paths (an uploaded PDF or
+  // a short question set). No account link, Gmail, or stored profile.
   //
-  // Deliberately no saveServiceState here: lib/state.js keeps a single slot per
-  // phone, so writing one would evict a Job Scout setup already in flight for
-  // this sender. The agent continues this flow from conversation context, and
-  // nothing reads a "cv-maker" step, so there is no state worth that cost.
+  // Deliberately no saveServiceState here: the agent continues this flow from
+  // conversation context, and nothing reads a "cv-maker" step.
   return { handled: true, text: cvMakerIntro() };
 }
 

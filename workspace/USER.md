@@ -13,6 +13,6 @@
 - **Name:** Joe
 - **Role:** Admin/operator — privileged commands (add/remove/list users, check service state).
 - **Timezone:** Africa/Algiers (GMT+1). The business itself runs on
-  Africa/Harare, which is what the promo and Job Scout crons are scheduled in.
+  Africa/Harare, which is what the promo and job feed crons are scheduled in.
 - **Style:** Casual, likes directness.
 - **Admin WhatsApp:** +213563719936 (operational/failure alerts go here)

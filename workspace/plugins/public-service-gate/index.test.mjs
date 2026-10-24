@@ -6,9 +6,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import plugin, { createLimiter, isQueueFullError, runJsonCommand } from "./index.js";
-import { accountLinkRequiredText, VERBATIM_LINK_DIRECTIVE } from "./lib/account-link.js";
 import { busyReply } from "./lib/runtime.js";
-import { handleJobScoutRequest } from "./services/job-scout.js";
 
 const MEMBER = "+233208864185";
 const UNKNOWN = "+19995550123";
@@ -55,7 +53,6 @@ esac
               enabled: true,
               publicUsers: [MEMBER],
               memberGateEnabled: true,
-              jobScoutOnboardingEnabled: true,
               serviceStatePath,
               ...effectiveConfig,
             },
@@ -64,17 +61,16 @@ esac
             config: {
               enabled: true,
               serviceKeywords: [
-                "news",
-                "job",
-                "event",
+                "cv",
+                "borehole",
+                "fruit trees",
               ],
               serviceExamples: [
-                "subscribe me to news",
-                "find me a job",
-                "any scholarships",
-                "what events are near me",
+                "make me a cv",
+                "how much is borehole drilling",
+                "do you sell mango trees",
               ],
-              serviceSummary: "personalized news, local events, and job scouting",
+              serviceSummary: "CV making, borehole drilling, and grafted fruit trees",
               useLlmFallback: true,
               ...relevanceConfig,
             },
@@ -136,18 +132,11 @@ test("a disabled public service is omitted from the public service tool schema",
   const handler = registerHandler({ cvMakerEnabled: false });
   const tool = handler.publicTool({ agentId: "public", requesterSenderId: MEMBER, messageChannel: "whatsapp" });
 
-  assert.deepEqual(tool.parameters.properties.action.enum, ["business_info", "handoff", "job_scout_start_or_status"]);
+  assert.deepEqual(tool.parameters.properties.action.enum, ["business_info", "handoff"]);
 
   const result = await tool.execute("test", { action: "cv_maker_start" });
   assert.match(result.content[0].text, /isn't available here right now/i);
-  assert.match(result.content[0].text, /Job Scout/);
-});
-
-test("job scout onboarding has a generic disabled response", async () => {
-  const reply = await handleJobScoutRequest({ pluginConfig: { jobScoutOnboardingEnabled: false } }, UNKNOWN);
-  assert.equal(reply.handled, true);
-  assert.match(reply.text, /temporarily unavailable/i);
-  assert.doesNotMatch(reply.text, /pilot/i);
+  assert.doesNotMatch(result.content[0].text, /making a CV/);
 });
 
 test("classic mode: enabling the CV maker exposes cv_maker_start and routes to the intro", async () => {
@@ -183,136 +172,6 @@ test("classic mode: a CV request is unavailable while the CV maker is disabled",
   });
   assert.equal(reply.handled, true);
   assert.match(reply.text, /isn't available here right now/i);
-});
-
-test("job scout asks for web or WhatsApp before creating a link", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-jobs-"));
-  const accountLinkScript = path.join(dir, "account-link");
-  const jobScoutScript = path.join(dir, "job-scout");
-  const serviceStatePath = path.join(dir, "state.json");
-  const helperLog = path.join(dir, "helper.log");
-  writeExecutable(
-    jobScoutScript,
-    `#!/usr/bin/env bash
-set -eu
-case "$1" in
-  status) printf '{"linked":false,"ready":false,"onboardingChannel":null,"onboardingNextStep":"channel_selection"}\\n' ;;
-  *) exit 2 ;;
-esac
-`,
-  );
-  writeExecutable(
-    accountLinkScript,
-    `#!/usr/bin/env bash
-printf '%s\\n' "$*" >> "${helperLog}"
-printf '{"linked":false,"channel":"web","nextStep":"whatsapp","setupUrl":"https://app.example.test/whatsapp?token=abc"}\\n'
-`,
-  );
-  const api = {
-    config: {
-      plugins: {
-        entries: {
-          "public-service-gate": {
-            config: {
-              enabled: true,
-              accountLinkScript,
-              jobScoutScript,
-              serviceStatePath,
-              jobScoutOnboardingEnabled: true,
-            },
-          },
-        },
-      },
-    },
-    logger: { debug() {}, warn() {} },
-  };
-
-  const firstReply = await handleJobScoutRequest(api, MEMBER, "Set up Job Scout");
-  assert.equal(firstReply.handled, true);
-  assert.match(firstReply.text, /1\. In the web app/);
-  assert.match(firstReply.text, /2\. Here in WhatsApp/);
-  assert.doesNotMatch(firstReply.text, /https?:\/\//);
-  assert.equal(fs.existsSync(helperLog), false);
-
-  const secondReply = await handleJobScoutRequest(api, MEMBER, "web");
-  assert.match(secondReply.text, /Finish setting up Job Scout in the web app/);
-  assert.match(secondReply.text, /https:\/\/app\.example\.test\/whatsapp\?token=abc/);
-  assert.match(fs.readFileSync(helperLog, "utf8"), /start-onboarding --phone \+233208864185 --service jobs --channel web/);
-});
-
-test("job scout chat selection creates the link only after the choice", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-jobs-"));
-  const accountLinkScript = path.join(dir, "account-link");
-  const jobScoutScript = path.join(dir, "job-scout");
-  const serviceStatePath = path.join(dir, "state.json");
-  writeExecutable(
-    jobScoutScript,
-    `#!/usr/bin/env bash
-set -eu
-case "$1" in
-  status) printf '{"linked":false,"ready":false,"onboardingChannel":null}\\n' ;;
-  *) exit 2 ;;
-esac
-`,
-  );
-  writeExecutable(
-    accountLinkScript,
-    `#!/usr/bin/env bash
-set -eu
-if [ "$1" != "start-onboarding" ] || [ "$7" != "chat" ]; then exit 2; fi
-printf '{"linked":false,"channel":"chat","nextStep":"whatsapp","setupUrl":"https://app.example.test/whatsapp?token=chat"}\\n'
-`,
-  );
-  const api = {
-    config: {
-      plugins: {
-        entries: {
-          "public-service-gate": {
-            config: {
-              enabled: true,
-              accountLinkScript,
-              jobScoutScript,
-              serviceStatePath,
-              jobScoutOnboardingEnabled: true,
-            },
-          },
-        },
-      },
-    },
-    logger: { debug() {}, warn() {} },
-  };
-
-  const firstReply = await handleJobScoutRequest(api, MEMBER, "Set up Job Scout");
-  assert.doesNotMatch(firstReply.text, /https?:\/\//);
-  const reply = await handleJobScoutRequest(api, MEMBER, "2");
-  assert.equal(reply.handled, true);
-  assert.match(reply.text, /Sign in to connect your account here/);
-  assert.match(reply.text, /Gmail is granted as part of sign-in/);
-  assert.match(reply.text, /app will bring you back here automatically/);
-  assert.match(reply.text, /https:\/\/app\.example\.test\/whatsapp\?token=chat/);
-});
-
-test("public service forwards the user's Job Scout channel choice", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-tool-jobs-"));
-  const accountLinkScript = path.join(dir, "account-link");
-  const jobScoutScript = path.join(dir, "job-scout");
-  writeExecutable(
-    jobScoutScript,
-    `#!/usr/bin/env bash
-printf '{"linked":false,"ready":false,"onboardingChannel":null}\\n'
-`,
-  );
-  writeExecutable(
-    accountLinkScript,
-    `#!/usr/bin/env bash
-printf '{"linked":false,"channel":"web","nextStep":"whatsapp","setupUrl":"https://app.example.test/whatsapp?token=tool"}\\n'
-`,
-  );
-  const handler = registerHandler({ accountLinkScript, jobScoutScript });
-  const tool = handler.publicTool({ agentId: "public", requesterSenderId: MEMBER, messageChannel: "whatsapp" });
-
-  const result = await tool.execute("test", { action: "job_scout_start_or_status", text: "web" });
-  assert.match(result.content[0].text, /whatsapp\?token=tool/);
 });
 
 function eventFor(text, sender = MEMBER) {
@@ -372,7 +231,7 @@ function writeServiceState(filePath, phone, service, step, options = {}) {
 test("failsafe stop command silently clears active service state before dispatch", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
   const serviceStatePath = path.join(dir, "state.json");
-  writeServiceState(serviceStatePath, MEMBER, "news", "news.awaiting_topics");
+  writeServiceState(serviceStatePath, MEMBER, "cv-maker", "cv.interview");
 
   const handler = registerHandler({ serviceStatePath });
   const reply = await handler(eventFor("stop!"), { channelId: "whatsapp", senderId: MEMBER });
@@ -402,7 +261,7 @@ test("failsafe stop command accepts transcript variants before dispatch", async 
 test("failsafe stop command handles nested live-style event fields", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
   const serviceStatePath = path.join(dir, "state.json");
-  writeServiceState(serviceStatePath, MEMBER, "news", "news.awaiting_topics");
+  writeServiceState(serviceStatePath, MEMBER, "cv-maker", "cv.interview");
 
   let calls = 0;
   const handler = registerHandler({ serviceStatePath }, async () => {
@@ -430,7 +289,7 @@ test("failsafe stop command suppresses late WhatsApp outbound until next inbound
 
   const stopReply = await handler(eventFor("stop"), { channelId: "whatsapp", senderId: MEMBER });
   const suppressed = await handler.messageSending(
-    { to: MEMBER, content: "Here is your personalized news update." },
+    { to: MEMBER, content: "Here is the price list you asked for." },
     { channelId: "whatsapp", senderId: MEMBER },
   );
 
@@ -760,20 +619,17 @@ test("classic mode: member text falls through with nested live-style event field
 
 test("classic mode: member service messages do not call deterministic service helpers", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
-  const accountLinkScript = path.join(dir, "account-link");
-  const jobScoutScript = path.join(dir, "job-scout");
+  const cvMakerScript = path.join(dir, "cv-maker");
   const helperLog = path.join(dir, "helper.log");
 
-  for (const script of [accountLinkScript, jobScoutScript]) {
-    writeExecutable(
-      script,
-      `#!/usr/bin/env bash
+  writeExecutable(
+    cvMakerScript,
+    `#!/usr/bin/env bash
 printf '%s %s\\n' "$0" "$*" >> "${helperLog}"
 exit 2
 `,
-    );
-  }
-  const handler = registerHandler({ memberGateEnabled: false, accountLinkScript, jobScoutScript });
+  );
+  const handler = registerHandler({ memberGateEnabled: false, cvMakerScript });
   for (const text of [
     "Hello",
     "1",
@@ -781,7 +637,6 @@ exit 2
     "3",
     "4",
     "Done",
-    "setup job scout",
   ]) {
     const reply = await handler(eventFor(text), { channelId: "whatsapp", senderId: MEMBER });
     assert.equal(reply, undefined, `expected "${text}" to reach the agent`);
@@ -792,7 +647,7 @@ exit 2
 test("classic mode: active service state no longer short-circuits member continuations", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-"));
   const serviceStatePath = path.join(dir, "state.json");
-  writeServiceState(serviceStatePath, MEMBER, "news", "news.awaiting_topics");
+  writeServiceState(serviceStatePath, MEMBER, "cv-maker", "cv.interview");
 
   const handler = registerHandler({ memberGateEnabled: false, serviceStatePath });
   for (const text of ["2", "menu", "tell me more", "continue please"]) {
@@ -800,7 +655,7 @@ test("classic mode: active service state no longer short-circuits member continu
     assert.equal(reply, undefined, `expected "${text}" to reach the agent`);
   }
   const saved = JSON.parse(fs.readFileSync(serviceStatePath, "utf8"));
-  assert.equal(saved.states[MEMBER]?.step, "news.awaiting_topics");
+  assert.equal(saved.states[MEMBER]?.step, "cv.interview");
 });
 
 test("WhatsApp message without a sender fails closed before agent dispatch", async () => {
@@ -917,19 +772,13 @@ test("runJsonCommand parses JSON stdout", async () => {
 });
 
 test("public canned replies use the concise style", () => {
-  assert.equal(
-    accountLinkRequiredText("https://example.test/setup", "Event scouting"),
-    `${VERBATIM_LINK_DIRECTIVE}\n\nSign in here to set up Event scouting:\nhttps://example.test/setup\n\nCheck Spam if the sign-in email doesn't arrive.`,
-  );
   assert.equal(busyReply().text, "I'm busy right now. Try again shortly.");
 
   const files = [
-    "lib/account-link.js",
     "lib/runtime.js",
     "services/membership.js",
     "services/greeting.js",
     "services/intake.js",
-    "services/job-scout.js",
     "services/cv-maker.js",
     "services/handoff.js",
     "lib/handoffs.js",
@@ -944,8 +793,6 @@ test("public canned replies use the concise style", () => {
     "public-whatsapp-system-prompt.txt",
     "public-services.md",
     "business-info.md",
-    "gmail-onboarding.md",
-    "job-scout-onboarding.md",
   ];
   for (const file of docs) {
     const source = fs.readFileSync(new URL(`../../docs/${file}`, import.meta.url), "utf8");

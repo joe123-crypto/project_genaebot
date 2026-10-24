@@ -74,32 +74,32 @@ test("handleCvMakerRequest offers both paths when enabled", async () => {
   assert.match(reply.text, /from scratch/i);
 });
 
-// lib/state.js keeps one slot per phone, so writing cv-maker state would evict a
-// Job Scout setup already in flight for the same sender.
+// lib/state.js keeps one slot per phone; the classic CV intro must leave whatever
+// is already in that slot alone.
 test("handleCvMakerRequest does not touch shared service state", async () => {
   const api = apiFor();
   const statePath = api.pluginConfig.serviceStatePath;
   fs.mkdirSync(path.dirname(statePath), { recursive: true });
-  const jobScoutState = {
+  const existingState = {
     version: 1,
     states: {
       "+263700000001": {
         phone: "+263700000001",
-        service: "job-scout",
-        step: "job-scout.awaiting_setup_channel",
+        service: "intake",
+        step: "intake.awaiting_reply",
         data: {},
         updatedAt: new Date().toISOString(),
         expiresAt: new Date(Date.now() + 600000).toISOString(),
       },
     },
   };
-  fs.writeFileSync(statePath, JSON.stringify(jobScoutState));
+  fs.writeFileSync(statePath, JSON.stringify(existingState));
 
   await handleCvMakerRequest(api, "+263700000001", "make me a cv");
 
   const after = JSON.parse(fs.readFileSync(statePath, "utf8"));
-  assert.equal(after.states["+263700000001"].service, "job-scout");
-  assert.equal(after.states["+263700000001"].step, "job-scout.awaiting_setup_channel");
+  assert.equal(after.states["+263700000001"].service, "intake");
+  assert.equal(after.states["+263700000001"].step, "intake.awaiting_reply");
 });
 
 test("handleCvMakerRequest reports unavailable when disabled", async () => {

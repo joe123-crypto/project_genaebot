@@ -23,9 +23,7 @@
         "deploy/install-*.sh",
         "deploy/promo-crons.json",
         "deploy/reinstall-promo-crons.sh",
-        "deploy/promo-cron-drift.py",
-        "deploy/job-scout-browser.Dockerfile",
-        "deploy/job-scout-channel-listener.Dockerfile"
+        "deploy/promo-cron-drift.py"
       ],
       "requiredDocs": [
         "README.md",
@@ -49,27 +47,6 @@
       ],
       "requiredDocs": [
         "workspace/docs/public-whatsapp-system-prompt.txt"
-      ]
-    },
-    {
-      "name": "Gmail interface",
-      "paths": [
-        "workspace/bin/genaie-mail",
-        "workspace/skills/genaie-mail/**"
-      ],
-      "requiredDocs": [
-        "workspace/docs/gmail-onboarding.md"
-      ]
-    },
-    {
-      "name": "Job Scout public interface",
-      "paths": [
-        "workspace/bin/job-scout",
-        "workspace/plugins/public-service-gate/services/job-scout.js",
-        "workspace/skills/job-scout/**"
-      ],
-      "requiredDocs": [
-        "workspace/docs/job-scout-onboarding.md"
       ]
     },
     {

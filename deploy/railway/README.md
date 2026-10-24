@@ -30,16 +30,13 @@ GitHub-Actions deploy job that runs `railway up` with
 
 - The **`validate` job** (`name: Portable validation`) in
   `.github/workflows/deploy-main.yml` runs the full suite on every PR and push
-  (actionlint, shellcheck, gitleaks, `deploy/ci-check.sh`, npm audit). It is the check
+  (actionlint, shellcheck, gitleaks, `deploy/ci-check.sh`). It is the check
   that should be required on `main` (see setup below). We reuse it rather than add a
   second workflow, so there is exactly one CI run per push.
   Its required checks cover repository and staging structure, documentation
   contracts, syntax, every discovered Python and Node test, ShellCheck, actionlint,
-  locked npm dependencies, high-severity production npm advisories, and
-  secret/private-state scanning. The Job Scout and channel-listener dependency sets
-  are installed from their lockfiles before the Node tests run, then both
-  production sets are audited. The Job Scout browser image is built when one of its
-  inputs changes. Actions are pinned to commit revisions and containerized
+  and secret/private-state scanning. The tracked code has no npm dependencies to
+  install or audit. Actions are pinned to commit revisions and containerized
   validation tools to versions.
 - **Railway's GitHub integration** watches `main` and rebuilds on every push. It reads
   `railway.json` (repo root) → `deploy/railway/Dockerfile`.

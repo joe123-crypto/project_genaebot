@@ -22,8 +22,8 @@ function registerHandler(config = {}, complete, publicServiceGateConfig = {}) {
           "whatsapp-relevance-gate": {
             config: {
               enabled: true,
-              serviceKeywords: ["news", "job", "event"],
-              serviceSummary: "personalized news, local events, and job scouting",
+              serviceKeywords: ["cv", "borehole", "fruit trees"],
+              serviceSummary: "CV making, borehole drilling, and grafted fruit trees",
               useLlmFallback: true,
               ...config,
             },
@@ -122,7 +122,7 @@ test("explicit irrelevant classifier verdict still rejects", async () => {
   });
 
   assert.equal(reply.handled, true);
-  assert.match(reply.text, /personalized news/);
+  assert.match(reply.text, /making a CV/);
   assert.doesNotMatch(reply.text, /Sorry, I can only help/);
 });
 
@@ -160,7 +160,7 @@ test("configured admin bypass user is filtered when WhatsApp admin mode is disab
     });
 
     assert.equal(reply.handled, true);
-    assert.match(reply.text, /personalized news/);
+    assert.match(reply.text, /making a CV/);
     assert.equal(calls, 0);
   });
 });
@@ -198,7 +198,7 @@ test("nested live-style event fields are still classified and rejected", async (
   );
 
   assert.equal(reply.handled, true);
-  assert.match(reply.text, /personalized news/);
+  assert.match(reply.text, /making a CV/);
 });
 
 test("WhatsApp message without a sender fails closed", async () => {
@@ -206,7 +206,7 @@ test("WhatsApp message without a sender fails closed", async () => {
   const reply = await handler({ channel: "whatsapp", content: "Tell me a joke" }, { channelId: "whatsapp" });
 
   assert.equal(reply.handled, true);
-  assert.match(reply.text, /personalized news/);
+  assert.match(reply.text, /making a CV/);
 });
 
 test("classifier errors fail open by default", async () => {
@@ -233,5 +233,5 @@ test("classifier errors fail closed when configured", async () => {
   });
 
   assert.equal(reply.handled, true);
-  assert.match(reply.text, /personalized news/);
+  assert.match(reply.text, /making a CV/);
 });

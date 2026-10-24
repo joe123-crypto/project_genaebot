@@ -103,8 +103,8 @@ need.
 
 - We run a WhatsApp group that posts job vacancies. Job seekers can be added if
   they want.
-- Job Scout: automatic job, internship and scholarship searching and
-  applications, set up in this chat.
+- We do not search for jobs or send applications for anyone. We can make or
+  revamp their CV.
 
 ## Website
 

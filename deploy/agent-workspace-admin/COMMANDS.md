@@ -3,14 +3,13 @@
 Use the narrow `openclaw-cap` wrappers for routine service operations. General
 shell access is reserved for explicit administrator requests.
 
-## Job Scout (read-only status)
+## Public users
 
-Answer subscriber/application questions from these commands, never from memory:
+- `openclaw-cap users list` — the public-user member store
+- `openclaw-cap users <add|remove|sync|check> ...` — manage it
 
-- `job-scout summary` — current ready-subscriber count + latest dispatch run counts
-- `job-scout status --phone "+263..."` — one user's readiness and missing requirements
-- `job-scout list-ready` — full list of currently ready subscribers
-- `job-scout list-applications --user-id "<uid>"` — a user's recorded applications
+## CV orders
 
-Historical run stats: `runtime/job-scout/dispatch-runs/<run-id>.json`. Report
-user-facing status only; do not reveal user ids, hashed keys, or raw records.
+CV orders are approved or denied from WhatsApp with `cv approve <id>` and
+`cv deny <id>`. Report user-facing status only; do not reveal phone numbers,
+order data, or raw records.

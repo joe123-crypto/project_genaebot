@@ -2,7 +2,6 @@ import { execFile } from "node:child_process";
 
 export const DEFAULT_COMMAND_MAX_BUFFER = 1024 * 1024;
 export const HELPER_TIMEOUT_MS = 15000;
-export const NEWS_HELPER_TIMEOUT_MS = 10000;
 
 const DEFAULT_BUSY_MESSAGE = `I'm busy right now. Try again shortly.`;
 

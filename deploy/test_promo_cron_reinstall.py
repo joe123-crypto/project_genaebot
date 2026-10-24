@@ -87,10 +87,10 @@ def live_jobs(drop=(), patch=None, extra=()):
             target[parts[-1]] = value
         jobs.append(job)
     # An unrelated gateway job must never be mistaken for a promo.
-    jobs.append({"id": "js", "name": "job-scout", "enabled": True,
-                 "schedule": {"expr": "0 8 * * *", "tz": "Africa/Harare"},
-                 "payload": {"argv": ["python3", "/w/job-scout/run.py"],
-                             "timeoutSeconds": 21600}})
+    jobs.append({"id": "jf", "name": "vacancy-lamp-feed", "enabled": True,
+                 "schedule": {"expr": "20 9 * * *", "tz": "Africa/Harare"},
+                 "payload": {"argv": ["/w/bin/job-feed", "deliver-group-feed"],
+                             "timeoutSeconds": 600}})
     jobs.extend(copy.deepcopy(list(extra)))
     return {"jobs": jobs}
 
@@ -187,9 +187,9 @@ class ManifestContractTests(unittest.TestCase):
     def test_neither_readme_still_quotes_a_promos_pre_114_on_the_hour_slot(self):
         """The deploy/railway/README.md:159 "11:00" bug, made unreintroducible.
 
-        Scoped by proximity rather than by a bare substring: Job Scout really does
-        run at 08:00 Africa/Harare (README.md:262), so only an on-the-hour time whose
-        surrounding prose names a promo that moved off the hour is stale.
+        Scoped by proximity rather than by a bare substring: other times appear in
+        the READMEs too, so only an on-the-hour time whose surrounding prose names
+        a promo that moved off the hour is stale.
         """
         hours = {int(local_time(p["cron"]).split(":")[0]): p for p in MANIFEST["promos"]}
         for label, text in (("README.md", ROOT / "README.md"),
@@ -293,7 +293,7 @@ class DriftComparatorTests(unittest.TestCase):
     def test_an_unrelated_job_is_ignored(self):
         code, out, _ = run_comparator(live_jobs())
         self.assertEqual(code, 0)
-        self.assertNotIn("job-scout", out)
+        self.assertNotIn("vacancy-lamp-feed", out)
 
     def test_failure_alert_and_cwd_are_reported_but_do_not_fail_the_check(self):
         code, out, _ = run_comparator(live_jobs(patch={"cv-promo": {"payload.cwd": "/elsewhere"}}))

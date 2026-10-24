@@ -15,8 +15,8 @@ const RELEVANCE_MODES = new Set(["keyword", "embedding", "off"]);
 const PUBLIC_SERVICE_GATE_ID = "public-service-gate";
 
 const DEFAULT_REJECTION =
-  "I can help with personalized news, local events, " +
-  "and job/scholarship/internship scouting. Which one do you want?";
+  "I can help with making a CV, building materials, grafted fruit trees, " +
+  "borehole drilling, solar and business marketing. What do you need?";
 const DEFAULT_MAX_TEXT_LENGTH = 400;
 const DEFAULT_LLM_MAX_TOKENS = 5;
 const CACHE_TTL_MS = 10 * 60 * 1000;
