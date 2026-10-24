@@ -118,7 +118,7 @@ so the plugin's runJsonCommand always parses. Errors go through
 ## 7. Plugin config keys (openclaw.plugin.json + config/openclaw.template.json)
 
     cvMakerPriceText        default "US$5"
-    cvMakerPaymentDetails   default "EcoCash +263783496308 (Charlene Anika)"
+    cvMakerPaymentDetails   default "EcoCash +263775489417 (Noriah Mzenda)"
     cvMakerPaymentMethod    default "EcoCash"
     cvMakerScript           default "~/.openclaw/workspace/bin/cv-maker"
 

@@ -56,7 +56,8 @@ edit it in this repo, open a PR, merge. That's the whole flow. Two pieces of
 - `deploy/railway/sync-reply-gates.py` sets the eight WhatsApp reply gates
   (`channels.whatsapp.enabled`, `dmPolicy`, `accounts.default.enabled`,
   `plugins.entries.whatsapp.enabled`, both `public-service-gate` `enabled` flags
-  and the two `whatsapp-relevance-gate` ones) to their
+  and the two `whatsapp-relevance-gate` ones) plus the CV payment details
+  (`public-service-gate` `cvMakerPaymentDetails`) to their
   `config/openclaw.template.json` values, and appends `"*"` to
   `channels.whatsapp.allowFrom` when `dmPolicy` is `"open"` — without it every DM
   is dropped. It writes scalar leaves only and never touches `bindings`,
@@ -196,7 +197,7 @@ the project memory notes for the full seed/stuck-session recovery procedure.
 railway logs        # expect: [whatsapp] ... starting provider, [gateway] ready,
                     #         [entrypoint] synced source overlay from /opt/live-source/workspace,
                     #         [entrypoint] public WhatsApp prompt updated|unchanged
-                    #         [entrypoint] reply gates unchanged (8 paths already match the template)
+                    #         [entrypoint] reply gates unchanged (9 paths already match the template)
 ```
 
 A `reply gates updated: ...` line instead means the live config had drifted and was

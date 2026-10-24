@@ -635,7 +635,7 @@ reaches the live agent on the next deploy, and the business facts it reads
 
 The second exception is the WhatsApp **reply gates**. Right after the prompt sync
 the entrypoint runs `deploy/railway/sync-reply-gates.py`, which sets each of these
-eight keys to its value in `config/openclaw.template.json`:
+nine keys to its value in `config/openclaw.template.json`:
 
 | Path | Template |
 |---|---|
@@ -647,6 +647,10 @@ eight keys to its value in `config/openclaw.template.json`:
 | `plugins.entries["public-service-gate"].config.enabled` | `true` |
 | `plugins.entries["whatsapp-relevance-gate"].config.enabled` | `false` |
 | `plugins.entries["whatsapp-relevance-gate"].config.relevanceMode` | `"off"` |
+| `plugins.entries["public-service-gate"].config.cvMakerPaymentDetails` | `"EcoCash +263775489417 (Noriah Mzenda)"` |
+
+The last one is not a reply gate: it is where CV buyers are told to pay, governed
+so a change of payee reaches the live bot on the next deploy.
 
 It writes **scalar leaves only** -- no object or array is ever replaced -- so the
 live-only plugin keys the strict `configSchema` still requires survive untouched.
@@ -674,7 +678,7 @@ Deliberately **not** governed:
 - every `PRESERVE_PATHS` entry -- runtime-derived or PII, absent from the template
   by design.
 
-It logs `reply gates unchanged (8 paths already match the template)`,
+It logs `reply gates unchanged (9 paths already match the template)`,
 `reply gates updated: <path> <old> -> <new>; ...`, or, on any problem,
 `reply gates NOT synced: <err>` and the boot carries on with the config unchanged.
 A non-fatal `openclaw config validate` runs straight after and only warns, because

@@ -15,7 +15,7 @@ const CV_MAKER_UNAVAILABLE = "The CV maker isn't available here right now. Try a
 // Defaults mirror openclaw.plugin.json / config/openclaw.template.json. The
 // payment destination is configuration, so it is never written anywhere else.
 const DEFAULT_CV_PRICE_TEXT = "US$5";
-const DEFAULT_CV_PAYMENT_DETAILS = "EcoCash +263783496308 (Charlene Anika)";
+const DEFAULT_CV_PAYMENT_DETAILS = "EcoCash +263775489417 (Noriah Mzenda)";
 // The method alone (no account number), disclosed up front in the intro so a
 // buyer knows the price and how they will pay before investing time in the
 // interview. The full destination stays in cvMakerPaymentDetails for the payment
