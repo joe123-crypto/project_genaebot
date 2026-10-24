@@ -64,7 +64,11 @@ edit it in this repo, open a PR, merge. That's the whole flow. Two pieces of
   `channels.whatsapp.allowFrom` when `dmPolicy` is `"open"` — without it every DM
   is dropped. It writes scalar leaves only and never touches `bindings`,
   `groupPolicy`, the `ads` account or any `PRESERVE_PATHS` entry. Set the Railway
-  variable `REPLIES_DISABLED=1` to turn replies off instead of editing the volume.
+  variable `REPLIES_DISABLED=1` to turn the `default` line's replies off instead of
+  editing the volume; it does not touch the `ads` account, which has no tracked
+  off-switch here (editing the template does not reach the live config on Railway —
+  silence the `ads` line by hand-editing the live `openclaw.json`, an edit the sync
+  does not revert).
 
 The rest of `config/openclaw.template.json` is still not applied (see README).
 `deploy/railway/wait-gateway-lease.py` (also baked at `/usr/local/bin/`) runs just

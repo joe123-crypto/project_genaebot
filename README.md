@@ -599,12 +599,22 @@ channel for it and `botLoopProtection` is rejected by the strict WhatsApp config
 schema. There is no deny list for WhatsApp DMs either, and an allowlist is
 unusable because an advertising line must accept DMs from strangers.
 
-To stop a loop like that again, set `REPLIES_DISABLED=1` in the Railway variables
-(it disables `channels.whatsapp.accounts.default.enabled` on every boot and is
-reversible by deleting the variable), or set
-`channels.whatsapp.accounts.<id>.enabled` to `false` in the template for the line
-you want off. Both are visible and tracked; a hand-edit to the live
-`openclaw.json` is neither, and is reverted on the next deploy.
+To stop a loop like that again, set `REPLIES_DISABLED=1` in the Railway variables:
+it forces `channels.whatsapp.accounts.default.enabled` to `false` on every boot and
+is reversible by deleting the variable. Silencing the `default` line is enough to
+break an own-lines ping-pong, because one side going quiet ends the exchange — but
+the switch governs **only** the `default` line, so a loop or flood that involves the
+`ads` line and an outside party is not stopped by it.
+
+The `ads` line has no equivalent tracked switch on Railway. Nothing on the boot path
+applies `config/openclaw.template.json` (see **Deploying Changes**), and
+`sync-reply-gates.py` deliberately never writes `accounts.ads.enabled`, so editing
+the template does **not** reach the live config here — it only matters for a Compose
+deploy or a fresh seed. To silence the `ads` line on Railway, hand-edit the live
+`openclaw.json` on the volume (`accounts.ads.enabled` to `false`); that edit is *not*
+undone on the next deploy, because the reply-gate sync only forces the eight tracked
+scalars (and appends the `allowFrom` wildcard) and leaves everything else — the `ads`
+account, `groupPolicy`, `bindings`, every `PRESERVE_PATHS` entry — alone.
 
 The lines are allowed to talk, on a budget enforced by
 `workspace/plugins/public-service-gate/lib/sibling-lines.js`: **8 messages per
