@@ -25,7 +25,9 @@ TZ="Africa/Harare"
 ALERT_TO="${JOB_FEED_FAILURE_ALERT_TO:-${JOB_SCOUT_FAILURE_ALERT_TO:-+213563719936}}"
 MAIN_INVITE_URL="${JOB_FEED_INVITE_URL:-${JOB_SCOUT_GROUP_FEED_INVITE_URL:-https://chat.whatsapp.com/JZvh9lwFOvc3N2sSs8F1QD}}"
 INVITE_URL="${HUSTLERS_FEED_INVITE_URL:-${JOB_SCOUT_HUSTLERS_FEED_INVITE_URL:-$MAIN_INVITE_URL}}"
-TARGET="${HUSTLERS_FEED_TARGET:-${JOB_SCOUT_HUSTLERS_FEED_TARGET:-}}"
+# Hustlers marketplace's JID (see workspace/cron/membership.json). Override with
+# HUSTLERS_FEED_TARGET, or set it empty to look the group up by HUSTLERS_FEED_GROUP_QUERY.
+TARGET="${HUSTLERS_FEED_TARGET-${JOB_SCOUT_HUSTLERS_FEED_TARGET-120363427709161501@g.us}}"
 GROUP_QUERY="${HUSTLERS_FEED_GROUP_QUERY:-${JOB_SCOUT_HUSTLERS_FEED_GROUP_QUERY:-Hustlers Marketplace}}"
 MAX_MESSAGES="${HUSTLERS_FEED_MAX_MESSAGES:-${JOB_SCOUT_HUSTLERS_FEED_MAX_MESSAGES:-1}}"
 
@@ -144,13 +146,6 @@ print(json.dumps([
 ], separators=(",", ":")))
 PY
 )"
-
-"${openclaw[@]}" message send \
-  --channel whatsapp \
-  --target "$target" \
-  --message "Hustlers Marketplace job feed target check" \
-  --dry-run \
-  --json >/dev/null
 
 jobs_json="$("${openclaw[@]}" cron list --all --json)"
 existing_id="$(printf '%s' "$jobs_json" | jq -r --arg name "$NAME" '.jobs[] | select(.name == $name) | .id' | head -1)"
