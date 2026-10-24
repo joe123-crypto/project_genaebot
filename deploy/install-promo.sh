@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Shared helper for the deterministic WhatsApp promo-ad cron installers
 # (one per campaign: cv, genaie, genaie-leads, building-materials, fruit-trees,
-# borehole-drilling, borehole-paid, appliance-repairs, skylight-solar).
+# borehole-drilling, borehole-paid, appliance-repairs, skylight-solar,
+# big-player).
 #
 # This file is SOURCED by those wrappers, not run directly; it exposes one
 # function, register_promo_cron, which idempotently registers/updates a

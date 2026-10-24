@@ -244,7 +244,7 @@ class SendSpacingTests(unittest.TestCase):
 class CallerWiringTests(unittest.TestCase):
     def test_promo_scripts_do_not_pin_a_fixed_delay(self):
         scripts = sorted(CRON.glob("*-promo/post_*.py"))
-        self.assertEqual(len(scripts), 9)
+        self.assertEqual(len(scripts), 10)
         for script in scripts:
             src = script.read_text(encoding="utf-8")
             self.assertIn("promo_broadcast.broadcast(", src, script)
@@ -277,24 +277,39 @@ class CallerWiringTests(unittest.TestCase):
         (base minute + full start jitter + every gap at its max + a per-send
         allowance); this pins that promise against today's group counts."""
         manifest = json.loads((ROOT / "deploy/promo-crons.json").read_text(encoding="utf-8"))
-        runs = []
+        # The 20-60 s spacing is per WhatsApp account: each line sends on its own
+        # socket, so two promo runs only double the send rate when they post to the
+        # SAME account at once. Bucket every run by the account its groups are
+        # tagged to (an untagged group is on the default line) and check spacing
+        # within each account; a promo on the second ("ads") line therefore never
+        # has to clear the default line's slots.
+        by_account = {}
         for promo in manifest["promos"]:
             minute, hour = promo["cron"].split()[:2]
+            start = int(hour) * 60 + int(minute)
             data = json.loads((CRON / ("%s-promo" % promo["slug"]) / "targets.json")
                               .read_text(encoding="utf-8"))
-            count = len(set(data.get("groups", [])) | set(data.get("weekly_groups", {})))
-            runs.append((int(hour) * 60 + int(minute), promo["slug"], count))
-        runs.sort()
-        for (start, slug, count), (next_start, next_slug, _) in zip(runs, runs[1:]):
-            latest = start * 60 + (pb.DEFAULT_START_JITTER_SECONDS
-                                   + (count - 1) * pb.DEFAULT_SEND_DELAY_MAX
-                                   + count * pb.SEND_ALLOWANCE_SECONDS)
-            with self.subTest(promo=slug):
-                self.assertLess(latest, next_start * 60,
-                                "%s (%d groups) can still be sending at %02d:%02d "
-                                "when %s starts at %02d:%02d"
-                                % (slug, count, latest // 3600, latest % 3600 // 60,
-                                   next_slug, next_start // 60, next_start % 60))
+            jids = set(data.get("groups", [])) | set(data.get("weekly_groups", {}))
+            accounts = data.get("accounts") or {}
+            per_account = {}
+            for jid in jids:
+                acct = accounts.get(jid, pb.DEFAULT_ACCOUNT)
+                per_account[acct] = per_account.get(acct, 0) + 1
+            for acct, count in per_account.items():
+                by_account.setdefault(acct, []).append((start, promo["slug"], count))
+        for acct, runs in by_account.items():
+            runs.sort()
+            for (start, slug, count), (next_start, next_slug, _) in zip(runs, runs[1:]):
+                latest = start * 60 + (pb.DEFAULT_START_JITTER_SECONDS
+                                       + (count - 1) * pb.DEFAULT_SEND_DELAY_MAX
+                                       + count * pb.SEND_ALLOWANCE_SECONDS)
+                with self.subTest(account=acct, promo=slug):
+                    self.assertLess(latest, next_start * 60,
+                                    "%s (%d groups on %s) can still be sending at "
+                                    "%02d:%02d when %s starts at %02d:%02d"
+                                    % (slug, count, acct, latest // 3600,
+                                       latest % 3600 // 60, next_slug,
+                                       next_start // 60, next_start % 60))
 
 
 class RunTimeoutFitTests(unittest.TestCase):

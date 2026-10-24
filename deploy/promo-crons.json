@@ -1,5 +1,5 @@
 {
-  "_comment": "Declared gateway cron state for the nine WhatsApp promo campaigns -- the single source of truth for their schedule, timezone, failure-alert target, command and shared job timeout. deploy/reinstall-promo-crons.sh applies and verifies it; deploy/test_promo_cron_reinstall.py fails CI when a wrapper, install-promo.sh's timeout default or either README drifts from it. Cron state lives on the gateway's Railway volume, so merging a change here ships NOTHING until the installers are re-run.",
+  "_comment": "Declared gateway cron state for the ten WhatsApp promo campaigns -- the single source of truth for their schedule, timezone, failure-alert target, command and shared job timeout. deploy/reinstall-promo-crons.sh applies and verifies it; deploy/test_promo_cron_reinstall.py fails CI when a wrapper, install-promo.sh's timeout default or either README drifts from it. Cron state lives on the gateway's Railway volume, so merging a change here ships NOTHING until the installers are re-run.",
   "version": 1,
   "commandCwd": "/home/joseph/.openclaw/workspace",
   "timeoutSeconds": 7200,
@@ -101,6 +101,17 @@
       "tz": "Africa/Harare",
       "failureAlertTo": "+213563719936",
       "script": "/home/joseph/.openclaw/workspace/cron/genaie-leads-promo/post_ad.py",
+      "legacyNames": []
+    },
+    {
+      "slug": "big-player",
+      "name": "big-player-promo",
+      "installer": "deploy/install-big-player-promo.sh",
+      "envPrefix": "BIG_PLAYER_PROMO",
+      "cron": "30 15 * * *",
+      "tz": "Africa/Harare",
+      "failureAlertTo": "+263785632943",
+      "script": "/home/joseph/.openclaw/workspace/cron/big-player-promo/post_ad.py",
       "legacyNames": []
     }
   ]
