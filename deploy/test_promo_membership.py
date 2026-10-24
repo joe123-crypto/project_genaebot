@@ -34,6 +34,11 @@ MEMBERSHIP = CRON / "membership.json"
 # show up as a failure.
 EXPECTED_DAILY = {
     "appliance-repairs": 6,
+    # big-player (2026-10-24) is the operator's borehole/solar lead-gen ad on the
+    # second ("ads") WhatsApp line, posted only to the two ads-account groups
+    # (REACH BYO MARKET 5 + BYO ADVERTISING) so every post advertises the ads
+    # number via {bot_number}.
+    "big-player": 2,
     "borehole-drilling": 8,
     # borehole-paid (2026-10-23) is a PAID third-party borehole ad posted to the
     # same 23-group cohort as skylight-solar (identified by sharing its promo), so

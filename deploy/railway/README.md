@@ -64,7 +64,7 @@ Cron job definitions (schedule, command, job timeout) are the exception to "merg
 it ships": they live in the gateway's cron state on the volume and change only when
 their `deploy/install-*.sh` installer is re-run (via `deploy/gateway-exec.sh`, i.e.
 `railway ssh`). For example, the promo crons' 7200 s job timeout set in
-`deploy/install-promo.sh` reaches production only after the nine
+`deploy/install-promo.sh` reaches production only after the ten
 `install-*-promo.sh` installers run again; each installer now verifies the
 timeout it registered is the one the gateway reports back, and the promo engine
 reads that live value at run time so a not-yet-migrated job tightens its send
@@ -72,15 +72,17 @@ gaps rather than being killed with groups unreached (see README).
 
 The same applies to the promo **schedules**, which moved off the hour (07:15,
 08:13, 08:40, 10:35, 11:39, 12:50, 13:21, 14:26, 17:06 `Africa/Harare`) so the
-account's daily pattern is not perfectly periodic. Merging that change ships
-nothing on its own. `deploy/promo-crons.json` is the declared cron state for all nine campaigns --
+account's daily pattern is not perfectly periodic. (big-player runs at 15:30 on
+the separate "ads" line, so it need not avoid the default line's slots.) Merging
+that change ships nothing on its own. `deploy/promo-crons.json` is the declared
+cron state for all ten campaigns --
 schedule, timezone, failure-alert target, command and the shared 7200 s job
 timeout -- and `deploy/reinstall-promo-crons.sh` is the one command that compares
 it to the gateway and applies it:
 
 ```sh
 ./deploy/reinstall-promo-crons.sh --check   # read-only: live state vs. what the repo declares
-./deploy/reinstall-promo-crons.sh           # re-run all nine installers, then re-check
+./deploy/reinstall-promo-crons.sh           # re-run all ten installers, then re-check
 ```
 
 `--check` makes a single `openclaw cron list --all --json` read and changes

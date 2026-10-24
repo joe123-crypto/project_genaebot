@@ -39,7 +39,7 @@ test("extractAdRefs ignores unknown prefixes, ambiguous letters and plain text",
 });
 
 test("prefix list matches the promo crons", () => {
-  assert.deepEqual([...AD_REF_PREFIXES].sort(), ["BH", "BM", "CV", "FT", "GL", "GN", "PB", "SK"]);
+  assert.deepEqual([...AD_REF_PREFIXES].sort(), ["BH", "BM", "BP", "CV", "FT", "GL", "GN", "PB", "SK"]);
 });
 
 test("recordAdRefs counts each ref and distinct senders without storing phone numbers", () => {

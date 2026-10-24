@@ -406,12 +406,21 @@ individual installers.
   through two bundled posters daily and reusing the same shared `promo_broadcast`
   delivery engine. The posters carry the prices, so the captions stay price-free and
   route replies to the bot's own number
+- **`big-player-promo`** (`install-big-player-promo.sh`, 15:30) runs
+  `workspace/cron/big-player-promo/post_ad.py`, a deterministic (no-agent) job that
+  posts the operator's borehole/solar lead-gen ad on the **second ("ads") WhatsApp
+  line**, to the two ads-account group JIDs listed in
+  `workspace/cron/big-player-promo/targets.json` (REACH BYO MARKET 5 and BYO
+  ADVERTISING). Because those groups are tagged to the `ads` account, every post is
+  sent from and advertises the ads number via `{bot_number}`, and replies reach the
+  bot (ref prefix `BP`). It runs on a separate WhatsApp account, so its slot can
+  overlap the default line's promos
 
 ### Reconciling the promo crons
 
 A promo cron's schedule, timezone and job timeout live in the gateway's cron state
 on the Railway volume, not in this repo, so merging a change to any of them ships
-nothing on its own. `deploy/promo-crons.json` declares what the nine should be;
+nothing on its own. `deploy/promo-crons.json` declares what the ten should be;
 `./deploy/reinstall-promo-crons.sh --check` reports what the gateway actually has,
 and `./deploy/reinstall-promo-crons.sh` applies the manifest by re-running the
 installers and re-checking. Both need `railway` (or a local container) and run from

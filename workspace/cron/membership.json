@@ -57,6 +57,9 @@
     },
     "genaie-leads": {
       "comment": "GENERATED from workspace/cron/membership.json by workspace/bin/make-promo-targets -- do not hand-edit. Add or remove a group by editing its 'promos' list in membership.json and regenerating (CI fails if this file drifts). Only groups with status 'active' reach this list, which is why admin-only, not-a-member and on-hold groups are absent. Invite links are NOT reliably resolvable on this gateway, so membership.json records group JIDs."
+    },
+    "big-player": {
+      "comment": "GENERATED from workspace/cron/membership.json by workspace/bin/make-promo-targets -- do not hand-edit. Add or remove a group by editing its 'promos' list in membership.json and regenerating (CI fails if this file drifts). Only groups with status 'active' reach this list, which is why admin-only, not-a-member and on-hold groups are absent. Invite links are NOT reliably resolvable on this gateway, so membership.json records group JIDs."
     }
   },
   "groups": {
@@ -156,6 +159,26 @@
         "fruit-trees",
         "skylight-solar",
         "borehole-paid"
+      ]
+    },
+    "263782033305-1606361015@g.us": {
+      "name": "REACH BYO MARKET 5",
+      "source": "operator",
+      "status": "active",
+      "account": "ads",
+      "daily_cap": null,
+      "promos": [
+        "big-player"
+      ]
+    },
+    "263782033305-1592355579@g.us": {
+      "name": "BYO ADVERTISING",
+      "source": "operator",
+      "status": "active",
+      "account": "ads",
+      "daily_cap": null,
+      "promos": [
+        "big-player"
       ]
     },
     "263712716631-1612799459@g.us": {

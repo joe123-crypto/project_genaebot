@@ -29,6 +29,14 @@ import promo_broadcast as pb  # noqa: E402
 import json_store  # noqa: E402
 
 BOT_NUMBER = "+263785632943"
+# The bot's second WhatsApp line (the "ads" account). A promo posted only to
+# ads-account groups advertises this number via {bot_number}; replies still reach
+# the bot (the same agent handles both lines), so its refs are recorded too.
+ADS_NUMBER = "+263790453292"
+# Both of the bot's own lines: a promo whose link resolves to either of these is a
+# bot-line promo (copy uses {bot_number}, replies reach the ad-ref recorder), as
+# opposed to one pinned to a third party's number.
+BOT_LINES = frozenset({BOT_NUMBER, ADS_NUMBER})
 # APPLIANCE REPAIRS PL's own WhatsApp number: the one promo whose link does not
 # go to the bot, so its replies never reach the plugin's ad-ref recorder.
 APPLIANCE_REPAIRS_NUMBER = "+263713911390"
@@ -36,6 +44,7 @@ APPLIANCE_REPAIRS_NUMBER = "+263713911390"
 # promo dir -> (script, expected tracking prefix, expected link target)
 PROMOS = {
     "appliance-repairs-promo": ("post_ad.py", "AR", APPLIANCE_REPAIRS_NUMBER),
+    "big-player-promo": ("post_ad.py", "BP", ADS_NUMBER),
     "borehole-drilling-promo": ("post_ad.py", "BH", BOT_NUMBER),
     "borehole-paid-promo": ("post_ad.py", "PB", BOT_NUMBER),
     "building-materials-promo": ("post_ad.py", "BM", BOT_NUMBER),
@@ -147,6 +156,13 @@ class VariantRotationTests(unittest.TestCase):
     def test_groups_are_spread_across_variants_on_a_day(self):
         for name in PROMOS:
             jids = all_target_jids(name)
+            # A promo with fewer groups than variants can legitimately land them
+            # all on one variant on a given day (big-player posts to only two
+            # ads-line groups); the per-group daily rotation and no-consecutive-
+            # repeat guarantees are pinned separately. Spread across variants is
+            # only expected once a promo has at least as many groups as variants.
+            if len(jids) < 3:
+                continue
             used = {pb.variant_index(j, 3, day=date(2026, 10, 9)) for j in jids}
             self.assertGreater(len(used), 1, "%s: every group got the same variant" % name)
 
@@ -270,7 +286,7 @@ class RefCodeTests(unittest.TestCase):
         # Only replies sent to the bot can be counted by the plugin, so a promo
         # that links to a third party's number stays out of its prefix list.
         self.assertEqual(plugin_prefixes,
-                         {p for _, p, n in PROMOS.values() if n == BOT_NUMBER})
+                         {p for _, p, n in PROMOS.values() if n in BOT_LINES})
         self.assertIn("[0-9A-HJKMNP-TV-Z]{%d}" % pb.REF_CODE_LEN, src)
 
 
@@ -491,7 +507,7 @@ class PromoWiringTests(unittest.TestCase):
         for name, (_, prefix, number) in PROMOS.items():
             m = load_promo(name)
             self.assertEqual(m.TRACKING["prefix"], prefix, name)
-            if number == BOT_NUMBER:
+            if number in BOT_LINES:
                 # Bot promos no longer pin a number: each account advertises its
                 # own, substituted into the {bot_number} placeholder in the copy.
                 self.assertIsNone(m.TRACKING.get("number"), name)
@@ -513,6 +529,7 @@ class PromoWiringTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             state_env = {
                 "appliance-repairs-promo": "APPLIANCE_REPAIRS_STATE",
+                "big-player-promo": "BIG_PLAYER_STATE",
                 "borehole-drilling-promo": "BOREHOLE_STATE",
                 "borehole-paid-promo": "BOREHOLE_PAID_STATE",
                 "building-materials-promo": "BUILDING_MATERIALS_STATE",
