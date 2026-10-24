@@ -228,7 +228,7 @@
       "defaultAccount": "default",
       "accounts": {
         "default": { "enabled": true },
-        "ads": { "enabled": false }
+        "ads": { "enabled": true }
       },
       "streaming": {
         "block": {
