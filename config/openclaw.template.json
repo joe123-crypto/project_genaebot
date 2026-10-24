@@ -17,9 +17,9 @@
   "agents": {
     "defaults": {
       "model": {
-        "primary": "openrouter/deepseek/deepseek-v4-pro",
+        "primary": "openrouter/deepseek/deepseek-v4.1-flash-1017",
         "fallbacks": [
-          "openrouter/deepseek/deepseek-v4-pro"
+          "openrouter/deepseek/deepseek-v4.1-flash-1017"
         ]
       },
       "workspace": "/home/joseph/.openclaw/agent-workspace-admin",
