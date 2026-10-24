@@ -47,7 +47,6 @@ import {
   loadBusinessInfo,
   parseResumeCommand,
 } from "./services/handoff.js";
-import { handleJobScoutRequest, isJobScoutRequest } from "./services/job-scout.js";
 import {
   handleCvDecision,
   handleCvMakerRequest,
@@ -59,7 +58,6 @@ import {
 const PUBLIC_SERVICE_ACTIONS = [
   { name: "business_info", service: "core" },
   { name: "handoff", service: "core" },
-  { name: "job_scout_start_or_status", service: "jobScout" },
   { name: "cv_maker_start", service: "cvMaker" },
 ];
 const SERVICE_DISABLED_UNAVAILABLE = "That isn't available here right now.";
@@ -68,7 +66,6 @@ const SERVICE_DISABLED_UNAVAILABLE = "That isn't available here right now.";
 // CV maker disabled never offers a CV in the same breath as declining one.
 function serviceDisabledReply(api) {
   const offers = [];
-  if (isServiceEnabled(api, "jobScout")) offers.push("Job Scout");
   if (isServiceEnabled(api, "cvMaker")) offers.push("making a CV");
   if (!offers.length) return SERVICE_DISABLED_UNAVAILABLE;
   return `${SERVICE_DISABLED_UNAVAILABLE} This chat can help with ${offers.join(" or ")}.`;
@@ -79,8 +76,6 @@ function isServiceEnabled(api, service) {
   switch (service) {
     case "core":
       return true;
-    case "jobScout":
-      return pluginCfg.jobScoutOnboardingEnabled === true;
     case "cvMaker":
       return pluginCfg.cvMakerEnabled === true;
     default:
@@ -109,7 +104,6 @@ async function runPublicServiceAction(api, sender, action, text, params = {}) {
   switch (action) {
     case "business_info": return toolText({ text: loadBusinessInfo(api) });
     case "handoff": return toolText(await handleHandoff(api, sender, params.category, params.details || text));
-    case "job_scout_start_or_status": return toolText(await handleJobScoutRequest(api, sender, text));
     // Open-DM mode starts the automated CV order (the gate then relays each
     // interview turn); classic allowlist mode keeps the agent-driven intro.
     case "cv_maker_start":
@@ -126,12 +120,11 @@ function isEnabled(api) {
 }
 
 function isDisabledServiceRequestText(api, text) {
-  // A message that also matches an enabled signal (a Job Scout request, a
-  // greeting, or a menu digit) must reach the agent. Any other off-topic ask
+  // A message that also matches an enabled signal (a greeting or a menu digit)
+  // must reach the agent. Any other off-topic ask
   // also reaches the agent, which answers from business-info.md; only an
   // explicit request for a switched-off service is refused here.
   if (getServiceMenuSelection(text) || isGreetingOrServiceMenuRequest(text)) return false;
-  if (isServiceEnabled(api, "jobScout") && isJobScoutRequest(text)) return false;
   return Boolean(!isServiceEnabled(api, "cvMaker") && isCvMakerRequest(text));
 }
 

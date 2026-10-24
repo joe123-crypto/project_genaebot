@@ -104,39 +104,23 @@
 # Service docs and source helpers.
 !workspace/docs/
 !workspace/docs/**
-!workspace/account-link/
-!workspace/account-link/*.py
-# Standalone CV maker service (project-owned; NOT part of the job-scout overlay).
+# Standalone CV maker service.
 !workspace/cv-maker/
 !workspace/cv-maker/*.md
 !workspace/cv-maker/*.py
 !workspace/cv-maker/cvmaker/
 !workspace/cv-maker/cvmaker/*.py
 
-!workspace/job-scout/
-!workspace/job-scout/*.py
-!workspace/job-scout/*.mjs
-!workspace/job-scout/package.json
-!workspace/job-scout/package-lock.json
-!workspace/job-scout/channel-listener/
-!workspace/job-scout/channel-listener/**
-!workspace/job-scout/scrapers/
-!workspace/job-scout/scrapers/*.py
-!workspace/job-scout/jobscout/
-!workspace/job-scout/jobscout/*.py
-!workspace/job-scout/jobscout/integrations/
-!workspace/job-scout/jobscout/integrations/*.py
+# Daily job-advert feed for the Vacancy Lamp and Hustlers Marketplace groups.
+!workspace/job-feed/
+!workspace/job-feed/*.py
+!workspace/job-feed/scrapers/
+!workspace/job-feed/scrapers/*.py
+!workspace/job-feed/jobfeed/
+!workspace/job-feed/jobfeed/*.py
 
 # Custom skills that are not purely reinstallable from package metadata.
 !workspace/skills/
-!workspace/skills/genaie-mail/
-!workspace/skills/genaie-mail/**
-!workspace/skills/genaie-calendar/
-!workspace/skills/genaie-calendar/**
-!workspace/skills/gog/
-!workspace/skills/gog/**
-!workspace/skills/job-scout/
-!workspace/skills/job-scout/SKILL.md
 !workspace/skills/cv-maker/
 !workspace/skills/cv-maker/SKILL.md
 !workspace/skills/pdf-edit/
@@ -163,11 +147,8 @@ workspace/.git/
 **/*.last-good
 **/*.pre-update*
 **/state.json
-**/pending-links.json
-**/subscriptions.json
 **/dispatch-runs/
 **/users/
-**/job-scout-data/
 workspace/memory/
 workspace/tmp/
 workspace/jobs/

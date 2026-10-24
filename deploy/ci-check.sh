@@ -74,7 +74,7 @@ trap 'rm -rf "$pycache"' EXIT
 mapfile -t python_tests < <(printf '%s\n' "${source_files[@]}" | awk -F/ '$NF ~ /^test_.*\.py$/ || $NF ~ /_test\.py$/')
 for path in "${python_tests[@]}"; do
   printf 'Running %s\n' "$path"
-  PYTHONPATH="$ROOT/workspace/lib:$ROOT/workspace/account-link" \
+  PYTHONPATH="$ROOT/workspace/lib" \
     PYTHONPYCACHEPREFIX="$pycache" \
     python3 "$ROOT/$path"
 done

@@ -2,8 +2,7 @@
 # Validate a staged live-source tree produced by stage-openclaw-source.sh.
 #
 # Fails the Railway image build (and CI) fast if a build ever ships
-# runtime/cache/secret files, or is missing a required Job Scout deploy
-# artifact. Portable: no docker/systemd/host coupling.
+# runtime/cache/secret files, or is missing a required service entrypoint. Portable: no docker/systemd/host coupling.
 #
 # Usage: verify-staged-source.sh STAGE_ROOT
 set -euo pipefail
@@ -25,37 +24,31 @@ if find "$stage_root/workspace" -type f \( \
   -path '*/__pycache__/*' -o \
   -name '*.pyc' -o \
   -name '*.log' -o \
-  -name 'state.json' -o \
-  -name 'pending-links.json' -o \
-  -name 'subscriptions.json' \
+  -name 'state.json' \
 \) -print | grep -q .; then
   find "$stage_root/workspace" -type f \( \
     -path '*/__pycache__/*' -o \
     -name '*.pyc' -o \
     -name '*.log' -o \
-    -name 'state.json' -o \
-    -name 'pending-links.json' -o \
-    -name 'subscriptions.json' \
+    -name 'state.json' \
   \) -print >&2
   die "staged source contains runtime/cache files; refusing to build"
 fi
 
-# 2. Stable Job Scout deploy entrypoints/artifacts must be present. Internal
-#    module layout is validated by the CI test suite, not enumerated here.
+# 2. Stable service entrypoints must be present (the CV maker and the job feed
+#    the cron runs). Internal module layout is validated by the CI test suite,
+#    not enumerated here.
 missing=0
 for path in \
-  "$stage_root/workspace/bin/job-scout" \
-  "$stage_root/workspace/job-scout/job_scout.py" \
-  "$stage_root/workspace/job-scout/web_apply_server.mjs" \
-  "$stage_root/deploy/job-scout-browser.Dockerfile" \
-  "$stage_root/deploy/job-scout-channel-listener.Dockerfile" \
-  "$stage_root/workspace/job-scout/channel-listener/listener.mjs" \
-  "$stage_root/workspace/job-scout/channel-listener/package-lock.json"; do
+  "$stage_root/workspace/bin/cv-maker" \
+  "$stage_root/workspace/cv-maker/cv_maker.py" \
+  "$stage_root/workspace/bin/job-feed" \
+  "$stage_root/workspace/job-feed/job_feed.py"; do
   if [ ! -f "$path" ]; then
     printf 'missing required staged workspace file: %s\n' "$path" >&2
     missing=1
   fi
 done
-[ "$missing" = "0" ] || die "Job Scout wrapper or implementation is missing from staged source"
+[ "$missing" = "0" ] || die "a service wrapper or implementation is missing from staged source"
 
 printf 'staged source OK: %s\n' "$stage_root"

@@ -68,8 +68,7 @@ def gateway_env():
     """Env for nested ``openclaw`` calls so they reach the live gateway's WhatsApp
     channel. A bare ``openclaw message send`` runs standalone and reports
     "Channel is unavailable: whatsapp"; it must connect to the running gateway as
-    a client, which needs OPENCLAW_GATEWAY_TOKEN set and OPENCLAW_HOME unset (same
-    wrapper as workspace/bin/job-scout-agent)."""
+    a client, which needs OPENCLAW_GATEWAY_TOKEN set and OPENCLAW_HOME unset."""
     env = dict(os.environ)
     env.pop("OPENCLAW_HOME", None)
     token = os.environ.get("GATEWAY_AUTH_TOKEN")
@@ -250,7 +249,7 @@ def _group_jid(group):
 
 def resolve_invite(entry):
     """Resolve an invite link to a group JID by matching its code against the
-    OpenClaw WhatsApp directory (same approach as deploy/install-job-scout-group-feed.sh).
+    OpenClaw WhatsApp directory (same approach as deploy/install-vacancy-lamp-feed.sh).
     The bot must be a member of the group for it to appear in the directory.
     Returns JID or None."""
     code = entry.rstrip("/").split("/")[-1].casefold()

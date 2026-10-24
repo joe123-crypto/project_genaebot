@@ -95,7 +95,7 @@ for f in SOUL.md HEARTBEAT.md IDENTITY.md MEMORY.md USER.md; do
   [ -f "$LIVE_SOURCE/workspace/$f" ] && cp -f "$LIVE_SOURCE/workspace/$f" "$OC_DIR/agent-workspace-admin/$f"
 done
 
-# 1.6 Runtime reseed: one-shot overlay of live job-scout/gate/account-link state.
+# 1.6 Runtime reseed: one-shot overlay of live runtime state (gate, CV orders, job feed).
 #     Upload runtime-seed.tgz (tar of genaebot/runtime) to the volume root via
 #     `railway volume files upload`; this extracts it over $OC_DIR/runtime and
 #     removes the tarball. Used to replace the stale runtime the volume was
@@ -120,12 +120,6 @@ SECRET_KEYS=(
   PUBLIC_BASE_URL
   WHATSAPP_ADMIN_ENABLED
   WHATSAPP_RELEVANCE_MODE
-  JSEARCH_API_KEY
-  JSEARCH_RAPIDAPI_KEY
-  JSEARCH_RAPIDAPI_HOST
-  JSEARCH_PROVIDER
-  JSEARCH_DATE_POSTED
-  JOB_SCOUT_BROWSER_TOKEN
 )
 wrote_env=0
 tmp_env="$(mktemp)"
@@ -134,7 +128,7 @@ for key in "${SECRET_KEYS[@]}"; do
   # Sanitize: a Railway variable set with surrounding whitespace or quotes would
   # otherwise be written verbatim and rejected downstream (e.g. a quoted
   # AGENT_GENAI_INTERNAL_API_KEY yields HTTP 403 "invalid internal API key",
-  # which silently breaks the job-scout group feed and dispatch crons). Trim
+  # which silently breaks the CV renderer). Trim
   # surrounding whitespace, then one layer of surrounding quotes.
   val="${val#"${val%%[![:space:]]*}"}"
   val="${val%"${val##*[![:space:]]}"}"
@@ -142,9 +136,9 @@ for key in "${SECRET_KEYS[@]}"; do
   val="${val#\'}"; val="${val%\'}"
   if [ -n "$val" ]; then
     printf '%s=%s\n' "$key" "$val" >> "$tmp_env"
-    # Re-export the cleaned value into the process environment. job-scout's
-    # env_default() reads os.environ FIRST and verbatim (config.py), only
-    # falling back to .env, so the gateway and the cron subprocesses it spawns
+    # Re-export the cleaned value into the process environment. The CV maker's
+    # env_default() reads os.environ FIRST and verbatim (cvmaker/common.py),
+    # only falling back to .env, so the gateway and the subprocesses it spawns
     # would otherwise inherit Railway's raw (quoted) value and keep 403-ing.
     export "$key=$val"
     wrote_env=1

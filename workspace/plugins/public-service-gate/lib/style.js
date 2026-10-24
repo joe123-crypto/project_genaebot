@@ -3,9 +3,8 @@
 // this rewrite is the guarantee. It runs on every outbound WhatsApp message and
 // turns the dash into the punctuation a person would have typed instead.
 //
-// Links are left exactly as they are. A Job Scout sign-in URL must reach the
-// customer character for character, so URLs are cut out before the rewrite and
-// put back untouched.
+// Links are left exactly as they are. A link must reach the customer character
+// for character, so URLs are cut out before the rewrite and put back untouched.
 
 const DASH_CLASS = "\\u2012\\u2013\\u2014\\u2015\\u2E3A\\u2E3B";
 const HAS_DASH = new RegExp(`[${DASH_CLASS}]`);

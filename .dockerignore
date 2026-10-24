@@ -15,7 +15,7 @@
 /.env.example
 /secrets
 
-# Writable runtime state (job-scout/gate/account-link) — reseeded via the volume,
+# Writable runtime state (job feed, gate, CV orders) — reseeded via the volume,
 # not baked into the image.
 /runtime
 

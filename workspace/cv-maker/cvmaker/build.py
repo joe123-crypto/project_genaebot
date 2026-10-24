@@ -19,11 +19,9 @@ import html as html_module
 from pathlib import Path
 import re
 
-from jobscout.commands_setup import convert_pdf_to_cv_html, cv_html_from_facts, style_cv_html
-from jobscout.subscriber import document_filename
-from jobscout.util import normalize_phone
-
 from . import CvMakerError
+from .common import document_filename, normalize_phone
+from .cv_html import convert_pdf_to_cv_html, cv_html_from_facts, style_cv_html
 from . import delivery, orders, render
 
 

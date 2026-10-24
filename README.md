@@ -15,15 +15,17 @@ and pushes are manual. See `deploy/railway/README.md` for the pipeline, the
 one-time dashboard wiring, and the volume seed/recovery procedure.
 
 Pull requests and `main` pushes run portable structure, documentation-contract,
-syntax, unit, dependency, secret, and browser-image checks on GitHub-hosted
-runners (`.github/workflows/deploy-main.yml`). There is no deploy job in that
+syntax, unit, and secret checks on GitHub-hosted runners (`.github/workflows/deploy-main.yml`). There is no deploy job in that
 workflow: the `validate` job is the gate, and Railway does the deploying.
 
 ## Runtime Layout
 
-The gateway runs as a single Railway service. There is no second container: the
-Job Scout browser worker and WhatsApp channel listener described below are built
-in CI but **not currently deployed** (see *Job Scout sidecars*).
+The gateway runs as a single Railway service. There is no second container.
+
+The bot does two things: the daily promo ad crons (cv-promo, genaie-promo,
+fruit-trees-promo and the rest, see *Scheduled jobs*) and paid CV making for
+public WhatsApp users. It also posts a daily feed of job adverts to the Vacancy
+Lamp and Hustlers Marketplace groups (see *Job feeds*).
 
 Durable state lives on a Railway volume mounted at `/home/joseph/.openclaw`:
 
@@ -71,28 +73,27 @@ This is the repository tree. Paths are relative to the repo root.
 │   ├── ci/                        # Structure/docs policy and mappings
 │   ├── patch-openclaw-config.py   # Applies the template to a live openclaw.json (NOT wired into the Railway boot)
 │   ├── gateway-exec.sh            # How installers reach the live gateway
-│   ├── install-*.sh               # Cron registration (promos, Job Scout workers)
+│   ├── install-*.sh               # Cron registration (promos, job feeds)
 │   ├── agent-workspace-admin/     # Private administrator context template
-│   ├── agent-workspace-public/    # Restricted public context template
-│   └── job-scout-*.Dockerfile     # Sidecar images, built in CI, not deployed
+│   ├── retire-job-scout-crons.sh  # One-off removal of the retired Job Scout crons
+│   └── agent-workspace-public/    # Restricted public context template
 └── workspace/                     # Developer-owned source and agent context
-    ├── bin/                       # Command wrappers (openclaw-cap, job-scout, ...)
+    ├── bin/                       # Command wrappers (openclaw-cap, cv-maker, job-feed, ...)
     ├── lib/                       # Shared Python helpers
     ├── plugins/                   # OpenClaw plugins
     ├── docs/                       # Service policy and onboarding docs
-    ├── cron/                      # Deterministic cron jobs (promo ads, listeners)
+    ├── cron/                      # Deterministic cron jobs (promo ads)
     ├── skills/                    # Custom skills + skills.lock.json
-    ├── account-link/              # Account linking CLI
     ├── cv-maker/                  # Standalone CV maker service
-    └── job-scout/                 # Job Scout service (maintained upstream)
+    └── job-feed/                  # Daily job-advert feed for the jobs groups
 ```
 
 `workspace/` holds source and context, not a working room: plugins, command
 wrappers, scripts, docs, selected skills, and the five agent context files that
 the entrypoint copies into the admin room.
 
-On the live volume, `runtime/` holds mutable command state — account-link caches,
-public-service routing state, cron state, and cron logs. It is volume data, not
+On the live volume, `runtime/` holds mutable command state — CV orders, the job
+feed cache, public-service routing state, cron state, and cron logs. It is volume data, not
 source, and is neither tracked nor staged.
 
 ## Git Tracking
@@ -111,21 +112,18 @@ Tracked categories:
 - `workspace/plugins/**`
 - `workspace/cron/**/*.py` and `workspace/cron/**/*.sh`
 - `workspace/docs/**`
-- custom source folders such as `account-link/`, `cv-maker/`,
-  and `job-scout/` (including its `scrapers/`,
-  `jobscout/`, and `channel-listener/` helper packages). Each service folder is
+- the service folders `cv-maker/` and `job-feed/` (including its `scrapers/`
+  and `jobfeed/` packages). Each service folder is
   staged whole by a per-service recursive glob in
-  `deploy/stage-workspace.rsync` (e.g. `+ /job-scout/***`, `+ /cv-maker/***`), so
+  `deploy/stage-workspace.rsync` (e.g. `+ /job-feed/***`, `+ /cv-maker/***`), so
   adding or splitting an internal module ships automatically without editing the
   deploy allowlist; the global runtime/state/cache excludes at the top of that
   filter still keep `__pycache__/`, `node_modules/`, `*.log`, and `*.json` state
   files out of the deployable source. A **new** service folder is a different
   matter: the filter ends in `- /**`, and the repository `.gitignore` is
   default-deny, so a new tree has to be allowlisted in both or it will neither
-  commit nor deploy. `workspace/cv-maker/` is listed in each for that reason. It
-  is deliberately outside `workspace/job-scout/`, which is maintained upstream
-  and synced in wholesale: an earlier CV maker implementation lived inside it and
-  was silently deleted by a sync.
+  commit nor deploy. `workspace/cv-maker/` and `workspace/job-feed/` are listed
+  in each for that reason.
 - selected custom skills plus `workspace/skills.lock.json`. Unlike the service
   folders above, skills are **not** covered by a recursive glob: each one is
   listed explicitly in `deploy/stage-workspace.rsync` (e.g. `+ /skills/cv-maker/`
@@ -160,8 +158,7 @@ git push origin main            # via a PR; see the gate below
 ```
 
 GitHub Actions runs the `validate` job (portable structure and docs-contract
-checks, shellcheck, actionlint, unit tests, `npm audit`), a gitleaks secret scan,
-and — when the browser image inputs change — a Job Scout browser image build.
+checks, shellcheck, actionlint, unit tests) and a gitleaks secret scan.
 Railway's GitHub integration then rebuilds `deploy/railway/Dockerfile` from the
 new `main` and redeploys the gateway.
 
@@ -198,137 +195,62 @@ To check that the deployable overlay still builds the way the image build will:
 ./deploy/verify-staged-source.sh /tmp/stage
 ```
 
-### Job Scout sidecars (built, not deployed)
+### Job feeds (Vacancy Lamp and Hustlers Marketplace)
 
-Two sidecar images are defined and CI-built but have **no Railway service**:
+`workspace/job-feed/` scrapes Zimbabwe job adverts from VacancyMail, iHarare,
+VacancyBox and ApplyNow into a deduplicated cache under
+`runtime/job-scout/group-feed/` (the directory keeps its old name so the record of
+what each group has already received carries over). Two crons post from that
+cache with `workspace/bin/job-feed deliver-group-feed --refresh-if-stale`, which
+rebuilds the cache from the boards first when it is older than six hours. If a
+refresh finds nothing, the existing cache is kept.
 
-- `deploy/job-scout-browser.Dockerfile` — the Playwright worker that submits
-  URL-only applications. `jobscout/config.py` defaults its endpoint to
-  `http://job-scout-browser:8787/apply`, a hostname that does not resolve in
-  production, so URL-only applications are recorded `action_required` rather than
-  submitted.
-- `deploy/job-scout-channel-listener.Dockerfile` — the Baileys listener that feeds
-  the `zimlinks` WhatsApp Channel source.
-
-Restoring either means adding a Railway service, not editing docs. Until then,
-treat the channel-source and URL-apply features below as inactive.
-
-### Job Scout scheduler activation
-
-Scheduler activation is deliberately separate from a gateway deploy.
-
-1. Set these as Railway service variables (never in Git):
-
-```text
-JOB_SCOUT_BROWSER_TOKEN=<at least 32 random bytes>
-OPENROUTER_API_KEY=<OpenRouter API key, sk-or-...>
-```
-
-   `OPENROUTER_API_KEY` backs all LLM model calls (the agent brain and the Job
-   Scout channel post classifier). The retained `AI_GATEWAY_API_KEY` (Vercel AI
-   Gateway) is used only for memory-search embeddings, since OpenRouter has no
-   embeddings endpoint.
-
-2. Deploy the Agent Genaie API schema change, then merge this repository.
-
-3. CVs live in the Agent Genaie Cloudflare R2 bucket (object key
-   `<uid>/cv/cv.pdf`), and `cvFileRef` in Firestore holds that key. New CVs are
-   uploaded to R2 by `stage-cv` / `save-profile`, and the worker downloads a
-   presigned URL at dispatch time. The gateway converts uploaded PDFs into a
-   structured A4 HTML template using Poppler and Tesseract OCR, with plain text
-   extraction as a fallback. The conversion removes browser print headers, local
-   `file://` paths, timestamps, and page counters before any personalized CV is
-   rendered.
-
-4. Any ready user without a CV in R2 must upload it again through the normal Job
-   Scout profile flow. Local files under `runtime/job-scout/users` are disposable
-   caches and are not evidence that an R2 CV exists or is missing.
-
-5. Install or update the schedule:
-
-```bash
-./deploy/install-job-scout.sh
-```
-
-Cron jobs live in the gateway's own state on the Railway volume, so they survive
-deploys and only need registering when they change. The installers reach the live
-gateway through `deploy/gateway-exec.sh`, which uses `railway ssh` by default;
-set `OPENCLAW_EXEC_MODE=docker` (or `DOCKER` / `OPENCLAW_CONTAINER`) to target a
-local container instead.
-
-The installer refuses to enable the cron unless at least one subscriber is ready
-and every ready CV is accessible. The browser-worker token-parity preflight runs
-only in docker mode, since there is no browser worker in production. It installs
-an isolated `main` agent turn at `08:00 Africa/Harare` with a six-hour run budget.
-The parent prepares every ready subscriber and delegates four isolated same-model
-children at a time; children score the deterministic shortlist, while the
-validated dispatcher remains the only component allowed to record, submit, or
-send. For subscribers with `autoApply: false`, strong email and website matches
-are recorded as `pending_approval` without creating personalized documents or
-submitting an application. The dashboard exposes those records for approval. A
-separate five-minute `job-scout-approvals` worker picks up records the user
-changed to `approved`, then runs CV and application-letter customization before
-the dispatcher sends email applications or submits supported website forms.
-
-### Dashboard task telemetry
-
-After each per-user run, the Job Scout dispatch publishes a live task snapshot
-to Agent Genaie's `POST /internal/dashboard/tasks`
-(rendered by the signed-in dashboard) through
-`workspace/job-scout/jobscout/integrations/dashboard_telemetry.py`. Publishing is
-best-effort: failures log one stderr warning and never change the run outcome. It
-reuses `APP_BASE_URL` and `AGENT_GENAI_INTERNAL_API_KEY`, so no extra
-configuration is needed.
-
-### WhatsApp Channel sources (inactive)
-
-Job Scout can consume job adverts from the ZimLinks, ZIM•JOB•VACANCIES, and
-EveryDayVacancies WhatsApp Channels. This needs the separate
-`job-scout-channel-listener` container, which has no Railway service, so the
-source is currently inactive and contributes no candidates.
-
-The listener uses its own linked-device auth and must never be pointed at
-OpenClaw's WhatsApp auth directory. It captures posts in real time, backfills the
-latest 10 from each channel after pairing/reconnect, and keeps transient state
-under `runtime/job-scout-channel/`. The daily dispatch reads normalized Zimbabwe
-candidates from that queue. Raw post text/media is removed once all selected
-users reach terminal outcomes; application records remain in the Agent Genaie
-database. Media-only posts are discarded: this version does not perform OCR.
-
-Reactivating it means adding a Railway service for the image and restoring a
-pairing path (the old `deploy/pair-job-scout-channel.sh` drove it through Docker
-Compose and was removed with the rest of the Compose tooling).
-
-### Group job feeds (Vacancy Lamp and Hustlers Marketplace)
-
-The daily dispatch also writes a broad, deduplicated cache of Zimbabwe job
-adverts (VacancyMail, iHarare, the WhatsApp Channels above, and the other broad
-sources), and a separate delivery-only cron posts from that cache to a WhatsApp
-group — the source is discovery; delivery just reads the cache. Two standalone
-installers register these delivery crons (they are not part of the automatic
-gateway deploy):
-
-- `./deploy/install-job-scout-group-feed.sh` — posts the daily feed (up to
-  5 jobs) to the main jobs group (Vacancy Lamp) at `09:20 Africa/Harare`. The
+- `./deploy/install-vacancy-lamp-feed.sh` (cron `vacancy-lamp-feed`) posts up to
+  5 jobs a day to the main jobs group (Vacancy Lamp) at `09:20 Africa/Harare`. The
   cache is ordered so fully structured adverts (a clear title and location, an
   overview, both a Key Responsibilities and a Qualifications and Experience
   section, a non-expired closing date, and an actionable contact) are posted
   first, falling back to other eligible adverts only to fill the 5 daily slots.
-  Set `JOB_SCOUT_GROUP_FEED_TARGET` to the group JID (`120…@g.us`), or
-  `JOB_SCOUT_GROUP_FEED_GROUP_QUERY` once the bot is a member and the group
-  appears in the OpenClaw WhatsApp directory.
-- `./deploy/install-job-scout-hustlers-feed.sh` — posts **one job per day** from
-  the same cache to the **Hustlers Marketplace** group at `09:40 Africa/Harare`,
-  alongside the jobs-group invite link so members can join for more. Set
-  `JOB_SCOUT_HUSTLERS_FEED_TARGET` to its group JID, or leave
-  `JOB_SCOUT_HUSTLERS_FEED_GROUP_QUERY` (default `Hustlers Marketplace`) to
-  resolve it from the directory. Override the appended invite with
-  `JOB_SCOUT_HUSTLERS_FEED_INVITE_URL` (defaults to the main
-  `JOB_SCOUT_GROUP_FEED_INVITE_URL`), and the daily cap with
-  `JOB_SCOUT_HUSTLERS_FEED_MAX_MESSAGES` (default `1`).
+  Set `JOB_FEED_TARGET` to the group JID (`120…@g.us`), or `JOB_FEED_GROUP_QUERY`
+  once the bot is a member and the group appears in the OpenClaw WhatsApp
+  directory. `JOB_FEED_INVITE_URL` overrides the jobs-group invite appended to
+  each post.
+- `./deploy/install-hustlers-feed.sh` (cron `hustlers-feed`) posts **one job per
+  day** from the same cache to the **Hustlers Marketplace** group at
+  `09:40 Africa/Harare`, alongside the jobs-group invite link so members can join
+  for more. Set `HUSTLERS_FEED_TARGET` to its group JID, or leave
+  `HUSTLERS_FEED_GROUP_QUERY` (default `Hustlers Marketplace`) to resolve it from
+  the directory. Override the appended invite with `HUSTLERS_FEED_INVITE_URL`
+  (defaults to `JOB_FEED_INVITE_URL`), and the daily cap with
+  `HUSTLERS_FEED_MAX_MESSAGES` (default `1`).
 
-Delivery is tracked per target, so a job posted to one group is still eligible
-for the other; each group only ever receives a given advert once.
+The older `JOB_SCOUT_GROUP_FEED_*` and `JOB_SCOUT_HUSTLERS_FEED_*` variable names
+still work as fallbacks. Delivery is tracked per target, so a job posted to one
+group is still eligible for the other; each group only ever receives a given
+advert once.
+
+The installers reach the live gateway through `deploy/gateway-exec.sh`, which uses
+`railway ssh` by default; set `OPENCLAW_EXEC_MODE=docker` (or `DOCKER` /
+`OPENCLAW_CONTAINER`) to target a local container instead.
+
+#### Moving off Job Scout (one-off, after the deploy that removed it)
+
+Job Scout (per-user job hunting and applications), account-link, the Gmail and
+Calendar tools, and the algeria-exhibitions and github-issue-tracker crons were
+removed. Their crons may still be registered in the gateway and would fail daily,
+so after deploying run:
+
+```bash
+./deploy/retire-job-scout-crons.sh --dry-run   # list what would be removed
+./deploy/retire-job-scout-crons.sh             # remove job-scout, job-scout-approvals, ...
+./deploy/install-vacancy-lamp-feed.sh          # renames job-scout-group-feed in place
+./deploy/install-hustlers-feed.sh              # renames job-scout-hustlers-feed in place
+```
+
+The public-service-gate manifest still declares `jobScoutOnboardingEnabled` and
+`pendingLinksPath` (like `newsEnabled` and `eventScoutEnabled`) because the live
+`openclaw.json` still carries them and the schema rejects unknown keys. Remove
+them from the live config first, then from the manifest.
 
 ### Scheduled jobs
 
@@ -337,8 +259,8 @@ deploys. Each has an idempotent installer under `deploy/` that registers or
 updates it; run one only when its schedule or command changes. All times are
 `Africa/Harare`. The eight promo crons are declared together in
 `deploy/promo-crons.json` and reconciled with `./deploy/reinstall-promo-crons.sh`
-(see *Reconciling the promo crons* below); the Job Scout jobs keep their
-individual installers.
+(see *Reconciling the promo crons* below); the two job feeds keep their
+individual installers (see *Job feeds* above).
 
 - **`cv-promo`** (`install-cv-promo.sh`, 11:39) runs
   `workspace/cron/cv-promo/post_cv_ad.py`, a deterministic (no-agent) job that
@@ -462,9 +384,7 @@ committed immediately, a re-run the same day resumes where it stopped.
 group is committed to the promo's state file immediately, so a run that is killed
 part-way and re-run the same day skips the groups it already reached.
 
-The daily Job Scout turn (`install-job-scout.sh`, 08:00), the five-minute
-`job-scout-approvals` worker, the hourly `job-scout-cv-conversion` pass and the
-two group feeds have their own installers and are described above.
+The two job feeds have their own installers and are described above.
 
 Each promo also waits a **random 0-900 s before its first send**
 (`PROMO_START_JITTER_SECONDS`; `0` disables it). The gaps inside a run were
@@ -715,7 +635,7 @@ reaches the live agent on the next deploy, and the business facts it reads
 
 The second exception is the WhatsApp **reply gates**. Right after the prompt sync
 the entrypoint runs `deploy/railway/sync-reply-gates.py`, which sets each of these
-eight keys to its value in `config/openclaw.template.json`:
+nine keys to its value in `config/openclaw.template.json`:
 
 | Path | Template |
 |---|---|
@@ -727,6 +647,10 @@ eight keys to its value in `config/openclaw.template.json`:
 | `plugins.entries["public-service-gate"].config.enabled` | `true` |
 | `plugins.entries["whatsapp-relevance-gate"].config.enabled` | `false` |
 | `plugins.entries["whatsapp-relevance-gate"].config.relevanceMode` | `"off"` |
+| `plugins.entries["public-service-gate"].config.cvMakerPaymentDetails` | `"EcoCash +263775489417 (Noriah Mzenda)"` |
+
+The last one is not a reply gate: it is where CV buyers are told to pay, governed
+so a change of payee reaches the live bot on the next deploy.
 
 It writes **scalar leaves only** -- no object or array is ever replaced -- so the
 live-only plugin keys the strict `configSchema` still requires survive untouched.
@@ -754,7 +678,7 @@ Deliberately **not** governed:
 - every `PRESERVE_PATHS` entry -- runtime-derived or PII, absent from the template
   by design.
 
-It logs `reply gates unchanged (8 paths already match the template)`,
+It logs `reply gates unchanged (9 paths already match the template)`,
 `reply gates updated: <path> <old> -> <new>; ...`, or, on any problem,
 `reply gates NOT synced: <err>` and the boot carries on with the config unchanged.
 A non-fatal `openclaw config validate` runs straight after and only warns, because
@@ -817,16 +741,10 @@ config. Shell into the live gateway with `railway ssh`:
 railway ssh -- /home/joseph/.openclaw/workspace/bin/openclaw-cap --help
 ```
 
-Examples:
+Example:
 
 ```bash
 railway ssh -- /home/joseph/.openclaw/workspace/bin/openclaw-cap users list
-
-railway ssh -- /home/joseph/.openclaw/workspace/bin/openclaw-cap \
-  account-link status --phone +213...
-
-railway ssh -- /home/joseph/.openclaw/workspace/bin/openclaw-cap \
-  cron run algeria-exhibitions --dry-run
 ```
 
 `railway link` once in this checkout so `railway ssh` resolves the project,
@@ -861,16 +779,18 @@ Mutable service data lives on the Railway volume under `/home/joseph/.openclaw`:
 
 ```text
 runtime/
-├── account-link/pending-links.json
 ├── public-service-gate/invites.json (member store; invite codes retired)
 ├── public-service-gate/state.json
 ├── public-service-gate/ad-refs.json (promo ad ref code counts)
 ├── public-service-gate/handoffs.json (customers handed off to a person; bot silent)
-├── job-scout/ (dispatch runs, per-user CV caches)
-└── cron-state/
-    ├── algeria-exhibitions-listener/state.json
-    └── github-issue-tracker/state.json
+├── cv-maker/ (CV orders; settled orders are purged)
+├── job-scout/group-feed/ (job feed cache and per-group delivered state)
+└── cron-state/<promo>/state.json (per-promo delivery state)
 ```
+
+Old `runtime/account-link/`, `runtime/job-scout/users/`,
+`runtime/job-scout/dispatch-runs/` and `runtime/cron-state/` entries for the
+retired crons are leftovers from removed services and can be deleted.
 
 These files are ignored by Git and excluded from deployment staging. They are live
 data on the volume, not source: inspect or back them up through `railway ssh`, and

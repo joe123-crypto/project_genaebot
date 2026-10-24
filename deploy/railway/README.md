@@ -30,16 +30,13 @@ GitHub-Actions deploy job that runs `railway up` with
 
 - The **`validate` job** (`name: Portable validation`) in
   `.github/workflows/deploy-main.yml` runs the full suite on every PR and push
-  (actionlint, shellcheck, gitleaks, `deploy/ci-check.sh`, npm audit). It is the check
+  (actionlint, shellcheck, gitleaks, `deploy/ci-check.sh`). It is the check
   that should be required on `main` (see setup below). We reuse it rather than add a
   second workflow, so there is exactly one CI run per push.
   Its required checks cover repository and staging structure, documentation
   contracts, syntax, every discovered Python and Node test, ShellCheck, actionlint,
-  locked npm dependencies, high-severity production npm advisories, and
-  secret/private-state scanning. The Job Scout and channel-listener dependency sets
-  are installed from their lockfiles before the Node tests run, then both
-  production sets are audited. The Job Scout browser image is built when one of its
-  inputs changes. Actions are pinned to commit revisions and containerized
+  and secret/private-state scanning. The tracked code has no npm dependencies to
+  install or audit. Actions are pinned to commit revisions and containerized
   validation tools to versions.
 - **Railway's GitHub integration** watches `main` and rebuilds on every push. It reads
   `railway.json` (repo root) → `deploy/railway/Dockerfile`.
@@ -59,7 +56,8 @@ edit it in this repo, open a PR, merge. That's the whole flow. Two pieces of
 - `deploy/railway/sync-reply-gates.py` sets the eight WhatsApp reply gates
   (`channels.whatsapp.enabled`, `dmPolicy`, `accounts.default.enabled`,
   `plugins.entries.whatsapp.enabled`, both `public-service-gate` `enabled` flags
-  and the two `whatsapp-relevance-gate` ones) to their
+  and the two `whatsapp-relevance-gate` ones) plus the CV payment details
+  (`public-service-gate` `cvMakerPaymentDetails`) to their
   `config/openclaw.template.json` values, and appends `"*"` to
   `channels.whatsapp.allowFrom` when `dmPolicy` is `"open"` — without it every DM
   is dropped. It writes scalar leaves only and never touches `bindings`,
@@ -199,7 +197,7 @@ the project memory notes for the full seed/stuck-session recovery procedure.
 railway logs        # expect: [whatsapp] ... starting provider, [gateway] ready,
                     #         [entrypoint] synced source overlay from /opt/live-source/workspace,
                     #         [entrypoint] public WhatsApp prompt updated|unchanged
-                    #         [entrypoint] reply gates unchanged (8 paths already match the template)
+                    #         [entrypoint] reply gates unchanged (9 paths already match the template)
 ```
 
 A `reply gates updated: ...` line instead means the live config had drifted and was

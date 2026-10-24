@@ -70,13 +70,22 @@ class PluginConfigSchemaTests(unittest.TestCase):
             "gateway will refuse to start: remove them from the live config first",
         )
 
-    def test_job_scout_onboarding_flag_is_boolean(self) -> None:
+    def test_retired_keys_stay_declared_and_typed(self) -> None:
+        # Job Scout, account-link, news and events are gone, but the live config
+        # still carries these keys, so the schema must keep accepting them.
         manifest = json.loads(
             (ROOT / "workspace/plugins/public-service-gate/openclaw.plugin.json").read_text(encoding="utf-8")
         )
 
-        flag_schema = manifest["configSchema"]["properties"]["jobScoutOnboardingEnabled"]
-        self.assertEqual(flag_schema, {"type": "boolean"})
+        properties = manifest["configSchema"]["properties"]
+        for key, kind in (
+            ("jobScoutOnboardingEnabled", "boolean"),
+            ("newsEnabled", "boolean"),
+            ("eventScoutEnabled", "boolean"),
+            ("pendingLinksPath", "string"),
+        ):
+            self.assertEqual(properties[key]["type"], kind)
+            self.assertIn("Deprecated and unread", properties[key]["description"])
 
     def test_public_service_disable_flags_are_booleans(self) -> None:
         manifest = json.loads(

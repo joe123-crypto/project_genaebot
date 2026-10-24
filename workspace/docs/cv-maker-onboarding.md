@@ -1,7 +1,7 @@
 # CV Maker
 
-Purpose: make a professional CV for a public WhatsApp user, for US$5, without enrolling them in
-Job Scout. There is no account link, no Gmail, and no saved profile.
+Purpose: make a professional CV for a public WhatsApp user, for US$5. There is no account link,
+no Gmail, and no saved profile.
 
 **This service runs deterministically inside the public-service-gate plugin. The agent does not
 drive it and cannot run any part of it.** When a customer says yes to the automated AI interview,

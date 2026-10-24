@@ -22,7 +22,6 @@ export const HANDOFF_CATEGORIES = [
   "borehole",
   "cv",
   "marketing",
-  "job_scout",
   "other",
 ];
 

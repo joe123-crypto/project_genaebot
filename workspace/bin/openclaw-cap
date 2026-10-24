@@ -3,29 +3,17 @@ set -euo pipefail
 
 OC_DIR="${OPENCLAW_DIR:-/home/joseph/.openclaw}"
 WORKSPACE="$OC_DIR/workspace"
-RUNTIME="$OC_DIR/runtime"
 
 usage() {
   cat <<'EOF'
 Usage:
   openclaw-cap users <add|remove|list|sync|check> [args...]
-  openclaw-cap account-link <create-invite|status|start-onboarding> [args...]
-  openclaw-cap job-scout <resolve-location|stage-cv|save-profile|list-ready> [args...]
-  openclaw-cap cron run <algeria-exhibitions|github-issue-tracker> [--dry-run]
 EOF
 }
 
 die() {
   printf 'ERROR: %s\n' "$*" >&2
   exit 2
-}
-
-ensure_runtime() {
-  mkdir -p \
-    "$RUNTIME/account-link" \
-    "$RUNTIME/cron-state/algeria-exhibitions-listener" \
-    "$RUNTIME/cron-state/github-issue-tracker" \
-    "$RUNTIME/public-service-gate"
 }
 
 cmd_users() {
@@ -40,56 +28,6 @@ cmd_users() {
   esac
 }
 
-cmd_account_link() {
-  [ "$#" -ge 1 ] || die "account-link requires a subcommand"
-  case "$1" in
-    create-invite|status|start-onboarding)
-      ensure_runtime
-      export OPENCLAW_PENDING_LINKS_PATH="$RUNTIME/account-link/pending-links.json"
-      exec python3 "$WORKSPACE/account-link/account_link.py" "$@"
-      ;;
-    *)
-      die "unsupported account-link subcommand: $1"
-      ;;
-  esac
-}
-
-cmd_job_scout() {
-  [ "$#" -ge 1 ] || die "job-scout requires a subcommand"
-  case "$1" in
-    resolve-location|stage-cv|save-profile|list-ready)
-      ensure_runtime
-      export OPENCLAW_PENDING_LINKS_PATH="$RUNTIME/account-link/pending-links.json"
-      exec "$WORKSPACE/bin/job-scout" "$@"
-      ;;
-    *)
-      die "unsupported job-scout subcommand: $1"
-      ;;
-  esac
-}
-
-cmd_cron() {
-  [ "${1:-}" = "run" ] || die "cron only supports: run"
-  [ "$#" -ge 2 ] || die "cron run requires a job name"
-  local job="$2"
-  shift 2
-
-  ensure_runtime
-  case "$job" in
-    algeria-exhibitions)
-      export OPENCLAW_ALGERIA_EXHIBITIONS_STATE="$RUNTIME/cron-state/algeria-exhibitions-listener/state.json"
-      exec python3 "$WORKSPACE/cron/algeria-exhibitions-listener/check_new_events.py" "$@"
-      ;;
-    github-issue-tracker)
-      export OPENCLAW_GITHUB_ISSUE_TRACKER_STATE="$RUNTIME/cron-state/github-issue-tracker/state.json"
-      exec "$WORKSPACE/cron/github-issue-tracker/check_issue.sh" "$@"
-      ;;
-    *)
-      die "unsupported cron job: $job"
-      ;;
-  esac
-}
-
 main() {
   [ "$#" -ge 1 ] || {
     usage
@@ -100,18 +38,6 @@ main() {
     users)
       shift
       cmd_users "$@"
-      ;;
-    account-link)
-      shift
-      cmd_account_link "$@"
-      ;;
-    job-scout)
-      shift
-      cmd_job_scout "$@"
-      ;;
-    cron)
-      shift
-      cmd_cron "$@"
       ;;
     -h|--help|help)
       usage

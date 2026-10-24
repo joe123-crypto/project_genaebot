@@ -60,6 +60,7 @@ class ReplyGateSyncTests(unittest.TestCase):
                             "botWhatsappNumber": "+263785632943",
                             "whatsappAdminUsers": ["+263785632943"],
                             "retiredButDeclared": "keep me",
+                            "cvMakerPaymentDetails": "EcoCash +263700000000 (Old Payee)",
                         },
                     },
                     "whatsapp-relevance-gate": {
@@ -132,6 +133,9 @@ class ReplyGateSyncTests(unittest.TestCase):
         w["accounts"]["default"]["enabled"] = True
         entries = expected["plugins"]["entries"]
         entries["public-service-gate"]["config"]["enabled"] = True
+        entries["public-service-gate"]["config"]["cvMakerPaymentDetails"] = (
+            "EcoCash +263775489417 (Noriah Mzenda)"
+        )
         entries["whatsapp-relevance-gate"]["config"]["enabled"] = False
         entries["whatsapp-relevance-gate"]["config"]["relevanceMode"] = "off"
         self.assertEqual(synced, expected)

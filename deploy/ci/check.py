@@ -87,7 +87,7 @@ def check_tracked_policy(files: dict[str, str], checks: Checks) -> None:
             checks.errors.append(f"private/runtime path is tracked: {rel}")
 
         full = ROOT / rel
-        if rel.startswith("workspace/bin/") and path.name != "test_genaie_mail.py":
+        if rel.startswith("workspace/bin/"):
             checks.require(mode == "100755", f"command wrapper is not executable: {rel}")
         if rel.startswith("deploy/") and full.is_file():
             try:
@@ -128,8 +128,8 @@ def check_staged_source(files: dict[str, str], checks: Checks) -> None:
     with tempfile.TemporaryDirectory(prefix="genaebot-stage-") as temp:
         stage = Path(temp) / "live-source"
         stale_files = [
-            stage / "workspace/job-scout/jobscout/__pycache__/group_feed.cpython-314.pyc",
-            stage / "workspace/lib/__pycache__/genaie_env.cpython-314.pyc",
+            stage / "workspace/job-feed/jobfeed/__pycache__/group_feed.cpython-314.pyc",
+            stage / "workspace/lib/__pycache__/promo_caps.cpython-314.pyc",
             stage / "workspace/obsolete-runtime/file.txt",
         ]
         for stale_file in stale_files:
@@ -165,7 +165,7 @@ def check_staged_source(files: dict[str, str], checks: Checks) -> None:
         missing = sorted(tracked_workspace - staged_workspace)
         checks.require(not missing, f"tracked workspace files are not deployable or explicitly exempt: {missing}")
 
-        forbidden_names = {"state.json", "pending-links.json", "subscriptions.json"}
+        forbidden_names = {"state.json"}
         for rel in staged:
             path = Path(rel)
             checks.require(
@@ -177,10 +177,12 @@ def check_staged_source(files: dict[str, str], checks: Checks) -> None:
             )
 
         required = {
-            "workspace/skills/genaie-calendar/SKILL.md",
+            "workspace/skills/cv-maker/SKILL.md",
             "workspace/docs/business-info.md",
-            "workspace/bin/job-scout",
-            "workspace/job-scout/job_scout.py",
+            "workspace/bin/cv-maker",
+            "workspace/cv-maker/cv_maker.py",
+            "workspace/bin/job-feed",
+            "workspace/job-feed/job_feed.py",
             "workspace/USER.md",
         }
         checks.require(not (required - staged.keys()), f"required staged files are missing: {sorted(required - staged.keys())}")
@@ -265,7 +267,6 @@ def check_service_catalog(checks: Checks) -> None:
     policy = (ROOT / "workspace/docs/public-services.md").read_text(encoding="utf-8").lower()
     prompt = (ROOT / "workspace/docs/public-whatsapp-system-prompt.txt").read_text(encoding="utf-8").lower()
     services = {
-        "Job Scout": (public_gate.get("jobScoutOnboardingEnabled") is True, ("job scout", "job, scholarship", "job & internship")),
         "CV maker": (public_gate.get("cvMakerEnabled") is True, ("cv",)),
     }
     for label, (enabled, terms) in services.items():
@@ -307,7 +308,6 @@ CUSTOMER_FACING_PAGES = (
     "workspace/docs/public-services.md",
     "workspace/docs/business-info.md",
     "workspace/docs/cv-maker-onboarding.md",
-    "workspace/docs/job-scout-onboarding.md",
 )
 DASHES = "\u2012\u2013\u2014\u2015\u2e3a\u2e3b"
 

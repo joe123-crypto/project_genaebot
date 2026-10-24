@@ -3,7 +3,7 @@
 stdout is always exactly one JSON object and the exit code is always 0, so the
 Node plugin's runJsonCommand always has something to parse. Every failure comes
 back as {"ok": false, "error": "..."} with the text run through
-jobscout.textutil.public_text and then scrubbed of anything path-shaped: a
+common.public_text and then scrubbed of anything path-shaped: a
 public user is on the other end of this, so no traceback, no file path, and no
 CV content ever reaches stdout.
 """
@@ -18,10 +18,8 @@ import re
 import shutil
 import sys
 
-from jobscout.textutil import public_text
-from jobscout.util import normalize_phone
-
 from . import CvMakerError
+from .common import normalize_phone, public_text
 from . import build, delivery, orders
 
 

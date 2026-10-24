@@ -49,6 +49,9 @@ GATED_PATHS: list[list[str]] = [
     ["plugins", "entries", "public-service-gate", "config", "enabled"],
     ["plugins", "entries", "whatsapp-relevance-gate", "config", "enabled"],
     ["plugins", "entries", "whatsapp-relevance-gate", "config", "relevanceMode"],
+    # Where CV buyers are told to pay. Governed so a payee change in the template
+    # reaches the live bot on the next deploy instead of an old number lingering.
+    ["plugins", "entries", "public-service-gate", "config", "cvMakerPaymentDetails"],
 ]
 
 # Paths this script must never write, each for a reason a later edit could forget.

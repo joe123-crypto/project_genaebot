@@ -21,7 +21,7 @@ in the gate's own store.
 ## What you must not do
 
 - Do not conduct the interview or ask a user for CV details yourself.
-- Do not run any `cv-maker` or `job-scout` command to make a CV. The old `make-cv` command described
+- Do not run any `cv-maker` command to make a CV. The old `make-cv` command described
   by earlier versions of this skill no longer exists, and the public agent cannot execute commands
   in any case.
 - Do not quote a price, promise a CV, or say when one will arrive. Only an admin approval releases a

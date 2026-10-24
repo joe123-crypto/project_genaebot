@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Wrapper for the job feed: locate the source tree and hand over to Python.
+set -euo pipefail
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+repo_root="$(cd -- "$script_dir/.." && pwd -P)"
+source_root="${JOB_FEED_SOURCE_ROOT:-}"
+if [ -z "$source_root" ]; then
+  if [ -f "$repo_root/job_feed.py" ]; then
+    source_root="$repo_root"
+  elif [ -f "$repo_root/job-feed/job_feed.py" ]; then
+    source_root="$repo_root/job-feed"
+  else
+    printf 'unable to locate job_feed.py; set JOB_FEED_SOURCE_ROOT\n' >&2
+    exit 1
+  fi
+fi
+[ -f "$source_root/job_feed.py" ] || {
+  printf 'job_feed.py was not found under JOB_FEED_SOURCE_ROOT=%s\n' "$source_root" >&2
+  exit 1
+}
+
+exec python3 "$source_root/job_feed.py" "$@"

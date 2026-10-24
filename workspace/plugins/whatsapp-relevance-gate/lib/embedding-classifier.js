@@ -26,24 +26,18 @@ const EMBED_INPUT_TYPE = "classification";
 // the config anchors are tuned. Config `serviceAnchors` / `offTopicAnchors`
 // override these entirely when present.
 const DEFAULT_SERVICE_ANCHORS = [
-  // personalized news
-  "subscribe me to personalized news",
-  "start sending me daily news updates",
-  "stop the news updates",
-  "abonne-moi aux actualités",
-  // local events
-  "what events are happening near me",
-  "find local events this weekend",
-  "y a-t-il des événements près de chez moi",
-  // jobs / scholarships / internships
-  "find me a job",
-  "any scholarships I can apply to",
-  "help me apply for an internship",
-  "cherche-moi un emploi ou une bourse",
-  "ابحث لي عن وظيفة او منحة",
-  // onboarding
+  // CV making
+  "make me a professional cv",
+  "can you revamp my CV",
+  // products and services we advertise
+  "how much are your bricks and quarry stones",
+  "do you sell grafted mango trees",
+  "how much is borehole drilling",
+  "I want a solar system installed",
+  "can you advertise my business in whatsapp groups",
+  // getting started
   "how do I get started",
-  "help me set up my account",
+  "what services do you offer",
 ];
 const DEFAULT_OFFTOPIC_ANCHORS = [
   "what is the weather today",

@@ -138,7 +138,7 @@ def classify(manifest, jobs, only=None):
         argv = (job.get("payload") or {}).get("argv") or []
         match = PROMO_ARGV_RE.search(" ".join(str(a) for a in argv))
         if not (name.endswith("-promo") or match):
-            continue  # an unrelated job (job-scout and friends) is none of our business
+            continue  # an unrelated job (the job feeds and friends) is none of our business
         if only and not (match and match.group(1) in selected_dirs):
             continue
         row = {"name": name, "id": job.get("id"),

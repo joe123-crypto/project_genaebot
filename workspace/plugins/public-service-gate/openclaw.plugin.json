@@ -54,7 +54,8 @@
         "type": "string"
       },
       "jobScoutOnboardingEnabled": {
-        "type": "boolean"
+        "type": "boolean",
+        "description": "Deprecated and unread. Still present in the live openclaw.json on the volume, and configSchema is additionalProperties:false, so removing it here makes the live config invalid and the gateway refuses to start. Delete only after it is removed from the live config."
       },
       "cvMakerEnabled": {
         "type": "boolean"
@@ -72,7 +73,8 @@
         "type": "string"
       },
       "pendingLinksPath": {
-        "type": "string"
+        "type": "string",
+        "description": "Deprecated and unread. Still present in the live openclaw.json on the volume, and configSchema is additionalProperties:false, so removing it here makes the live config invalid and the gateway refuses to start. Delete only after it is removed from the live config."
       },
       "serviceStatePath": {
         "type": "string"

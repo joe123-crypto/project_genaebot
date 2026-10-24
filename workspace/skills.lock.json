@@ -6,22 +6,6 @@
       "path": "workspace/skills/cv-maker"
     },
     {
-      "name": "genaie-calendar",
-      "path": "workspace/skills/genaie-calendar"
-    },
-    {
-      "name": "genaie-mail",
-      "path": "workspace/skills/genaie-mail"
-    },
-    {
-      "name": "gog",
-      "path": "workspace/skills/gog"
-    },
-    {
-      "name": "job-scout",
-      "path": "workspace/skills/job-scout"
-    },
-    {
       "name": "pdf-edit",
       "path": "workspace/skills/pdf-edit"
     }
