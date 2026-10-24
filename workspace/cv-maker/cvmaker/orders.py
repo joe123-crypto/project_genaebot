@@ -3,8 +3,7 @@
 One JSON file, `~/.openclaw/runtime/cv-maker/orders.json`, holding every order
 keyed by its order id, plus a per-order artifact directory beside it. An order
 carries the applicant's name, phone, email and address, so the store is written
-the same way Job Scout writes its agent work packets: an flock around the
-read-modify-write, a private temp file, fsync, then os.replace, with 0600 files
+carefully: an flock around the read-modify-write, a private temp file, fsync, then os.replace, with 0600 files
 inside a 0700 directory.
 
 Retention is part of the store, not an afterthought: `data`, `transcript`,
@@ -25,9 +24,8 @@ import re
 import secrets
 import shutil
 
-from jobscout.util import normalize_phone, utc_now
-
 from . import CvMakerError
+from .common import normalize_phone, utc_now
 
 
 STORE_VERSION = 1

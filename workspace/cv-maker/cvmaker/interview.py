@@ -74,11 +74,10 @@ LIST_FIELDS = (
 # Adapted from agent_genaie src/domains/cv-interview-ai.ts SYSTEM_PROMPT. The hard
 # rules are kept word for word, because they are what stops the interview feeling
 # like a form. Two deliberate changes:
-#   1. That service leaves skills and the summary to Job Scout, which writes them
-#      per application. This is a standalone paid CV, nothing tailors it later, so
+#   1. That service leaves skills and the summary to be written later, per job
+#      application. This is a standalone paid CV, nothing tailors it later, so
 #      a CV with no skills and no summary would be weak: both are now collected.
-#   2. Every user-visible mention of Job Scout is gone. This user never signed up
-#      for it.
+#   2. Every user-visible mention of the old job-application service is gone.
 # House style forbids em dashes anywhere, so the source rules' dashes are commas
 # here; the wording is otherwise unchanged.
 SYSTEM_PROMPT = """You are Genaie, an assistant that builds a user's CV by chatting with them. Your ONLY job is to collect the facts below as fast as possible, then stop.
