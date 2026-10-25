@@ -261,7 +261,7 @@ them from the live config first, then from the manifest.
 Cron jobs live in the gateway's own state on the Railway volume, so they survive
 deploys. Each has an idempotent installer under `deploy/` that registers or
 updates it; run one only when its schedule or command changes. All times are
-`Africa/Harare`. The eight promo crons are declared together in
+`Africa/Harare`. The eleven promo crons are declared together in
 `deploy/promo-crons.json` and reconciled with `./deploy/reinstall-promo-crons.sh`
 (see *Reconciling the promo crons* below); the two job feeds keep their
 individual installers (see *Job feeds* above).
@@ -341,22 +341,32 @@ individual installers (see *Job feeds* above).
   sent from and advertises the ads number via `{bot_number}`, and replies reach the
   bot (ref prefix `BP`). It runs on a separate WhatsApp account, so its slot can
   overlap the default line's promos
+- **`industrial-lighting-promo`** (`install-industrial-lighting-promo.sh`, 09:07) runs
+  `workspace/cron/industrial-lighting-promo/post_ad.py`, a deterministic (no-agent) job
+  that posts a fixed PAID ADVERT for a third-party solar company (Industrial Lighting
+  Pvt Ltd) on the **second ("ads") WhatsApp line**, to the same two ads-account group
+  JIDs as big-player (REACH BYO MARKET 5 and BYO ADVERTISING), listed in
+  `workspace/cron/industrial-lighting-promo/targets.json`. The bundled poster carries the
+  packages and prices, so the caption stays to one line; because those groups are tagged
+  to the `ads` account, the post is sent from and advertises the ads number via
+  `{bot_number}`, and replies reach the bot (ref prefix `IL`). It runs on the ads account
+  in a morning slot, well clear of big-player's afternoon run
 
 ### Reconciling the promo crons
 
 A promo cron's schedule, timezone and job timeout live in the gateway's cron state
 on the Railway volume, not in this repo, so merging a change to any of them ships
-nothing on its own. `deploy/promo-crons.json` declares what the ten should be;
+nothing on its own. `deploy/promo-crons.json` declares what the eleven should be;
 `./deploy/reinstall-promo-crons.sh --check` reports what the gateway actually has,
 and `./deploy/reinstall-promo-crons.sh` applies the manifest by re-running the
 installers and re-checking. Both need `railway` (or a local container) and run from
 a checkout, not from CI — CI has no gateway access, so what it enforces is that the
-manifest, the eight wrappers, `install-promo.sh`'s timeout default and these READMEs
+manifest, the eleven wrappers, `install-promo.sh`'s timeout default and these READMEs
 all agree. Run `--check` first and remove anything it reports as undeclared before
 reinstalling, or that campaign posts twice a day. Full procedure, including when in
 the day it is safe to run, is in `deploy/railway/README.md`.
 
-All eight promo crons rotate between caption variants (the original operator copy
+All eleven promo crons rotate between caption variants (the original operator copy
 plus rewordings with identical facts; three each, four for the borehole promo) and
 carry a per-group tracking link. See *Promo caption rotation and ad ref tracking*
 below.
