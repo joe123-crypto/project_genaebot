@@ -116,10 +116,9 @@ POST_TEXT_V3 = (
 
 POST_TEXTS = [POST_TEXT, POST_TEXT_V2, POST_TEXT_V3]
 
-# Per-group ref-coded wa.me link to the posting account's own contact number
-# ({bot_number} resolves to membership.json's defaults.accounts entry for the
-# account that posts to each group). That is the bot's WhatsApp number, so
-# replies reach the bot and the public-service-gate ad-ref recorder counts them.
+# Per-group ref-coded wa.me link to the configured contact account.
+# {bot_number} and the link use defaults.contact_account when selected;
+# otherwise they use the posting account. Replies reach the bot's ad-ref recorder.
 TRACKING = {
     "prefix": "FT",
     "label": "fruit trees",

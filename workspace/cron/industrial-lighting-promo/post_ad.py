@@ -9,7 +9,7 @@ hardcoded caption variants and the image is one bundled poster. This script is
 meant to run from an OpenClaw `--command` cron (deterministic, no agent turn).
 
 The operator runs this as a lead-gen ad on the second WhatsApp line (the "ads"
-account): the contact number in the copy is the posting account's own via the
+account): the contact number in the copy is the configured contact line via the
 {bot_number} placeholder, so replies reach the bot and the leads are attributable
 under the "IL" ad-ref prefix (in the public-service-gate's AD_REF_PREFIXES) --
 the same lead-gen pattern as the big-player / skylight / genaie promos. The
@@ -88,11 +88,9 @@ POST_TEXT_V3 = (
 
 POST_TEXTS = [POST_TEXT, POST_TEXT_V2, POST_TEXT_V3]
 
-# Per-group ref-coded wa.me link. The ad's contact number is the posting account's
-# own ({bot_number} resolves to membership.json's defaults.accounts entry for the
-# account that posts to each group), so replies reach the bot and the
-# public-service-gate ad-ref recorder counts them (the "IL" prefix is in its
-# AD_REF_PREFIXES list).
+# Per-group ref-coded wa.me link to the configured contact account.
+# {bot_number} and the link use defaults.contact_account when selected;
+# otherwise they use the posting account. Replies reach the bot's ad-ref recorder.
 TRACKING = {
     "prefix": "IL",
     "label": "solar",

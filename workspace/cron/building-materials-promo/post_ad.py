@@ -125,12 +125,9 @@ POST_TEXT_V3 = (
 
 POST_TEXTS = [POST_TEXT, POST_TEXT_V2, POST_TEXT_V3]
 
-# Per-group ref-coded wa.me link to the posting account's own WhatsApp number
-# ({bot_number} resolves to membership.json's defaults.accounts entry for the
-# account that posts to each group), like every other bot promo: replies reach
-# the bot, the public-service-gate ad-ref recorder counts them, and the bot
-# forwards the order to the seller when it hands the customer off
-# (services/handoff.js).
+# Per-group ref-coded wa.me link to the configured contact account.
+# {bot_number} and the link use defaults.contact_account when selected;
+# otherwise they use the posting account. Replies reach the bot's ad-ref recorder.
 TRACKING = {
     "prefix": "BM",
     "label": "building materials",

@@ -94,6 +94,35 @@ def minimal(**groups):
     }
 
 
+class ContactAccountTests(unittest.TestCase):
+    def test_contact_is_generated_without_changing_account_numbers(self):
+        m = minimal()
+        m["defaults"].update({
+            "accounts": {"default": {"number": "+263785632943"},
+                         "ads": {"number": "+263790453292"}},
+            "contact_account": "ads",
+        })
+        self.assertEqual(pm.validate(m), [])
+        payload = pm.targets_payload(m, "cv")
+        self.assertEqual(payload["contact_account"], "ads")
+        self.assertEqual(payload["account_numbers"]["default"], "+263785632943")
+
+    def test_invalid_contact_account_is_rejected(self):
+        for contact in ("missing", "", [], 42):
+            with self.subTest(contact=contact):
+                m = minimal()
+                m["defaults"]["contact_account"] = contact
+                self.assertTrue(any("contact_account" in e for e in pm.validate(m)))
+
+    def test_contact_account_requires_number(self):
+        m = minimal()
+        m["defaults"].update({"contact_account": "ads", "accounts": {"ads": {}}})
+        self.assertTrue(any("contact_account" in e for e in pm.validate(m)))
+
+    def test_absent_contact_preserves_legacy_payload(self):
+        self.assertNotIn("contact_account", pm.targets_payload(minimal(), "cv"))
+
+
 class MembershipFileTests(unittest.TestCase):
     def setUp(self):
         self.m = pm.load(str(MEMBERSHIP))
