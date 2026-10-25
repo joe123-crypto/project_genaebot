@@ -280,8 +280,8 @@ individual installers (see *Job feeds* above).
   JIDs listed in `workspace/cron/building-materials-promo/targets.json`
 - **`genaie-promo`** (`install-genaie-promo.sh`, 14:26) runs
   `workspace/cron/genaie-promo/post_ad.py`, a deterministic (no-agent) job that
-  posts the fixed Genaie-services ad (group advertising, poster design, WhatsApp
-  bots) to the WhatsApp group JIDs listed in
+  posts the fixed Genaie-services ad (lead generation and WhatsApp group
+  advertising) to the WhatsApp group JIDs listed in
   `workspace/cron/genaie-promo/targets.json` (every group the bot is in except
   Vacancy Lamp)
 - **`genaie-leads-promo`** (`install-genaie-leads-promo.sh`, 17:06) runs

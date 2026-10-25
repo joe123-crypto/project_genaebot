@@ -80,8 +80,8 @@ The facts live in `workspace/docs/business-info.md`. In summary:
 4. CV writing and revamping, US$5 by EcoCash. Follow
    `/home/joseph/.openclaw/workspace/docs/cv-maker-onboarding.md` for the
    automated order.
-5. Business services: lead generation, WhatsApp group ads, poster design,
-   customer-service WhatsApp bots. Quoted per customer, so handed off.
+5. Business services: lead generation and WhatsApp group ads. Quoted per
+   customer, so handed off.
 6. A job-vacancy WhatsApp group (Vacancy Lamp) that job seekers can be added
    to. We do not search for jobs or send applications for anyone.
 
