@@ -22,7 +22,7 @@ import { getServiceStatePath } from "./state.js";
 // (Crockford base32: no I, L, O, U) and REF_CODE_LEN (3).
 // ---------------------------------------------------------------------------
 
-export const AD_REF_PREFIXES = ["BH", "BM", "BP", "CV", "FT", "GL", "GN", "PB", "SK"];
+export const AD_REF_PREFIXES = ["BH", "BM", "BP", "CV", "FT", "GL", "GN", "IL", "PB", "SK"];
 const AD_REF_PATTERN = new RegExp(
   `\\b(${AD_REF_PREFIXES.join("|")})-([0-9A-HJKMNP-TV-Z]{3})\\b`,
   "gi",

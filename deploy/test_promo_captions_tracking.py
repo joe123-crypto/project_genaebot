@@ -52,6 +52,7 @@ PROMOS = {
     "fruit-trees-promo": ("post_ad.py", "FT", BOT_NUMBER),
     "genaie-leads-promo": ("post_ad.py", "GL", BOT_NUMBER),
     "genaie-promo": ("post_ad.py", "GN", BOT_NUMBER),
+    "industrial-lighting-promo": ("post_ad.py", "IL", ADS_NUMBER),
     "skylight-solar-promo": ("post_ad.py", "SK", BOT_NUMBER),
 }
 
@@ -537,6 +538,7 @@ class PromoWiringTests(unittest.TestCase):
                 "fruit-trees-promo": "FRUIT_TREES_STATE",
                 "genaie-leads-promo": "GENAIE_LEADS_PROMO_STATE",
                 "genaie-promo": "GENAIE_PROMO_STATE",
+                "industrial-lighting-promo": "INDUSTRIAL_LIGHTING_PROMO_STATE",
                 "skylight-solar-promo": "SKYLIGHT_STATE",
             }[name]
             m.STATE_FILE = str(Path(tmp, "state.json"))
