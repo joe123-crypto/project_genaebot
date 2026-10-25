@@ -517,23 +517,27 @@ may instead place the link itself with the `{ref_link}` / `{ref}` placeholders.
 | Promo | Prefix | Link target |
 |---|---|---|
 | appliance-repairs-promo | AR | +263713911390 (the repair shop, pinned) |
-| borehole-drilling-promo | BH | the posting account (bot) |
-| building-materials-promo | BM | the posting account (bot) |
-| cv-promo | CV | the posting account (bot) |
-| fruit-trees-promo | FT | the posting account (bot) |
-| genaie-leads-promo | GL | the posting account (bot) |
-| genaie-promo | GN | the posting account (bot) |
-| skylight-solar-promo | SK | the posting account (bot) |
+| borehole-drilling-promo | BH | the ads contact account (bot) |
+| building-materials-promo | BM | the ads contact account (bot) |
+| cv-promo | CV | the ads contact account (bot) |
+| fruit-trees-promo | FT | the ads contact account (bot) |
+| genaie-leads-promo | GL | the ads contact account (bot) |
+| genaie-promo | GN | the ads contact account (bot) |
+| skylight-solar-promo | SK | the ads contact account (bot) |
 
 The bot advertises from two WhatsApp lines so neither account is a member of a
 suspiciously large number of groups. `membership.json` maps each account to the
 number it advertises (`defaults.accounts`) and tags each group with the account
 that joined it (`account`, absent means the `default` line); a group can only be
-posted to by the line that is actually a member of it. Each line advertises
-itself: the engine sends the group's ad from its account and renders that
-account's number into both the `{bot_number}` placeholder in the copy and the
-`wa.me` link. A promo that pins its own `TRACKING` number (appliance-repairs)
-keeps that number whichever line posts the ad.
+posted to by the line that is actually a member of it. Public enquiries use
+`defaults.contact_account` (`ads`): both `{bot_number}` in the copy and the
+`wa.me` link advertise **+263790453292**, whichever account sends the post.
+The account-number map still records each line's actual identity. An explicit
+third-party `TRACKING.number` (appliance-repairs) takes precedence. Without
+`contact_account`, the engine retains the original per-sender contact behavior.
+Default-line conversations, admin/self-chat, alerts and payment details are
+unchanged. Regenerate targets with `workspace/bin/make-promo-targets --write`
+after changing contact routing.
 
 | Account | Number | Role |
 |---|---|---|

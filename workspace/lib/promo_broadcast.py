@@ -196,8 +196,8 @@ def load_account_targets(targets_file):
 
 def load_account_numbers(targets_file):
     """Return {account_id: advertised_number} so the engine can render each
-    group's caption + wa.me link with the number of the account that posts it
-    (each account advertises itself). Comes from membership.json's
+    group's caption + wa.me link with the selected contact account
+    (or the posting account when no contact is selected). Comes from membership.json's
     defaults.accounts, carried into every targets.json by make-promo-targets."""
     raw = _targets_doc(targets_file).get("account_numbers") or {}
     out = {}
@@ -618,8 +618,8 @@ def _print_dry_run(jids, weekly, weekday, sent_map, today, image_path, rotating,
         number = number_for(j) if number_for else None
         if account and account != DEFAULT_ACCOUNT:
             extra += "  account %s" % account
-            if number:
-                extra += " (%s)" % number
+        if number:
+            extra += "  contact %s" % number
         if multi or tracking:
             idx, _, ref = caption_for(j, variants, day=day, allowed=allowed,
                                       tracking=tracking, bot_number=number)
@@ -972,21 +972,21 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
     weekly = load_weekly_targets(targets_file)
     account_map = load_account_targets(targets_file)       # {jid: account}
     account_numbers = load_account_numbers(targets_file)   # {account: number}
+    contact_account = _targets_doc(targets_file).get("contact_account")
 
-    # Each account advertises its own number. A group's number is its account's
-    # (from account_numbers), falling back to the tracking config's pinned number
-    # (e.g. appliance-repairs always routes to a fixed shop line).
+    # Contact routing is independent of the group's posting account. Explicit
+    # third-party tracking destinations retain precedence.
     def account_for(jid):
         return account_map.get(jid, DEFAULT_ACCOUNT)
 
     def number_for(jid):
         # A promo that pins its own contact number (e.g. appliance-repairs routes
         # to a fixed shop line) always advertises it, whatever account posts the
-        # ad. Otherwise the ad advertises the posting account's own number.
+        # ad. Otherwise use the shared contact account, if configured.
         pinned = (tracking or {}).get("number")
         if pinned:
             return pinned
-        return account_numbers.get(account_for(jid))
+        return account_numbers.get(contact_account or account_for(jid))
 
     # Whether this promo's copy/link needs a bot number: it uses {bot_number}, or
     # it tracks without pinning its own number (so the link target comes from the
@@ -999,6 +999,10 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
     if not all_entries:
         print("NO_REPLY")  # nothing configured -> stay silent
         return 0
+    if contact_account is not None and (
+            not isinstance(contact_account, str) or contact_account not in account_numbers):
+        raise ValueError("contact_account must name an account with a number; "
+                         "regenerate targets.json with make-promo-targets")
     # Checked only once there is something to send, so a missing/unreadable
     # targets file still exits quietly above (load_targets reports it) instead of
     # being misreported here as a stale, un-regenerated one.

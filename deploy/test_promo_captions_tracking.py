@@ -45,15 +45,15 @@ APPLIANCE_REPAIRS_NUMBER = "+263713911390"
 PROMOS = {
     "appliance-repairs-promo": ("post_ad.py", "AR", APPLIANCE_REPAIRS_NUMBER),
     "big-player-promo": ("post_ad.py", "BP", ADS_NUMBER),
-    "borehole-drilling-promo": ("post_ad.py", "BH", BOT_NUMBER),
-    "borehole-paid-promo": ("post_ad.py", "PB", BOT_NUMBER),
-    "building-materials-promo": ("post_ad.py", "BM", BOT_NUMBER),
-    "cv-promo": ("post_cv_ad.py", "CV", BOT_NUMBER),
-    "fruit-trees-promo": ("post_ad.py", "FT", BOT_NUMBER),
-    "genaie-leads-promo": ("post_ad.py", "GL", BOT_NUMBER),
-    "genaie-promo": ("post_ad.py", "GN", BOT_NUMBER),
+    "borehole-drilling-promo": ("post_ad.py", "BH", ADS_NUMBER),
+    "borehole-paid-promo": ("post_ad.py", "PB", ADS_NUMBER),
+    "building-materials-promo": ("post_ad.py", "BM", ADS_NUMBER),
+    "cv-promo": ("post_cv_ad.py", "CV", ADS_NUMBER),
+    "fruit-trees-promo": ("post_ad.py", "FT", ADS_NUMBER),
+    "genaie-leads-promo": ("post_ad.py", "GL", ADS_NUMBER),
+    "genaie-promo": ("post_ad.py", "GN", ADS_NUMBER),
     "industrial-lighting-promo": ("post_ad.py", "IL", ADS_NUMBER),
-    "skylight-solar-promo": ("post_ad.py", "SK", BOT_NUMBER),
+    "skylight-solar-promo": ("post_ad.py", "SK", ADS_NUMBER),
 }
 
 PLUGIN_AD_REFS = ROOT / "workspace/plugins/public-service-gate/lib/ad-refs.js"
@@ -354,16 +354,19 @@ class AccountRoutingTests(unittest.TestCase):
     # A bot promo pins no number: the link target comes from the posting account.
     TRACK = {"prefix": "GN", "label": "Genaie"}
 
-    def _targets(self, tmp):
+    def _targets(self, tmp, contact_account=None):
         targets = Path(tmp, "targets.json")
-        targets.write_text(json.dumps({
+        payload = {
             "groups": ["1@g.us", "2@g.us"],
             "accounts": {"2@g.us": "ads"},
             "account_numbers": {"default": self.DEFAULT_NUM, "ads": self.ADS_NUM},
-        }))
+        }
+        if contact_account is not None:
+            payload["contact_account"] = contact_account
+        targets.write_text(json.dumps(payload))
         return targets
 
-    def _run(self, tmp, **kwargs):
+    def _run(self, tmp, contact_account=None, **kwargs):
         sent = {}
         saved = pb.send_ad
         pb.send_ad = lambda target, text, image, account=None: (
@@ -371,7 +374,7 @@ class AccountRoutingTests(unittest.TestCase):
         try:
             img = Path(tmp, "ad.png")
             img.write_bytes(b"img")
-            rc = pb.broadcast(image=str(img), targets_file=str(self._targets(tmp)),
+            rc = pb.broadcast(image=str(img), targets_file=str(self._targets(tmp, contact_account)),
                               state_file=str(Path(tmp, "s.json")),
                               send_delay=0, argv=[], start_jitter=0, caps=None,
                               **kwargs)
@@ -435,12 +438,33 @@ class AccountRoutingTests(unittest.TestCase):
             self.assertNotIn(theirs, text)                  # and never the other line
             self.assertNotIn("wa.me/%s?" % pb.wa_digits(theirs), text)
 
+    def test_shared_contact_keeps_each_sending_account(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, sent = self._run(tmp, contact_account="ads", text="Call {bot_number}",
+                                 tracking=self.TRACK, promo_name="genaie-promo")
+        self.assertEqual(rc, 0)
+        for jid, account in (("1@g.us", "default"), ("2@g.us", "ads")):
+            text, sender = sent[jid]
+            self.assertEqual(sender, account)
+            self.assertIn(self.ADS_NUM, text)
+            self.assertIn("wa.me/%s?" % pb.wa_digits(self.ADS_NUM), text)
+            self.assertNotIn(pb.wa_digits(self.DEFAULT_NUM), text)
+            self.assertIn(pb.ref_code("GN", jid), text)
+
+    def test_invalid_shared_contact_fails_before_send(self):
+        for invalid in ("missing", "", [], 42):
+            with self.subTest(contact=invalid), tempfile.TemporaryDirectory() as tmp:
+                with self.assertRaisesRegex(ValueError, "contact_account"):
+                    self._run(tmp, contact_account=invalid, text="Call {bot_number}",
+                              tracking=self.TRACK, promo_name="genaie-promo")
+                self.assertFalse(Path(tmp, "s.json").exists())
+
     def test_pinned_tracking_number_wins_over_the_posting_account(self):
         # appliance-repairs routes replies to a fixed shop line whichever account
         # posts the ad, so a per-account number must not override it.
         shop = APPLIANCE_REPAIRS_NUMBER
         with tempfile.TemporaryDirectory() as tmp:
-            rc, sent = self._run(tmp, text="Repairs",
+            rc, sent = self._run(tmp, contact_account="ads", text="Repairs",
                                  tracking={"prefix": "AR", "number": shop,
                                            "label": "repairs"},
                                  promo_name="appliance-repairs-promo")
@@ -509,8 +533,8 @@ class PromoWiringTests(unittest.TestCase):
             m = load_promo(name)
             self.assertEqual(m.TRACKING["prefix"], prefix, name)
             if number in BOT_LINES:
-                # Bot promos no longer pin a number: each account advertises its
-                # own, substituted into the {bot_number} placeholder in the copy.
+                # Bot promos use the configured contact account, substituted
+                # into the {bot_number} placeholder in the copy.
                 self.assertIsNone(m.TRACKING.get("number"), name)
                 self.assertIn("{bot_number}", m.POST_TEXT, name)
             else:
@@ -554,7 +578,7 @@ class PromoWiringTests(unittest.TestCase):
         return rc, buf.getvalue()
 
     def test_dry_run_shows_variant_and_ref_per_group(self):
-        for name, (_, prefix, _) in PROMOS.items():
+        for name, (_, prefix, number) in PROMOS.items():
             rc, out = self._run(name, ["--dry-run"])
             self.assertEqual(rc, 0, name)
             n = len(load_promo(name).POST_TEXTS)
@@ -562,8 +586,25 @@ class PromoWiringTests(unittest.TestCase):
                 line = next(l for l in out.splitlines() if jid in l)
                 self.assertRegex(line, r"variant \d+/%d" % n, name)
                 self.assertIn("ref %s" % pb.ref_code(prefix, jid), line)
+                self.assertIn("contact %s" % number, line)
             self.assertIn("message (variant %d/%d)" % (n, n), out)
             self.assertIn("<ref_link>", out)
+
+    def test_all_production_caption_variants_use_the_expected_contact(self):
+        for name, (_, prefix, number) in PROMOS.items():
+            m = load_promo(name)
+            targets = json.loads(Path(m.TARGETS_FILE).read_text())
+            self.assertEqual(targets["contact_account"], "ads", name)
+            selected = m.TRACKING.get("number") or targets["account_numbers"][targets["contact_account"]]
+            self.assertEqual(selected, number, name)
+            for jid in all_target_jids(name):
+                ref, link = pb.tracking_for(m.TRACKING, jid, bot_number=selected)
+                for variant in m.POST_TEXTS:
+                    caption = pb.render_caption(variant, ref, link, pb.DEFAULT_LINK_LINE,
+                                                bot_number=selected)
+                    self.assertIn("wa.me/%s?" % pb.wa_digits(number), caption, name)
+                    self.assertNotIn(pb.wa_digits(BOT_NUMBER), caption, name)
+                    self.assertNotIn("{bot_number}", caption, name)
 
     def test_refs_flag_prints_mapping_without_sending(self):
         saved = pb.send_ad

@@ -10,7 +10,7 @@ meant to run from an OpenClaw `--command` cron (deterministic, no agent turn).
 
 The operator runs this as a lead-gen ad on the second WhatsApp line (the "ads"
 account): every contact number in the advertiser-supplied copy is replaced with
-the posting account's own line via the {bot_number} placeholder, and the group
+the configured contact line via the {bot_number} placeholder, and the group
 invite link is dropped, so replies reach the bot and the leads are attributable
 under the "BP" ad-ref prefix (in the public-service-gate's AD_REF_PREFIXES) --
 the same lead-gen pattern as the skylight / borehole / genaie promos.
@@ -58,7 +58,7 @@ IMAGE = os.environ.get("BIG_PLAYER_IMAGE") or os.path.join(
     HERE, "assets", "big-player-1.jpg"
 )
 
-# Fixed advert caption. Every contact number is the posting account's own,
+# Fixed advert caption. Every contact number is the configured contact line,
 # substituted into {bot_number}; the advertiser's group-invite link is dropped.
 # Emoji are written as explicit \u / \U escapes so the source stays ASCII-safe.
 # The pricing/spec block below (_PITCH) carries ALL the digits, and the three
@@ -127,11 +127,9 @@ POST_TEXT_V3 = (
 
 POST_TEXTS = [POST_TEXT, POST_TEXT_V2, POST_TEXT_V3]
 
-# Per-group ref-coded wa.me link. The ad's contact number is the posting account's
-# own ({bot_number} resolves to membership.json's defaults.accounts entry for the
-# account that posts to each group), so replies reach the bot and the
-# public-service-gate ad-ref recorder counts them (the "BP" prefix is in its
-# AD_REF_PREFIXES list).
+# Per-group ref-coded wa.me link to the configured contact account.
+# {bot_number} and the link use defaults.contact_account when selected;
+# otherwise they use the posting account. Replies reach the bot's ad-ref recorder.
 TRACKING = {
     "prefix": "BP",
     "label": "borehole",

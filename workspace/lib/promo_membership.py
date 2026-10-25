@@ -23,6 +23,7 @@ Schema (``version: 1``)::
     {
       "version": 1,
       "defaults": {"activity": "normal", "caps_enabled": false,
+                   "contact_account": "ads",
                    "bands": {"busy": [6, 10], "normal": [4, 6], "quiet": [1, 3]},
                    "accounts": {"default": {"number": "+263785632943"},
                                 "ads": {"number": "+2637..."}}},
@@ -43,7 +44,8 @@ Schema (``version: 1``)::
     }
 
 ``defaults.accounts`` maps each WhatsApp line the bot advertises from to the
-number it advertises (each line advertises itself). A group's ``account`` names
+number that identifies it. ``defaults.contact_account`` optionally selects the
+shared advertised contact, independent of the sending account. A group's ``account`` names
 its line; absent ⇒ the ``default`` line. Spreading groups across two accounts
 keeps any one account from being a member of a suspiciously large number of
 groups.
@@ -161,7 +163,7 @@ def caps_enabled(m):
 
 def accounts(m):
     """``{account_id: {"number": "+263..."}}`` from ``defaults.accounts``. The
-    WhatsApp lines the bot advertises from; each line advertises its own number.
+    WhatsApp lines used to send ads, with their actual phone numbers.
     Empty when none are configured (then every group stays on the implicit
     default line and no per-account number is emitted)."""
     raw = ((m or {}).get("defaults") or {}).get("accounts") or {}
@@ -177,7 +179,7 @@ def accounts(m):
 def account_numbers(m):
     """``{account_id: advertised_number}`` for every configured account, in file
     order. This is carried verbatim into each targets.json so the send engine can
-    render a group's caption with the number of the account that posts it."""
+    resolve the shared contact account or, when absent, the posting account."""
     out = {}
     for acct, cfg in accounts(m).items():
         number = str(cfg.get("number") or "").strip()
@@ -234,7 +236,7 @@ def targets_payload(m, promo):
             payload["_weekly_comment"] = meta["weekly_comment"]
         payload["weekly_groups"] = weekly
     # Per-group account tag (only for groups not on the default line) and the
-    # account->number map, so the engine advertises each line's own number.
+    # account->number map. Contact routing is independent of sending.
     all_groups = groups(m)
     acct_map = {}
     for jid in list(jids) + list(weekly):
@@ -246,6 +248,9 @@ def targets_payload(m, promo):
     numbers = account_numbers(m)
     if numbers:
         payload["account_numbers"] = numbers
+    contact_account = ((m or {}).get("defaults") or {}).get("contact_account")
+    if contact_account is not None:
+        payload["contact_account"] = contact_account
     return payload
 
 
@@ -307,6 +312,11 @@ def validate(m):
         if not isinstance(number, str) or not number.strip():
             errors.append("defaults.accounts[%r] must have a non-empty string "
                           "'number'" % acct)
+    contact_account = ((m or {}).get("defaults") or {}).get("contact_account")
+    if contact_account is not None:
+        if (not isinstance(contact_account, str)
+                or contact_account not in account_numbers(m)):
+            errors.append("defaults.contact_account must name an account with a number")
     declared_accounts = set(accounts(m)) | {DEFAULT_ACCOUNT}
     seen_names = {}
     for jid, entry in groups(m).items():

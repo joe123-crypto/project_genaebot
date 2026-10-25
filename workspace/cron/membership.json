@@ -4,6 +4,7 @@
   "defaults": {
     "activity": "normal",
     "caps_enabled": false,
+    "contact_account": "ads",
     "accounts": {
       "default": {
         "number": "+263785632943"

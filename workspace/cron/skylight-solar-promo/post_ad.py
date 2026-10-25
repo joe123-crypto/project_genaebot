@@ -123,11 +123,9 @@ POST_TEXT_V3 = (
 
 POST_TEXTS = [POST_TEXT, POST_TEXT_V2, POST_TEXT_V3]
 
-# Per-group ref-coded wa.me link. The ad's contact number is the posting
-# account's own ({bot_number} resolves to membership.json's defaults.accounts
-# entry for the account that posts to each group), so replies reach the bot and
-# the public-service-gate ad-ref recorder counts them (the "SK" prefix is in its
-# AD_REF_PREFIXES list).
+# Per-group ref-coded wa.me link to the configured contact account.
+# {bot_number} and the link use defaults.contact_account when selected;
+# otherwise they use the posting account. Replies reach the bot's ad-ref recorder.
 TRACKING = {
     "prefix": "SK",
     "label": "solar & borehole",
