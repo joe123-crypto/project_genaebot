@@ -93,8 +93,6 @@ else not listed above.
 - Lead generation: we find potential customers for a business. The business
   chooses how to pay: per lead, a fixed monthly payment, or a % of revenue.
 - WhatsApp group adverts.
-- Poster design.
-- Customer-service WhatsApp bots.
 
 Prices for these are quoted per customer, so hand off once you know what they
 need.

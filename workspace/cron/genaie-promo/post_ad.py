@@ -3,7 +3,7 @@
 Genaie-services daily ad poster.
 
 Posts a FIXED, predefined advert (caption + image) for Genaie's own services
-(WhatsApp group advertising, poster design, WhatsApp bots) to a configured set of
+(lead generation and WhatsApp group advertising) to a configured set of
 WhatsApp groups, once per day per group. There is NO AI/LLM generation involved:
 the post text is a hardcoded constant and the image is a bundled asset. This
 script is meant to run from an OpenClaw `--command` cron (deterministic, no agent
@@ -57,22 +57,19 @@ STATE_FILE = os.environ.get(
 POST_TEXT = (
     "\U0001F4E2 Get Your Business Noticed\n"
     "Get Customers Ready To Buy\n"
-    "Get 24/7 Customer Service For Your Business\n"
     "\n"
     "Great products go unnoticed when nobody knows they exist. "
     "Genaie fixes that.\n"
     "\n"
     "\U0001F9F2 Lead Generation\n"
     "\U0001F7E2 WhatsApp Group Ads\n"
-    "\U0001F3A8 Poster Design\n"
-    "\U0001F916 Customer Service WhatsApp Bots\n"
     "\n"
     "\U0001F4DE WhatsApp us: {bot_number}"
 )
 
 # Caption variants that rotate per group per day (see promo_broadcast) so the ad
 # doesn't read as copy-paste spam. Variant 1 is POST_TEXT verbatim; the others
-# reword/reorder only. Every fact (the four services, number) must stay
+# reword/reorder only. Every fact (the two services, number) must stay
 # IDENTICAL across variants -- never add a claim or offer here.
 POST_TEXT_V2 = (
     "\U0001F440 Do people know your business exists?\n"
@@ -81,12 +78,9 @@ POST_TEXT_V2 = (
     "Genaie fixes that.\n"
     "\n"
     "\U0001F7E2 WhatsApp Group Ads\n"
-    "\U0001F3A8 Poster Design\n"
     "\U0001F9F2 Lead Generation\n"
-    "\U0001F916 Customer Service WhatsApp Bots\n"
     "\n"
-    "Get your business noticed, get customers ready to buy, and get 24/7 "
-    "customer service for your business.\n"
+    "Get your business noticed and get customers ready to buy.\n"
     "\n"
     "\U0001F4DE WhatsApp us: {bot_number}"
 )
@@ -96,13 +90,10 @@ POST_TEXT_V3 = (
     "\n"
     "✔️ Get your business noticed\n"
     "✔️ Get customers ready to buy\n"
-    "✔️ Get 24/7 customer service for your business\n"
     "\n"
     "Our services:\n"
-    "\U0001F916 Customer Service WhatsApp Bots\n"
     "\U0001F9F2 Lead Generation\n"
     "\U0001F7E2 WhatsApp Group Ads\n"
-    "\U0001F3A8 Poster Design\n"
     "\n"
     "\U0001F4DE WhatsApp us: {bot_number}"
 )
