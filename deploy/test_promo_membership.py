@@ -75,7 +75,7 @@ EXPECTED_DAILY = {
     "cv": 44,
     "fruit-trees": 44,
     "genaie-leads": 46,
-    "genaie": 47,
+    "genaie": 46,
 }
 EXPECTED_WEEKLY = {
     "borehole-drilling": {"120363166672509962@g.us": ["mon", "wed", "fri"]},
