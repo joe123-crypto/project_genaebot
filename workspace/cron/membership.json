@@ -344,7 +344,7 @@
       ]
     },
     "120363275485319265@g.us": {
-      "name": "Bindura Town  Business💰💻📱🚙",
+      "name": "Bindura Town  Business\ud83d\udcb0\ud83d\udcbb\ud83d\udcf1\ud83d\ude99",
       "source": "whatsapp",
       "status": "active",
       "daily_cap": null,
@@ -897,6 +897,18 @@
         "fruit-trees"
       ],
       "note": "discovered in the sender-key store 2026-10-17 (legacy-format JID, added in the 03:2x burst)"
+    },
+    "120363412236304347@g.us": {
+      "name": "BYO HUSTLERS.COM",
+      "source": "operator",
+      "status": "active",
+      "account": "ads",
+      "daily_cap": null,
+      "promos": [
+        "big-player",
+        "industrial-lighting"
+      ],
+      "note": "Discovered in the ads account sender-key store on 2026-10-25; name supplied by the operator."
     },
     "263713611554-1588562864@g.us": {
       "name": "Bulawayo business group",
