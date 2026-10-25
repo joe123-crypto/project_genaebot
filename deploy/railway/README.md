@@ -82,7 +82,9 @@ their `deploy/install-*.sh` installer is re-run (via `deploy/gateway-exec.sh`, i
 `install-*-promo.sh` installers run again; each installer now verifies the
 timeout it registered is the one the gateway reports back, and the promo engine
 reads that live value at run time so a not-yet-migrated job tightens its send
-gaps rather than being killed with groups unreached (see README).
+gaps rather than being killed with groups unreached (see README). The two job feed
+installers (`install-vacancy-lamp-feed.sh`, `install-hustlers-feed.sh`) target
+their groups' JIDs by default and send no test message over `railway ssh`.
 
 The same applies to the promo **schedules**, which moved off the hour (07:15,
 08:13, 08:40, 10:35, 11:39, 12:50, 13:21, 14:26, 17:06 `Africa/Harare`) so the

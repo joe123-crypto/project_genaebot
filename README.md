@@ -211,21 +211,25 @@ refresh finds nothing, the existing cache is kept.
   overview, both a Key Responsibilities and a Qualifications and Experience
   section, a non-expired closing date, and an actionable contact) are posted
   first, falling back to other eligible adverts only to fill the 5 daily slots.
-  Set `JOB_FEED_TARGET` to the group JID (`120…@g.us`), or `JOB_FEED_GROUP_QUERY`
-  once the bot is a member and the group appears in the OpenClaw WhatsApp
-  directory. `JOB_FEED_INVITE_URL` overrides the jobs-group invite appended to
+  It targets Vacancy Lamp's JID (`120363407177302513@g.us`) by default; set
+  `JOB_FEED_TARGET` to another group JID, or set it empty and use
+  `JOB_FEED_GROUP_QUERY` to look the group up in the OpenClaw WhatsApp directory. `JOB_FEED_INVITE_URL` overrides the jobs-group invite appended to
   each post.
 - `./deploy/install-hustlers-feed.sh` (cron `hustlers-feed`) posts **one job per
   day** from the same cache to the **Hustlers Marketplace** group at
   `09:40 Africa/Harare`, alongside the jobs-group invite link so members can join
-  for more. Set `HUSTLERS_FEED_TARGET` to its group JID, or leave
-  `HUSTLERS_FEED_GROUP_QUERY` (default `Hustlers Marketplace`) to resolve it from
-  the directory. Override the appended invite with `HUSTLERS_FEED_INVITE_URL`
+  for more. It targets Hustlers marketplace's JID (`120363427709161501@g.us`) by
+  default; set `HUSTLERS_FEED_TARGET` to another JID, or set it empty to resolve
+  the group from the directory by `HUSTLERS_FEED_GROUP_QUERY` (default
+  `Hustlers Marketplace`). Override the appended invite with `HUSTLERS_FEED_INVITE_URL`
   (defaults to `JOB_FEED_INVITE_URL`), and the daily cap with
   `HUSTLERS_FEED_MAX_MESSAGES` (default `1`).
 
 The older `JOB_SCOUT_GROUP_FEED_*` and `JOB_SCOUT_HUSTLERS_FEED_*` variable names
-still work as fallbacks. Delivery is tracked per target, so a job posted to one
+still work as fallbacks. The installers no longer send a `--dry-run` test message
+to the group first: over `railway ssh` that check fails with "Channel is
+unavailable: whatsapp" even though the cron itself sends fine through the running
+gateway. Delivery is tracked per target, so a job posted to one
 group is still eligible for the other; each group only ever receives a given
 advert once.
 

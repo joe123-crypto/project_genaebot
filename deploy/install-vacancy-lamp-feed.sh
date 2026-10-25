@@ -12,7 +12,9 @@ CRON_EXPR="20 9 * * *"
 TZ="Africa/Harare"
 ALERT_TO="${JOB_FEED_FAILURE_ALERT_TO:-${JOB_SCOUT_FAILURE_ALERT_TO:-+213563719936}}"
 INVITE_URL="${JOB_FEED_INVITE_URL:-${JOB_SCOUT_GROUP_FEED_INVITE_URL:-https://chat.whatsapp.com/JZvh9lwFOvc3N2sSs8F1QD}}"
-TARGET="${JOB_FEED_TARGET:-${JOB_SCOUT_GROUP_FEED_TARGET:-}}"
+# Vacancy Lamp's JID (see workspace/cron/membership.json). Override with JOB_FEED_TARGET,
+# or set it empty and use JOB_FEED_GROUP_QUERY to look the group up in the directory.
+TARGET="${JOB_FEED_TARGET-${JOB_SCOUT_GROUP_FEED_TARGET-120363407177302513@g.us}}"
 GROUP_QUERY="${JOB_FEED_GROUP_QUERY:-${JOB_SCOUT_GROUP_FEED_GROUP_QUERY:-}}"
 
 openclaw=("${GATEWAY_OPENCLAW[@]}")
@@ -126,13 +128,6 @@ print(json.dumps([
 ], separators=(",", ":")))
 PY
 )"
-
-"${openclaw[@]}" message send \
-  --channel whatsapp \
-  --target "$target" \
-  --message "Vacancy Lamp job feed target check" \
-  --dry-run \
-  --json >/dev/null
 
 jobs_json="$("${openclaw[@]}" cron list --all --json)"
 existing_id="$(printf '%s' "$jobs_json" | jq -r --arg name "$NAME" '.jobs[] | select(.name == $name) | .id' | head -1)"
