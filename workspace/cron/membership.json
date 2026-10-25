@@ -896,6 +896,17 @@
         "fruit-trees"
       ],
       "note": "discovered in the sender-key store 2026-10-17 (legacy-format JID, added in the 03:2x burst)"
+    },
+    "263713611554-1588562864@g.us": {
+      "name": "Bulawayo business group",
+      "source": "operator",
+      "status": "active",
+      "account": "ads",
+      "daily_cap": null,
+      "promos": [
+        "big-player",
+        "industrial-lighting"
+      ]
     }
   }
 }
