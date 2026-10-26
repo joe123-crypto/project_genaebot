@@ -372,8 +372,9 @@ all agree. Run `--check` first and remove anything it reports as undeclared befo
 reinstalling, or that campaign posts twice a day. Full procedure, including when in
 the day it is safe to run, is in `deploy/railway/README.md`.
 
-The eleven existing promo crons rotate between caption variants (the original operator copy
-plus rewordings with identical facts; three each, four for the borehole promo) and
+The eleven existing promo crons rotate between caption variants (the original
+operator copy plus rewordings with identical facts; three each, four for the
+borehole promo). Advertiser recruitment keeps one fixed caption. All twelve
 carry a per-group tracking link. See *Promo caption rotation and ad ref tracking*
 below.
 
