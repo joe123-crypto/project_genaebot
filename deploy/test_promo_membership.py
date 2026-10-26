@@ -40,6 +40,7 @@ EXPECTED_DAILY = {
     # BYO HUSTLERS.COM joined the ads account on 2026-10-25 and takes both promos.
     "big-player": 4,
     "industrial-lighting": 4,
+    "genaie-advertisers": 3,
     "borehole-drilling": 8,
     # borehole-paid (2026-10-23) is a PAID third-party borehole ad posted to the
     # same 23-group cohort as skylight-solar (identified by sharing its promo), so

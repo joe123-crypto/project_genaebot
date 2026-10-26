@@ -180,3 +180,8 @@ update-check.json
 gateway-supervisor-restart-handoff.json
 workspace-attestations/
 gitclaw/
+
+# Genaie advertiser recruitment: generated targets and operator-supplied image.
+!workspace/cron/genaie-advertisers-promo/targets.json
+!workspace/cron/genaie-advertisers-promo/assets/
+!workspace/cron/genaie-advertisers-promo/assets/*.jpg

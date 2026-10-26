@@ -23,6 +23,7 @@ function apiWithStateDir() {
 
 test("extractAdRefs finds promo refs in the prefilled click-to-chat text", () => {
   assert.deepEqual(extractAdRefs("Hi, I saw your borehole ad (ref BH-7K2)"), ["BH-7K2"]);
+  assert.deepEqual(extractAdRefs("Hi, I saw your Genaie advertiser recruitment ad (ref GA-FZB)"), ["GA-FZB"]);
   // Case-insensitive, normalised to upper case, de-duplicated.
   assert.deepEqual(extractAdRefs("ref cv-a1b and CV-A1B again"), ["CV-A1B"]);
   assert.deepEqual(extractAdRefs("GN-0Z9 GL-XYZ"), ["GN-0Z9", "GL-XYZ"]);
@@ -39,7 +40,7 @@ test("extractAdRefs ignores unknown prefixes, ambiguous letters and plain text",
 });
 
 test("prefix list matches the promo crons", () => {
-  assert.deepEqual([...AD_REF_PREFIXES].sort(), ["BH", "BM", "BP", "CV", "FT", "GL", "GN", "IL", "PB", "SK"]);
+  assert.deepEqual([...AD_REF_PREFIXES].sort(), ["BH", "BM", "BP", "CV", "FT", "GA", "GL", "GN", "IL", "PB", "SK"]);
 });
 
 test("recordAdRefs counts each ref and distinct senders without storing phone numbers", () => {

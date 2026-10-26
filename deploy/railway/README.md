@@ -78,7 +78,7 @@ Cron job definitions (schedule, command, job timeout) are the exception to "merg
 it ships": they live in the gateway's cron state on the volume and change only when
 their `deploy/install-*.sh` installer is re-run (via `deploy/gateway-exec.sh`, i.e.
 `railway ssh`). For example, the promo crons' 7200 s job timeout set in
-`deploy/install-promo.sh` reaches production only after the eleven
+`deploy/install-promo.sh` reaches production only after the twelve
 `install-*-promo.sh` installers run again; each installer now verifies the
 timeout it registered is the one the gateway reports back, and the promo engine
 reads that live value at run time so a not-yet-migrated job tightens its send
@@ -88,18 +88,18 @@ their groups' JIDs by default and send no test message over `railway ssh`.
 
 The same applies to the promo **schedules**, which moved off the hour (07:15,
 08:13, 08:40, 10:35, 11:39, 12:50, 13:21, 14:26, 17:06 `Africa/Harare`) so the
-account's daily pattern is not perfectly periodic. (big-player runs at 15:30, and
-industrial-lighting at 09:07, on the separate "ads" line, so they need not avoid
-the default line's slots.) Merging
+account's daily pattern is not perfectly periodic. (big-player runs at 15:30,
+industrial-lighting at 09:07, and genaie-advertisers at 12:23 on the separate
+"ads" line, so they need not avoid the default line's slots.) Merging
 that change ships nothing on its own. `deploy/promo-crons.json` is the declared
-cron state for all eleven campaigns --
+cron state for all twelve campaigns --
 schedule, timezone, failure-alert target, command and the shared 7200 s job
 timeout -- and `deploy/reinstall-promo-crons.sh` is the one command that compares
 it to the gateway and applies it:
 
 ```sh
 ./deploy/reinstall-promo-crons.sh --check   # read-only: live state vs. what the repo declares
-./deploy/reinstall-promo-crons.sh           # re-run all eleven installers, then re-check
+./deploy/reinstall-promo-crons.sh           # re-run all twelve installers, then re-check
 ```
 
 `--check` makes a single `openclaw cron list --all --json` read and changes
