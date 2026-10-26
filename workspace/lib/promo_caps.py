@@ -49,7 +49,7 @@ import promo_membership
 # workspace/plugins/public-service-gate/lib/ad-refs.js; "AR" is absent there on
 # purpose (that ad links to the repair shop's number, not the bot's), so it is
 # absent here too. deploy/test_promo_caps.py pins this list.
-AD_REF_PREFIXES = ("BH", "BM", "CV", "FT", "GL", "GN", "SK")
+AD_REF_PREFIXES = ("BH", "BM", "CV", "FT", "GA", "GL", "GN", "SK")
 
 AD_REFS_PATH = os.environ.get(
     "PROMO_AD_REFS_PATH",

@@ -244,7 +244,7 @@ class SendSpacingTests(unittest.TestCase):
 class CallerWiringTests(unittest.TestCase):
     def test_promo_scripts_do_not_pin_a_fixed_delay(self):
         scripts = sorted(CRON.glob("*-promo/post_*.py"))
-        self.assertEqual(len(scripts), 11)
+        self.assertEqual(len(scripts), 12)
         for script in scripts:
             src = script.read_text(encoding="utf-8")
             self.assertIn("promo_broadcast.broadcast(", src, script)
