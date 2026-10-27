@@ -1,10 +1,12 @@
+import { normalizePhone } from "./events.js";
+
 export const FAILSAFE_STOP_PRIORITY = 100;
 const FAILSAFE_STOP_SUPPRESSION_TTL_MS = 30 * 60 * 1000;
 const failsafeStopSuppressions = new Map();
 
 function stopSuppressionKey(value) {
-  const digits = String(value ?? "").replace(/[^\d]/g, "");
-  return digits || "";
+  const identity = normalizePhone(String(value ?? ""));
+  return identity.includes("@") ? identity : identity.replace(/[^\d]/g, "");
 }
 
 export function markFailsafeStopSuppression(sender, now = Date.now()) {

@@ -15,7 +15,7 @@ function leadSnippet(text) {
 
 // Admin-only in-chat command to unlock a user, e.g. "allow +263788390903".
 // "grandfather" is kept as a legacy spelling. Returns the normalized phone or "".
-const ALLOW_COMMAND_PATTERN = /^(?:allow|grandfather)\s+(\+?[\d][\d\s-]{6,})$/i;
+const ALLOW_COMMAND_PATTERN = /^(?:allow|grandfather)\s+(\d+@(?:lid|hosted\.lid)|\+?[\d][\d\s-]{6,})$/i;
 
 export { DEFAULT_ALLOW_FAILED };
 

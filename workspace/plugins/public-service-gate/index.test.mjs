@@ -449,6 +449,23 @@ test("a new sender's message reaches the agent, is recorded as a lead, and alert
   });
 });
 
+test("an unmapped LID reaches public tools and cannot impersonate an admin phone", async () => {
+  const lid = `${ADMIN.slice(1)}@lid`;
+  const handler = intakeHandler({ whatsappAdminUsers: [ADMIN] });
+  await withFakeOpenclaw(handler.dir, async () => {
+    assert.equal(await handler(eventFor("hello", lid), { channelId: "whatsapp", senderId: lid, accountId: "ads" }), undefined);
+    assert.ok(handler.memberArgs().includes(lid));
+    const infoPath = path.join(handler.dir, "business-info.md");
+    fs.writeFileSync(infoPath, "Current prices for opaque contacts");
+    const tool = publicToolFor(registerHandler({ businessInfoPath: infoPath }), lid);
+    const result = await tool.execute("test", { action: "business_info" });
+    assert.match(result.content[0].text, /Current prices for opaque contacts/);
+    const handoff = await publicToolFor(handler, lid).execute("test", { action: "handoff", category: "building_materials", details: "5000 bricks" });
+    assert.match(handoff.content[0].text, HANDOFF);
+    assert.deepEqual(await handler(eventFor("hello again", lid), { channelId: "whatsapp", senderId: lid }), { handled: true });
+  });
+});
+
 test("a returning sender reaches the agent without another admin alert", async () => {
   await withAdminMode("true", async () => {
     const handler = intakeHandler({ whatsappAdminUsers: [ADMIN] }, intakeStore);
@@ -1216,4 +1233,18 @@ test("without an account id the guard stays out of the way", async () => {
     assert.deepEqual(reply, baseline, `message ${i + 1} must fall through`);
   }
   assert.equal(fs.existsSync(path.join(dir, "sibling-lines.json")), false);
+});
+
+test('audit: CV tools and interview turns retain the authenticated receiving account',async()=>{
+  const handler=cvHandler();
+  const tool=handler.publicTool({agentId:'public',agentAccountId:'ads',requesterSenderId:UNKNOWN,messageChannel:'whatsapp'});
+  await tool.execute('test',{action:'cv_maker_start'});
+  assert.deepEqual(handler.cvCalls(),[`status --phone=${UNKNOWN} --account=ads`]);
+  await handler(eventFor('Jane',UNKNOWN),{channelId:'whatsapp',senderId:UNKNOWN,accountId:'ads'});
+  assert.ok(handler.cvCalls().includes(`interview-turn --phone=${UNKNOWN} --message=Jane --account=ads`));
+  // A CV pointer from ads must not turn an unrelated main-line message into
+  // an interview turn, nor change the original order's delivery account.
+  const before=handler.cvCalls().length;
+  await handler(eventFor('hello',UNKNOWN),{channelId:'whatsapp',senderId:UNKNOWN,accountId:'default'});
+  assert.equal(handler.cvCalls().length,before);
 });

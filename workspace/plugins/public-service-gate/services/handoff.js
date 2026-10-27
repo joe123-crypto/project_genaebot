@@ -4,6 +4,7 @@ import { expandHome, getPluginConfig } from "../lib/config.js";
 import { normalizePhone } from "../lib/events.js";
 import { markHandedOff } from "../lib/handoffs.js";
 import { HELPER_TIMEOUT_MS, helperLimiter, runTextCommand } from "../lib/runtime.js";
+import { notifyAdminOfIntake } from "./membership.js";
 
 // ---------------------------------------------------------------------------
 // Handoff and business info (public agent tool actions)
@@ -89,11 +90,15 @@ async function forwardToPartner(api, customer, category, details) {
 
 // The `handoff` tool action. Forwarding is best effort; the customer is always
 // handed off and told someone will be in touch.
-export async function handleHandoff(api, sender, category, details) {
+export async function handleHandoff(api, sender, category, details, accountId = "default") {
   const customer = normalizePhone(sender || "");
   const resolved = normalizeHandoffCategory(category);
-  if (customer && FORWARDED_CATEGORIES.has(resolved)) {
+  if (customer && !customer.includes("@") && FORWARDED_CATEGORIES.has(resolved)) {
     await forwardToPartner(api, customer, resolved, detailsSnippet(details));
+  } else if (customer.includes("@")) {
+    // A partner cannot call an opaque WhatsApp ID. Let the operator continue
+    // in the original chat rather than inventing a customer phone number.
+    await notifyAdminOfIntake(api, customer, resolved, `Original WhatsApp line: ${accountId}. ${detailsSnippet(details)}`);
   }
   try {
     markHandedOff(api, customer, resolved);
@@ -106,7 +111,7 @@ export async function handleHandoff(api, sender, category, details) {
 
 // Admin-only in-chat command to let the bot talk to a handed-off customer again,
 // e.g. "resume +263771234567". Returns the normalized phone or "".
-const RESUME_COMMAND_PATTERN = /^resume\s+(\+?[\d][\d\s-]{6,})$/i;
+const RESUME_COMMAND_PATTERN = /^resume\s+(\d+@(?:lid|hosted\.lid)|\+?[\d][\d\s-]{6,})$/i;
 
 export function parseResumeCommand(text) {
   const compact = String(text ?? "").trim().replace(/\s+/g, " ");

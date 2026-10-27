@@ -12,7 +12,7 @@ import { CV_SERVICE, handleCvOrder } from "./cv-maker.js";
 //   - a customer already handed off stays silent, so a person can take over;
 //   - a customer inside the automated CV order is relayed to the CV maker.
 // Everything else returns undefined and falls through to the agent.
-export async function handleIntake(api, sender, text) {
+export async function handleIntake(api, sender, text, accountId = "default") {
   // Record the contact as a lead; the admin is alerted once, on first contact.
   // Best effort: a store or messaging failure never blocks the reply.
   try {
@@ -34,7 +34,8 @@ export async function handleIntake(api, sender, text) {
   // isStateResetRequest) escapes back to the normal conversation.
   const state = loadServiceState(api, sender);
   if (state?.service === CV_SERVICE) {
-    if (!isStateResetRequest(text)) return handleCvOrder(api, sender, text, state);
+    if ((state.data?.accountId || "default") !== accountId) return;
+    if (!isStateResetRequest(text)) return handleCvOrder(api, sender, text, state, accountId);
     clearServiceState(api, sender);
   }
   return undefined;

@@ -18,7 +18,7 @@ from pathlib import Path
 import json
 import subprocess
 
-from .common import OPENCLAW_BIN, public_text
+from .common import OPENCLAW_BIN, normalize_account, public_text
 
 
 __all__ = ["result_message_id", "send_whatsapp_document", "send_whatsapp_message"]
@@ -50,7 +50,7 @@ def run_json_command(command: list[str], timeout: int = 90, env: dict[str, str] 
   return parse_json_output(completed.stdout)
 
 
-def _cli_env() -> dict[str, str]:
+def _cli_env(target: str = "") -> dict[str, str]:
   """OPENCLAW_HOME is dropped so the CLI resolves its own home, and a gateway
   token is forwarded under the name the CLI expects."""
   command_env = os.environ.copy()
@@ -58,22 +58,38 @@ def _cli_env() -> dict[str, str]:
   gateway_token = command_env.get("GATEWAY_AUTH_TOKEN", "").strip()
   if gateway_token:
     command_env["OPENCLAW_GATEWAY_TOKEN"] = gateway_token
+  if target.endswith(("@lid", "@hosted.lid")):
+    # Standalone approvals do not inherit the gateway's NODE_OPTIONS. The
+    # unpatched CLI converts LIDs into invented E.164 phones, so never send one
+    # without the target-preserving loader, even when run outside the gateway.
+    candidates = (
+      Path("/usr/local/lib/genaie/whatsapp-lid-loader.mjs"),
+      Path(__file__).resolve().parents[3] / "deploy/railway/whatsapp-lid-loader.mjs",
+    )
+    loader = next((candidate for candidate in candidates if candidate.is_file()), None)
+    if loader is None:
+      raise RuntimeError("WhatsApp identity delivery support is unavailable")
+    option = f"--import={json.dumps(str(loader))}"
+    if str(loader) not in command_env.get("NODE_OPTIONS", ""):
+      command_env["NODE_OPTIONS"] = f"{command_env.get('NODE_OPTIONS', '')} {option}".strip()
   return command_env
 
 
-def send_whatsapp_message(target: str, message: str) -> dict:
+def send_whatsapp_message(target: str, message: str, *, account: str = "default") -> dict:
   return run_json_command([
     str(OPENCLAW_BIN),
     "message",
     "send",
     "--channel",
     "whatsapp",
+    "--account",
+    normalize_account(account),
     "--target",
     target,
     "--message",
     message,
     "--json",
-  ], env=_cli_env())
+  ], env=_cli_env(target))
 
 
 def result_message_id(result: dict) -> str | None:
@@ -90,7 +106,7 @@ def result_message_id(result: dict) -> str | None:
   return None
 
 
-def send_whatsapp_document(target: str, document_path: str | Path, message: str = "") -> dict:
+def send_whatsapp_document(target: str, document_path: str | Path, message: str = "", *, account: str = "default") -> dict:
   """Send a document (e.g. a rendered CV PDF) to a WhatsApp user as media.
 
   Same as send_whatsapp_message but attaches a file via --media.
@@ -101,6 +117,8 @@ def send_whatsapp_document(target: str, document_path: str | Path, message: str 
     "send",
     "--channel",
     "whatsapp",
+    "--account",
+    normalize_account(account),
     "--target",
     target,
     "--message",
@@ -108,4 +126,4 @@ def send_whatsapp_document(target: str, document_path: str | Path, message: str 
     "--media",
     str(document_path),
     "--json",
-  ], env=_cli_env())
+  ], env=_cli_env(target))

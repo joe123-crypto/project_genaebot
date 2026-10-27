@@ -388,4 +388,7 @@ runuser -u joseph -- python3 /usr/local/bin/wait-gateway-lease.py \
 # --bind lan  : listen on all container interfaces so the platform can reach us.
 # --tailscale off : no tailscaled in the container; remote access is via ingress.
 log "starting openclaw gateway on port $PORT as joseph (bind=lan, tailscale=off)"
+# Keep unknown WhatsApp LID DMs addressable and retain verified phone mappings
+# across relinks. The loader also covers integrity-checked plugin captures.
+export NODE_OPTIONS="${NODE_OPTIONS:-} --import=/usr/local/lib/genaie/whatsapp-lid-loader.mjs"
 exec runuser -u joseph -- openclaw gateway --port "$PORT" --bind lan --tailscale off

@@ -19,7 +19,7 @@ import shutil
 import sys
 
 from . import CvMakerError
-from .common import normalize_phone, public_text
+from .common import normalize_account, normalize_phone, public_text
 from . import build, delivery, orders
 
 
@@ -75,28 +75,29 @@ def _summarize(order: dict) -> dict:
   }
 
 
-def _order_for_turn(phone: str, order_id: str) -> dict:
+def _order_for_turn(phone: str, order_id: str, account: str = "default") -> dict:
+  account = normalize_account(account)
   if order_id:
     order = orders.load_order(order_id)
     if not order:
       raise CvMakerError("that CV order was not found")
-    if str(order.get("phone") or "") != phone:
+    if str(order.get("phone") or "") != phone or order.get("account", "default") != account:
       raise CvMakerError("that CV order belongs to another number")
     return order
-  existing = orders.active_order_for(phone)
+  existing = orders.active_order_for(phone, account)
   if (
     existing
     and str(existing.get("mode") or "") == "interview"
     and str(existing.get("status") or "") == orders.STATUS_INTERVIEWING
   ):
     return existing
-  return orders.create_order(phone, "interview")
+  return orders.create_order(phone, "interview", account)
 
 
 def cmd_interview_turn(args: argparse.Namespace) -> dict:
   phone = normalize_phone(args.phone)
   message = _clean_message(args.message)
-  order = _order_for_turn(phone, str(getattr(args, "order", "") or "").strip())
+  order = _order_for_turn(phone, str(getattr(args, "order", "") or "").strip(), getattr(args, "account", "default"))
   order_id = str(order.get("orderId") or "")
   if str(order.get("status") or "") != orders.STATUS_INTERVIEWING:
     raise CvMakerError("that CV order has already moved past the interview")
@@ -150,7 +151,7 @@ def cmd_start_revamp(args: argparse.Namespace) -> dict:
     if stream.read(5) != b"%PDF-":
       raise CvMakerError("that file is not a readable PDF")
 
-  order = orders.create_order(phone, "revamp")
+  order = orders.create_order(phone, "revamp", getattr(args, "account", "default"))
   order_id = str(order["orderId"])
   target = orders.ensure_order_dir(order_id) / "source.pdf"
   shutil.copyfile(source, target)
@@ -165,7 +166,7 @@ def cmd_start_revamp(args: argparse.Namespace) -> dict:
 
 def cmd_paid(args: argparse.Namespace) -> dict:
   phone = normalize_phone(args.phone)
-  order = orders.active_order_for(phone)
+  order = orders.active_order_for(phone, getattr(args, "account", "default"))
   if not order:
     raise CvMakerError("there is no CV order waiting on this number")
   if str(order.get("status") or "") == orders.STATUS_INTERVIEWING:
@@ -188,7 +189,7 @@ def cmd_status(args: argparse.Namespace) -> dict:
   order store stay the source of truth.
   """
   phone = normalize_phone(args.phone)
-  order = orders.active_order_for(phone)
+  order = orders.active_order_for(phone, getattr(args, "account", "default"))
   if not order:
     return {"ok": True, "orderId": "", "status": ""}
   return {
@@ -250,7 +251,7 @@ DECLINED_MESSAGE = (
 )
 
 
-def _notify_declined(phone: str) -> bool:
+def _notify_declined(phone: str, account: str = "default") -> bool:
   """Best effort decline notice. A send failure never fails the admin command.
 
   The admin has already made the decision and the order is settled by the time
@@ -261,7 +262,7 @@ def _notify_declined(phone: str) -> bool:
   if not target:
     return False
   try:
-    delivery.send_whatsapp_message(target, DECLINED_MESSAGE)
+    delivery.send_whatsapp_message(target, DECLINED_MESSAGE, account=account)
     return True
   except (RuntimeError, OSError):
     return False
@@ -278,7 +279,7 @@ def cmd_deny(args: argparse.Namespace) -> dict:
   status = orders.set_status(order_id, orders.STATUS_REJECTED)
   # Only tell the buyer on the transition, so a repeated deny does not message
   # them twice.
-  notified = False if already_settled else _notify_declined(phone)
+  notified = False if already_settled else _notify_declined(phone, order.get("account", "default"))
   return {
     "ok": True,
     "orderId": order_id,
@@ -299,21 +300,25 @@ def build_parser() -> _Parser:
 
   turn = sub.add_parser("interview-turn", add_help=False)
   turn.add_argument("--phone", required=True)
+  turn.add_argument("--account", default="default")
   turn.add_argument("--order", default="")
   turn.add_argument("--message", required=True)
   turn.set_defaults(handler=cmd_interview_turn)
 
   revamp = sub.add_parser("start-revamp", add_help=False)
   revamp.add_argument("--phone", required=True)
+  revamp.add_argument("--account", default="default")
   revamp.add_argument("--cv", required=True)
   revamp.set_defaults(handler=cmd_start_revamp)
 
   paid = sub.add_parser("paid", add_help=False)
   paid.add_argument("--phone", required=True)
+  paid.add_argument("--account", default="default")
   paid.set_defaults(handler=cmd_paid)
 
   status = sub.add_parser("status", add_help=False)
   status.add_argument("--phone", required=True)
+  status.add_argument("--account", default="default")
   status.set_defaults(handler=cmd_status)
 
   approve = sub.add_parser("approve", add_help=False)

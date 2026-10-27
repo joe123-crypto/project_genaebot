@@ -26,6 +26,7 @@ from unittest import mock
 
 from cvmaker import CvMakerError
 from cvmaker import build, cli, delivery, orders, render
+from cvmaker.common import normalize_phone
 
 
 GROUP_JID = "120363001234567890@g.us"
@@ -143,6 +144,12 @@ class StoreTestCase(unittest.TestCase):
 
 
 class CvIdentityTests(unittest.TestCase):
+  def test_opaque_direct_identity_remains_addressable(self) -> None:
+    self.assertEqual(normalize_phone("199630767833213:7@lid"), "199630767833213@lid")
+    self.assertEqual(normalize_phone("123456789@hosted.lid"), "123456789@hosted.lid")
+    with self.assertRaises(SystemExit):
+      normalize_phone("123456789@g.us")
+
   def test_identity_read_from_semantic_html(self) -> None:
     html = '<h1 data-cv-field="identity">Joseph Munemo</h1>'
     self.assertEqual(build._cv_identity(html), "Joseph Munemo")
@@ -163,6 +170,13 @@ class CvIdentityTests(unittest.TestCase):
 
 
 class OrderStoreTests(StoreTestCase):
+  def test_active_orders_are_scoped_to_the_receiving_account(self) -> None:
+    first = orders.create_order(PHONE)
+    second = orders.create_order(PHONE, account="ads")
+    self.assertEqual(orders.active_order_for(PHONE)["orderId"], first["orderId"])
+    self.assertEqual(orders.active_order_for(PHONE, "ads")["orderId"], second["orderId"])
+
+
   def test_create_order_starts_interviewing(self) -> None:
     order = orders.create_order(PHONE)
     self.assertEqual(order["status"], orders.STATUS_INTERVIEWING)
@@ -484,6 +498,22 @@ class RenderTests(unittest.TestCase):
 
 
 class DeliveryTests(unittest.TestCase):
+  def test_standalone_opaque_delivery_loads_compatibility_code(self) -> None:
+    with mock.patch.dict(os.environ, {"NODE_OPTIONS": "--max-old-space-size=2048"}), \
+      mock.patch("cvmaker.delivery.run_json_command", return_value={}) as run:
+      delivery.send_whatsapp_document("199630767833213@lid", "/somewhere/cv.pdf", account="ads")
+    options = run.call_args.kwargs["env"]["NODE_OPTIONS"]
+    self.assertIn("--max-old-space-size=2048", options)
+    self.assertIn("whatsapp-lid-loader.mjs", options)
+
+  def test_missing_compatibility_code_cannot_send_to_an_invented_phone(self) -> None:
+    with mock.patch("pathlib.Path.is_file", return_value=False), \
+      mock.patch("cvmaker.delivery.run_json_command") as run:
+      with self.assertRaises(RuntimeError):
+        delivery.send_whatsapp_document("199630767833213@lid", "/somewhere/cv.pdf", account="ads")
+    run.assert_not_called()
+
+
   def test_document_send_adds_the_media_argv(self) -> None:
     with mock.patch("cvmaker.delivery.run_json_command", return_value={"messageId": "wamid.1"}) as run:
       result = delivery.send_whatsapp_document(PHONE, "/somewhere/Joseph-Munemo-CV.pdf", "here you go")
@@ -508,6 +538,18 @@ class DeliveryTests(unittest.TestCase):
 
 
 class BuildTests(StoreTestCase):
+  def test_opaque_cv_is_delivered_from_the_original_account(self) -> None:
+    target = "199630767833213@lid"
+    order = orders.create_order(target, account="ads")
+    order = orders.update_order(order["orderId"], data=INTERVIEW_DATA)
+    with mock.patch("cvmaker.render.render_cv_pdf", side_effect=lambda html, out: Path(out)), \
+      mock.patch("cvmaker.delivery.run_json_command", return_value={"messageId": "wamid.ads"}) as send:
+      build.build_and_send(order)
+    command = send.call_args.args[0]
+    self.assertEqual(command[command.index("--account") + 1], "ads")
+    self.assertEqual(command[command.index("--target") + 1], target)
+
+
   def _order(self, **overrides) -> dict:
     order = orders.create_order(PHONE)
     orders.update_order(order["orderId"], data=INTERVIEW_DATA)
@@ -688,6 +730,20 @@ class CliContractTests(StoreTestCase):
 
 
 class CliInterviewTests(StoreTestCase):
+  def test_cli_account_flag_scopes_order_creation_resume_and_status(self) -> None:
+    target = "199630767833213@lid"
+    with mock.patch("cvmaker.interview.run_turn", return_value={"reply": "Next question", "complete": False}):
+      result = run_cli("interview-turn", "--phone", target, "--account", "ads", "--message", "Joe")
+    self.assertTrue(result["ok"])
+    self.assertEqual(orders.load_order(result["orderId"])["account"], "ads")
+    self.assertEqual(run_cli("status", "--phone", target)["orderId"], "")
+    self.assertEqual(run_cli("status", "--phone", target, "--account", "ads")["orderId"], result["orderId"])
+    with mock.patch("cvmaker.interview.run_turn") as turn:
+      denied = run_cli("interview-turn", "--phone", target, "--account", "default", "--order", result["orderId"], "--message", "Joe")
+    self.assertFalse(denied["ok"])
+    turn.assert_not_called()
+
+
   def test_first_message_opens_an_order(self) -> None:
     with fake_interview():
       result = run_cli("interview-turn", "--phone", PHONE, "--message", "I want a CV")
@@ -788,6 +844,18 @@ class CliRevampTests(StoreTestCase):
 
 
 class CliSettlementTests(StoreTestCase):
+  def test_decline_notice_uses_the_order_account(self) -> None:
+    order = orders.create_order("199630767833213@lid", account="ads")
+    orders.set_status(order["orderId"], orders.STATUS_AWAITING_PAYMENT)
+    orders.set_status(order["orderId"], orders.STATUS_AWAITING_APPROVAL)
+    with mock.patch("cvmaker.delivery.run_json_command", return_value={"messageId": "declined.ads"}) as send:
+      result = run_cli("deny", "--order", order["orderId"])
+    self.assertTrue(result["notified"])
+    command = send.call_args.args[0]
+    self.assertEqual(command[command.index("--account") + 1], "ads")
+    self.assertEqual(command[command.index("--target") + 1], "199630767833213@lid")
+
+
   def _awaiting_approval(self) -> str:
     order = orders.create_order(PHONE)
     orders.update_order(order["orderId"], data=INTERVIEW_DATA)

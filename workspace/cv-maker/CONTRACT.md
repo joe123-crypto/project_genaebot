@@ -19,7 +19,8 @@ settled order returns its current status without repeating the side effect.
       "orders": {
         "<orderId>": {
           "orderId":   "<token_urlsafe(6)>",
-          "phone":     "+263...",          // normalized E.164
+          "phone":     "+263...",          // E.164 or opaque direct WhatsApp LID
+          "account":   "ads",              // receiving WhatsApp account; legacy default is "default"
           "status":    "interviewing",
           "mode":      "interview" | "revamp",
           "data":      { ...InterviewData... },   // see §4
@@ -32,6 +33,18 @@ settled order returns its current status without repeating the side effect.
         }
       }
     }
+
+The historical `phone` key is the authenticated delivery identity. When WhatsApp
+does not expose a phone, it may contain `<digits>@lid` or `<digits>@hosted.lid`.
+These IDs are preserved exactly (apart from a device suffix), never converted
+into phone numbers. Group JIDs and other JID domains are rejected. The CV's own
+contact details still come from the interview, independently of this address.
+Active orders are keyed by both delivery identity and receiving account. The
+receiving account is stored when the order is created and is immutable.
+Approvals and declines explicitly send from that stored account. Existing
+records without `account` retain the historical `default` account.
+Opaque-ID delivery explicitly loads the adapter compatibility code even for a
+standalone approval; it fails without sending if that code is unavailable.
 
 Per-order artifacts live in `~/.openclaw/runtime/cv-maker/<orderId>/`, dir 0700,
 files 0600. The JSON file itself is 0600, written atomically (tmp + os.replace)
@@ -104,7 +117,10 @@ is settled. `deny` also messages the buyer itself: someone who said they paid mu
 not be met with silence. It notifies only on the transition, so a repeated deny
 does not message them twice, and a send failure never fails the admin's command.
 
-`interview-turn` with only `--phone` resolves the order via `active_order_for`.
+`interview-turn`, `start-revamp`, `status` and `paid` accept `--account` (default:
+`default`). The gate supplies it from the authenticated runtime account, never
+from model arguments or message text. `interview-turn` with only `--phone`
+resolves the order via `active_order_for` on that account.
 `start-revamp` opens the order at `interviewing` and immediately moves it to
 `awaiting_payment`, so §1's ordering holds.
 

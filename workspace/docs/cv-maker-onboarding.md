@@ -13,8 +13,9 @@ describes the flow so an operator can reason about it; it is not a script for th
 
 1. The user asks for a CV, the agent quotes the price and offers the automated AI interview, and
    the user accepts. Declining hands the user off to a person instead.
-2. The gate resolves whether they already have an order in flight and resumes them at the right
-   point. A returning user is never restarted from scratch.
+2. The gate resolves whether they already have an order in flight on this WhatsApp line and
+   resumes them at the right point. Returning to the same line resumes that order. An interview
+   on one line does not take over messages sent to the other business line.
 3. The intro message states the price and the payment method (for example "US$5, paid by EcoCash")
    before any questions are asked, so a user who does not want to pay, or cannot use the method,
    bounces up front rather than after answering the whole interview. The full payee (account number
@@ -29,8 +30,9 @@ describes the flow so an operator can reason about it; it is not a script for th
 7. The user pays out of band and replies "paid". The order moves to awaiting approval and the
    configured admins are notified with the order id and the exact command to reply with.
 8. An admin replies `cv approve <id>` or `cv deny <id>` in their own chat. Approval builds the CV,
-   renders it to PDF and sends it to the user. A denial tells the user their payment could not be
-   confirmed and leaves the conversation open.
+   renders it to PDF and sends it to the user from the line where the order started. A denial
+   uses that same line to tell the user their payment could not be confirmed and leaves the
+   conversation open.
 
 ## Payment
 
@@ -55,6 +57,8 @@ represents something owed to someone who may already have paid.
   free.
 - Never invent an employer, date or qualification. If a detail is missing it is left out.
 - Never expose helper output, file paths, logs, order internals, or another user's data.
+- Continue serving customers whose phone number is not exposed by WhatsApp. Their chat identity
+  stays attached to the order; digits from a chat identifier are never a substitute phone number.
 - Only the configured WhatsApp admins can approve or deny. A non-admin sending an approval command
   is ignored entirely.
 
