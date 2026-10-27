@@ -62,10 +62,8 @@ class DocumentationContractTests(unittest.TestCase):
 
 
 class WorkflowContractTests(unittest.TestCase):
-    # This workflow deliberately has no deploy job: the gateway deploys through
-    # Railway's GitHub integration, which builds deploy/railway/Dockerfile on
-    # every push to main. `validate` is the required status check that gates the
-    # merge, so it must run the repository checks.
+    # Repository-plan limitations do not permit branch protection here. The
+    # deploy job, rather than a promise about merge discipline, gates production.
 
     def test_validate_job_runs_the_repository_checks(self) -> None:
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
@@ -75,6 +73,25 @@ class WorkflowContractTests(unittest.TestCase):
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
         self.assertNotIn("workspace/job-scout", workflow)
         self.assertNotIn("job-scout-browser", workflow)
+
+    def test_production_deploy_requires_all_checks_and_cannot_run_for_prs(self) -> None:
+        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+        deploy = job_block(workflow, "deploy")
+        self.assertIn("needs: [validate, secrets, compatibility]", deploy)
+        self.assertIn("github.ref == 'refs/heads/main'", deploy)
+        self.assertIn("github.event_name != 'pull_request'", deploy)
+        self.assertIn("cancel-in-progress: false", deploy)
+        self.assertIn('--sha "$GITHUB_SHA"', deploy)
+        self.assertNotIn("RAILWAY_API_TOKEN", workflow)
+
+    def test_runtime_lane_uses_production_node_and_cannot_silently_skip(self) -> None:
+        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+        self.assertIn('node-version: "26.12.1"', job_block(workflow, "validate"))
+        compatibility = job_block(workflow, "compatibility")
+        self.assertIn("--network none", compatibility)
+        self.assertIn("GENAIE_REQUIRE_INTEGRATION=1", compatibility)
+        self.assertIn("catalog-recovery.integration.test.mjs", compatibility)
+        self.assertIn('= "0"', compatibility)
 
 
 if __name__ == "__main__":
