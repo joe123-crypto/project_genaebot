@@ -154,9 +154,8 @@ normal merge. Turning the caps on is a one-line edit to that file
 1. Create a **project token** for `openclaw-gateway`, environment `production`,
    and save it as the repository Actions secret `RAILWAY_TOKEN`. Keep the token
    out of chat, Git and logs. This is the only release credential; no workspace
-   billing token or SSH key is needed. The local account's project-token creation
-   API returned `Not Authorized`, so initial provisioning needs the project
-   owner's Railway settings access.
+   billing token or SSH key is needed. Create it through the project owner's
+   Railway settings access.
 2. Confirm the correction PR passes all three prerequisite jobs and the secret
    exists. Keep the existing volume mounted at `/home/joseph/.openclaw`.
 3. Disconnect the service's direct GitHub source **before merging the correction
@@ -169,7 +168,8 @@ normal merge. Turning the caps on is a one-line edit to that file
      --environment 2cae37a4-8e24-41db-87ed-9a3a7c9eff22 --json
    ```
 
-4. Merge, watch the `main` workflow, and inspect its `railway-release` artifact.
+4. Complete the live cron preflight below, then merge, watch the `main` workflow,
+   and inspect its `railway-release` artifact.
    Confirm `healthy`, the tested SHA, image digest, baseline flags, both accounts,
    all jobs, and no `rollbackError`. A missing secret fails the job before any
    production mutation; provision it before the cutover to avoid a deployment gap.
@@ -177,6 +177,35 @@ normal merge. Turning the caps on is a one-line edit to that file
 Require the three status checks and PRs in branch protection if the repository
 plan later supports it. The production gate is the deploy job's `needs` list
 combined with the disconnected direct source.
+
+## Cron preflight before merging
+
+Check production cron activity immediately before a planned merge. The main
+workflow spends about ten minutes in compatibility checks before deployment
+starts, so reserve time for CI, the build, startup verification and a possible
+rollback. Prefer a quiet gap with at least thirty minutes until the next
+campaign, and check again if the release is delayed. Keep the PR open while
+campaigns are running or the available gap is too short.
+
+Read the live schedule using the existing local operator login and SSH key:
+
+```sh
+export RAILWAY_PROJECT=a251f752-3b49-4f72-8a71-4629bf2fced0
+export RAILWAY_SERVICE=503baf60-c897-4a77-812a-719195705031
+export RAILWAY_ENVIRONMENT=2cae37a4-8e24-41db-87ed-9a3a7c9eff22
+source ./deploy/gateway-exec.sh
+"${GATEWAY_OPENCLAW[@]}" cron list --all --json
+```
+
+Require empty `state.runningAtMs` markers, no active campaign processes under
+`/proc`, and no unfinished `cron_run_receipts` in the live state database. Use
+the live `nextRunAtMs` values to find the next campaign; installers can leave
+live schedules different from the repository manifest. Leave cron definitions
+enabled and let active work finish normally.
+
+The startup report runs after the gateway restarts, so this operator preflight
+must happen before merging. GitHub CI's release gate validates the tested
+source and startup; it does not acquire a pre-deployment cron lock.
 
 ## Recovery
 

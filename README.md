@@ -159,6 +159,11 @@ checks pass: `Portable validation`, `Secret and private-state scan`, and
 the installed OpenClaw 2026.9.9 SDK, SQLite and real catalog workers; missing
 integration dependencies fail that job instead of silently skipping tests.
 
+Before merging, perform the [live cron preflight](deploy/railway/README.md#cron-preflight-before-merging).
+Require zero active runs and choose a gap that allows CI, deployment, startup
+verification and recovery to finish before the next campaign. The main workflow
+spends about ten minutes testing the runtime before it can begin deployment.
+
 After the [one-time cutover](deploy/railway/README.md#one-time-wiring), the
 serialized `Deploy verified production commit` job is the production gate even
 when branch protection is unavailable. Superseded commits are skipped. The job
