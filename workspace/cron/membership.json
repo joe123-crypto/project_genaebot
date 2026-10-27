@@ -961,6 +961,54 @@
         "industrial-lighting",
         "genaie-advertisers"
       ]
+    },
+    "263773491386-1531974442@g.us": {
+      "name": "TawPro Adverts",
+      "source": "operator",
+      "status": "active",
+      "account": "ads",
+      "daily_cap": null,
+      "promos": [
+        "big-player",
+        "industrial-lighting",
+        "genaie-advertisers"
+      ]
+    },
+    "263773491386-1578547813@g.us": {
+      "source": "operator",
+      "status": "active",
+      "account": "ads",
+      "daily_cap": null,
+      "promos": [
+        "big-player",
+        "industrial-lighting",
+        "genaie-advertisers"
+      ],
+      "name": "ONLINE MARKETING"
+    },
+    "263773491386-1578547921@g.us": {
+      "source": "operator",
+      "status": "active",
+      "account": "ads",
+      "daily_cap": null,
+      "promos": [
+        "big-player",
+        "industrial-lighting",
+        "genaie-advertisers"
+      ],
+      "name": "ONLINE MARKETING 2"
+    },
+    "263776554037-1383758077@g.us": {
+      "source": "operator",
+      "status": "active",
+      "account": "ads",
+      "daily_cap": null,
+      "promos": [
+        "big-player",
+        "industrial-lighting",
+        "genaie-advertisers"
+      ],
+      "name": "ONLINE MARKETING 03"
     }
   }
 }
