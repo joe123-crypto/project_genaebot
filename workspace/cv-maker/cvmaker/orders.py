@@ -25,7 +25,7 @@ import secrets
 import shutil
 
 from . import CvMakerError
-from .common import normalize_phone, utc_now
+from .common import normalize_account, normalize_phone, utc_now
 
 
 STORE_VERSION = 1
@@ -266,9 +266,10 @@ def _remove_artifact_files(order_id: str, source_pdf: str = "") -> None:
     pass
 
 
-def create_order(phone: str, mode: str = "interview") -> dict:
+def create_order(phone: str, mode: str = "interview", account: str = "default") -> dict:
   """Open a fresh order in the `interviewing` state for a normalized number."""
   target = normalize_phone(phone)
+  account = normalize_account(account)
   chosen = str(mode or "").strip() or "interview"
   if chosen not in MODES:
     raise CvMakerError("that is not a CV order type this service offers")
@@ -279,6 +280,7 @@ def create_order(phone: str, mode: str = "interview") -> dict:
     order = {
       "orderId": order_id,
       "phone": target,
+      "account": account,
       "status": STATUS_INTERVIEWING,
       "mode": chosen,
       "data": empty_interview_data(),
@@ -303,13 +305,14 @@ def load_order(order_id: str) -> dict | None:
   return copy.deepcopy(order)
 
 
-def active_order_for(phone: str) -> dict | None:
+def active_order_for(phone: str, account: str = "default") -> dict | None:
   """The newest order for this number that has not settled yet."""
   target = normalize_phone(phone)
+  account = normalize_account(account)
   with _store_lock():
     store = _read_store()
     for order in _live_orders(store):
-      if order.get("phone") == target and str(order.get("status") or "") not in TERMINAL_STATUSES:
+      if order.get("phone") == target and order.get("account", "default") == account and str(order.get("status") or "") not in TERMINAL_STATUSES:
         return copy.deepcopy(order)
   return None
 

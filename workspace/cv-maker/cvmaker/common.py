@@ -107,6 +107,13 @@ def normalize_phone(value: str) -> str:
   return phone
 
 
+def normalize_account(value: object = "default") -> str:
+  account = str(value or "default").strip()
+  if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", account):
+    raise SystemExit("invalid WhatsApp account")
+  return account
+
+
 def utc_now() -> str:
   return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 

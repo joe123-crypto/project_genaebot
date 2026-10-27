@@ -103,12 +103,12 @@ async function runPublicServiceAction(api, sender, action, text, params = {}) {
   if (!service || !isServiceEnabled(api, service)) return toolText({ text: serviceDisabledReply(api) });
   switch (action) {
     case "business_info": return toolText({ text: loadBusinessInfo(api) });
-    case "handoff": return toolText(await handleHandoff(api, sender, params.category, params.details || text));
+    case "handoff": return toolText(await handleHandoff(api, sender, params.category, params.details || text, params.accountId));
     // Open-DM mode starts the automated CV order (the gate then relays each
     // interview turn); classic allowlist mode keeps the agent-driven intro.
     case "cv_maker_start":
       return toolText(
-        memberGateEnabled(api) ? await startCvOrder(api, sender) : await handleCvMakerRequest(api, sender, text),
+        memberGateEnabled(api) ? await startCvOrder(api, sender, params.accountId) : await handleCvMakerRequest(api, sender, text),
       );
     default: return toolText();
   }
@@ -193,6 +193,7 @@ export default {
             return runPublicServiceAction(api, sender, params.action, String(params.text || ""), {
               category: String(params.category || ""),
               details: String(params.details || ""),
+              accountId: getEventAccountId({}, ctx) || "default",
             });
           },
         };
@@ -368,7 +369,7 @@ export default {
       if (gateOn) {
         if (admin) return;
         try {
-          return await handleIntake(api, sender, text);
+          return await handleIntake(api, sender, text, getEventAccountId(event, ctx) || "default");
         } catch (err) {
           if (isQueueFullError(err)) return busyReply();
           api.logger?.warn?.(`public-service-gate: intake failed (${String(err)})`);

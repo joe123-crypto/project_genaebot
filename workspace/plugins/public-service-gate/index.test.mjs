@@ -1234,3 +1234,17 @@ test("without an account id the guard stays out of the way", async () => {
   }
   assert.equal(fs.existsSync(path.join(dir, "sibling-lines.json")), false);
 });
+
+test('audit: CV tools and interview turns retain the authenticated receiving account',async()=>{
+  const handler=cvHandler();
+  const tool=handler.publicTool({agentId:'public',agentAccountId:'ads',requesterSenderId:UNKNOWN,messageChannel:'whatsapp'});
+  await tool.execute('test',{action:'cv_maker_start'});
+  assert.deepEqual(handler.cvCalls(),[`status --phone=${UNKNOWN} --account=ads`]);
+  await handler(eventFor('Jane',UNKNOWN),{channelId:'whatsapp',senderId:UNKNOWN,accountId:'ads'});
+  assert.ok(handler.cvCalls().includes(`interview-turn --phone=${UNKNOWN} --message=Jane --account=ads`));
+  // A CV pointer from ads must not turn an unrelated main-line message into
+  // an interview turn, nor change the original order's delivery account.
+  const before=handler.cvCalls().length;
+  await handler(eventFor('hello',UNKNOWN),{channelId:'whatsapp',senderId:UNKNOWN,accountId:'default'});
+  assert.equal(handler.cvCalls().length,before);
+});

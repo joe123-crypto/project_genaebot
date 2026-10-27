@@ -77,7 +77,7 @@ def build_and_send(order: dict) -> dict:
 
   cv_html = style_cv_html(cv_html_for_order(order, work_dir))
   rendered = render.render_cv_pdf(cv_html, work_dir / _cv_filename(cv_html))
-  send_result = delivery.send_whatsapp_document(phone, rendered, CV_READY_MESSAGE)
+  send_result = delivery.send_whatsapp_document(phone, rendered, CV_READY_MESSAGE, account=order.get("account", "default"))
   message_id = delivery.result_message_id(send_result)
   return {
     "delivered": bool(message_id),

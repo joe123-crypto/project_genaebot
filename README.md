@@ -769,20 +769,35 @@ from a 401 logout; restarting or repeatedly scanning a QR does not repair it.
 
 Railway loads `deploy/railway/whatsapp-lid-loader.mjs` before starting the gateway.
 It adapts the installed WhatsApp normalizer, including OpenClaw's plugin captures,
-without editing vendor files. `whatsapp-lid-recovery.mjs` keeps verified mappings
-in `runtime/whatsapp-identities/mappings.json`, outside the relinked credentials.
-Reciprocal mappings and authenticated message-key alternates can establish a
-phone; conflicting mappings cannot. Without a phone, a DM keeps its opaque
+without editing vendor files. `whatsapp-lid-recovery.mjs` keeps account- and
+domain-scoped routing hints in `runtime/whatsapp-identities/mappings.json`,
+outside the relinked credentials. It uses the current account's mappings and
+authenticated message-key alternates; it never borrows customer identities from
+another account. Cached aliases alone cannot authorize a phone allowlist,
+administrator, configured member or privileged agent binding. The schema-v1
+cache's unscoped phone aliases are discarded when upgrading. Without a phone, a DM keeps its opaque
 `<id>@lid` or `<id>@hosted.lid` identity and still reaches the public agent.
-An account keeps an opaque identity stable even if a phone mapping arrives later,
-so its conversation and handoff/CV state do not split.
+An account keeps an opaque identity stable when a verified, unambiguous mapping
+links later phone-addressed messages to it. Unassociated or ambiguous identities
+are never guessed or merged. Lookup failures/timeouts and malformed cache fields cannot
+discard an otherwise addressable DM.
 Opaque IDs stay distinct from phone numbers throughout lead, handoff, stop and CV
 state; they never inherit phone-based administrator or sibling-line privileges.
 Handoffs without a phone alert the operator to continue in the original chat.
+CV orders record their receiving WhatsApp account; PDF and decline deliveries
+use that account explicitly. Existing orders without an account belong to
+`default`. An interview on one line does not capture messages sent to the other.
+The adapter's target formatter is also patched: without this, it converts a LID
+into an invented phone number, including when formatting command-owner checks.
+Standalone CV delivery preloads the compatibility code itself and refuses an
+opaque-ID send if the loader is unavailable. Other standalone `openclaw message`
+commands targeting LIDs must set `NODE_OPTIONS=--import=/usr/local/lib/genaie/whatsapp-lid-loader.mjs`;
+the gateway and its child processes already inherit that setting.
 
-The loader is deliberately checked against the pinned adapter structure and
-fails visibly if an upgrade changes the affected code. Test the compatibility
-patch before updating OpenClaw. Do not delete the identity archive during a
+The loader checks the adapter's exact version and patch anchors; unsupported
+versions or changed matched bundles fail visibly. CI checks that its supported
+version matches the image pin. Test bundle names and the compatibility patch
+before updating OpenClaw. Do not delete the identity archive during a
 relink, or copy Signal session/key files between accounts. Verify reception with
 an outside-number DM and its reply, rather than channel status alone.
 

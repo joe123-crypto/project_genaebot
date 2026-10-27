@@ -4,9 +4,11 @@ export function normalizePhone(value) {
   if (!trimmed) return "";
   // WhatsApp can withhold a sender's phone number. Preserve its authenticated
   // direct-chat identity; stripping @lid would impersonate an unrelated phone.
-  const lid = /^(\d+)(?::\d+)?@(lid|hosted\.lid)$/.exec(trimmed);
+  const lid = /^(\d{1,32})(?::\d+)?@(lid|hosted\.lid)$/.exec(trimmed);
   if (lid) return `${lid[1]}@${lid[2]}`;
-  if (trimmed.includes("@") && !/^\d+(?::\d+)?@s\.whatsapp\.net$/.test(trimmed)) return "";
+  const phoneJid = /^(\d{8,15})(?::\d+)?@(s\.whatsapp\.net|hosted)$/.exec(trimmed);
+  if (phoneJid) return `+${phoneJid[1]}`;
+  if (trimmed.includes("@")) return "";
   const plus = trimmed.startsWith("+") ? "+" : "";
   return plus + trimmed.replace(/[^\d]/g, "");
 }
@@ -92,6 +94,8 @@ export function getEventSender(event = {}, ctx = {}) {
 export function getEventAccountId(event = {}, ctx = {}) {
   return String(
     ctx.accountId ??
+      ctx.agentAccountId ??
+      ctx.deliveryContext?.accountId ??
       ctx.account_id ??
       ctx.account?.id ??
       event.accountId ??

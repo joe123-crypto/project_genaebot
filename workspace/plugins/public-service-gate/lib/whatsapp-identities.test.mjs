@@ -40,3 +40,12 @@ test('handoff can be stored and resumed using an opaque sender identity', (t) =>
   assert.equal(clearHandoff(api, LID), true);
   assert.equal(isHandedOff(api, LID), false);
 });
+
+test('audit: phone JID device suffixes do not become part of the phone number',()=>{
+  assert.equal(normalizePhone('263785632943:39@s.whatsapp.net'),PHONE);
+  assert.equal(normalizePhone('263785632943:39@hosted'),PHONE);
+  clearFailsafeStopSuppression(PHONE);
+  markFailsafeStopSuppression('263785632943:39@s.whatsapp.net');
+  assert.equal(hasFailsafeStopSuppression(PHONE),true);
+  clearFailsafeStopSuppression(PHONE);
+});

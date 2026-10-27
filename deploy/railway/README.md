@@ -191,8 +191,12 @@ runs the same Dockerfile, so the result is identical to an integration build.
 The gateway's final boot command preloads the repository's
 `whatsapp-lid-loader.mjs` compatibility patch. It preserves incoming DMs when
 WhatsApp supplies an opaque sender ID without a phone mapping, and archives
-verified mappings under `runtime/whatsapp-identities/` so relinking cannot erase
-them. The loader covers plugin captures as well as the installed adapter and
+account-scoped routing hints under `runtime/whatsapp-identities/` so relinking
+cannot erase them. Cached phone aliases never establish restricted access or
+administrator authority without current evidence. It also preserves LIDs in
+outbound targets and command-owner comparisons. Standalone CV delivery adds the
+loader to its CLI environment, so manual approval does not depend on inheriting
+the gateway's environment. The loader covers plugin captures as well as the installed adapter and
 checks its patch anchors against the pinned OpenClaw version. See the root
 README's WhatsApp reception troubleshooting before upgrading OpenClaw; a healthy
 channel status alone does not verify inbound messages and replies.

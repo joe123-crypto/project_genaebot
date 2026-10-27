@@ -90,7 +90,7 @@ async function forwardToPartner(api, customer, category, details) {
 
 // The `handoff` tool action. Forwarding is best effort; the customer is always
 // handed off and told someone will be in touch.
-export async function handleHandoff(api, sender, category, details) {
+export async function handleHandoff(api, sender, category, details, accountId = "default") {
   const customer = normalizePhone(sender || "");
   const resolved = normalizeHandoffCategory(category);
   if (customer && !customer.includes("@") && FORWARDED_CATEGORIES.has(resolved)) {
@@ -98,7 +98,7 @@ export async function handleHandoff(api, sender, category, details) {
   } else if (customer.includes("@")) {
     // A partner cannot call an opaque WhatsApp ID. Let the operator continue
     // in the original chat rather than inventing a customer phone number.
-    await notifyAdminOfIntake(api, customer, resolved, detailsSnippet(details));
+    await notifyAdminOfIntake(api, customer, resolved, `Original WhatsApp line: ${accountId}. ${detailsSnippet(details)}`);
   }
   try {
     markHandedOff(api, customer, resolved);
