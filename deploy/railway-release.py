@@ -83,6 +83,26 @@ def startup_result(deployment_id, sha, profile, jobs, timeout=180):
     raise TimeoutError("No validated startup result for the released deployment")
 
 
+def cancel_pending(deployment_id, timeout=60):
+    """Prevent a timed-out build from activating after the rollback."""
+    pending = {"INITIALIZING", "QUEUED", "WAITING", "BUILDING", "DEPLOYING"}
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        current = next((item for item in deployments() if item["id"] == deployment_id), None)
+        if current is None:
+            raise RuntimeError("failed candidate is not visible for cancellation")
+        if current["status"] not in pending:
+            return
+        result = railway("api", "mutation($id:String!){deploymentCancel(id:$id)}",
+                         "--variables", json.dumps({"id": deployment_id}))
+        if result.get("errors"):
+            # Cancellation can race with activation. The next scoped read decides.
+            time.sleep(2)
+            continue
+        time.sleep(2)
+    raise TimeoutError("failed candidate did not leave its pending state")
+
+
 def restore(previous, variables):
     present = [f"{key}={value}" for key, value in variables.items() if value is not None]
     if present:
@@ -144,8 +164,8 @@ def release(root, sha, profile, report):
         report.update({"status": "superseded", "sourceCommit": sha})
         return
     previous = next((item for item in deployments() if item["status"] == "SUCCESS"), None)
-    if not previous:
-        raise RuntimeError("no successful deployment available for rollback")
+    if not previous or not previous.get("meta", {}).get("imageDigest"):
+        raise RuntimeError("no successful deployment with an image digest available for rollback")
     raw_variables = railway("variable", "list", *SCOPE, "--json")
     variables = {key: raw_variables.get(key) for key in OWNED}
     if any(key in raw_variables and raw_variables[key] is None for key in OWNED):
@@ -159,6 +179,7 @@ def release(root, sha, profile, report):
         # The repository's manifest is the authority; never install or edit crons here.
         jobs = {item["name"] for item in entries} | {"vacancy-lamp-feed", "hustlers-feed"}
         idle = "1" if profile == "catalog-trial" else "0"
+        identifier = None
         try:
             railway("variable", "set", f"SOURCE_COMMIT={sha}", "GENAIE_CAMPAIGN_TRANSPORT=cli",
                     f"GENAIE_CATALOG_IDLE_RETIREMENT={idle}", *SCOPE, "--skip-deploys", "--json")
@@ -168,10 +189,17 @@ def release(root, sha, profile, report):
             report["deploymentId"] = identifier
             deployed = wait_for(identifier)
             report["imageDigest"] = deployed.get("meta", {}).get("imageDigest")
+            if not report["imageDigest"]:
+                raise RuntimeError("released image digest is missing")
             report["startup"] = startup_result(identifier, sha, idle, jobs)
             report["status"] = "healthy"
         except Exception:
             report["status"] = "failed"
+            if identifier:
+                try:
+                    cancel_pending(identifier)
+                except Exception as error:
+                    report["candidateCancellationError"] = str(error)
             try:
                 report["rollback"] = restore(previous, variables)
             except Exception as error:
@@ -185,7 +213,7 @@ def main():
     parser.add_argument("--profile", choices=["baseline", "catalog-trial"], default="baseline")
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args()
-    report = {}
+    report = {"status": "failed", "sourceCommit": args.sha}
     try:
         release(Path(__file__).resolve().parent.parent, args.sha, args.profile, report)
     finally:

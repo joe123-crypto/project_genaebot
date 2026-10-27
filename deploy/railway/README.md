@@ -180,10 +180,13 @@ combined with the disconnected direct source.
 
 ## Recovery
 
-The release script restores the exact previous successful image and verifies its
-startup when build, provenance, runtime flags or channel/job checks fail. Read the
+The release refuses to mutate production without a known previous image digest.
+On failure it cancels a still-pending candidate by deployment ID before restoring
+the exact previous successful image and verifying startup. A missing new image
+digest, build, provenance, runtime flag or channel/job failure triggers recovery. Read the
 release artifact for its rollback deployment ID and digest. If rollback fails,
-`rollbackError` is recorded and the workflow remains failed; inspect that specific
+`rollbackError` is recorded and the workflow remains failed; a
+`candidateCancellationError` also requires inspection for a late build. In either case, inspect that specific
 deployment and restore a known healthy image through Railway before retrying.
 Do not downgrade migrated OpenClaw state.
 

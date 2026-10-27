@@ -73,6 +73,23 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(report["imageDigest"], "sha256:previous")
         self.assertTrue(any(args[:3] == ("variable", "delete", "SOURCE_COMMIT") for args in calls))
 
+    def test_pending_failed_candidate_is_cancelled_by_its_exact_id(self):
+        with patch.object(RELEASE, "deployments", side_effect=[
+            [{"id": "new", "status": "BUILDING"}], [{"id": "new", "status": "REMOVED"}]]), \
+             patch.object(RELEASE, "railway", return_value={"data": {"deploymentCancel": True}}) as railway, \
+             patch.object(RELEASE.time, "sleep"):
+            RELEASE.cancel_pending("new")
+        self.assertIn("deploymentCancel", railway.call_args.args[1])
+        self.assertEqual(json.loads(railway.call_args.args[-1]), {"id": "new"})
+
+    def test_missing_previous_digest_stops_before_any_production_mutation(self):
+        with patch.object(RELEASE.subprocess, "check_output", side_effect=[SHA+"\n", SHA+"\trefs/heads/main\n"]), \
+             patch.object(RELEASE, "deployments", return_value=[{"id": "old", "status": "SUCCESS"}]), \
+             patch.object(RELEASE, "railway") as railway:
+            with self.assertRaisesRegex(RuntimeError, "image digest"):
+                RELEASE.release(ROOT, SHA, "baseline", {})
+        railway.assert_not_called()
+
     def test_wrong_rollback_image_is_not_reported_as_recovered(self):
         with patch.object(RELEASE, "railway", return_value={"data": {"deploymentRedeploy": {"id": "rollback"}}}), \
              patch.object(RELEASE, "wait_for", return_value={"id": "rollback", "meta": {"imageDigest": "other"}}):
@@ -107,9 +124,11 @@ class ReleaseTests(unittest.TestCase):
                  patch.object(RELEASE, "railway", side_effect=railway), \
                  patch.object(RELEASE, "wait_for", return_value={"meta": {"imageDigest": "new"}}), \
                  patch.object(RELEASE, "startup_result", side_effect=ValueError("wrong source SHA")), \
+                 patch.object(RELEASE, "cancel_pending") as cancel, \
                  patch.object(RELEASE, "restore", return_value={"deploymentId": "rollback"}) as restore:
                 with self.assertRaisesRegex(ValueError, "wrong source"):
                     RELEASE.release(root, SHA, "baseline", report)
+            cancel.assert_called_once_with("new")
             self.assertEqual(report["status"], "failed")
             self.assertEqual(restore.call_args.args[0]["id"], "previous")
             self.assertNotIn("OTHER_SECRET", restore.call_args.args[1])
