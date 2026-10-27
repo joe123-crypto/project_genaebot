@@ -76,10 +76,12 @@ COPY --from=stage /opt/live-source /opt/live-source
 COPY deploy/railway/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY deploy/railway/sync-public-prompt.py /usr/local/bin/sync-public-prompt.py
 COPY deploy/railway/sync-reply-gates.py /usr/local/bin/sync-reply-gates.py
+COPY deploy/railway/sync-runtime-plugins.py /usr/local/bin/sync-runtime-plugins.py
 COPY deploy/railway/wait-gateway-lease.py /usr/local/bin/wait-gateway-lease.py
 COPY deploy/railway/whatsapp-lid-loader.mjs deploy/railway/whatsapp-lid-recovery.mjs /usr/local/lib/genaie/
 RUN chmod 0755 /usr/local/bin/entrypoint.sh /usr/local/bin/sync-public-prompt.py \
-    /usr/local/bin/sync-reply-gates.py /usr/local/bin/wait-gateway-lease.py
+    /usr/local/bin/sync-reply-gates.py /usr/local/bin/sync-runtime-plugins.py \
+    /usr/local/bin/wait-gateway-lease.py
 
 EXPOSE 18789
 

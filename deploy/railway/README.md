@@ -47,8 +47,8 @@ GitHub-Actions deploy job that runs `railway up` with
 
 To change what the gateway ships (workspace code, cron jobs like the CV-promo ad targets,
 agent context markdown, the public WhatsApp system prompt, the business info page):
-edit it in this repo, open a PR, merge. That's the whole flow. Two pieces of
-`openclaw.json` are rewritten on every boot, both baked at `/usr/local/bin/`:
+edit it in this repo, open a PR, merge. That's the whole flow. Three sets of
+`openclaw.json` settings are synced on every boot by scripts baked at `/usr/local/bin/`:
 
 - `deploy/railway/sync-public-prompt.py` copies
   `workspace/docs/public-whatsapp-system-prompt.txt` into
@@ -67,6 +67,14 @@ edit it in this repo, open a PR, merge. That's the whole flow. Two pieces of
   off-switch here (editing the template does not reach the live config on Railway —
   silence the `ads` line by hand-editing the live `openclaw.json`, an edit the sync
   does not revert).
+
+`deploy/railway/sync-runtime-plugins.py` also applies eleven optional plugin
+`enabled` leaves from the template. It disables unused browser, canvas,
+computer/device, geolocation, GitHub, Ollama, voice, Anthropic and xAI integrations.
+It preserves plugin configs, model access, memory, file transfer, local execution,
+WhatsApp gates, bindings and both accounts. To restore a governed plugin, set its
+template `enabled` boolean to `true` and deploy. `--dry-run` reports without writing;
+invalid input leaves the config untouched and does not block boot.
 
 The rest of `config/openclaw.template.json` is still not applied (see README).
 `deploy/railway/wait-gateway-lease.py` (also baked at `/usr/local/bin/`) runs just
@@ -221,7 +229,69 @@ corrected; `reply gates NOT synced: ...` means it was left alone and the previou
 values still apply. A `WARNING: openclaw config validate failed after the
 reply-gate sync` line is never fatal but always worth reading.
 
-### Turning replies off
+## Cost measurement
+
+The October 11 OpenClaw/Node upgrade coincided with a sustained memory increase.
+Memory represented about 91% of compute usage on October 27. The target is about
+$10/month, retaining both WhatsApp lines and core bot capabilities. Keep one
+replica and the gateway always running; sleep would interrupt WhatsApp and cron.
+
+The workspace compute email alert is $8, with no hard shutdown limit. Inspect it
+with `railway usage limit status --json`. A forecast is not a spending cap.
+
+Capture comparison reports outside the repo:
+
+```sh
+python3 deploy/railway-cost-report.py --since 1h > /tmp/railway-baseline.json
+# After deploying the optional-plugin policy and allowing startup to settle:
+python3 deploy/railway-cost-report.py --since 1h > /tmp/railway-plugins.json
+# After a full campaign week:
+python3 deploy/railway-cost-report.py --since 7d > /tmp/railway-week.json
+```
+
+Aim for about 0.8 GB average memory, leaving roughly $2 for CPU, network and
+storage. Compare billing deltas as well as metrics. Check both connected WhatsApp
+accounts, inbound replies, CV processing, memory and the next normal campaign
+runs; do not send extra promotional test messages. Do not reduce the memory
+ceiling or downgrade migrated state simply to force the target.
+
+An allocator trial is separate from plugin trimming: set `MALLOC_ARENA_MAX=2`
+through Railway variables, restart, and compare equivalent settled windows against
+the plugin-only deployment. Keep it only if memory improves without worker errors,
+restarts or functional regressions; otherwise remove the variable and restart.
+It is deliberately not baked into the image without measurements. If the target
+is missed, profile worker heaps and native memory next; lowering only the main
+JavaScript heap limit does not bound the workers or native allocations.
+
+### Initial rollout: 2026-10-27
+
+The plugin policy was deployed successfully: startup now reports 8 loaded plugins
+instead of 19. Both WhatsApp accounts connected without channel errors, and all
+12 campaigns and both feeds remained enabled. CV and feed CLI smoke checks and
+the portable test suite passed.
+
+Twelve idle samples per deployment, ten seconds apart, gave these averages over
+the last six samples (MiB):
+
+| Configuration | Container memory | Anonymous memory | Gateway RSS |
+| --- | ---: | ---: | ---: |
+| Optional plugins disabled | 1658 | 1062 | 1073 |
+| Same image, `MALLOC_ARENA_MAX=2` | 1593 | 1014 | 1020 |
+
+The short allocator trial is inconclusive: its small difference includes cache
+variation and neither run covers campaign load. The variable was removed rather
+than making the experiment permanent. The $10 target is **not yet verified**;
+collect the full-week report after November 3 before declaring savings.
+
+The earlier memory-pressure sample found a 323 MiB main heap plus 520 MiB of
+sampled worker heaps, with incomplete worker coverage. The largest sampled worker
+was the prepared model catalog (130 MiB), followed by session transcript storage
+(72 MiB), state reads (46 MiB), SQLite storage (50 MiB) and disk budgeting (42 MiB).
+This points the next profiling pass at core worker lifetime/retention and native
+RSS, rather than imposing a smaller main JavaScript heap or reverting migrated
+state. Loaded plugin count alone does not establish proportional memory savings.
+
+## Turning replies off
 
 ```sh
 railway variables --set REPLIES_DISABLED=1 && railway redeploy   # replies off
