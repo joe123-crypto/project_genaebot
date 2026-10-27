@@ -16,7 +16,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/install-promo.sh"
 
 register_promo_cron \
   "industrial-lighting-promo" \
-  "${INDUSTRIAL_LIGHTING_PROMO_CRON_EXPR:-7 9 * * *}" \
+  "${INDUSTRIAL_LIGHTING_PROMO_CRON_EXPR:-5 10 * * *}" \
   "${INDUSTRIAL_LIGHTING_PROMO_TZ:-Africa/Harare}" \
   "${INDUSTRIAL_LIGHTING_PROMO_FAILURE_ALERT_TO:-+263785632943}" \
   "/home/joseph/.openclaw/workspace/cron/industrial-lighting-promo/post_ad.py"

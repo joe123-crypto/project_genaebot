@@ -332,31 +332,20 @@ individual installers (see *Job feeds* above).
   through two bundled posters daily and reusing the same shared `promo_broadcast`
   delivery engine. The posters carry the prices, so the captions stay price-free and
   route replies to the bot's own number
-- **`big-player-promo`** (`install-big-player-promo.sh`, 15:30) runs
-  `workspace/cron/big-player-promo/post_ad.py`, a deterministic (no-agent) job that
-  posts the operator's borehole/solar lead-gen ad on the **second ("ads") WhatsApp
-  line**, to the two ads-account group JIDs listed in
-  `workspace/cron/big-player-promo/targets.json` (REACH BYO MARKET 5 and BYO
-  ADVERTISING). Because those groups are tagged to the `ads` account, every post is
-  sent from and advertises the ads number via `{bot_number}`, and replies reach the
-  bot (ref prefix `BP`). It runs on a separate WhatsApp account, so its slot can
-  overlap the default line's promos
-- **`industrial-lighting-promo`** (`install-industrial-lighting-promo.sh`, 09:07) runs
-  `workspace/cron/industrial-lighting-promo/post_ad.py`, a deterministic (no-agent) job
-  that posts a fixed PAID ADVERT for a third-party solar company (Industrial Lighting
-  Pvt Ltd) on the **second ("ads") WhatsApp line**, to the same two ads-account group
-  JIDs as big-player (REACH BYO MARKET 5 and BYO ADVERTISING), listed in
-  `workspace/cron/industrial-lighting-promo/targets.json`. The bundled poster carries the
-  packages and prices, so the caption stays to one line; because those groups are tagged
-  to the `ads` account, the post is sent from and advertises the ads number via
-  `{bot_number}`, and replies reach the bot (ref prefix `IL`). It runs on the ads account
-  in a morning slot, well clear of big-player's afternoon run
+- **`big-player-promo`** (`install-big-player-promo.sh`, 15:50) posts the
+  operator's borehole/solar lead-gen ad with tracking prefix `BP`.
+- **`industrial-lighting-promo`** (`install-industrial-lighting-promo.sh`, 10:05)
+  posts the fixed paid advert for Industrial Lighting Pvt Ltd with tracking prefix
+  `IL`. Its bundled poster carries the packages and prices.
+- **`genaie-advertisers-promo`** (`install-genaie-advertisers-promo.sh`, 14:05)
+  posts the fixed advertiser recruitment copy and operator-supplied photo daily,
+  with tracking prefix `GA`.
 
-- **`genaie-advertisers-promo`** (`install-genaie-advertisers-promo.sh`, 12:23)
-  posts the fixed advertiser recruitment copy and operator-supplied photo daily
-  to REACH BYO MARKET 5, BYO HUSTLERS.COM and Bulawayo business group on the
-  **ads** WhatsApp account. The appended click-to-chat link uses the ads contact
-  number with tracking prefix `GA` (Genaie advertiser recruitment).
+These three campaigns use the per-group accounts in their generated target files:
+CHIREDZI BUSINESS FORUM and CHIREDZI MARKETPLACE use the **ads** account, while
+BULAWAYO ADVERTISEMENT uses the **default** account. Existing campaign groups
+remain on the ads account. The shared advertised contact is the ads number.
+Their slots allow preceding campaigns on both accounts to finish before sending.
 
 ### Reconciling the promo crons
 
