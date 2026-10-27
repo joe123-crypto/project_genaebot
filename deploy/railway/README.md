@@ -188,6 +188,15 @@ runs the same Dockerfile, so the result is identical to an integration build.
 
 ## Volume seeding & recovery
 
+The gateway's final boot command preloads the repository's
+`whatsapp-lid-loader.mjs` compatibility patch. It preserves incoming DMs when
+WhatsApp supplies an opaque sender ID without a phone mapping, and archives
+verified mappings under `runtime/whatsapp-identities/` so relinking cannot erase
+them. The loader covers plugin captures as well as the installed adapter and
+checks its patch anchors against the pinned OpenClaw version. See the root
+README's WhatsApp reception troubleshooting before upgrading OpenClaw; a healthy
+channel status alone does not verify inbound messages and replies.
+
 Durable state is a Railway volume at `/home/joseph/.openclaw` (seeded once from the local
 Docker volumes). Seed mode (`OPENCLAW_SEED_MODE=1`) idles the container so state can be
 pushed via the CLI; auto-seed extracts `openclaw-state.tgz` / `runtime-seed.tgz` from the

@@ -759,6 +759,35 @@ The template remains the tracked source of truth for what the config *should* be
 
 ## Operational Changes
 
+### WhatsApp connected but not receiving direct messages
+
+OpenClaw 2026.9.9 can discard an incoming DM before normal inbound logging when
+the sender uses a WhatsApp LID and its phone mapping is missing. A healthy socket
+does not prove reception works. The diagnostic signature is `LID mapping not
+found ...; skipping inbound message` with `logging.level=debug`. This is distinct
+from a 401 logout; restarting or repeatedly scanning a QR does not repair it.
+
+Railway loads `deploy/railway/whatsapp-lid-loader.mjs` before starting the gateway.
+It adapts the installed WhatsApp normalizer, including OpenClaw's plugin captures,
+without editing vendor files. `whatsapp-lid-recovery.mjs` keeps verified mappings
+in `runtime/whatsapp-identities/mappings.json`, outside the relinked credentials.
+Reciprocal mappings and authenticated message-key alternates can establish a
+phone; conflicting mappings cannot. Without a phone, a DM keeps its opaque
+`<id>@lid` or `<id>@hosted.lid` identity and still reaches the public agent.
+An account keeps an opaque identity stable even if a phone mapping arrives later,
+so its conversation and handoff/CV state do not split.
+Opaque IDs stay distinct from phone numbers throughout lead, handoff, stop and CV
+state; they never inherit phone-based administrator or sibling-line privileges.
+Handoffs without a phone alert the operator to continue in the original chat.
+
+The loader is deliberately checked against the pinned adapter structure and
+fails visibly if an upgrade changes the affected code. Test the compatibility
+patch before updating OpenClaw. Do not delete the identity archive during a
+relink, or copy Signal session/key files between accounts. Verify reception with
+an outside-number DM and its reply, rather than channel status alone.
+
+### Gateway commands
+
 Runtime and user operations go through approved commands rather than hand-edited
 config. Shell into the live gateway with `railway ssh`:
 

@@ -66,8 +66,8 @@ def build_and_send(order: dict) -> dict:
   """Render this order's CV and send it back to the requester.
 
   The delivery target is normalized exactly like every other phone-taking
-  command. Normalization strips non-digits and bounds the length, so a group JID
-  such as "1203...@g.us" can never become the target: a CV carries the
+  command. Normalization accepts phones and opaque direct WhatsApp LIDs, and
+  rejects group JIDs such as "1203...@g.us": a CV carries the
   applicant's name, phone, email and address, and must only ever go back to the
   individual who asked for it.
   """

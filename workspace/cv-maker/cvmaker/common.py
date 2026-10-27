@@ -92,6 +92,12 @@ OPENCLAW_BIN = resolve_openclaw_bin()
 
 
 def normalize_phone(value: str) -> str:
+  raw = str(value or "").strip()
+  lid = re.fullmatch(r"(\d+)(?::\d+)?@(lid|hosted\.lid)", raw)
+  if lid:
+    return f"{lid[1]}@{lid[2]}"
+  if "@" in raw:
+    raise SystemExit("a direct WhatsApp identity is required")
   digits = re.sub(r"\D", "", str(value or ""))
   if not digits:
     raise SystemExit("phone is required")

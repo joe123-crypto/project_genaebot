@@ -26,6 +26,7 @@ from unittest import mock
 
 from cvmaker import CvMakerError
 from cvmaker import build, cli, delivery, orders, render
+from cvmaker.common import normalize_phone
 
 
 GROUP_JID = "120363001234567890@g.us"
@@ -143,6 +144,12 @@ class StoreTestCase(unittest.TestCase):
 
 
 class CvIdentityTests(unittest.TestCase):
+  def test_opaque_direct_identity_remains_addressable(self) -> None:
+    self.assertEqual(normalize_phone("199630767833213:7@lid"), "199630767833213@lid")
+    self.assertEqual(normalize_phone("123456789@hosted.lid"), "123456789@hosted.lid")
+    with self.assertRaises(SystemExit):
+      normalize_phone("123456789@g.us")
+
   def test_identity_read_from_semantic_html(self) -> None:
     html = '<h1 data-cv-field="identity">Joseph Munemo</h1>'
     self.assertEqual(build._cv_identity(html), "Joseph Munemo")

@@ -2,6 +2,11 @@ export function normalizePhone(value) {
   if (typeof value !== "string") return "";
   const trimmed = value.trim();
   if (!trimmed) return "";
+  // WhatsApp can withhold a sender's phone number. Preserve its authenticated
+  // direct-chat identity; stripping @lid would impersonate an unrelated phone.
+  const lid = /^(\d+)(?::\d+)?@(lid|hosted\.lid)$/.exec(trimmed);
+  if (lid) return `${lid[1]}@${lid[2]}`;
+  if (trimmed.includes("@") && !/^\d+(?::\d+)?@s\.whatsapp\.net$/.test(trimmed)) return "";
   const plus = trimmed.startsWith("+") ? "+" : "";
   return plus + trimmed.replace(/[^\d]/g, "");
 }

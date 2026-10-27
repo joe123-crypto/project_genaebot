@@ -24,6 +24,16 @@ def request_args(phone: str, message: str = "") -> argparse.Namespace:
 class CmdRequestTests(unittest.TestCase):
     PHONE = "+263779528446"
 
+    def test_opaque_whatsapp_contact_is_not_a_phone_or_group(self) -> None:
+        lid = "199630767833213@lid"
+        store = {"invites": {}, "members": {}}
+        result, _ = whatsapp_invite.cmd_request(request_args(lid, "hello"), store)
+        self.assertTrue(result["isNew"])
+        self.assertIn(lid, store["members"])
+        self.assertNotIn("+199630767833213", store["members"])
+        with self.assertRaises(whatsapp_invite.InviteError):
+            whatsapp_invite.normalize_phone("123456789@g.us")
+
     def test_first_contact_creates_pending_lead(self) -> None:
         store: dict = {"invites": {}, "members": {}}
         result, changed = whatsapp_invite.cmd_request(request_args(self.PHONE, "hello I want to apply"), store)

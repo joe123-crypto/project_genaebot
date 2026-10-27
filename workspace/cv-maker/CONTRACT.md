@@ -19,7 +19,7 @@ settled order returns its current status without repeating the side effect.
       "orders": {
         "<orderId>": {
           "orderId":   "<token_urlsafe(6)>",
-          "phone":     "+263...",          // normalized E.164
+          "phone":     "+263...",          // E.164 or opaque direct WhatsApp LID
           "status":    "interviewing",
           "mode":      "interview" | "revamp",
           "data":      { ...InterviewData... },   // see §4
@@ -32,6 +32,12 @@ settled order returns its current status without repeating the side effect.
         }
       }
     }
+
+The historical `phone` key is the authenticated delivery identity. When WhatsApp
+does not expose a phone, it may contain `<digits>@lid` or `<digits>@hosted.lid`.
+These IDs are preserved exactly (apart from a device suffix), never converted
+into phone numbers. Group JIDs and other JID domains are rejected. The CV's own
+contact details still come from the interview, independently of this address.
 
 Per-order artifacts live in `~/.openclaw/runtime/cv-maker/<orderId>/`, dir 0700,
 files 0600. The JSON file itself is 0600, written atomically (tmp + os.replace)

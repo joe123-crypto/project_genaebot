@@ -36,6 +36,9 @@ def normalize_phone(value: str) -> str:
     raw = str(value or "").strip()
     if not raw:
         raise InviteError("phone number is empty")
+    lid = re.fullmatch(r"(\d+)(?::\d+)?@(lid|hosted\.lid)", raw)
+    if lid:
+        return f"{lid[1]}@{lid[2]}"
     if raw == "*" or "@" in raw:
         raise InviteError(f"not a direct phone number: {raw}")
     digits = re.sub(r"\D", "", raw)

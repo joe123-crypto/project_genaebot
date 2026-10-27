@@ -56,6 +56,7 @@ let warnedUnknownAccount = false;
 // a bare JID-derived "263790453292" would otherwise be different keys (same
 // reason lib/failsafe.js uses its own digits key).
 export function lineKey(value) {
+  if (String(value ?? "").includes("@")) return "";
   return String(value ?? "").replace(/[^\d]/g, "");
 }
 
