@@ -703,7 +703,17 @@ Deliberately **not** governed:
 - every `PRESERVE_PATHS` entry -- runtime-derived or PII, absent from the template
   by design.
 
-It logs `reply gates unchanged (9 paths already match the template)`,
+Railway also applies the optional-plugin enablement policy with
+`deploy/railway/sync-runtime-plugins.py`. It writes only the eleven optional
+plugin `enabled` leaves declared by that script, retaining live plugin options,
+WhatsApp routing, both accounts, model access, memory, file transfer and local
+execution. Browser, canvas, computer/device, geolocation, GitHub, Ollama, voice,
+Anthropic and xAI integrations are disabled to reduce the gateway footprint.
+Changing a governed plugin's template boolean restores it on the next deploy.
+See [Railway cost measurement](deploy/railway/README.md#cost-measurement) for
+baseline comparisons, the separate allocator experiment and the $8 usage alert.
+
+The reply-gate sync logs `reply gates unchanged (9 paths already match the template)`,
 `reply gates updated: <path> <old> -> <new>; ...`, or, on any problem,
 `reply gates NOT synced: <err>` and the boot carries on with the config unchanged.
 A non-fatal `openclaw config validate` runs straight after and only warns, because

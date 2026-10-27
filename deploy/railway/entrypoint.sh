@@ -370,6 +370,12 @@ runuser -u joseph -- env REPLIES_DISABLED="${REPLIES_DISABLED:-}" \
   "$OC_DIR/openclaw.json" \
   --applier "$LIVE_SOURCE/deploy/patch-openclaw-config.py" \
   | while IFS= read -r line; do log "$line"; done || true
+# Optional integrations have a separate, narrow sync: disabling them must not
+# replace live plugin configs, model access or WhatsApp account routing.
+runuser -u joseph -- python3 /usr/local/bin/sync-runtime-plugins.py \
+  "$LIVE_SOURCE/config/openclaw.template.json" "$OC_DIR/openclaw.json" \
+  | while IFS= read -r line; do log "$line"; done || true
+
 # Non-fatal on purpose: a fatal validate here would turn a config nit into a
 # crashloop, which is the 2026-10-12 and 2026-10-18 failure mode. The upgrade
 # block above can afford a fatal one because it has a snapshot to roll back to.

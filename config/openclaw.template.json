@@ -102,6 +102,16 @@
   ],
   "plugins": {
     "entries": {
+      "anthropic": { "enabled": false },
+      "browser": { "enabled": false },
+      "canvas": { "enabled": false },
+      "cua-computer": { "enabled": false },
+      "device-pair": { "enabled": false },
+      "geolocation": { "enabled": false },
+      "github": { "enabled": false },
+      "ollama": { "enabled": false },
+      "talk-voice": { "enabled": false },
+      "xai": { "enabled": false },
       "openrouter": {
         "enabled": true
       },
@@ -112,7 +122,7 @@
         "enabled": true
       },
       "voice-call": {
-        "enabled": true,
+        "enabled": false,
         "config": {
           "agentId": "main",
           "provider": "mock",
