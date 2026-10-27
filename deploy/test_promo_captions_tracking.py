@@ -522,10 +522,16 @@ class PromoWiringTests(unittest.TestCase):
                     v = v.replace(url, "")
                 self.assertEqual(facts(v), base, "%s variant %d facts drifted" % (name, k))
 
-    def test_advertiser_campaign_sends_only_selected_ads_groups_once_daily(self):
+    def test_advertiser_campaign_sends_selected_groups_once_daily_on_their_accounts(self):
         m = load_promo("genaie-advertisers-promo")
-        expected = {"263782033305-1606361015@g.us",
-                    "120363412236304347@g.us", "263713611554-1588562864@g.us"}
+        expected = {
+            "263782033305-1606361015@g.us": "ads",
+            "120363412236304347@g.us": "ads",
+            "263713611554-1588562864@g.us": "ads",
+            "120363415810487005@g.us": "ads",
+            "263779541998-1547060119@g.us": "ads",
+            "120363412512900877@g.us": "default",
+        }
         sent = []
         saved = pb.send_ad
         pb.send_ad = lambda target, text, image, account=None: (
@@ -540,10 +546,10 @@ class PromoWiringTests(unittest.TestCase):
                               caps=None, argv=[])
                 self.assertEqual(pb.broadcast(**kwargs), 0)
                 self.assertEqual(pb.broadcast(**kwargs), 0)
-            self.assertEqual(len(sent), 3)
-            self.assertEqual({target for target, *_ in sent}, expected)
+            self.assertEqual(len(sent), len(expected))
+            self.assertEqual({target for target, *_ in sent}, set(expected))
             for target, text, image, account in sent:
-                self.assertEqual(account, "ads")
+                self.assertEqual(account, expected[target])
                 self.assertEqual(image, m.IMAGE)
                 self.assertTrue(text.startswith(m.POST_TEXT + "\n\n"))
                 self.assertIn("wa.me/263790453292?text=", text)

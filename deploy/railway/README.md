@@ -96,9 +96,10 @@ their groups' JIDs by default and send no test message over `railway ssh`.
 
 The same applies to the promo **schedules**, which moved off the hour (07:15,
 08:13, 08:40, 10:35, 11:39, 12:50, 13:21, 14:26, 17:06 `Africa/Harare`) so the
-account's daily pattern is not perfectly periodic. (big-player runs at 15:30,
-industrial-lighting at 09:07, and genaie-advertisers at 12:23 on the separate
-"ads" line, so they need not avoid the default line's slots.) Merging
+account's daily pattern is not perfectly periodic. (big-player runs at 15:50,
+industrial-lighting at 10:05, and genaie-advertisers at 14:05 primarily on the
+"ads" line. All three also serve BULAWAYO ADVERTISEMENT on the default line,
+so these slots clear both accounts' preceding campaigns.) Merging
 that change ships nothing on its own. `deploy/promo-crons.json` is the declared
 cron state for all twelve campaigns --
 schedule, timezone, failure-alert target, command and the shared 7200 s job

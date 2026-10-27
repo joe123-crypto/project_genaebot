@@ -914,6 +914,42 @@
       ],
       "note": "Discovered in the ads account sender-key store on 2026-10-25; name supplied by the operator."
     },
+    "120363415810487005@g.us": {
+      "name": "CHIREDZI MARKETPLACE",
+      "source": "operator",
+      "status": "active",
+      "account": "ads",
+      "daily_cap": null,
+      "promos": [
+        "big-player",
+        "industrial-lighting",
+        "genaie-advertisers"
+      ]
+    },
+    "263779541998-1547060119@g.us": {
+      "name": "CHIREDZI BUSINESS FORUM",
+      "source": "operator",
+      "status": "active",
+      "account": "ads",
+      "daily_cap": null,
+      "promos": [
+        "big-player",
+        "industrial-lighting",
+        "genaie-advertisers"
+      ]
+    },
+    "120363412512900877@g.us": {
+      "name": "BULAWAYO ADVERTISEMENT",
+      "source": "operator",
+      "status": "active",
+      "account": "default",
+      "daily_cap": null,
+      "promos": [
+        "big-player",
+        "industrial-lighting",
+        "genaie-advertisers"
+      ]
+    },
     "263713611554-1588562864@g.us": {
       "name": "Bulawayo business group",
       "source": "operator",
