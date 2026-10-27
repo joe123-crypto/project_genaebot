@@ -22,43 +22,77 @@ class CampaignClient:
         self.sequence = 0
 
     def close(self):
-        if self.process is None:
-            return
         process, self.process = self.process, None
+        self.buffer = b""
+        if process is None:
+            return
         try:
             process.stdin.close()
+        except OSError:
+            pass
+        try:
             process.wait(timeout=5)
-        except (OSError, subprocess.TimeoutExpired):
-            process.terminate()
+        except subprocess.TimeoutExpired:
             try:
+                process.terminate()
                 process.wait(timeout=2)
             except subprocess.TimeoutExpired:
                 process.kill()
-                process.wait()
+                process.wait(timeout=2)
+            except OSError:
+                pass
+        except OSError:
+            pass
         finally:
-            process.stdout.close()
+            try:
+                process.stdout.close()
+            except OSError:
+                pass
+
+    def _remaining(self, deadline):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("gateway acknowledgement timed out; delivery outcome unknown")
+        return remaining
+
+    def _write(self, data, deadline):
+        pending = memoryview(data)
+        while pending:
+            if not select.select([], [self.process.stdin], [], self._remaining(deadline))[1]:
+                raise TimeoutError("gateway write timed out; delivery outcome unknown")
+            try:
+                written = os.write(self.process.stdin.fileno(), pending)
+            except BlockingIOError:
+                continue
+            if not written:
+                raise RuntimeError("gateway helper closed during write; delivery outcome unknown")
+            pending = pending[written:]
 
     def request(self, method, params):
         # Startup failure is terminal for this request too. Switching transports
         # after a timeout/closed pipe could duplicate a request already accepted.
         try:
+            deadline = time.monotonic() + self.timeout
             if self.process is None:
+                self.buffer = b""
                 self.process = subprocess.Popen(
                     ["node", str(Path(__file__).with_suffix(".mjs"))],
                     stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                    stderr=None, env=os.environ.copy(),
+                    stderr=None, env=os.environ.copy(), bufsize=0,
                 )
+                os.set_blocking(self.process.stdin.fileno(), False)
+                os.set_blocking(self.process.stdout.fileno(), False)
             self.sequence += 1
             identifier = str(self.sequence)
             message = json.dumps({"id": identifier, "method": method, "params": params})
-            self.process.stdin.write(message.encode() + b"\n")
-            self.process.stdin.flush()
-            deadline = time.monotonic() + self.timeout
+            self._write(message.encode() + b"\n", deadline)
             while b"\n" not in self.buffer:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0 or not select.select([self.process.stdout], [], [], remaining)[0]:
+                if not select.select([self.process.stdout], [], [], self._remaining(deadline))[0]:
                     raise TimeoutError("gateway acknowledgement timed out; delivery outcome unknown")
-                chunk = os.read(self.process.stdout.fileno(), 65536)
+                try:
+                    chunk = os.read(self.process.stdout.fileno(), 65536)
+                except BlockingIOError:
+                    continue
                 if not chunk:
                     raise RuntimeError("gateway helper closed; delivery outcome unknown")
                 self.buffer += chunk
@@ -72,7 +106,11 @@ class CampaignClient:
                 return False, json.dumps({"error": response.get("error", "gateway request failed")})
             return True, json.dumps(response.get("payload", {}))
         except Exception as error:
-            self.close()
+            try:
+                self.close()
+            except Exception:
+                # Cleanup must not replace the delivery failure being reported.
+                pass
             return False, "gateway transport error: %s" % error
 
     def send(self, target, text, image, account=None):
@@ -102,7 +140,12 @@ def campaign_transport(function):
             return function(*args, **kwargs)
         finally:
             _client.reset(token)
-            client.close()
+            try:
+                client.close()
+            except Exception as error:
+                # A cleanup fault must not overwrite a broadcast's original error.
+                import sys
+                print("gateway helper cleanup failed: %s" % error, file=sys.stderr)
     return wrapped
 
 

@@ -68,6 +68,51 @@ for line in sys.stdin:
         a, b = self.calls()
         self.assertEqual(a["params"]["idempotencyKey"], b["params"]["idempotencyKey"])
 
+    def test_corrupt_trailing_data_is_discarded_before_a_healthy_restart(self):
+        self.helper.write_text('''import sys,json
+for line in sys.stdin:
+ d=json.loads(line)
+ if d['id']=='1': print('bad-json\\n'+json.dumps({'id':'stale','ok':True}),flush=True)
+ else: print(json.dumps({'id':d['id'],'ok':True,'payload':{'messageId':'healthy'}}),flush=True)
+''')
+        client = gc.CampaignClient("recovery")
+        self.addCleanup(client.close)
+        self.assertFalse(client.send("1@g.us", "hello", "/ad.png")[0])
+        self.assertEqual(client.buffer, b"")
+        self.assertTrue(client.send("2@g.us", "hello", "/ad.png")[0])
+        self.assertEqual(len(self.processes), 2)
+
+    def test_wrong_id_eof_and_oversize_responses_are_bounded_and_clear_buffers(self):
+        for response in ['print(\'{"id":"wrong","ok":true}\',flush=True)',
+                         'sys.exit(0)', 'print("x"*(1024*1024+1),flush=True)']:
+            with self.subTest(response=response):
+                self.helper.write_text('import sys\nsys.stdin.readline()\n'+response+'\n')
+                client = gc.CampaignClient("fault", timeout=0.2)
+                ok, output = client.send("1@g.us", "hello", "/ad.png")
+                self.assertFalse(ok)
+                self.assertIn("gateway transport error", output)
+                self.assertIsNone(client.process)
+                self.assertEqual(client.buffer, b"")
+
+    def test_partial_response_is_reassembled(self):
+        self.helper.write_text('''import sys,json,time
+for line in sys.stdin:
+ d=json.loads(line); response=json.dumps({'id':d['id'],'ok':True,'payload':{'messageId':'partial'}})+'\\n'
+ sys.stdout.write(response[:10]);sys.stdout.flush();time.sleep(.02)
+ sys.stdout.write(response[10:]);sys.stdout.flush()
+''')
+        client = gc.CampaignClient("partial")
+        self.addCleanup(client.close)
+        self.assertTrue(client.send("1@g.us", "hello", "/ad.png")[0])
+
+    def test_blocked_write_obeys_the_request_deadline(self):
+        self.helper.write_text('import time\ntime.sleep(10)\n')
+        client = gc.CampaignClient("blocked-write", timeout=0.05)
+        ok, output = client.send("1@g.us", "x" * 200_000, "/ad.png")
+        self.assertFalse(ok)
+        self.assertIn("write timed out", output)
+        self.assertIsNone(client.process)
+
     def test_timeout_is_not_replayed_or_fallen_back_to_cli(self):
         client = gc.CampaignClient("promo", timeout=0.15)
         ok, output = client.send("1@g.us", "timeout", "/ad.png")

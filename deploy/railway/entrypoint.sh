@@ -397,4 +397,7 @@ log "starting openclaw gateway on port $PORT as joseph (bind=lan, tailscale=off)
 # Keep unknown WhatsApp LID DMs addressable and retain verified phone mappings
 # across relinks. The loader also covers integrity-checked plugin captures.
 export NODE_OPTIONS="${NODE_OPTIONS:-} --import=/usr/local/lib/genaie/whatsapp-lid-loader.mjs"
+# A bounded local check publishes sanitized readiness for the CI project token.
+# CI needs no SSH key or public gateway endpoint. This exits after one result.
+runuser -u joseph -- python3 /usr/local/bin/report-release-ready.py &
 exec runuser -u joseph -- openclaw gateway --port "$PORT" --bind lan --tailscale off

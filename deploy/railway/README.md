@@ -7,43 +7,47 @@ truth** — there is no hand-maintained `live-source/` copy anymore.
 
 ## How a deploy happens (the pipeline)
 
-```
-open PR ─► "Portable validation" (deploy-main.yml) runs deploy/ci-check.sh ─►
-branch protection should block merge until green ─► merge to main ─►
-Railway auto-builds deploy/railway/Dockerfile ─► gateway redeploys
-```
-
-**Railway deploys whatever lands on `main`, pass or fail.** CI only gates
-production if the `Portable validation` check is *required* on `main`, which is
-step 2 under one-time wiring below. Nothing in this repository can enforce it, so
-verify it rather than assuming it:
-
-```sh
-gh api repos/joe123-crypto/project_genaebot/branches/main/protection \
-  --jq '.required_status_checks.contexts'
+```text
+PR → portable validation + secret scan + installed runtime compatibility
+merge to main → repeat all checks → serialized release job → startup verification
+                                                       ↘ exact image rollback on failure
 ```
 
-An error or an empty list means a failing commit will deploy. If branch
-protection is unavailable on the current plan, the enforced alternative is a
-GitHub-Actions deploy job that runs `railway up` with
-`needs: [validate, secrets]`, with Railway auto-deploy turned off.
+`.github/workflows/deploy-main.yml` has three prerequisite jobs:
 
-- The **`validate` job** (`name: Portable validation`) in
-  `.github/workflows/deploy-main.yml` runs the full suite on every PR and push
-  (actionlint, shellcheck, gitleaks, `deploy/ci-check.sh`). It is the check
-  that should be required on `main` (see setup below). We reuse it rather than add a
-  second workflow, so there is exactly one CI run per push.
-  Its required checks cover repository and staging structure, documentation
-  contracts, syntax, every discovered Python and Node test, ShellCheck, actionlint,
-  and secret/private-state scanning. The tracked code has no npm dependencies to
-  install or audit. Actions are pinned to commit revisions and containerized
-  validation tools to versions.
-- **Railway's GitHub integration** watches `main` and rebuilds on every push. It reads
-  `railway.json` (repo root) → `deploy/railway/Dockerfile`.
-- The Docker build assembles the curated overlay from repo HEAD in a first stage
-  (`deploy/stage-openclaw-source.sh` + `deploy/verify-staged-source.sh`), bakes it at
-  `/opt/live-source`, and the entrypoint syncs it onto the state volume at boot. No
-  manual file copying, no drift.
+- **Portable validation** runs structure, documentation contracts, syntax, Python
+  and Node tests, ShellCheck and actionlint on Node 26.12.1.
+- **Secret and private-state scan** checks the source with gitleaks.
+- **Installed runtime compatibility** builds the production Dockerfile with
+  Node 26.12.1 and OpenClaw 2026.9.9, then tests SQLite, WhatsApp LID recovery,
+  the installed gateway SDK, generic pool safety, and actual catalog/auth worker
+  retirement and recreation. The container has no external network or production
+  state. Required integration tests cannot skip. This job takes about ten minutes.
+
+`Deploy verified production commit` depends on all three jobs and runs only for
+`main`. It uses a production project token, uploads a temporary `git archive` of
+that exact tested SHA, and records deployment ID, image digest and runtime profile
+in the `railway-release` artifact. Local dirty and untracked files cannot enter
+the upload. Railway rebuilds the same source; the recorded digest identifies the
+image it actually produced, rather than asserting that separate builds are identical.
+
+The job checks a bounded, sanitized startup log record for the baked source SHA,
+CLI transport, catalog profile, both connected WhatsApp accounts and all twelve
+campaigns plus both feeds. Failure restores the previous successful deployment's
+exact image digest and owned runtime settings, then verifies its startup. It
+never installs crons or sends a test message. This needs no SSH key, public
+health endpoint or permanent monitoring process. Deployments are serialized;
+queued releases whose SHA is no longer `main` exit without changing production.
+
+**The gate only controls production after the one-time cutover below.** Until
+`RAILWAY_TOKEN` is provisioned and Railway's direct GitHub source disconnected,
+the existing integration can still deploy `main` before checks finish. Branch
+protection is unavailable on the current repository plan; do not treat it as an
+active safeguard.
+
+The Docker build stages the curated overlay at `/opt/live-source`; the entrypoint
+syncs it onto the persistent volume at boot. The source marker records the tested
+SHA, and the release verifies that marker instead of trusting a mutable checkout.
 
 To change what the gateway ships (workspace code, cron jobs like the CV-promo ad targets,
 agent context markdown, the public WhatsApp system prompt, the business info page):
@@ -145,51 +149,48 @@ Group membership and the per-group ad caps are NOT cron state: they live in
 normal merge. Turning the caps on is a one-line edit to that file
 (`defaults.caps_enabled`), not an installer run.
 
-## One-time wiring (must be done in the dashboards; the CLI cannot do these)
+## One-time wiring
 
-1. **Railway → GitHub integration.** Railway dashboard → project `openclaw-gateway` →
-   service `gateway` → Settings → *Source* → Connect Repo → `joe123-crypto/project_genaebot`,
-   branch `main`. Install the Railway GitHub app on the repo if prompted. Leave *Root
-   Directory* empty (repo root) so the build context includes `deploy/`, `config/`,
-   `workspace/`. Confirm the existing volume stays mounted at `/home/joseph/.openclaw`.
-   (Optional provenance: add a service variable `SOURCE_COMMIT=${{RAILWAY_GIT_COMMIT_SHA}}`
-   — the Dockerfile records it in `/opt/live-source/.OPENCLAW_GENERATED`.)
-
-2. **GitHub branch protection.** Require the `Portable validation` check on `main` and block
-   direct pushes, so untested code can never reach Railway:
+1. Create a **project token** for `openclaw-gateway`, environment `production`,
+   and save it as the repository Actions secret `RAILWAY_TOKEN`. Keep the token
+   out of chat, Git and logs. This is the only release credential; no workspace
+   billing token or SSH key is needed. The local account's project-token creation
+   API returned `Not Authorized`, so initial provisioning needs the project
+   owner's Railway settings access.
+2. Confirm the correction PR passes all three prerequisite jobs and the secret
+   exists. Keep the existing volume mounted at `/home/joseph/.openclaw`.
+3. Disconnect the service's direct GitHub source **before merging the correction
+   PR**, so merging triggers only the checked Actions release:
 
    ```sh
-   gh api -X PUT repos/joe123-crypto/project_genaebot/branches/main/protection \
-     -H "Accept: application/vnd.github+json" \
-     --input - <<'JSON'
-   {
-     "required_status_checks": { "strict": true, "contexts": ["Portable validation"] },
-     "enforce_admins": false,
-     "required_pull_request_reviews": { "required_approving_review_count": 0 },
-     "restrictions": null
-   }
-   JSON
+   railway service source disconnect \
+     --project a251f752-3b49-4f72-8a71-4629bf2fced0 \
+     --service 503baf60-c897-4a77-812a-719195705031 \
+     --environment 2cae37a4-8e24-41db-87ed-9a3a7c9eff22 --json
    ```
 
-   `required_pull_request_reviews` (with 0 approvals) routes every change through a PR so
-   the check cannot be bypassed by a direct push to `main`; `strict: true` requires the
-   branch be up to date. Leave `enforce_admins: false` so you retain a break-glass hotfix
-   path (set it `true` to gate admins too). If classic branch protection isn't offered on
-   the plan, the equivalent **repository ruleset** (Settings → Rules → Rulesets → require
-   status checks + require a pull request) achieves the same and is available for free
-   private repos.
+4. Merge, watch the `main` workflow, and inspect its `railway-release` artifact.
+   Confirm `healthy`, the tested SHA, image digest, baseline flags, both accounts,
+   all jobs, and no `rollbackError`. A missing secret fails the job before any
+   production mutation; provision it before the cutover to avoid a deployment gap.
 
-## Break-glass: manual deploy without GitHub
+Require the three status checks and PRs in branch protection if the repository
+plan later supports it. The production gate is the deploy job's `needs` list
+combined with the disconnected direct source.
 
-If the integration is down and you must ship now, deploy this repo directly:
+## Recovery
 
-```sh
-railway link            # openclaw-gateway / production / gateway
-railway up --ci         # from the repo root; builds deploy/railway/Dockerfile
-```
+The release script restores the exact previous successful image and verifies its
+startup when build, provenance, runtime flags or channel/job checks fail. Read the
+release artifact for its rollback deployment ID and digest. If rollback fails,
+`rollbackError` is recorded and the workflow remains failed; inspect that specific
+deployment and restore a known healthy image through Railway before retrying.
+Do not downgrade migrated OpenClaw state.
 
-`railway up` uploads the repo root as the build context (honoring `.dockerignore`) and
-runs the same Dockerfile, so the result is identical to an integration build.
+To deploy a corrected release normally, open a PR and use the same pipeline. To
+repeat a verified release, manually run the workflow on `main` with profile
+`baseline`. Avoid `railway up` from a working checkout: it can include unrelated
+local files, bypass the CI gate and obscure which source actually ran.
 
 > The old `/home/joseph/openclaw-deploy/` directory (with its own `live-source/`,
 > `railway/Dockerfile`, `entrypoint.sh`) is **deprecated** — kept only as historical
@@ -225,6 +226,9 @@ railway logs        # expect: [whatsapp] ... starting provider, [gateway] ready,
                     #         [entrypoint] reply gates unchanged (9 paths already match the template)
 ```
 
+The release artifact also retains the `GENAIE_RELEASE_READY` record emitted once
+at startup; it contains no credentials, phone numbers or raw account bindings.
+
 A `reply gates updated: ...` line instead means the live config had drifted and was
 corrected; `reply gates NOT synced: ...` means it was left alone and the previous
 values still apply. A `WARNING: openclaw config validate failed after the
@@ -240,21 +244,44 @@ replica and the gateway always running; sleep would interrupt WhatsApp and cron.
 The workspace compute email alert is $8, with no hard shutdown limit. Inspect it
 with `railway usage limit status --json`. A forecast is not a spending cap.
 
-Capture comparison reports outside the repo:
+Railway's historical resource charts and actual invoice line items are the
+source of truth. Reports below are **manual snapshots** using the local login;
+there is no scheduled collector, extra billing credential or added hosting cost.
+The report keeps provider forecasts, linear resource projections and invoices
+separate. On October 27 the provider forecast was about $12.20, while
+period-to-date spend extrapolated over the actual 31-day cycle was about $22.46.
+Neither number proves that the target has been reached.
+
+For each stable profile, capture an initial snapshot, then another after seven
+full days, outside the repo:
 
 ```sh
-python3 deploy/railway-cost-report.py --since 1h > /tmp/railway-baseline.json
-# After deploying the optional-plugin policy and allowing startup to settle:
-python3 deploy/railway-cost-report.py --since 1h > /tmp/railway-plugins.json
-# After a full campaign week:
-python3 deploy/railway-cost-report.py --since 7d > /tmp/railway-week.json
+python3 deploy/railway-cost-report.py --since 1h > /tmp/railway-baseline-start.json
+# Seven full days later, with the same baseline image/profile:
+python3 deploy/railway-cost-report.py --since 7d \
+  --baseline /tmp/railway-baseline-start.json > /tmp/railway-baseline-week.json
 ```
 
-Aim for about 0.8 GB average memory, leaving roughly $2 for CPU, network and
-storage. Compare billing deltas as well as metrics. Check both connected WhatsApp
-accounts, inbound replies, CV processing, memory and the next normal campaign
-runs; do not send extra promotional test messages. Do not reduce the memory
-ceiling or downgrade migrated state simply to force the target.
+The comparison reports resource spend deltas per day only within the same scope
+and billing cycle. Across a cycle boundary use Railway history instead. The
+metric window can be frozen with `--since <UTC timestamp> --until <UTC timestamp>`.
+Current flags are not proof of past configuration; use the deployment timeline
+and release artifacts to exclude intervals containing an unintended rollout.
+
+Establish the Node 26 baseline with `GENAIE_CAMPAIGN_TRANSPORT=cli` and
+`GENAIE_CATALOG_IDLE_RETIREMENT=0`. Then manually run the checked workflow on
+`main` with profile `catalog-trial` for a matched seven-day candidate window.
+Keep Node, OpenClaw, plugins and sender unchanged. Compare **total resource cost
+per day** and campaign volume, not just idle RSS. Promote retirement only if the
+candidate reduces that rate by at least **5%**, with no missed/duplicate sends,
+worker failures, unexpected restarts, channel/CV failures or latency regression.
+If inconclusive or worse, run the baseline profile again. Normal pushes always
+return to baseline until a reviewed change explicitly promotes the policy.
+
+Check both connected WhatsApp accounts, inbound replies, CV processing and the
+next normal campaign runs; do not send extra promotional test messages. Retain
+the $8 email alert and no hard shutdown cap. Do not lower the memory ceiling or
+downgrade migrated state to force a billing target. The $10 goal remains unproven.
 
 An allocator trial is separate from plugin trimming: set `MALLOC_ARENA_MAX=2`
 through Railway variables, restart, and compare equivalent settled windows against
@@ -282,7 +309,7 @@ the last six samples (MiB):
 The short allocator trial is inconclusive: its small difference includes cache
 variation and neither run covers campaign load. The variable was removed rather
 than making the experiment permanent. The $10 target is **not yet verified**;
-collect the full-week report after November 3 before declaring savings.
+measure seven full days from the verified baseline release before declaring savings.
 
 The earlier memory-pressure sample found a 323 MiB main heap plus 520 MiB of
 sampled worker heaps, with incomplete worker coverage. The largest sampled worker
@@ -319,21 +346,34 @@ active-task protection, native-section draining and source-capture cleanup stay
 intact. Catalog requests already carry the complete reconstruction input. Database
 worker lifetimes are unchanged; the canonical-validation pool already closes at
 the end of each batch. A changed OpenClaw version or patch anchor fails the build.
-Set `GENAIE_CATALOG_IDLE_RETIREMENT=0` and redeploy to restore the old catalog policy.
+The image and baseline release set `GENAIE_CATALOG_IDLE_RETIREMENT=0`; only the
+explicit `catalog-trial` profile enables it. Correctness passes do not establish
+a cost benefit.
 
-Local compatibility checks run the real pinned worker pool through active work,
-idle retirement, native exit/resource cleanup and worker recreation:
+The required compatibility job exercises the actual catalog owner and worker,
+loads provider models and authentication, performs real model inference against
+a local stub, waits for two retire/recreate cycles, checks source-capture cleanup,
+and repeats authentication and inference after each recreation. It also tests
+an authentication failure and verifies that opt-out retains the worker. Fake
+credentials and a network-isolated container keep this separate from production.
+A generic echo worker or a cached `models.list` response alone is insufficient.
+
+To reproduce the installed-runtime checks locally, build the image then run:
 
 ```sh
-GENAIE_OPENCLAW_ROOT=/usr/local/lib/node_modules/openclaw \
-  node --test deploy/railway/worker-idle.integration.test.mjs \
-  deploy/railway/campaign-sdk.integration.test.mjs
+docker build -f deploy/railway/Dockerfile -t genaebot:compatibility .
+docker run --rm --network none --entrypoint /bin/bash \
+  -v "$PWD:/repo:ro" -w /repo \
+  -e GENAIE_REQUIRE_INTEGRATION=1 \
+  -e GENAIE_OPENCLAW_ROOT=/usr/local/lib/node_modules/openclaw \
+  genaebot:compatibility -lc 'node --test deploy/railway/*.integration.test.mjs'
 ```
 
-The gateway client is tested with simulated acknowledgements and failures. Live
-verification uses read-only channel/model/status requests; do not send extra ads
-to validate the transport. Reassess campaign memory/CPU and delivery results after
-the next naturally scheduled runs.
+The sender tests cover malformed/trailing/partial responses, wrong IDs, EOF,
+oversized replies, bounded blocked writes, helper restart, initial connection
+failure, later recovery and no replay after a lost acknowledgement. A rejected
+connection affects that request; a later distinct request can use a recovered
+SDK connection. Cleanup cannot replace the original delivery error.
 
 The initial Node 26 read-only comparison took 1.245/1.175/1.167 seconds for three
 separate CLI channel-status requests versus 0.475/0.007/0.008 seconds using one
@@ -341,12 +381,16 @@ SDK client. These numbers measure client startup and status requests, not WhatsA
 send latency or monthly savings. The runtime-only idle memory samples did not
 establish a Node 26 memory improvement; retain the full-week acceptance check.
 
-The final live rollout confirmed Node 26.12.1, the transient `cli` default, both
+An earlier manual trial confirmed Node 26.12.1, the transient `cli` default, both
 WhatsApp accounts connected, and all 12 campaigns and both feeds enabled. The
 catalog pool went from one idle worker to zero; model listing still returned all
 793 entries afterward. Container memory went from 1537 to 1406 MiB across that
 idle interval. These short samples also include normal GC/cache variation and
-do not establish monthly savings. No extra promotional test messages were sent.
+do not establish monthly savings or catalog reconstruction correctness. Subsequent
+`main` deployments restored Node 24 and the stock worker policy. The corrected
+release returns to pinned Node 26 with retirement disabled; use its deployment
+artifact to identify the start of the baseline. No extra promotional test
+messages were sent.
 
 ## Turning replies off
 

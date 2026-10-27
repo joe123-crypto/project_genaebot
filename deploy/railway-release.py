@@ -1,0 +1,198 @@
+#!/usr/bin/env python3
+"""Release only an exact tested commit; roll back the exact previous image on failure."""
+
+import argparse
+import io
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import tarfile
+import tempfile
+import time
+
+PROJECT = "a251f752-3b49-4f72-8a71-4629bf2fced0"
+SERVICE = "503baf60-c897-4a77-812a-719195705031"
+ENVIRONMENT = "2cae37a4-8e24-41db-87ed-9a3a7c9eff22"
+OWNED = ("SOURCE_COMMIT", "GENAIE_CAMPAIGN_TRANSPORT", "GENAIE_CATALOG_IDLE_RETIREMENT")
+PREFIX = "GENAIE_RELEASE_READY "
+SCOPE = ["--project", PROJECT, "--service", SERVICE, "--environment", ENVIRONMENT]
+
+
+def railway(*arguments, cwd=None):
+    result = subprocess.run(["railway", *arguments], cwd=cwd, capture_output=True,
+                            text=True, timeout=120)
+    if result.returncode:
+        # Do not print secret-bearing variable responses or inherited tokens.
+        raise RuntimeError("Railway operation failed: " + " ".join(arguments[:2]))
+    return json.loads(result.stdout)
+
+
+def deployments():
+    return railway("deployment", "list", *SCOPE, "--limit", "100", "--json")
+
+
+def wait_for(deployment_id, timeout=600):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            deployment = next((item for item in deployments() if item["id"] == deployment_id), None)
+        except RuntimeError:
+            deployment = None
+        if deployment:
+            if deployment["status"] == "SUCCESS":
+                return deployment
+            if deployment["status"] in {"FAILED", "CRASHED", "REMOVED", "SKIPPED"}:
+                raise RuntimeError(f"Deployment {deployment_id} ended with {deployment['status']}")
+        time.sleep(5)
+    raise TimeoutError(f"Deployment {deployment_id} did not become successful")
+
+
+def validate_readiness(report, deployment_id, sha, profile, jobs):
+    if not report.get("ready") or report.get("deploymentId") != deployment_id:
+        raise ValueError("release startup verification failed or references another deployment")
+    if report.get("sourceCommit") != sha:
+        raise ValueError("baked source commit does not match the tested commit")
+    if report.get("transport") != "cli" or report.get("catalogIdleRetirement") != profile:
+        raise ValueError("runtime settings do not match the release profile")
+    if not {"default", "ads"}.issubset(set(report.get("connectedAccounts", []))):
+        raise ValueError("both WhatsApp accounts must be connected")
+    if not jobs.issubset(set(report.get("enabledJobs", []))):
+        raise ValueError("required campaigns or feeds are not enabled")
+
+
+def startup_result(deployment_id, sha, profile, jobs, timeout=180):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        result = subprocess.run(["railway", "logs", deployment_id, *SCOPE, "--lines", "100",
+                                 "--filter", "GENAIE_RELEASE_READY", "--json"],
+                                capture_output=True, text=True, timeout=45)
+        if not result.returncode:
+            for line in result.stdout.splitlines():
+                try:
+                    message = json.loads(line).get("message", "")
+                    if not message.startswith(PREFIX):
+                        continue
+                    report = json.loads(message[len(PREFIX):])
+                except (ValueError, AttributeError):
+                    continue
+                validate_readiness(report, deployment_id, sha, profile, jobs)
+                return report
+        time.sleep(5)
+    raise TimeoutError("No validated startup result for the released deployment")
+
+
+def restore(previous, variables):
+    present = [f"{key}={value}" for key, value in variables.items() if value is not None]
+    if present:
+        railway("variable", "set", *present, *SCOPE, "--skip-deploys", "--json")
+    for key, value in variables.items():
+        if value is None:
+            railway("variable", "delete", key, *SCOPE, "--json")
+    result = railway("api", "mutation($id:String!){deploymentRedeploy(id:$id,usePreviousImageTag:true){id}}",
+                     "--variables", json.dumps({"id": previous["id"]}))
+    restored = wait_for(result["data"]["deploymentRedeploy"]["id"])
+    expected = previous.get("meta", {}).get("imageDigest")
+    if not expected or restored.get("meta", {}).get("imageDigest") != expected:
+        raise RuntimeError("rollback image digest does not match the previous successful deployment")
+    verify_rollback_startup(restored["id"])
+    return {"deploymentId": restored["id"], "imageDigest": expected, "startupVerified": True}
+
+
+def verify_rollback_startup(deployment_id, timeout=180):
+    """Older known images predate the structured startup result; verify their logs too."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        result = subprocess.run(["railway", "logs", deployment_id, *SCOPE, "--lines", "200", "--json"],
+                                capture_output=True, text=True, timeout=45)
+        messages = []
+        for line in result.stdout.splitlines():
+            try:
+                message = json.loads(line).get("message", "")
+            except (ValueError, AttributeError):
+                continue
+            if message.startswith(PREFIX):
+                report = json.loads(message[len(PREFIX):])
+                if report.get("deploymentId") == deployment_id:
+                    if report.get("ready") and {"default", "ads"}.issubset(report.get("connectedAccounts", [])):
+                        return
+                    raise RuntimeError("rollback startup report is unhealthy")
+            messages.append(message)
+        if any("[gateway] ready" in message for message in messages) and \
+           sum("Listening for WhatsApp inbound messages" in message for message in messages) >= 2 and \
+           all(any(f"[{account}] starting provider" in message for message in messages) for account in ["default", "ads"]):
+            return
+        time.sleep(5)
+    raise TimeoutError("rollback image was restored but channel startup could not be verified")
+
+
+def archive_commit(root, sha, destination):
+    archive = subprocess.check_output(["git", "archive", sha], cwd=root)
+    with tarfile.open(fileobj=io.BytesIO(archive)) as source:
+        source.extractall(destination, filter="data")
+
+
+def release(root, sha, profile, report):
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise ValueError("a full commit SHA is required")
+    if subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip() != sha:
+        raise ValueError("checkout does not match the tested SHA")
+    remote = subprocess.check_output(["git", "ls-remote", "origin", "refs/heads/main"], cwd=root,
+                                     text=True).split()[0]
+    if remote != sha:
+        report.update({"status": "superseded", "sourceCommit": sha})
+        return
+    previous = next((item for item in deployments() if item["status"] == "SUCCESS"), None)
+    if not previous:
+        raise RuntimeError("no successful deployment available for rollback")
+    raw_variables = railway("variable", "list", *SCOPE, "--json")
+    variables = {key: raw_variables.get(key) for key in OWNED}
+    if any(key in raw_variables and raw_variables[key] is None for key in OWNED):
+        raise RuntimeError("owned release setting is sealed and cannot safely be restored")
+    report.update({"sourceCommit": sha, "profile": profile, "previousDeploymentId": previous["id"],
+                   "previousImageDigest": previous.get("meta", {}).get("imageDigest")})
+    with tempfile.TemporaryDirectory(prefix="genaebot-release-") as temporary:
+        archive_commit(root, sha, temporary)
+        manifest = json.loads((Path(temporary) / "deploy/promo-crons.json").read_text())
+        entries = manifest if isinstance(manifest, list) else manifest.get("promos", manifest.get("jobs", []))
+        # The repository's manifest is the authority; never install or edit crons here.
+        jobs = {item["name"] for item in entries} | {"vacancy-lamp-feed", "hustlers-feed"}
+        idle = "1" if profile == "catalog-trial" else "0"
+        try:
+            railway("variable", "set", f"SOURCE_COMMIT={sha}", "GENAIE_CAMPAIGN_TRANSPORT=cli",
+                    f"GENAIE_CATALOG_IDLE_RETIREMENT={idle}", *SCOPE, "--skip-deploys", "--json")
+            result = railway("up", *SCOPE, "--detach", "--json", "--message",
+                             f"commit:{sha} profile:{profile}", cwd=temporary)
+            identifier = result["deploymentId"]
+            report["deploymentId"] = identifier
+            deployed = wait_for(identifier)
+            report["imageDigest"] = deployed.get("meta", {}).get("imageDigest")
+            report["startup"] = startup_result(identifier, sha, idle, jobs)
+            report["status"] = "healthy"
+        except Exception:
+            report["status"] = "failed"
+            try:
+                report["rollback"] = restore(previous, variables)
+            except Exception as error:
+                report["rollbackError"] = str(error)
+            raise
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--sha", required=True)
+    parser.add_argument("--profile", choices=["baseline", "catalog-trial"], default="baseline")
+    parser.add_argument("--report", type=Path, required=True)
+    args = parser.parse_args()
+    report = {}
+    try:
+        release(Path(__file__).resolve().parent.parent, args.sha, args.profile, report)
+    finally:
+        args.report.parent.mkdir(parents=True, exist_ok=True)
+        args.report.write_text(json.dumps(report, indent=2) + "\n")
+    print(json.dumps({key: report[key] for key in ["status", "sourceCommit", "deploymentId"] if key in report}))
+
+
+if __name__ == "__main__":
+    main()

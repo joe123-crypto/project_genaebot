@@ -60,3 +60,38 @@ test('authentication failure never issues a send', async () => {
   assert.equal(requests, 0);
   await bridge.close();
 });
+
+test('a future request succeeds after an initial connection failure recovers', async () => {
+  let instance;
+  let sends = 0;
+  class Recovering {
+    constructor(options) { this.options = options; instance = this; }
+    start() { this.options.onConnectError(new Error('temporary connection failure')); }
+    async request() { sends++; return { messageId: 'new-request' }; }
+    async stopAndWait() {}
+  }
+  const bridge = createCampaignBridge(Recovering, { token: 'fixture' });
+  await assert.rejects(bridge.request({ method: 'send', params: {} }), /temporary/);
+  const future = bridge.request({ method: 'send', params: {} });
+  instance.options.onHelloOk({});
+  assert.deepEqual(await future, { messageId: 'new-request' });
+  assert.equal(sends, 1, 'failed request must never be replayed');
+  await bridge.close();
+  instance.options.onHelloOk({});
+  await assert.rejects(bridge.request({ method: 'send', params: {} }), /closed/);
+});
+
+test('a connection timeout does not poison a later successful hello', async () => {
+  let instance;
+  class Slow {
+    constructor(options) { this.options = options; instance = this; }
+    start() {}
+    async request() { return { messageId: 'after-timeout' }; }
+    async stopAndWait() {}
+  }
+  const bridge = createCampaignBridge(Slow, { token: 'fixture', connectTimeoutMs: 10 });
+  await assert.rejects(bridge.request({ method: 'send', params: {} }), /timed out/);
+  instance.options.onHelloOk({});
+  assert.equal((await bridge.request({ method: 'send', params: {} })).messageId, 'after-timeout');
+  await bridge.close();
+});

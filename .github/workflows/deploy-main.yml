@@ -6,6 +6,15 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Runtime profile (catalog-trial requires completed baseline measurements)
+        type: choice
+        options:
+          - baseline
+          - catalog-trial
+        default: baseline
 
 permissions:
   actions: read
@@ -34,7 +43,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: "22"
+          node-version: "26.12.1"
 
       - name: Validate workflow definitions
         run: >-
@@ -73,3 +82,74 @@ jobs:
           -v "$PWD:/repo"
           zricethezav/gitleaks:v8.30.1
           dir /repo --no-banner --redact
+
+  compatibility:
+    name: Installed runtime compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Build the pinned production runtime
+        run: docker build --build-arg SOURCE_COMMIT="$GITHUB_SHA" -f deploy/railway/Dockerfile -t genaebot:ci .
+      - name: Exercise the installed SDK, real catalog workers and SQLite
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --network none --entrypoint /bin/bash \
+            -v "$PWD:/repo:ro" -w /repo \
+            -e GENAIE_REQUIRE_INTEGRATION=1 \
+            -e GENAIE_OPENCLAW_ROOT=/usr/local/lib/node_modules/openclaw \
+            genaebot:ci -lc '
+              set -euo pipefail
+              node -e '\''if(process.versions.node !== "26.12.1") process.exit(1); const {DatabaseSync}=require("node:sqlite");const d=new DatabaseSync(":memory:");d.prepare("select 1").get();d.close();'\''
+              python3 /usr/local/bin/patch-worker-idle.py /usr/local/lib/node_modules/openclaw --check
+              node --test --test-reporter=tap deploy/railway/whatsapp-lid-recovery.test.mjs \
+                deploy/railway/campaign-sdk.integration.test.mjs \
+                deploy/railway/worker-idle.integration.test.mjs \
+                deploy/railway/catalog-recovery.integration.test.mjs
+            ' | tee "$RUNNER_TEMP/runtime-compatibility.tap"
+          test "$(sed -n 's/^# skipped //p' "$RUNNER_TEMP/runtime-compatibility.tap" | tail -1)" = "0"
+      - name: Retain compatibility results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: runtime-compatibility
+          path: ${{ runner.temp }}/runtime-compatibility.tap
+          if-no-files-found: ignore
+
+  deploy:
+    name: Deploy verified production commit
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: [validate, secrets, compatibility]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    concurrency:
+      group: railway-production
+      cancel-in-progress: false
+    steps:
+      - name: Check out the tested commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "26.12.1"
+      - name: Install pinned Railway CLI
+        run: npm install --global @railway/cli@5.71.0
+      - name: Release or restore the exact previous image
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RELEASE_PROFILE: ${{ inputs.profile || 'baseline' }}
+        run: |
+          test -n "$RAILWAY_TOKEN"
+          python3 deploy/railway-release.py --sha "$GITHUB_SHA" \
+            --profile "$RELEASE_PROFILE" --report "$RUNNER_TEMP/railway-release.json"
+      - name: Retain release provenance and rollback result
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: railway-release
+          path: ${{ runner.temp }}/railway-release.json
+          if-no-files-found: ignore

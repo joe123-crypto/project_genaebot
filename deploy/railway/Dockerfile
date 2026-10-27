@@ -7,8 +7,8 @@
 # the entrypoint syncs it onto the mounted state volume at boot (Railway has no
 # host bind-mounts).
 #
-# Deploy is automatic via Railway's GitHub integration (push to main). See
-# deploy/railway/README.md for the wiring and the break-glass `railway up` path.
+# GitHub Actions releases an exact tested main commit after all checks pass.
+# See deploy/railway/README.md for token provisioning and the one-time cutover.
 #
 # Differences vs. the Compose image:
 #   * live-source is assembled in-build instead of bind-mounted.
@@ -28,8 +28,8 @@ RUN apt-get update \
 WORKDIR /src
 COPY . /src
 
-# Railway exposes the deployed commit as RAILWAY_GIT_COMMIT_SHA; pass it in for
-# provenance in the baked overlay marker (best-effort, informational only).
+# The release sets SOURCE_COMMIT for Railway build-arg injection. CI verifies
+# this baked marker at startup before accepting the deployment.
 ARG SOURCE_COMMIT=unknown
 
 RUN bash /src/deploy/stage-openclaw-source.sh /src /opt/live-source \
@@ -74,8 +74,9 @@ COPY deploy/railway/patch-worker-idle.py /usr/local/bin/patch-worker-idle.py
 RUN python3 /usr/local/bin/patch-worker-idle.py /usr/local/lib/node_modules/openclaw
 
 # The reusable client is opt-in: its speedup retains SDK memory during send gaps.
-# Keep the cheaper transient CLI default until campaign billing proves a win.
+# Keep the transient CLI default until campaign billing proves a win.
 ENV GENAIE_CAMPAIGN_TRANSPORT=cli
+ENV GENAIE_CATALOG_IDLE_RETIREMENT=0
 
 # Bake the curated source overlay assembled in stage 1. The entrypoint syncs it
 # onto the state volume on every boot (source of truth for workspace/ and the
@@ -86,6 +87,7 @@ COPY deploy/railway/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY deploy/railway/sync-public-prompt.py /usr/local/bin/sync-public-prompt.py
 COPY deploy/railway/sync-reply-gates.py /usr/local/bin/sync-reply-gates.py
 COPY deploy/railway/sync-runtime-plugins.py /usr/local/bin/sync-runtime-plugins.py
+COPY deploy/railway/report-release-ready.py /usr/local/bin/report-release-ready.py
 COPY deploy/railway/wait-gateway-lease.py /usr/local/bin/wait-gateway-lease.py
 COPY deploy/railway/whatsapp-lid-loader.mjs deploy/railway/whatsapp-lid-recovery.mjs /usr/local/lib/genaie/
 RUN chmod 0755 /usr/local/bin/entrypoint.sh /usr/local/bin/sync-public-prompt.py \

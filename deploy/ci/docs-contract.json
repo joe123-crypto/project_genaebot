@@ -16,6 +16,8 @@
       "paths": [
         "railway.json",
         "deploy/railway/**",
+        "deploy/railway-release.py",
+        "deploy/railway-cost-report.py",
         "deploy/stage-openclaw-source.sh",
         "deploy/verify-staged-source.sh",
         "deploy/stage-workspace.rsync",

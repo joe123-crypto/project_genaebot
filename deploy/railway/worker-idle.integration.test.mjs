@@ -7,6 +7,10 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 
+if (process.env.GENAIE_REQUIRE_INTEGRATION === '1' && !process.env.GENAIE_OPENCLAW_ROOT) {
+  throw new Error('required installed-runtime integration cannot skip');
+}
+
 test('installed pool joins idle workers, preserves active work and recreates a worker',
   { skip: !process.env.GENAIE_OPENCLAW_ROOT }, async (t) => {
     const root = process.env.GENAIE_OPENCLAW_ROOT;

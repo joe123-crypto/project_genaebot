@@ -6,6 +6,10 @@ import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 import { createCampaignBridge } from '../../workspace/lib/gateway_campaign.mjs';
 
+if (process.env.GENAIE_REQUIRE_INTEGRATION === '1' && !process.env.GENAIE_OPENCLAW_ROOT) {
+  throw new Error('required installed-runtime integration cannot skip');
+}
+
 test('installed SDK reuses a connection and never replays a lost send acknowledgement',
   { skip: !process.env.GENAIE_OPENCLAW_ROOT, timeout: 10_000 }, async (t) => {
     const root = process.env.GENAIE_OPENCLAW_ROOT;

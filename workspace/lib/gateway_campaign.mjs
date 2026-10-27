@@ -3,25 +3,57 @@
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 
-export function createCampaignBridge(GatewayClient, { token, port = '18789' }) {
+export function createCampaignBridge(GatewayClient, { token, port = '18789', connectTimeoutMs = 20_000 }) {
   let client;
-  let ready;
-  function connect() {
-    if (ready) return ready;
-    ready = new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('gateway connection timed out')), 20_000);
-      client = new GatewayClient({
-        url: `ws://127.0.0.1:${port}`, token,
+  let ready = false;
+  let closed = false;
+  let generation = 0;
+  const waiters = new Set();
+  function settle(error) {
+    for (const waiter of waiters) {
+      clearTimeout(waiter.timer);
+      if (error) waiter.reject(error);
+      else waiter.resolve();
+    }
+    waiters.clear();
+  }
+  function start() {
+    if (client) return;
+    const epoch = ++generation;
+    const current = () => !closed && epoch === generation;
+    try {
+      const created = new GatewayClient({
+        url: `ws://127.0.0.1:${port || '18789'}`, token,
         clientName: 'gateway-client', clientDisplayName: 'Genaie campaign sender',
         mode: 'backend', role: 'operator', scopes: ['operator.write', 'operator.read'],
         deviceIdentity: null, sharedStateMode: 'read-only',
-        onHelloOk: () => { clearTimeout(timer); resolve(); },
-        onConnectError: (error) => { clearTimeout(timer); reject(error); },
-        onClose: () => { clearTimeout(timer); reject(new Error('gateway connection closed')); },
+        onHelloOk: () => { if (current()) { ready = true; settle(); } },
+        onConnectError: (error) => { if (current()) { ready = false; settle(error); } },
+        onClose: () => { if (current()) { ready = false; settle(new Error('gateway connection closed')); } },
       });
+      client = created;
       client.start();
+    } catch (error) {
+      ready = false;
+      generation++;
+      const failed = client;
+      client = undefined;
+      try { failed?.stop?.(); } catch { /* preserve the connection error */ }
+      settle(error);
+    }
+  }
+  function connect() {
+    if (closed) return Promise.reject(new Error('campaign client is closed'));
+    if (ready && client?.connected !== false) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const waiter = { resolve, reject };
+      waiter.timer = setTimeout(() => {
+        waiters.delete(waiter);
+        reject(new Error('gateway connection timed out'));
+      }, connectTimeoutMs);
+      waiters.add(waiter);
+      start();
     });
-    return ready;
   }
   return {
     async request(input) {
@@ -30,6 +62,10 @@ export function createCampaignBridge(GatewayClient, { token, port = '18789' }) {
       return client.request(input.method, input.params, { timeoutMs: 150_000 });
     },
     async close() {
+      closed = true;
+      ready = false;
+      generation++;
+      settle(new Error('campaign client is closed'));
       if (client) await client.stopAndWait({ timeoutMs: 2000 });
     },
   };

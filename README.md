@@ -5,18 +5,22 @@ the single source of truth for the live gateway: custom plugins, command
 wrappers, skills metadata, agent context, cron jobs, deployment helpers, and the
 sanitized config template.
 
-It does not own or patch the OpenClaw npm package itself. OpenClaw upgrades
-replace only package-managed files; this repository tracks everything around them.
+OpenClaw upgrades replace package-managed files. The image applies one guarded,
+version-specific catalog-worker patch; it is disabled by default and requires
+a new compatibility review whenever the pinned package changes.
 
 Production runs on **Railway** (project `openclaw-gateway`, service `gateway`,
-environment `production`, EU West). Railway's GitHub integration watches `main`
-and rebuilds on every push, so **merging to `main` is the deploy**. Git commits
-and pushes are manual. See `deploy/railway/README.md` for the pipeline, the
-one-time dashboard wiring, and the volume seed/recovery procedure.
+environment `production`, EU West). `.github/workflows/deploy-main.yml` validates
+PRs and `main`, builds the pinned production runtime for integration tests, and
+releases `main` only after all three checks pass. The release job uploads an
+archive of the exact tested commit, verifies startup provenance, both WhatsApp
+accounts and the enabled jobs, and restores the previous image on failure.
 
-Pull requests and `main` pushes run portable structure, documentation-contract,
-syntax, unit, and secret checks on GitHub-hosted runners (`.github/workflows/deploy-main.yml`). There is no deploy job in that
-workflow: the `validate` job is the gate, and Railway does the deploying.
+This gate requires the production-scoped `RAILWAY_TOKEN` GitHub Actions secret
+and Railway's direct GitHub auto-deploy to be disconnected. Until the one-time
+cutover is completed, the existing direct integration still deploys `main`
+without waiting for these checks. See [deployment setup](deploy/railway/README.md#one-time-wiring)
+for the credential, cutover and recovery procedure.
 
 ## Runtime Layout
 
@@ -149,33 +153,24 @@ git ls-files --others --exclude-standard
 
 ## Deploying Changes
 
-Merging to `main` is the deploy:
+Open a PR from a dedicated branch, inspect its diff, and merge after these
+checks pass: `Portable validation`, `Secret and private-state scan`, and
+`Installed runtime compatibility`. The compatibility job uses Node 26.12.1 and
+the installed OpenClaw 2026.9.9 SDK, SQLite and real catalog workers; missing
+integration dependencies fail that job instead of silently skipping tests.
 
-```bash
-git status --short
-git commit -m "Describe the change"
-git push origin main            # via a PR; see the gate below
-```
+After the [one-time cutover](deploy/railway/README.md#one-time-wiring), the
+serialized `Deploy verified production commit` job is the production gate even
+when branch protection is unavailable. Superseded commits are skipped. The job
+archives the tested SHA, records the new deployment ID and image digest, and
+checks the baked source marker, baseline runtime flags, both connected accounts
+and all twelve campaigns plus both feeds. A failed release restores the exact
+previous image and owned runtime settings, then checks its startup.
 
-GitHub Actions runs the `validate` job (portable structure and docs-contract
-checks, shellcheck, actionlint, unit tests) and a gitleaks secret scan.
-Railway's GitHub integration then rebuilds `deploy/railway/Dockerfile` from the
-new `main` and redeploys the gateway.
-
-**The CI gate depends on branch protection, which lives outside this repo.**
-Railway deploys whatever lands on `main` regardless of the workflow result, so
-the `Portable validation` check must be required on `main` for CI to actually
-prevent a broken deploy. `deploy/railway/README.md` has the `gh api` command that
-sets it. Verify it is in place before relying on it:
-
-```bash
-gh api repos/joe123-crypto/project_genaebot/branches/main/protection \
-  --jq '.required_status_checks.contexts'
-```
-
-If that returns an error or an empty list, a failing commit pushed to `main` will
-deploy. Roll production back by reverting the bad commit on `main`; the revert
-goes through the same path.
+Release and compatibility results remain attached to the workflow as artifacts.
+A normal push uses the baseline profile (`cli`, catalog retirement disabled).
+Catalog trials require an explicit manual workflow run and completed baseline
+measurements; see [cost measurement](deploy/railway/README.md#cost-measurement).
 
 Validate without deploying:
 
@@ -355,7 +350,7 @@ nothing on its own. `deploy/promo-crons.json` declares what the twelve should be
 `./deploy/reinstall-promo-crons.sh --check` reports what the gateway actually has,
 and `./deploy/reinstall-promo-crons.sh` applies the manifest by re-running the
 installers and re-checking. Both need `railway` (or a local container) and run from
-a checkout, not from CI — CI has no gateway access, so what it enforces is that the
+a checkout, not from CI — CI does not install cron definitions, so it enforces that the
 manifest, the twelve wrappers, `install-promo.sh`'s timeout default and these READMEs
 all agree. Run `--check` first and remove anything it reports as undeclared before
 reinstalling, or that campaign posts twice a day. Full procedure, including when in
@@ -884,7 +879,7 @@ git ls-files
 
 The gateway image pins OpenClaw via `npm install -g openclaw@<version>` in
 `deploy/railway/Dockerfile`. The current pin is `openclaw@2026.9.9` (the `latest`
-stable channel). The Railway image uses `node:26.12.1-bookworm-slim`; the pinned
+pin used for this comparison). The Railway image uses `node:26.12.1-bookworm-slim`; the pinned
 OpenClaw supports Node 26, and its Node/SQLite and WhatsApp compatibility smoke
 checks run before rollout. OpenClaw itself remains pinned to avoid a state
 migration during the runtime comparison.
@@ -898,11 +893,15 @@ per-group state commits and stable per-day idempotency keys; an uncertain send i
 never automatically retried through a second transport. Dry runs start no helper.
 
 The image also applies `deploy/railway/patch-worker-idle.py` to the pinned
-model-catalog worker pool. It enables upstream idle retirement after 60 seconds,
+model-catalog worker pool. It is **disabled by default**
+(`GENAIE_CATALOG_IDLE_RETIREMENT=0`). A controlled trial with the flag set to `1`
+enables upstream idle retirement after 60 seconds,
 retaining the upstream five-minute anti-churn warm window on subsequent workers.
 Active tasks, native cleanup and source-capture ownership stay with the upstream
-pool. `GENAIE_CATALOG_IDLE_RETIREMENT=0` restores indefinite catalog-worker
-retention on the next deployment. Version and source-anchor checks fail the build
+pool. The baseline profile retains catalog workers indefinitely. Two actual
+catalog/auth retire-and-recreate cycles and local model inference run in CI,
+without production credentials or network access. Correctness alone does not
+establish savings; promotion requires the full-week cost comparison. Version and source-anchor checks fail the build
 if an OpenClaw upgrade needs a new compatibility review.
 
 A new OpenClaw release refuses to start on state written by an older one until
