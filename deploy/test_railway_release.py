@@ -1,3 +1,4 @@
+from contextlib import closing
 import importlib.util
 import json
 from pathlib import Path
@@ -190,9 +191,10 @@ class ReadinessTests(unittest.TestCase):
                 "accounts": {"default": {}, "ads": {}}}}, "bindings": [{"private": "fixture-private"}]}))
             marker = state / "marker"
             marker.write_text(f"Source commit: {SHA}\n")
-            with sqlite3.connect(state / "state/openclaw.sqlite") as database:
+            with closing(sqlite3.connect(state / "state/openclaw.sqlite")) as database:
                 database.execute("CREATE TABLE cron_jobs(name TEXT, enabled INTEGER)")
                 database.executemany("INSERT INTO cron_jobs VALUES (?,?)", [("fixture-promo", 1), ("private-job", 1)])
+                database.commit()
             channels = {"channelAccounts": {"whatsapp": [{"accountId": key, "connected": True}
                                                         for key in ["default", "ads"]]}}
             report = READY.inspect(state, marker, channels, {"RAILWAY_DEPLOYMENT_ID": "new"})

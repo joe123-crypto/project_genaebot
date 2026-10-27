@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Emit one bounded, sanitized startup result for CI; never send a message."""
 
+from contextlib import closing
 import hashlib
 import json
 import os
@@ -22,7 +23,7 @@ def inspect(state, marker, channels, environment):
     connected = {entry.get("accountId") for entry in accounts if entry.get("connected")}
     if not expected.issubset(connected):
         raise ValueError("enabled WhatsApp accounts have not connected")
-    with sqlite3.connect(f"file:{state / 'state/openclaw.sqlite'}?mode=ro", uri=True) as database:
+    with closing(sqlite3.connect(f"file:{state / 'state/openclaw.sqlite'}?mode=ro", uri=True)) as database:
         jobs = [row[0] for row in database.execute("SELECT name FROM cron_jobs WHERE enabled=1")
                 if row[0].endswith(("-promo", "-feed"))]
     source = re.search(r"^Source commit: ([0-9a-f]{40})$", marker.read_text(), re.MULTILINE)
