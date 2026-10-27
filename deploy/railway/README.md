@@ -291,6 +291,62 @@ This points the next profiling pass at core worker lifetime/retention and native
 RSS, rather than imposing a smaller main JavaScript heap or reverting migrated
 state. Loaded plugin count alone does not establish proportional memory savings.
 
+### Runtime and campaign optimizations
+
+The runtime is pinned to Node 26.12.1 while OpenClaw stays at 2026.9.9. Compare the
+runtime-only deployment against Node 24 before attributing savings to the changes
+below; the full-week billing comparison remains the acceptance test.
+
+Setting `GENAIE_CAMPAIGN_TRANSPORT=rpc` enables one lazy Node gateway SDK
+client per promo campaign. The image keeps `cli` as its default because the SDK
+client retained about 165 MiB during idle send gaps in the initial measurement;
+faster startup alone does not establish a net cost reduction.
+Python talks to that helper over private stdin/stdout;
+no extra service or network listener is created. The helper connects to the local
+gateway using its existing authentication, sends images through the normal
+gateway media path, and closes when the campaign exits. Existing account routing,
+random send gaps, queued-reconnect handling and per-group commits remain in the
+broadcast engine. Stable per-day/content/account idempotency keys accompany sends.
+The helper never replays a request or falls back to the CLI after a timeout or a
+lost acknowledgement. Dry runs never start it. Set
+`GENAIE_CAMPAIGN_TRANSPORT=cli` and redeploy to restore per-message CLI startup.
+
+`patch-worker-idle.py` makes one guarded change to the installed OpenClaw 2026.9.9
+model-catalog pool: its workers become eligible for upstream idle retirement after
+60 seconds. The upstream five-minute anti-churn window on subsequent workers,
+active-task protection, native-section draining and source-capture cleanup stay
+intact. Catalog requests already carry the complete reconstruction input. Database
+worker lifetimes are unchanged; the canonical-validation pool already closes at
+the end of each batch. A changed OpenClaw version or patch anchor fails the build.
+Set `GENAIE_CATALOG_IDLE_RETIREMENT=0` and redeploy to restore the old catalog policy.
+
+Local compatibility checks run the real pinned worker pool through active work,
+idle retirement, native exit/resource cleanup and worker recreation:
+
+```sh
+GENAIE_OPENCLAW_ROOT=/usr/local/lib/node_modules/openclaw \
+  node --test deploy/railway/worker-idle.integration.test.mjs \
+  deploy/railway/campaign-sdk.integration.test.mjs
+```
+
+The gateway client is tested with simulated acknowledgements and failures. Live
+verification uses read-only channel/model/status requests; do not send extra ads
+to validate the transport. Reassess campaign memory/CPU and delivery results after
+the next naturally scheduled runs.
+
+The initial Node 26 read-only comparison took 1.245/1.175/1.167 seconds for three
+separate CLI channel-status requests versus 0.475/0.007/0.008 seconds using one
+SDK client. These numbers measure client startup and status requests, not WhatsApp
+send latency or monthly savings. The runtime-only idle memory samples did not
+establish a Node 26 memory improvement; retain the full-week acceptance check.
+
+The final live rollout confirmed Node 26.12.1, the transient `cli` default, both
+WhatsApp accounts connected, and all 12 campaigns and both feeds enabled. The
+catalog pool went from one idle worker to zero; model listing still returned all
+793 entries afterward. Container memory went from 1537 to 1406 MiB across that
+idle interval. These short samples also include normal GC/cache variation and
+do not establish monthly savings. No extra promotional test messages were sent.
+
 ## Turning replies off
 
 ```sh

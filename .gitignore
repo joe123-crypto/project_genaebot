@@ -32,6 +32,7 @@
 !workspace/bin/**
 !workspace/lib/
 !workspace/lib/*.py
+!workspace/lib/*.mjs
 !workspace/*.py
 
 # Plugins are source-controlled deployment artifacts.

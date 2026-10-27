@@ -19,7 +19,7 @@
 # ---------------------------------------------------------------------------
 # Stage 1: assemble the curated source overlay from repo HEAD.
 # ---------------------------------------------------------------------------
-FROM node:24-bookworm-slim AS stage
+FROM node:26.12.1-bookworm-slim AS stage
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends rsync ca-certificates \
@@ -40,7 +40,7 @@ RUN bash /src/deploy/stage-openclaw-source.sh /src /opt/live-source \
 # ---------------------------------------------------------------------------
 # Stage 2: the gateway runtime image.
 # ---------------------------------------------------------------------------
-FROM node:24-bookworm-slim
+FROM node:26.12.1-bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive \
     HOME=/home/joseph \
@@ -67,6 +67,15 @@ RUN userdel -r node 2>/dev/null || true \
 RUN npm install -g openclaw@2026.9.9 \
  && npm cache clean --force \
  && rm -rf /home/joseph/.npm
+
+# Reuse the upstream pool's native-safe retirement rather than retaining its
+# stateless model-discovery worker for the gateway's entire lifetime.
+COPY deploy/railway/patch-worker-idle.py /usr/local/bin/patch-worker-idle.py
+RUN python3 /usr/local/bin/patch-worker-idle.py /usr/local/lib/node_modules/openclaw
+
+# The reusable client is opt-in: its speedup retains SDK memory during send gaps.
+# Keep the cheaper transient CLI default until campaign billing proves a win.
+ENV GENAIE_CAMPAIGN_TRANSPORT=cli
 
 # Bake the curated source overlay assembled in stage 1. The entrypoint syncs it
 # onto the state volume on every boot (source of truth for workspace/ and the

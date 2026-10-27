@@ -2,7 +2,7 @@
 
 ``cron/genaie-promo``, ``cron/building-materials-promo``, and ``cron/cv-promo``
 each post a FIXED advert (caption + image) to a set of WhatsApp groups, once per
-day per group, via ``openclaw message send --media``, recording a group as "sent
+day per group, through the local gateway, recording a group as "sent
 today" only after a confirmed send so delivery is transactional per group. They
 historically carried an identical copy of the gateway-env setup, invite/JID
 resolution, per-group state, the permission-error skip, and the send loop. That
@@ -47,6 +47,8 @@ timeout delays groups instead of dropping them.
 
 Std-lib only (plus the sibling :mod:`json_store` helper), so it stays importable
 from the OpenClaw ``--command`` cron scripts, which are std-lib only by contract.
+Set ``GENAIE_CAMPAIGN_TRANSPORT=rpc`` to use one lazy Node SDK client per campaign;
+the image defaults to the transient CLI while net billing savings are unproven.
 """
 
 import os
@@ -61,6 +63,7 @@ import urllib.parse
 from datetime import date
 
 import json_store
+from gateway_campaign import active_client, campaign_transport
 
 
 # ------------------------------------------------------------------ gateway ----
@@ -408,6 +411,9 @@ def send_ad(target, text, image_path, account=None):
     config/openclaw.template.json: without it the default is "default" if present
     else the first account id sorted, and "ads" sorts before "default"
     (deploy/test_promo_captions_tracking.py pins that config contract)."""
+    client = active_client()
+    if client is not None:
+        return client.send(target, text, image_path, account=account)
     cmd = ["openclaw", "message", "send", "--channel", "whatsapp",
            "--target", target, "--message", text,
            "--media", image_path, "--json"]
@@ -907,6 +913,7 @@ def apply_caps(promo_name, jids, day, caps=_PROBE_CAPS, membership_path=None,
     return kept, decisions
 
 
+@campaign_transport
 def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=None,
               tracking=None, promo_name=None, variant_images=None,
               send_delay_min=None, send_delay_max=None, rng=None, sleep=None,

@@ -895,8 +895,26 @@ git ls-files
 
 The gateway image pins OpenClaw via `npm install -g openclaw@<version>` in
 `deploy/railway/Dockerfile`. The current pin is `openclaw@2026.9.9` (the `latest`
-stable channel), which requires Node `>=24.16`, so the image uses
-`node:24-bookworm-slim`.
+stable channel). The Railway image uses `node:26.12.1-bookworm-slim`; the pinned
+OpenClaw supports Node 26, and its Node/SQLite and WhatsApp compatibility smoke
+checks run before rollout. OpenClaw itself remains pinned to avoid a state
+migration during the runtime comparison.
+
+Promo campaigns can use one lazy gateway SDK client per process instead of
+starting the full OpenClaw CLI for every group. Set
+`GENAIE_CAMPAIGN_TRANSPORT=rpc` to opt in; `cli` remains the image default because
+the SDK client retained about 165 MiB during idle send gaps in the initial trial.
+The speedup has not established a net billing improvement. Sends retain account routing, spacing,
+per-group state commits and stable per-day idempotency keys; an uncertain send is
+never automatically retried through a second transport. Dry runs start no helper.
+
+The image also applies `deploy/railway/patch-worker-idle.py` to the pinned
+model-catalog worker pool. It enables upstream idle retirement after 60 seconds,
+retaining the upstream five-minute anti-churn warm window on subsequent workers.
+Active tasks, native cleanup and source-capture ownership stay with the upstream
+pool. `GENAIE_CATALOG_IDLE_RETIREMENT=0` restores indefinite catalog-worker
+retention on the next deployment. Version and source-anchor checks fail the build
+if an OpenClaw upgrade needs a new compatibility review.
 
 A new OpenClaw release refuses to start on state written by an older one until
 `openclaw doctor --fix` has run. The entrypoint therefore runs a one-time upgrade
