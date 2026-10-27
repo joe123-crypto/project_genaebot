@@ -134,6 +134,27 @@ class ReleaseTests(unittest.TestCase):
             self.assertNotIn("OTHER_SECRET", restore.call_args.args[1])
             self.assertNotIn("fixture-private", json.dumps(report))
 
+    def test_ambiguous_upload_is_flagged_even_if_previous_image_recovers(self):
+        previous = {"id": "previous", "status": "SUCCESS", "meta": {"imageDigest": "old"}}
+        def archive(source, sha, destination):
+            (Path(destination) / "deploy").mkdir()
+            (Path(destination) / "deploy/promo-crons.json").write_text('{"promos":[]}')
+        def railway(*args, **kwargs):
+            if args[0] == "up": raise TimeoutError("upload timed out")
+            return {}
+        with tempfile.TemporaryDirectory() as temp, \
+             patch.object(RELEASE.subprocess, "check_output", side_effect=[SHA+"\n", SHA+"\trefs/heads/main\n"]), \
+             patch.object(RELEASE, "deployments", return_value=[previous]), \
+             patch.object(RELEASE, "archive_commit", side_effect=archive), \
+             patch.object(RELEASE, "railway", side_effect=railway), \
+             patch.object(RELEASE, "restore", return_value={"startupVerified": True}):
+            report = {}
+            with self.assertRaisesRegex(TimeoutError, "upload timed out"):
+                RELEASE.release(Path(temp), SHA, "baseline", report)
+        self.assertIn("no deployment ID", report["candidateCancellationError"])
+        self.assertIn("release:", report["releaseMessage"])
+        self.assertEqual(report["status"], "failed")
+
     def test_superseded_commit_never_mutates_railway(self):
         report = {}
         with patch.object(RELEASE.subprocess, "check_output", side_effect=[SHA+"\n", "b"*40+"\trefs/heads/main\n"]), \

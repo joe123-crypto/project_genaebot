@@ -11,6 +11,7 @@ import subprocess
 import tarfile
 import tempfile
 import time
+import uuid
 
 PROJECT = "a251f752-3b49-4f72-8a71-4629bf2fced0"
 SERVICE = "503baf60-c897-4a77-812a-719195705031"
@@ -180,11 +181,15 @@ def release(root, sha, profile, report):
         jobs = {item["name"] for item in entries} | {"vacancy-lamp-feed", "hustlers-feed"}
         idle = "1" if profile == "catalog-trial" else "0"
         identifier = None
+        upload_started = False
+        release_message = f"commit:{sha} profile:{profile} release:{uuid.uuid4().hex}"
+        report["releaseMessage"] = release_message
         try:
             railway("variable", "set", f"SOURCE_COMMIT={sha}", "GENAIE_CAMPAIGN_TRANSPORT=cli",
                     f"GENAIE_CATALOG_IDLE_RETIREMENT={idle}", *SCOPE, "--skip-deploys", "--json")
+            upload_started = True
             result = railway("up", *SCOPE, "--detach", "--json", "--message",
-                             f"commit:{sha} profile:{profile}", cwd=temporary)
+                             release_message, cwd=temporary)
             identifier = result["deploymentId"]
             report["deploymentId"] = identifier
             deployed = wait_for(identifier)
@@ -195,8 +200,15 @@ def release(root, sha, profile, report):
             report["status"] = "healthy"
         except Exception:
             report["status"] = "failed"
-            if identifier:
+            if upload_started:
                 try:
+                    if not identifier:
+                        candidate = next((item for item in deployments()
+                                          if item.get("meta", {}).get("cliMessage") == release_message), None)
+                        if not candidate:
+                            raise RuntimeError("upload returned no deployment ID; inspect the unique release message for a late candidate")
+                        identifier = candidate["id"]
+                        report["deploymentId"] = identifier
                     cancel_pending(identifier)
                 except Exception as error:
                     report["candidateCancellationError"] = str(error)
