@@ -35,7 +35,10 @@ The job checks a bounded, sanitized startup log record for the baked source SHA,
 CLI transport, catalog profile, both connected WhatsApp accounts and all twelve
 campaigns plus both feeds. Failure restores the previous successful deployment's
 exact image digest and owned runtime settings, then verifies its startup. It
-never installs crons or sends a test message. This needs no SSH key, public
+never installs crons or sends a test message. Startup verification for both release
+and rollback allows ten minutes, covering the entrypoint's 330-second stale-lease
+handoff plus channel startup. The release job has a sixty-minute ceiling to leave
+time for recovery. This needs no SSH key, public
 health endpoint or permanent monitoring process. Deployments are serialized;
 queued releases whose SHA is no longer `main` exit without changing production.
 

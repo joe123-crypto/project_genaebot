@@ -38,6 +38,23 @@ class ReleaseTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 RELEASE.validate_readiness(report, "new", SHA, "0", {"fixture-promo"})
 
+    def test_startup_verification_allows_the_entrypoint_lease_handoff(self):
+        # A stale gateway lease can take 330 seconds to expire before startup.
+        # Both the new image and exact-image rollback must wait through that.
+        for read in [lambda: RELEASE.startup_result("new", SHA, "0", {"fixture-promo"}),
+                     lambda: RELEASE.verify_rollback_startup("new")]:
+            clock = {"now": 0}
+            def wait(seconds): clock["now"] += seconds
+            def logs(*args, **kwargs):
+                text = json.dumps({"message": RELEASE.PREFIX+json.dumps(self.report())}) if clock["now"] >= 335 else ""
+                return subprocess.CompletedProcess(args=[], returncode=0, stdout=text)
+            with self.subTest(reader=read), \
+                 patch.object(RELEASE.time, "monotonic", side_effect=lambda: clock["now"]), \
+                 patch.object(RELEASE.time, "sleep", side_effect=wait), \
+                 patch.object(RELEASE.subprocess, "run", side_effect=logs):
+                read()
+            self.assertGreaterEqual(clock["now"], 335)
+
     def test_source_archive_excludes_untracked_and_uncommitted_changes(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "source"

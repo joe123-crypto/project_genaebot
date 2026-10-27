@@ -170,7 +170,9 @@ when branch protection is unavailable. Superseded commits are skipped. The job
 archives the tested SHA, records the new deployment ID and image digest, and
 checks the baked source marker, baseline runtime flags, both connected accounts
 and all twelve campaigns plus both feeds. A failed release restores the exact
-previous image and owned runtime settings, then checks its startup.
+previous image and owned runtime settings, then checks its startup. Verification
+allows time for the entrypoint's 330-second stale-lease handoff before the gateway
+can begin connecting its accounts.
 
 Release and compatibility results remain attached to the workflow as artifacts.
 A normal push uses the baseline profile (`cli`, catalog retirement disabled).

@@ -63,7 +63,7 @@ def validate_readiness(report, deployment_id, sha, profile, jobs):
         raise ValueError("required campaigns or feeds are not enabled")
 
 
-def startup_result(deployment_id, sha, profile, jobs, timeout=180):
+def startup_result(deployment_id, sha, profile, jobs, timeout=600):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         result = subprocess.run(["railway", "logs", deployment_id, *SCOPE, "--lines", "100",
@@ -121,7 +121,7 @@ def restore(previous, variables):
     return {"deploymentId": restored["id"], "imageDigest": expected, "startupVerified": True}
 
 
-def verify_rollback_startup(deployment_id, timeout=180):
+def verify_rollback_startup(deployment_id, timeout=600):
     """Older known images predate the structured startup result; verify their logs too."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
