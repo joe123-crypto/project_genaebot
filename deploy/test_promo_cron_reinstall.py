@@ -39,9 +39,9 @@ EXPECTED_SCHEDULES = {
     "building-materials": "50 12 * * *",
     "genaie": "26 14 * * *",
     "genaie-leads": "6 17 * * *",
-    "big-player": "30 15 * * *",
-    "industrial-lighting": "7 9 * * *",
-    "genaie-advertisers": "23 12 * * *",
+    "big-player": "50 15 * * *",
+    "industrial-lighting": "5 10 * * *",
+    "genaie-advertisers": "5 14 * * *",
 }
 
 

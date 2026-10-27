@@ -15,7 +15,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/install-promo.sh"
 
 register_promo_cron \
   "big-player-promo" \
-  "${BIG_PLAYER_PROMO_CRON_EXPR:-30 15 * * *}" \
+  "${BIG_PLAYER_PROMO_CRON_EXPR:-50 15 * * *}" \
   "${BIG_PLAYER_PROMO_TZ:-Africa/Harare}" \
   "${BIG_PLAYER_PROMO_FAILURE_ALERT_TO:-+263785632943}" \
   "/home/joseph/.openclaw/workspace/cron/big-player-promo/post_ad.py"

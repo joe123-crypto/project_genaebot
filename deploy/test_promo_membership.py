@@ -32,15 +32,18 @@ MEMBERSHIP = CRON / "membership.json"
 # membership.json (#111's successor). A change here means a campaign's reach
 # changed: intended edits update these numbers in the same commit, accidents
 # show up as a failure.
+# The three ads-line promos gained BULAWAYO ADVERTISEMENT, CHIREDZI
+# BUSINESS FORUM and CHIREDZI MARKETPLACE on 2026-10-27, followed by
+# TawPro Adverts and ONLINE MARKETING, ONLINE MARKETING 2 and ONLINE MARKETING 03.
 EXPECTED_DAILY = {
     "appliance-repairs": 6,
     # big-player (2026-10-24) is the operator's borehole/solar lead-gen ad on the
     # second ("ads") WhatsApp line. Both ads campaigns now include Bulawayo
     # business group alongside REACH BYO MARKET 5 and BYO ADVERTISING.
     # BYO HUSTLERS.COM joined the ads account on 2026-10-25 and takes both promos.
-    "big-player": 4,
-    "industrial-lighting": 4,
-    "genaie-advertisers": 3,
+    "big-player": 11,
+    "industrial-lighting": 11,
+    "genaie-advertisers": 10,
     "borehole-drilling": 8,
     # borehole-paid (2026-10-23) is a PAID third-party borehole ad posted to the
     # same 23-group cohort as skylight-solar (identified by sharing its promo), so
