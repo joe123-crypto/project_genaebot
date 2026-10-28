@@ -59,8 +59,11 @@ def validate_readiness(report, deployment_id, sha, profile, jobs):
         raise ValueError("runtime settings do not match the release profile")
     if not {"default", "ads"}.issubset(set(report.get("connectedAccounts", []))):
         raise ValueError("both WhatsApp accounts must be connected")
+    if {"vacancy-lamp-feed", "hustlers-feed", "job-scout-group-feed",
+        "job-scout-hustlers-feed"}.intersection(report.get("enabledJobs", [])):
+        raise ValueError("retired job feeds must not be enabled")
     if not jobs.issubset(set(report.get("enabledJobs", []))):
-        raise ValueError("required campaigns or feeds are not enabled")
+        raise ValueError("required campaigns are not enabled")
 
 
 def startup_result(deployment_id, sha, profile, jobs, timeout=600):
@@ -178,7 +181,7 @@ def release(root, sha, profile, report):
         manifest = json.loads((Path(temporary) / "deploy/promo-crons.json").read_text())
         entries = manifest if isinstance(manifest, list) else manifest.get("promos", manifest.get("jobs", []))
         # The repository's manifest is the authority; never install or edit crons here.
-        jobs = {item["name"] for item in entries} | {"vacancy-lamp-feed", "hustlers-feed"}
+        jobs = {item["name"] for item in entries}
         idle = "1" if profile == "catalog-trial" else "0"
         identifier = None
         upload_started = False

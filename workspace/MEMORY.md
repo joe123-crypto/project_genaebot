@@ -18,11 +18,11 @@
 Admin failure alerts go to the admin WhatsApp: **+213563719936** (Joe's day-to-day admin number; +263785632943 is the Zimbabwe number and is NOT in WhatsApp allowFrom).
 
 The live jobs are the promo ad crons (cv-promo, genaie-promo, fruit-trees-promo
-and the rest in `deploy/promo-crons.json`) and the two job feeds that post job
-adverts to Vacancy Lamp (`vacancy-lamp-feed`, 09:20) and Hustlers Marketplace
-(`hustlers-feed`, 09:40). Each has an installer under `deploy/` and is documented
-in the repo README. Job Scout (per-user job hunting and applications) is no
-longer a service: do not offer it or answer as if it runs.
+and the rest in `deploy/promo-crons.json`). Each has an installer under `deploy/`
+and is documented in the repo README. The Vacancy Lamp and Hustlers Marketplace
+job feeds, their scrapers and cache refresh are retired. Both groups remain
+available for their configured promotions. Job Scout (per-user job hunting and
+applications) is no longer a service: do not offer it or answer as if it runs.
 Query the gateway for actual state rather than trusting this file: `openclaw cron
 list --all --json`.
 

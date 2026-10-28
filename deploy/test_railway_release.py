@@ -39,6 +39,15 @@ class ReleaseTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 RELEASE.validate_readiness(report, "new", SHA, "0", {"fixture-promo"})
 
+    def test_readiness_rejects_retired_feeds_without_requiring_them(self):
+        RELEASE.validate_readiness(self.report(), "new", SHA, "0", {"fixture-promo"})
+        for name in ("vacancy-lamp-feed", "hustlers-feed", "job-scout-group-feed",
+                     "job-scout-hustlers-feed"):
+            report = self.report()
+            report["enabledJobs"].append(name)
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, "retired job feeds"):
+                RELEASE.validate_readiness(report, "new", SHA, "0", {"fixture-promo"})
+
     def test_startup_verification_allows_the_entrypoint_lease_handoff(self):
         # A stale gateway lease can take 330 seconds to expire before startup.
         # Both the new image and exact-image rollback must wait through that.

@@ -28,8 +28,8 @@ The gateway runs as a single Railway service. There is no second container.
 
 The bot does two things: the daily promo ad crons (cv-promo, genaie-promo,
 fruit-trees-promo and the rest, see *Scheduled jobs*) and paid CV making for
-public WhatsApp users. It also posts a daily feed of job adverts to the Vacancy
-Lamp and Hustlers Marketplace groups (see *Job feeds*).
+public WhatsApp users. The daily job feeds and their scraping pipeline are retired;
+Vacancy Lamp and Hustlers Marketplace retain their configured promotions.
 
 Durable state lives on a Railway volume mounted at `/home/joseph/.openclaw`:
 
@@ -77,28 +77,27 @@ This is the repository tree. Paths are relative to the repo root.
 │   ├── ci/                        # Structure/docs policy and mappings
 │   ├── patch-openclaw-config.py   # Applies the template to a live openclaw.json (NOT wired into the Railway boot)
 │   ├── gateway-exec.sh            # How installers reach the live gateway
-│   ├── install-*.sh               # Cron registration (promos, job feeds)
+│   ├── install-*.sh               # Cron registration (promos)
 │   ├── agent-workspace-admin/     # Private administrator context template
 │   ├── retire-job-scout-crons.sh  # One-off removal of the retired Job Scout crons
 │   └── agent-workspace-public/    # Restricted public context template
 └── workspace/                     # Developer-owned source and agent context
-    ├── bin/                       # Command wrappers (openclaw-cap, cv-maker, job-feed, ...)
+    ├── bin/                       # Command wrappers (openclaw-cap, cv-maker, ...)
     ├── lib/                       # Shared Python helpers
     ├── plugins/                   # OpenClaw plugins
     ├── docs/                       # Service policy and onboarding docs
     ├── cron/                      # Deterministic cron jobs (promo ads)
     ├── skills/                    # Custom skills + skills.lock.json
-    ├── cv-maker/                  # Standalone CV maker service
-    └── job-feed/                  # Daily job-advert feed for the jobs groups
+    └── cv-maker/                  # Standalone CV maker service
 ```
 
 `workspace/` holds source and context, not a working room: plugins, command
 wrappers, scripts, docs, selected skills, and the five agent context files that
 the entrypoint copies into the admin room.
 
-On the live volume, `runtime/` holds mutable command state — CV orders, the job
-feed cache, public-service routing state, cron state, and cron logs. It is volume data, not
-source, and is neither tracked nor staged.
+On the live volume, `runtime/` holds mutable command state — CV orders,
+public-service routing state, cron state, and cron logs. It is volume data,
+not source, and is neither tracked nor staged.
 
 ## Git Tracking
 
@@ -116,20 +115,18 @@ Tracked categories:
 - `workspace/plugins/**`
 - `workspace/cron/**/*.py` and `workspace/cron/**/*.sh`
 - `workspace/docs/**`
-- the service folders `cv-maker/` and `job-feed/` (including its `scrapers/`
-  and `jobfeed/` packages). Each service folder is
+- the service folder `cv-maker/` (including its internal packages). It is
   staged whole by a per-service recursive glob in
-  `deploy/stage-workspace.rsync` (e.g. `+ /job-feed/***`, `+ /cv-maker/***`), so
+  `deploy/stage-workspace.rsync` (`+ /cv-maker/***`), so
   adding or splitting an internal module ships automatically without editing the
   deploy allowlist; the global runtime/state/cache excludes at the top of that
   filter still keep `__pycache__/`, `node_modules/`, `*.log`, and `*.json` state
   files out of the deployable source. A **new** service folder is a different
   matter: the filter ends in `- /**`, and the repository `.gitignore` is
   default-deny, so a new tree has to be allowlisted in both or it will neither
-  commit nor deploy. `workspace/cv-maker/` and `workspace/job-feed/` are listed
-  in each for that reason.
+  commit nor deploy. `workspace/cv-maker/` is listed in each for that reason.
 - selected custom skills plus `workspace/skills.lock.json`. Unlike the service
-  folders above, skills are **not** covered by a recursive glob: each one is
+  folder above, skills are **not** covered by a recursive glob: each one is
   listed explicitly in `deploy/stage-workspace.rsync` (e.g. `+ /skills/cv-maker/`
   and `+ /skills/cv-maker/SKILL.md`) ahead of the closing `- /**` rule, so a new
   skill must be added there or it will not ship.
@@ -169,7 +166,7 @@ serialized `Deploy verified production commit` job is the production gate even
 when branch protection is unavailable. Superseded commits are skipped. The job
 archives the tested SHA, records the new deployment ID and image digest, and
 checks the baked source marker, baseline runtime flags, both connected accounts
-and all twelve campaigns plus both feeds. A failed release restores the exact
+and all twelve campaigns. A failed release restores the exact
 previous image and owned runtime settings, then checks its startup. Verification
 allows time for the entrypoint's 330-second stale-lease handoff before the gateway
 can begin connecting its accounts.
@@ -197,47 +194,20 @@ To check that the deployable overlay still builds the way the image build will:
 ./deploy/verify-staged-source.sh /tmp/stage
 ```
 
-### Job feeds (Vacancy Lamp and Hustlers Marketplace)
+### Retired job feeds
 
-`workspace/job-feed/` scrapes Zimbabwe job adverts from VacancyMail, iHarare,
-VacancyBox and ApplyNow into a deduplicated cache under
-`runtime/job-scout/group-feed/` (the directory keeps its old name so the record of
-what each group has already received carries over). Two crons post from that
-cache with `workspace/bin/job-feed deliver-group-feed --refresh-if-stale`, which
-rebuilds the cache from the boards first when it is older than six hours. If a
-refresh finds nothing, the existing cache is kept.
+The Vacancy Lamp and Hustlers Marketplace daily job feeds are retired, including
+all four board scrapers, cache refresh and job delivery commands. Both WhatsApp
+groups remain in membership and keep their configured promotional campaigns.
 
-- `./deploy/install-vacancy-lamp-feed.sh` (cron `vacancy-lamp-feed`) posts up to
-  5 jobs a day to the main jobs group (Vacancy Lamp) at `09:20 Africa/Harare`. The
-  cache is ordered so fully structured adverts (a clear title and location, an
-  overview, both a Key Responsibilities and a Qualifications and Experience
-  section, a non-expired closing date, and an actionable contact) are posted
-  first, falling back to other eligible adverts only to fill the 5 daily slots.
-  It targets Vacancy Lamp's JID (`120363407177302513@g.us`) by default; set
-  `JOB_FEED_TARGET` to another group JID, or set it empty and use
-  `JOB_FEED_GROUP_QUERY` to look the group up in the OpenClaw WhatsApp directory. `JOB_FEED_INVITE_URL` overrides the jobs-group invite appended to
-  each post.
-- `./deploy/install-hustlers-feed.sh` (cron `hustlers-feed`) posts **one job per
-  day** from the same cache to the **Hustlers Marketplace** group at
-  `09:40 Africa/Harare`, alongside the jobs-group invite link so members can join
-  for more. It targets Hustlers marketplace's JID (`120363427709161501@g.us`) by
-  default; set `HUSTLERS_FEED_TARGET` to another JID, or set it empty to resolve
-  the group from the directory by `HUSTLERS_FEED_GROUP_QUERY` (default
-  `Hustlers Marketplace`). Override the appended invite with `HUSTLERS_FEED_INVITE_URL`
-  (defaults to `JOB_FEED_INVITE_URL`), and the daily cap with
-  `HUSTLERS_FEED_MAX_MESSAGES` (default `1`).
-
-The older `JOB_SCOUT_GROUP_FEED_*` and `JOB_SCOUT_HUSTLERS_FEED_*` variable names
-still work as fallbacks. The installers no longer send a `--dry-run` test message
-to the group first: over `railway ssh` that check fails with "Channel is
-unavailable: whatsapp" even though the cron itself sends fine through the running
-gateway. Delivery is tracked per target, so a job posted to one
-group is still eligible for the other; each group only ever receives a given
-advert once.
-
-The installers reach the live gateway through `deploy/gateway-exec.sh`, which uses
-`railway ssh` by default; set `OPENCLAW_EXEC_MODE=docker` (or `DOCKER` /
-`OPENCLAW_CONTAINER`) to target a local container instead.
+Cron registrations persist independently of source deployments. Before deploying
+this removal, record the feed definitions for recovery, wait until neither feed
+is running, then use `./deploy/retire-job-scout-crons.sh --dry-run` and
+`./deploy/retire-job-scout-crons.sh`. The helper removes current and legacy feed
+names and is safe to repeat. It also removes the previously retired Job Scout jobs.
+After deployment, verify no feed registration or executable remains. Move only
+`runtime/job-scout/group-feed/` to a dated directory under `retired/job-feeds/`
+outside active runtime; retain cron receipts and unrelated runtime state.
 
 #### Moving off Job Scout (one-off, after the deploy that removed it)
 
@@ -249,8 +219,6 @@ so after deploying run:
 ```bash
 ./deploy/retire-job-scout-crons.sh --dry-run   # list what would be removed
 ./deploy/retire-job-scout-crons.sh             # remove job-scout, job-scout-approvals, ...
-./deploy/install-vacancy-lamp-feed.sh          # renames job-scout-group-feed in place
-./deploy/install-hustlers-feed.sh              # renames job-scout-hustlers-feed in place
 ```
 
 The public-service-gate manifest still declares `jobScoutOnboardingEnabled` and
@@ -265,8 +233,7 @@ deploys. Each has an idempotent installer under `deploy/` that registers or
 updates it; run one only when its schedule or command changes. All times are
 `Africa/Harare`. The twelve promo crons are declared together in
 `deploy/promo-crons.json` and reconciled with `./deploy/reinstall-promo-crons.sh`
-(see *Reconciling the promo crons* below); the two job feeds keep their
-individual installers (see *Job feeds* above).
+(see *Reconciling the promo crons* below).
 
 - **`cv-promo`** (`install-cv-promo.sh`, 11:39) runs
   `workspace/cron/cv-promo/post_cv_ad.py`, a deterministic (no-agent) job that
@@ -396,7 +363,7 @@ committed immediately, a re-run the same day resumes where it stopped.
 group is committed to the promo's state file immediately, so a run that is killed
 part-way and re-run the same day skips the groups it already reached.
 
-The two job feeds have their own installers and are described above.
+The job feeds are retired; see *Retired job feeds* above.
 
 Each promo also waits a **random 0-900 s before its first send**
 (`PROMO_START_JITTER_SECONDS`; `0` disables it). The gaps inside a run were
@@ -854,7 +821,6 @@ runtime/
 ├── public-service-gate/ad-refs.json (promo ad ref code counts)
 ├── public-service-gate/handoffs.json (customers handed off to a person; bot silent)
 ├── cv-maker/ (CV orders; settled orders are purged)
-├── job-scout/group-feed/ (job feed cache and per-group delivered state)
 └── cron-state/<promo>/state.json (per-promo delivery state)
 ```
 

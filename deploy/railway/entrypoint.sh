@@ -95,7 +95,7 @@ for f in SOUL.md HEARTBEAT.md IDENTITY.md MEMORY.md USER.md; do
   [ -f "$LIVE_SOURCE/workspace/$f" ] && cp -f "$LIVE_SOURCE/workspace/$f" "$OC_DIR/agent-workspace-admin/$f"
 done
 
-# 1.6 Runtime reseed: one-shot overlay of live runtime state (gate, CV orders, job feed).
+# 1.6 Runtime reseed: one-shot overlay of live runtime state (gate and CV orders).
 #     Upload runtime-seed.tgz (tar of genaebot/runtime) to the volume root via
 #     `railway volume files upload`; this extracts it over $OC_DIR/runtime and
 #     removes the tarball. Used to replace the stale runtime the volume was

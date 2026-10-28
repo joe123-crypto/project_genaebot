@@ -128,7 +128,8 @@ def check_staged_source(files: dict[str, str], checks: Checks) -> None:
     with tempfile.TemporaryDirectory(prefix="genaebot-stage-") as temp:
         stage = Path(temp) / "live-source"
         stale_files = [
-            stage / "workspace/job-feed/jobfeed/__pycache__/group_feed.cpython-314.pyc",
+            stage / "workspace/job-feed/job_feed.py",
+            stage / "workspace/bin/job-feed",
             stage / "workspace/lib/__pycache__/promo_caps.cpython-314.pyc",
             stage / "workspace/obsolete-runtime/file.txt",
         ]
@@ -181,8 +182,6 @@ def check_staged_source(files: dict[str, str], checks: Checks) -> None:
             "workspace/docs/business-info.md",
             "workspace/bin/cv-maker",
             "workspace/cv-maker/cv_maker.py",
-            "workspace/bin/job-feed",
-            "workspace/job-feed/job_feed.py",
             "workspace/USER.md",
         }
         checks.require(not (required - staged.keys()), f"required staged files are missing: {sorted(required - staged.keys())}")
