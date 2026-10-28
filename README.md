@@ -95,9 +95,9 @@ This is the repository tree. Paths are relative to the repo root.
 wrappers, scripts, docs, selected skills, and the five agent context files that
 the entrypoint copies into the admin room.
 
-On the live volume, `runtime/` holds mutable command state — CV orders, the job
-feed cache, public-service routing state, cron state, and cron logs. It is volume data, not
-source, and is neither tracked nor staged.
+On the live volume, `runtime/` holds mutable command state — CV orders,
+public-service routing state, cron state, and cron logs. It is volume data,
+not source, and is neither tracked nor staged.
 
 ## Git Tracking
 
