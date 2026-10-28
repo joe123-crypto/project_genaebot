@@ -171,7 +171,7 @@ normal merge. Turning the caps on is a one-line edit to that file
 
 4. Complete the live cron preflight below, then merge, watch the `main` workflow,
    and inspect its `railway-release` artifact.
-   Confirm `healthy`, the tested SHA, image digest, baseline flags, both accounts,
+   Confirm `healthy`, the tested SHA, image digest, selected runtime flags, both accounts,
    all jobs, and no `rollbackError`. A missing secret fails the job before any
    production mutation; provision it before the cutover to avoid a deployment gap.
 
@@ -224,7 +224,12 @@ Do not downgrade migrated OpenClaw state.
 
 To deploy a corrected release normally, open a PR and use the same pipeline. To
 repeat a verified release, manually run the workflow on `main` with profile
-`baseline`. Avoid `railway up` from a working checkout: it can include unrelated
+`preserve` (the default). Normal pushes also preserve the existing catalog
+retirement setting: `1` resolves to `catalog-trial`, `0` or an absent variable
+resolves to `baseline`. An unrecognized value aborts before mutation. Explicitly
+choose `baseline` to disable retirement or `catalog-trial` to enable it. Artifacts
+record `requestedProfile` and the resolved `profile`, and startup verifies the
+resolved setting. Failed releases still restore the prior image and settings. Avoid `railway up` from a working checkout: it can include unrelated
 local files, bypass the CI gate and obscure which source actually ran.
 
 > The old `/home/joseph/openclaw-deploy/` directory (with its own `live-source/`,
@@ -310,8 +315,10 @@ Keep Node, OpenClaw, plugins and sender unchanged. Compare **total resource cost
 per day** and campaign volume, not just idle RSS. Promote retirement only if the
 candidate reduces that rate by at least **5%**, with no missed/duplicate sends,
 worker failures, unexpected restarts, channel/CV failures or latency regression.
-If inconclusive or worse, run the baseline profile again. Normal pushes always
-return to baseline until a reviewed change explicitly promotes the policy.
+If inconclusive or worse, explicitly run the baseline profile again. Normal
+pushes preserve the selected setting, so unrelated deployments do not end a trial.
+A source deployment still changes the experiment: record its timing and compare
+matched workloads before declaring savings.
 
 Check both connected WhatsApp accounts, inbound replies, CV processing and the
 next normal campaign runs; do not send extra promotional test messages. Retain
@@ -381,8 +388,9 @@ active-task protection, native-section draining and source-capture cleanup stay
 intact. Catalog requests already carry the complete reconstruction input. Database
 worker lifetimes are unchanged; the canonical-validation pool already closes at
 the end of each batch. A changed OpenClaw version or patch anchor fails the build.
-The image and baseline release set `GENAIE_CATALOG_IDLE_RETIREMENT=0`; only the
-explicit `catalog-trial` profile enables it. Correctness passes do not establish
+The image and explicit baseline release set `GENAIE_CATALOG_IDLE_RETIREMENT=0`.
+An explicit `catalog-trial` release enables it, and subsequent ordinary releases
+preserve that choice. Correctness passes do not establish
 a cost benefit.
 
 The required compatibility job exercises the actual catalog owner and worker,

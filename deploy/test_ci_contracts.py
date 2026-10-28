@@ -93,6 +93,11 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("catalog-recovery.integration.test.mjs", compatibility)
         self.assertIn('= "0"', compatibility)
 
+    def test_normal_and_default_manual_releases_preserve_the_memory_profile(self) -> None:
+        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+        self.assertIn("default: preserve", workflow)
+        self.assertIn("RELEASE_PROFILE: ${{ inputs.profile || 'preserve' }}", job_block(workflow, "deploy"))
+
 
 if __name__ == "__main__":
     unittest.main()

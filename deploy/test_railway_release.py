@@ -24,6 +24,49 @@ SHA = "a" * 40
 
 
 class ReleaseTests(unittest.TestCase):
+    def test_preserve_and_explicit_profiles_reach_the_release_and_readiness_check(self):
+        for requested, current, expected in [("preserve", "1", "1"),
+                                             ("preserve", "0", "0"),
+                                             ("preserve", None, "0"),
+                                             ("baseline", "1", "0"),
+                                             ("catalog-trial", "0", "1")]:
+            with self.subTest(requested=requested, current=current), tempfile.TemporaryDirectory() as temp:
+                calls = []
+                def archive(source, sha, destination):
+                    (Path(destination) / "deploy").mkdir()
+                    (Path(destination) / "deploy/promo-crons.json").write_text('{"promos":[{"name":"fixture-promo"}]}')
+                def railway(*args, **kwargs):
+                    calls.append(args)
+                    if args[:2] == ("variable", "list"):
+                        return {} if current is None else {"GENAIE_CATALOG_IDLE_RETIREMENT": current}
+                    if args[0] == "up": return {"deploymentId": "new"}
+                    return {}
+                previous = {"id": "old", "status": "SUCCESS", "meta": {"imageDigest": "old"}}
+                report = {}
+                with patch.object(RELEASE.subprocess, "check_output", side_effect=[SHA+"\n", SHA+"\trefs/heads/main\n"]), \
+                     patch.object(RELEASE, "deployments", return_value=[previous]), \
+                     patch.object(RELEASE, "archive_commit", side_effect=archive), \
+                     patch.object(RELEASE, "railway", side_effect=railway), \
+                     patch.object(RELEASE, "wait_for", return_value={"meta": {"imageDigest": "new"}}), \
+                     patch.object(RELEASE, "startup_result", return_value={"ready": True}) as startup:
+                    RELEASE.release(Path(temp), SHA, requested, report)
+                setting = next(args for args in calls if args[:2] == ("variable", "set"))
+                self.assertIn(f"GENAIE_CATALOG_IDLE_RETIREMENT={expected}", setting)
+                startup.assert_called_once_with("new", SHA, expected, {"fixture-promo"})
+                self.assertEqual(report["requestedProfile"], requested)
+                self.assertEqual(report["profile"], "catalog-trial" if expected == "1" else "baseline")
+                self.assertEqual(report["status"], "healthy")
+
+    def test_unknown_preserved_setting_fails_before_mutating_production(self):
+        with patch.object(RELEASE.subprocess, "check_output", side_effect=[SHA+"\n", SHA+"\trefs/heads/main\n"]), \
+             patch.object(RELEASE, "deployments", return_value=[{
+                 "id": "old", "status": "SUCCESS", "meta": {"imageDigest": "old"}}]), \
+             patch.object(RELEASE, "railway", return_value={"GENAIE_CATALOG_IDLE_RETIREMENT": "unknown"}) as railway:
+            with self.assertRaisesRegex(ValueError, "unrecognized"):
+                RELEASE.release(ROOT, SHA, "preserve", {})
+        self.assertEqual(railway.call_count, 1)
+        self.assertEqual(railway.call_args.args[:2], ("variable", "list"))
+
     def report(self):
         return {"ready": True, "deploymentId": "new", "sourceCommit": SHA,
                 "transport": "cli", "catalogIdleRetirement": "0",
@@ -140,7 +183,8 @@ class ReleaseTests(unittest.TestCase):
 
             def railway(*args, **kwargs):
                 if args[:2] == ("variable", "list"):
-                    return {"SOURCE_COMMIT": "old", "OTHER_SECRET": "fixture-private"}
+                    return {"SOURCE_COMMIT": "old", "GENAIE_CATALOG_IDLE_RETIREMENT": "1",
+                            "OTHER_SECRET": "fixture-private"}
                 if args[0] == "up": return {"deploymentId": "new"}
                 return {}
 
@@ -154,10 +198,11 @@ class ReleaseTests(unittest.TestCase):
                  patch.object(RELEASE, "cancel_pending") as cancel, \
                  patch.object(RELEASE, "restore", return_value={"deploymentId": "rollback"}) as restore:
                 with self.assertRaisesRegex(ValueError, "wrong source"):
-                    RELEASE.release(root, SHA, "baseline", report)
+                    RELEASE.release(root, SHA, "preserve", report)
             cancel.assert_called_once_with("new")
             self.assertEqual(report["status"], "failed")
             self.assertEqual(restore.call_args.args[0]["id"], "previous")
+            self.assertEqual(restore.call_args.args[1]["GENAIE_CATALOG_IDLE_RETIREMENT"], "1")
             self.assertNotIn("OTHER_SECRET", restore.call_args.args[1])
             self.assertNotIn("fixture-private", json.dumps(report))
 

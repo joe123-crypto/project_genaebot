@@ -1009,6 +1009,30 @@
         "genaie-advertisers"
       ],
       "name": "ONLINE MARKETING 03"
+    },
+    "120363046894354726@g.us": {
+      "source": "operator",
+      "status": "active",
+      "account": "ads",
+      "daily_cap": null,
+      "promos": [
+        "fruit-trees",
+        "building-materials",
+        "genaie-advertisers"
+      ],
+      "name": "let's build bindura"
+    },
+    "120363433121439254@g.us": {
+      "source": "operator",
+      "status": "active",
+      "account": "ads",
+      "daily_cap": null,
+      "promos": [
+        "fruit-trees",
+        "building-materials",
+        "genaie-advertisers"
+      ],
+      "name": "BULAWAYO ADVERTS"
     }
   }
 }

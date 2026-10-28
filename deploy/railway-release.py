@@ -157,6 +157,19 @@ def archive_commit(root, sha, destination):
         source.extractall(destination, filter="data")
 
 
+def resolve_profile(requested, variables):
+    if requested in {"baseline", "catalog-trial"}:
+        return requested
+    if requested != "preserve":
+        raise ValueError("unknown release profile")
+    value = variables.get("GENAIE_CATALOG_IDLE_RETIREMENT")
+    if value in (None, "0"):
+        return "baseline"
+    if value == "1":
+        return "catalog-trial"
+    raise ValueError("cannot preserve an unrecognized catalog retirement setting")
+
+
 def release(root, sha, profile, report):
     if not re.fullmatch(r"[0-9a-f]{40}", sha):
         raise ValueError("a full commit SHA is required")
@@ -174,6 +187,8 @@ def release(root, sha, profile, report):
     variables = {key: raw_variables.get(key) for key in OWNED}
     if any(key in raw_variables and raw_variables[key] is None for key in OWNED):
         raise RuntimeError("owned release setting is sealed and cannot safely be restored")
+    report["requestedProfile"] = profile
+    profile = resolve_profile(profile, variables)
     report.update({"sourceCommit": sha, "profile": profile, "previousDeploymentId": previous["id"],
                    "previousImageDigest": previous.get("meta", {}).get("imageDigest")})
     with tempfile.TemporaryDirectory(prefix="genaebot-release-") as temporary:
@@ -225,7 +240,7 @@ def release(root, sha, profile, report):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sha", required=True)
-    parser.add_argument("--profile", choices=["baseline", "catalog-trial"], default="baseline")
+    parser.add_argument("--profile", choices=["preserve", "baseline", "catalog-trial"], default="preserve")
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args()
     report = {"status": "failed", "sourceCommit": args.sha}
