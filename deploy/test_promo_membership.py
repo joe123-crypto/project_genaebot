@@ -35,6 +35,8 @@ MEMBERSHIP = CRON / "membership.json"
 # The three ads-line promos gained BULAWAYO ADVERTISEMENT, CHIREDZI
 # BUSINESS FORUM and CHIREDZI MARKETPLACE on 2026-10-27, followed by
 # TawPro Adverts and ONLINE MARKETING, ONLINE MARKETING 2 and ONLINE MARKETING 03.
+# On 2026-10-28, let's build bindura and BULAWAYO ADVERTS each gained
+# building-materials, fruit-trees and genaie-advertisers on the ads account.
 EXPECTED_DAILY = {
     "appliance-repairs": 6,
     # big-player (2026-10-24) is the operator's borehole/solar lead-gen ad on the
@@ -43,13 +45,13 @@ EXPECTED_DAILY = {
     # BYO HUSTLERS.COM joined the ads account on 2026-10-25 and takes both promos.
     "big-player": 11,
     "industrial-lighting": 11,
-    "genaie-advertisers": 10,
+    "genaie-advertisers": 12,
     "borehole-drilling": 8,
     # borehole-paid (2026-10-23) is a PAID third-party borehole ad posted to the
     # same 23-group cohort as skylight-solar (identified by sharing its promo), so
     # it launches at skylight-solar's count. Separate from borehole-drilling above.
     "borehole-paid": 23,
-    "building-materials": 10,
+    "building-materials": 12,
     # skylight-solar launched (2026-10-19) targeting the Bulawayo/BYO groups plus
     # Kwekwe, Gweru, both lowveld/Chiredzi groups, Mutare, Magwegwe, Lobengula West
     # and Chikombedzi: 23 groups, no weekly cadence.
@@ -77,7 +79,7 @@ EXPECTED_DAILY = {
     # timeout was raised 5400 -> 7200 s to hold promos up to ~60 groups.
     # (Harare business classifie instead took appliance-repairs: 5 -> 6.)
     "cv": 44,
-    "fruit-trees": 44,
+    "fruit-trees": 46,
     "genaie-leads": 46,
     "genaie": 46,
 }

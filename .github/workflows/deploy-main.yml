@@ -9,12 +9,13 @@ on:
   workflow_dispatch:
     inputs:
       profile:
-        description: Runtime profile (catalog-trial requires completed baseline measurements)
+        description: Preserve the current memory setting, or explicitly select baseline/catalog-trial
         type: choice
         options:
+          - preserve
           - baseline
           - catalog-trial
-        default: baseline
+        default: preserve
 
 permissions:
   actions: read
@@ -141,7 +142,7 @@ jobs:
       - name: Release or restore the exact previous image
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-          RELEASE_PROFILE: ${{ inputs.profile || 'baseline' }}
+          RELEASE_PROFILE: ${{ inputs.profile || 'preserve' }}
         run: |
           test -n "$RAILWAY_TOKEN"
           python3 deploy/railway-release.py --sha "$GITHUB_SHA" \

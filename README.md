@@ -165,16 +165,19 @@ After the [one-time cutover](deploy/railway/README.md#one-time-wiring), the
 serialized `Deploy verified production commit` job is the production gate even
 when branch protection is unavailable. Superseded commits are skipped. The job
 archives the tested SHA, records the new deployment ID and image digest, and
-checks the baked source marker, baseline runtime flags, both connected accounts
+checks the baked source marker, selected runtime flags, both connected accounts
 and all twelve campaigns. A failed release restores the exact
 previous image and owned runtime settings, then checks its startup. Verification
 allows time for the entrypoint's 330-second stale-lease handoff before the gateway
 can begin connecting its accounts.
 
 Release and compatibility results remain attached to the workflow as artifacts.
-A normal push uses the baseline profile (`cli`, catalog retirement disabled).
-Catalog trials require an explicit manual workflow run and completed baseline
-measurements; see [cost measurement](deploy/railway/README.md#cost-measurement).
+A normal push preserves the current catalog retirement setting and keeps `cli`
+transport. Manual workflow runs default to `preserve`; explicitly choose `baseline`
+to disable retirement or `catalog-trial` to enable it. A missing retirement setting
+uses the image baseline (disabled); unrecognized values stop the release before
+any production changes. Release artifacts record both the requested and resolved
+profile. See [cost measurement](deploy/railway/README.md#cost-measurement).
 
 Validate without deploying:
 
