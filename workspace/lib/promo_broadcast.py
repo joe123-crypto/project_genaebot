@@ -252,7 +252,7 @@ def _group_jid(group):
 
 def resolve_invite(entry):
     """Resolve an invite link to a group JID by matching its code against the
-    OpenClaw WhatsApp directory (same approach as deploy/install-vacancy-lamp-feed.sh).
+    OpenClaw WhatsApp directory.
     The bot must be a member of the group for it to appear in the directory.
     Returns JID or None."""
     code = entry.rstrip("/").split("/")[-1].casefold()

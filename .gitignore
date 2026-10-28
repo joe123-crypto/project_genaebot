@@ -112,13 +112,6 @@
 !workspace/cv-maker/cvmaker/
 !workspace/cv-maker/cvmaker/*.py
 
-# Daily job-advert feed for the Vacancy Lamp and Hustlers Marketplace groups.
-!workspace/job-feed/
-!workspace/job-feed/*.py
-!workspace/job-feed/scrapers/
-!workspace/job-feed/scrapers/*.py
-!workspace/job-feed/jobfeed/
-!workspace/job-feed/jobfeed/*.py
 
 # Custom skills that are not purely reinstallable from package metadata.
 !workspace/skills/

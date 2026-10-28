@@ -3,9 +3,8 @@ set -euo pipefail
 
 # One-off cleanup after Job Scout was retired: removes the crons whose commands
 # no longer exist in the workspace, so they stop failing every day. Idempotent:
-# a cron that is already gone is skipped. The two job feeds are NOT removed here;
-# deploy/install-vacancy-lamp-feed.sh and deploy/install-hustlers-feed.sh adopt
-# and rename their old job-scout-* crons in place.
+# a cron that is already gone is skipped. Also retires both daily job feeds
+# (including their legacy names) now that the shared scraping service is removed.
 #
 # Run with --dry-run first to see what would be removed.
 
@@ -13,6 +12,10 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/gateway-exec.sh"
 
 RETIRED_NAMES=(
+  vacancy-lamp-feed
+  hustlers-feed
+  job-scout-group-feed
+  job-scout-hustlers-feed
   job-scout
   job-scout-pilot
   job-scout-approvals

@@ -35,15 +35,12 @@ if find "$stage_root/workspace" -type f \( \
   die "staged source contains runtime/cache files; refusing to build"
 fi
 
-# 2. Stable service entrypoints must be present (the CV maker and the job feed
-#    the cron runs). Internal module layout is validated by the CI test suite,
-#    not enumerated here.
+# 2. The CV maker wrapper and implementation must be present. Internal module
+#    layout is validated by the CI test suite, not enumerated here.
 missing=0
 for path in \
   "$stage_root/workspace/bin/cv-maker" \
-  "$stage_root/workspace/cv-maker/cv_maker.py" \
-  "$stage_root/workspace/bin/job-feed" \
-  "$stage_root/workspace/job-feed/job_feed.py"; do
+  "$stage_root/workspace/cv-maker/cv_maker.py"; do
   if [ ! -f "$path" ]; then
     printf 'missing required staged workspace file: %s\n' "$path" >&2
     missing=1

@@ -89,9 +89,9 @@ def live_jobs(drop=(), patch=None, extra=()):
             target[parts[-1]] = value
         jobs.append(job)
     # An unrelated gateway job must never be mistaken for a promo.
-    jobs.append({"id": "jf", "name": "vacancy-lamp-feed", "enabled": True,
+    jobs.append({"id": "jf", "name": "unrelated-maintenance", "enabled": True,
                  "schedule": {"expr": "20 9 * * *", "tz": "Africa/Harare"},
-                 "payload": {"argv": ["/w/bin/job-feed", "deliver-group-feed"],
+                 "payload": {"argv": ["/w/bin/maintenance", "check"],
                              "timeoutSeconds": 600}})
     jobs.extend(copy.deepcopy(list(extra)))
     return {"jobs": jobs}
@@ -295,7 +295,7 @@ class DriftComparatorTests(unittest.TestCase):
     def test_an_unrelated_job_is_ignored(self):
         code, out, _ = run_comparator(live_jobs())
         self.assertEqual(code, 0)
-        self.assertNotIn("vacancy-lamp-feed", out)
+        self.assertNotIn("unrelated-maintenance", out)
 
     def test_failure_alert_and_cwd_are_reported_but_do_not_fail_the_check(self):
         code, out, _ = run_comparator(live_jobs(patch={"cv-promo": {"payload.cwd": "/elsewhere"}}))

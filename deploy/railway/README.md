@@ -33,7 +33,7 @@ image it actually produced, rather than asserting that separate builds are ident
 
 The job checks a bounded, sanitized startup log record for the baked source SHA,
 CLI transport, catalog profile, both connected WhatsApp accounts and all twelve
-campaigns plus both feeds. Failure restores the previous successful deployment's
+campaigns. Failure restores the previous successful deployment's
 exact image digest and owned runtime settings, then verifies its startup. It
 never installs crons or sends a test message. Startup verification for both release
 and rollback allows ten minutes, covering the entrypoint's 330-second stale-lease
@@ -97,9 +97,7 @@ their `deploy/install-*.sh` installer is re-run (via `deploy/gateway-exec.sh`, i
 `install-*-promo.sh` installers run again; each installer now verifies the
 timeout it registered is the one the gateway reports back, and the promo engine
 reads that live value at run time so a not-yet-migrated job tightens its send
-gaps rather than being killed with groups unreached (see README). The two job feed
-installers (`install-vacancy-lamp-feed.sh`, `install-hustlers-feed.sh`) target
-their groups' JIDs by default and send no test message over `railway ssh`.
+gaps rather than being killed with groups unreached (see README).
 
 The same applies to the promo **schedules**, which moved off the hour (07:15,
 08:13, 08:40, 10:35, 11:39, 12:50, 13:21, 14:26, 17:06 `Africa/Harare`) so the
@@ -456,3 +454,23 @@ repository README.
 Do **not** trigger a manual ad send to test — the CV-promo campaign delivers on its own
 cron at 11:39 Africa/Harare (declared in `deploy/promo-crons.json`; confirm the live
 schedule with `./deploy/reinstall-promo-crons.sh --check`).
+
+## Retired daily job feeds: 2026-10-28
+
+Vacancy Lamp and Hustlers Marketplace job posting and the shared scraping/cache
+pipeline are removed. The twelve promo campaigns and both WhatsApp accounts
+remain required by release verification. Historical rollout notes above describe
+the earlier feed-enabled deployments.
+
+Before the removal deploy, save the feed definitions outside Git, verify neither
+feed is running, and run `deploy/retire-job-scout-crons.sh --dry-run`, then run it
+without the flag. This retires current and legacy feed names via the gateway CLI;
+source deployment alone does not remove volume-backed cron registrations.
+Deploy through the checked release workflow after the live cron preflight.
+The boot overlay uses `rsync --delete` to remove the retired source and wrapper.
+Verify the feed names are absent, both accounts connect and all twelve campaigns
+remain enabled. Do not send test adverts. Archive only
+`runtime/job-scout/group-feed/` under a dated `retired/job-feeds/` directory on the
+volume; retain cron receipts and all other runtime state. Restore the archived
+cache, previous source image and saved cron definitions only if undoing retirement.
+Memory savings require subsequent measurements and are not a release criterion.
