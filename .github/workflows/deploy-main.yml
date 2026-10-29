@@ -9,12 +9,15 @@ on:
   workflow_dispatch:
     inputs:
       profile:
-        description: Preserve the current memory setting, or explicitly select baseline/catalog-trial
+        description: Preserve settings, restore baseline, or enable one measured optimization
         type: choice
         options:
           - preserve
           - baseline
           - catalog-trial
+          - history-trial
+          - allocator-trial
+          - sender-trial
         default: preserve
 
 permissions:
@@ -105,9 +108,11 @@ jobs:
               set -euo pipefail
               node -e '\''if(process.versions.node !== "26.12.1") process.exit(1); const {DatabaseSync}=require("node:sqlite");const d=new DatabaseSync(":memory:");d.prepare("select 1").get();d.close();'\''
               python3 /usr/local/bin/patch-worker-idle.py /usr/local/lib/node_modules/openclaw --check
+              python3 /usr/local/bin/patch-history-idle.py /usr/local/lib/node_modules/openclaw --check
               node --test --test-reporter=tap deploy/railway/whatsapp-lid-recovery.test.mjs \
                 deploy/railway/campaign-sdk.integration.test.mjs \
                 deploy/railway/worker-idle.integration.test.mjs \
+                deploy/railway/history-idle.integration.test.mjs \
                 deploy/railway/catalog-recovery.integration.test.mjs
             ' | tee "$RUNNER_TEMP/runtime-compatibility.tap"
           test "$(sed -n 's/^# skipped //p' "$RUNNER_TEMP/runtime-compatibility.tap" | tail -1)" = "0"

@@ -52,7 +52,9 @@ class ReleaseTests(unittest.TestCase):
                     RELEASE.release(Path(temp), SHA, requested, report)
                 setting = next(args for args in calls if args[:2] == ("variable", "set"))
                 self.assertIn(f"GENAIE_CATALOG_IDLE_RETIREMENT={expected}", setting)
-                startup.assert_called_once_with("new", SHA, expected, {"fixture-promo"})
+                startup.assert_called_once_with("new", SHA, expected, {"fixture-promo"},
+                    settings={"GENAIE_CAMPAIGN_TRANSPORT": "cli", "GENAIE_CATALOG_IDLE_RETIREMENT": expected,
+                              "GENAIE_HISTORY_IDLE_RETIREMENT": "0", "MALLOC_ARENA_MAX": "0"})
                 self.assertEqual(report["requestedProfile"], requested)
                 self.assertEqual(report["profile"], "catalog-trial" if expected == "1" else "baseline")
                 self.assertEqual(report["status"], "healthy")
@@ -66,6 +68,27 @@ class ReleaseTests(unittest.TestCase):
                 RELEASE.release(ROOT, SHA, "preserve", {})
         self.assertEqual(railway.call_count, 1)
         self.assertEqual(railway.call_args.args[:2], ("variable", "list"))
+
+    def test_trials_change_one_setting_and_preserve_the_others(self):
+        current = {"GENAIE_CAMPAIGN_TRANSPORT": "cli", "GENAIE_CATALOG_IDLE_RETIREMENT": "1",
+                   "GENAIE_HISTORY_IDLE_RETIREMENT": "0", "MALLOC_ARENA_MAX": "0"}
+        for profile, key, value in [("history-trial", "GENAIE_HISTORY_IDLE_RETIREMENT", "1"),
+                                    ("allocator-trial", "MALLOC_ARENA_MAX", "2"),
+                                    ("sender-trial", "GENAIE_CAMPAIGN_TRANSPORT", "rpc-once")]:
+            expected = {**current, key: value}
+            self.assertEqual(RELEASE.resolve_settings(profile, current), expected)
+            self.assertEqual(RELEASE.resolve_settings("preserve", expected), expected)
+        for key in current:
+            with self.assertRaises(ValueError):
+                RELEASE.resolve_settings("preserve", {**current, key: "unexpected"})
+
+    def test_new_trial_settings_are_verified_in_startup_report(self):
+        settings = RELEASE.resolve_settings("history-trial", {})
+        report = {**self.report(), **{RELEASE.SETTING_FIELDS[key]: value for key, value in settings.items()}}
+        RELEASE.validate_readiness(report, "new", SHA, "0", {"fixture-promo"}, settings)
+        for field in RELEASE.SETTING_FIELDS.values():
+            with self.assertRaises(ValueError):
+                RELEASE.validate_readiness({**report, field: "wrong"}, "new", SHA, "0", {"fixture-promo"}, settings)
 
     def report(self):
         return {"ready": True, "deploymentId": "new", "sourceCommit": SHA,
@@ -184,6 +207,7 @@ class ReleaseTests(unittest.TestCase):
             def railway(*args, **kwargs):
                 if args[:2] == ("variable", "list"):
                     return {"SOURCE_COMMIT": "old", "GENAIE_CATALOG_IDLE_RETIREMENT": "1",
+                            "GENAIE_HISTORY_IDLE_RETIREMENT": "1", "MALLOC_ARENA_MAX": "2",
                             "OTHER_SECRET": "fixture-private"}
                 if args[0] == "up": return {"deploymentId": "new"}
                 return {}
@@ -203,6 +227,8 @@ class ReleaseTests(unittest.TestCase):
             self.assertEqual(report["status"], "failed")
             self.assertEqual(restore.call_args.args[0]["id"], "previous")
             self.assertEqual(restore.call_args.args[1]["GENAIE_CATALOG_IDLE_RETIREMENT"], "1")
+            self.assertEqual(restore.call_args.args[1]["GENAIE_HISTORY_IDLE_RETIREMENT"], "1")
+            self.assertEqual(restore.call_args.args[1]["MALLOC_ARENA_MAX"], "2")
             self.assertNotIn("OTHER_SECRET", restore.call_args.args[1])
             self.assertNotIn("fixture-private", json.dumps(report))
 

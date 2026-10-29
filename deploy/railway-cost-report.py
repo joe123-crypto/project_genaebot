@@ -73,7 +73,8 @@ def main():
         "usage": usage, "projectUsage": project, "metrics": metrics, "limits": limits,
         "resourceProjection": projection(usage, captured),
         "currentRuntimeSettings": {key: variables.get(key) for key in [
-            "SOURCE_COMMIT", "GENAIE_CAMPAIGN_TRANSPORT", "GENAIE_CATALOG_IDLE_RETIREMENT"]},
+            "SOURCE_COMMIT", "GENAIE_CAMPAIGN_TRANSPORT", "GENAIE_CATALOG_IDLE_RETIREMENT",
+            "GENAIE_HISTORY_IDLE_RETIREMENT", "MALLOC_ARENA_MAX"]},
         "deployments": [{"id": item["id"], "status": item["status"], "createdAt": item["createdAt"],
                          "imageDigest": item.get("meta", {}).get("imageDigest"),
                          "commit": item.get("meta", {}).get("commitHash"),

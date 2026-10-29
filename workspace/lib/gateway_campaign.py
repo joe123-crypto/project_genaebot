@@ -14,12 +14,13 @@ _client = ContextVar("campaign_gateway_client", default=None)
 
 
 class CampaignClient:
-    def __init__(self, namespace, timeout=180):
+    def __init__(self, namespace, timeout=180, keep_alive=True):
         self.namespace = namespace
         self.timeout = timeout
         self.process = None
         self.buffer = b""
         self.sequence = 0
+        self.keep_alive = keep_alive
 
     def close(self):
         process, self.process = self.process, None
@@ -112,6 +113,14 @@ class CampaignClient:
                 # Cleanup must not replace the delivery failure being reported.
                 pass
             return False, "gateway transport error: %s" % error
+        finally:
+            if not self.keep_alive:
+                try:
+                    self.close()
+                except Exception:
+                    # A confirmed acknowledgement remains confirmed even when
+                    # helper cleanup fails. Never resend or switch transports.
+                    pass
 
     def send(self, target, text, image, account=None):
         params = {"channel": "whatsapp", "to": target, "message": text, "mediaUrl": image}
@@ -130,11 +139,12 @@ class CampaignClient:
 def campaign_transport(function):
     @wraps(function)
     def wrapped(*args, **kwargs):
-        if os.environ.get("GENAIE_CAMPAIGN_TRANSPORT", "cli") != "rpc":
+        transport = os.environ.get("GENAIE_CAMPAIGN_TRANSPORT", "cli")
+        if transport not in {"rpc", "rpc-once"}:
             return function(*args, **kwargs)
         from datetime import date
         namespace = "%s:%s" % (kwargs.get("state_file", ""), date.today().isoformat())
-        client = CampaignClient(namespace)
+        client = CampaignClient(namespace, keep_alive=transport == "rpc")
         token = _client.set(client)
         try:
             return function(*args, **kwargs)

@@ -16,7 +16,13 @@ import uuid
 PROJECT = "a251f752-3b49-4f72-8a71-4629bf2fced0"
 SERVICE = "503baf60-c897-4a77-812a-719195705031"
 ENVIRONMENT = "2cae37a4-8e24-41db-87ed-9a3a7c9eff22"
-OWNED = ("SOURCE_COMMIT", "GENAIE_CAMPAIGN_TRANSPORT", "GENAIE_CATALOG_IDLE_RETIREMENT")
+OWNED = ("SOURCE_COMMIT", "GENAIE_CAMPAIGN_TRANSPORT", "GENAIE_CATALOG_IDLE_RETIREMENT",
+         "GENAIE_HISTORY_IDLE_RETIREMENT", "MALLOC_ARENA_MAX")
+PROFILES = ("preserve", "baseline", "catalog-trial", "history-trial", "allocator-trial", "sender-trial")
+SETTING_FIELDS = {"GENAIE_CAMPAIGN_TRANSPORT": "transport",
+                  "GENAIE_CATALOG_IDLE_RETIREMENT": "catalogIdleRetirement",
+                  "GENAIE_HISTORY_IDLE_RETIREMENT": "historyIdleRetirement",
+                  "MALLOC_ARENA_MAX": "mallocArenaMax"}
 PREFIX = "GENAIE_RELEASE_READY "
 SCOPE = ["--project", PROJECT, "--service", SERVICE, "--environment", ENVIRONMENT]
 
@@ -50,12 +56,14 @@ def wait_for(deployment_id, timeout=600):
     raise TimeoutError(f"Deployment {deployment_id} did not become successful")
 
 
-def validate_readiness(report, deployment_id, sha, profile, jobs):
+def validate_readiness(report, deployment_id, sha, profile, jobs, settings=None):
     if not report.get("ready") or report.get("deploymentId") != deployment_id:
         raise ValueError("release startup verification failed or references another deployment")
     if report.get("sourceCommit") != sha:
         raise ValueError("baked source commit does not match the tested commit")
-    if report.get("transport") != "cli" or report.get("catalogIdleRetirement") != profile:
+    expected = ({"transport": "cli", "catalogIdleRetirement": profile} if settings is None else
+                {SETTING_FIELDS[key]: value for key, value in settings.items()})
+    if any(report.get(key) != value for key, value in expected.items()):
         raise ValueError("runtime settings do not match the release profile")
     if not {"default", "ads"}.issubset(set(report.get("connectedAccounts", []))):
         raise ValueError("both WhatsApp accounts must be connected")
@@ -66,7 +74,7 @@ def validate_readiness(report, deployment_id, sha, profile, jobs):
         raise ValueError("required campaigns are not enabled")
 
 
-def startup_result(deployment_id, sha, profile, jobs, timeout=600):
+def startup_result(deployment_id, sha, profile, jobs, timeout=600, settings=None):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         result = subprocess.run(["railway", "logs", deployment_id, *SCOPE, "--lines", "100",
@@ -81,7 +89,7 @@ def startup_result(deployment_id, sha, profile, jobs, timeout=600):
                     report = json.loads(message[len(PREFIX):])
                 except (ValueError, AttributeError):
                     continue
-                validate_readiness(report, deployment_id, sha, profile, jobs)
+                validate_readiness(report, deployment_id, sha, profile, jobs, settings)
                 return report
         time.sleep(5)
     raise TimeoutError("No validated startup result for the released deployment")
@@ -158,7 +166,7 @@ def archive_commit(root, sha, destination):
 
 
 def resolve_profile(requested, variables):
-    if requested in {"baseline", "catalog-trial"}:
+    if requested in set(PROFILES) - {"preserve"}:
         return requested
     if requested != "preserve":
         raise ValueError("unknown release profile")
@@ -168,6 +176,30 @@ def resolve_profile(requested, variables):
     if value == "1":
         return "catalog-trial"
     raise ValueError("cannot preserve an unrecognized catalog retirement setting")
+
+
+def resolve_settings(requested, variables):
+    defaults = {"GENAIE_CAMPAIGN_TRANSPORT": "cli", "GENAIE_CATALOG_IDLE_RETIREMENT": "0",
+                "GENAIE_HISTORY_IDLE_RETIREMENT": "0", "MALLOC_ARENA_MAX": "0"}
+    if requested in {"baseline", "catalog-trial"}:
+        settings = defaults.copy()
+        settings["GENAIE_CATALOG_IDLE_RETIREMENT"] = "1" if requested == "catalog-trial" else "0"
+        return settings
+    if requested not in PROFILES:
+        raise ValueError("unknown release profile")
+    settings = {key: variables.get(key) or value for key, value in defaults.items()}
+    choices = {"GENAIE_CAMPAIGN_TRANSPORT": {"cli", "rpc", "rpc-once"},
+               "GENAIE_CATALOG_IDLE_RETIREMENT": {"0", "1"},
+               "GENAIE_HISTORY_IDLE_RETIREMENT": {"0", "1"}, "MALLOC_ARENA_MAX": {"0", "2"}}
+    if any(value not in choices[key] for key, value in settings.items()):
+        raise ValueError("cannot preserve an unrecognized memory/runtime setting")
+    if requested == "history-trial":
+        settings["GENAIE_HISTORY_IDLE_RETIREMENT"] = "1"
+    elif requested == "allocator-trial":
+        settings["MALLOC_ARENA_MAX"] = "2"
+    elif requested == "sender-trial":
+        settings["GENAIE_CAMPAIGN_TRANSPORT"] = "rpc-once"
+    return settings
 
 
 def release(root, sha, profile, report):
@@ -188,23 +220,25 @@ def release(root, sha, profile, report):
     if any(key in raw_variables and raw_variables[key] is None for key in OWNED):
         raise RuntimeError("owned release setting is sealed and cannot safely be restored")
     report["requestedProfile"] = profile
+    settings = resolve_settings(profile, variables)
     profile = resolve_profile(profile, variables)
     report.update({"sourceCommit": sha, "profile": profile, "previousDeploymentId": previous["id"],
-                   "previousImageDigest": previous.get("meta", {}).get("imageDigest")})
+                   "previousImageDigest": previous.get("meta", {}).get("imageDigest"), "runtimeSettings": settings})
     with tempfile.TemporaryDirectory(prefix="genaebot-release-") as temporary:
         archive_commit(root, sha, temporary)
         manifest = json.loads((Path(temporary) / "deploy/promo-crons.json").read_text())
         entries = manifest if isinstance(manifest, list) else manifest.get("promos", manifest.get("jobs", []))
         # The repository's manifest is the authority; never install or edit crons here.
         jobs = {item["name"] for item in entries}
-        idle = "1" if profile == "catalog-trial" else "0"
+        idle = settings["GENAIE_CATALOG_IDLE_RETIREMENT"]
         identifier = None
         upload_started = False
         release_message = f"commit:{sha} profile:{profile} release:{uuid.uuid4().hex}"
         report["releaseMessage"] = release_message
         try:
-            railway("variable", "set", f"SOURCE_COMMIT={sha}", "GENAIE_CAMPAIGN_TRANSPORT=cli",
-                    f"GENAIE_CATALOG_IDLE_RETIREMENT={idle}", *SCOPE, "--skip-deploys", "--json")
+            railway("variable", "set", f"SOURCE_COMMIT={sha}",
+                    *(f"{key}={value}" for key, value in settings.items()),
+                    *SCOPE, "--skip-deploys", "--json")
             upload_started = True
             result = railway("up", *SCOPE, "--detach", "--json", "--message",
                              release_message, cwd=temporary)
@@ -214,7 +248,7 @@ def release(root, sha, profile, report):
             report["imageDigest"] = deployed.get("meta", {}).get("imageDigest")
             if not report["imageDigest"]:
                 raise RuntimeError("released image digest is missing")
-            report["startup"] = startup_result(identifier, sha, idle, jobs)
+            report["startup"] = startup_result(identifier, sha, idle, jobs, settings=settings)
             report["status"] = "healthy"
         except Exception:
             report["status"] = "failed"
@@ -240,7 +274,7 @@ def release(root, sha, profile, report):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sha", required=True)
-    parser.add_argument("--profile", choices=["preserve", "baseline", "catalog-trial"], default="preserve")
+    parser.add_argument("--profile", choices=PROFILES, default="preserve")
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args()
     report = {"status": "failed", "sourceCommit": args.sha}

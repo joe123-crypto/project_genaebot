@@ -1,7 +1,29 @@
 // JSON-lines bridge. Only the existing Gateway SDK handles authentication and
 // reconnection. Requests are issued once; a lost acknowledgement is never replayed.
 import { createInterface } from 'node:readline';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+
+// Load the same upstream client re-exported by the SDK, without importing the
+// SDK's unrelated server, node-execution and plugin surfaces on every send.
+// Fail closed when the pinned package or SDK export contract changes.
+export async function loadCampaignGatewayClient(root = '/usr/local/lib/node_modules/openclaw') {
+  const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
+  if (pkg.version !== '2026.9.9') throw new Error('review campaign client loader before upgrading OpenClaw');
+  const sdk = await readFile(path.join(root, 'dist/plugin-sdk/gateway-runtime.js'), 'utf8');
+  const matches = [...sdk.matchAll(/import \{ (\w+) as GatewayClient \} from "\.\.\/(client-[\w-]+\.mjs)";/g)];
+  if (matches.length !== 1 || !/export \{[^}]*\bGatewayClient\b[^}]*\};/.test(sdk)) {
+    throw new Error('pinned GatewayClient SDK export changed');
+  }
+  const [, symbol, filename] = matches[0];
+  const GatewayClient = (await import(pathToFileURL(path.join(root, 'dist', filename))))[symbol];
+  if (typeof GatewayClient !== 'function' ||
+      !['start', 'request', 'stopAndWait'].every((name) => typeof GatewayClient.prototype[name] === 'function')) {
+    throw new Error('pinned GatewayClient API changed');
+  }
+  return GatewayClient;
+}
 
 export function createCampaignBridge(GatewayClient, { token, port = '18789', connectTimeoutMs = 20_000 }) {
   let client;
@@ -74,7 +96,7 @@ export function createCampaignBridge(GatewayClient, { token, port = '18789', con
 async function main() {
   const token = process.env.GATEWAY_AUTH_TOKEN;
   if (!token) throw new Error('GATEWAY_AUTH_TOKEN is required');
-  const { GatewayClient } = await import('/usr/local/lib/node_modules/openclaw/dist/plugin-sdk/gateway-runtime.js');
+  const GatewayClient = await loadCampaignGatewayClient();
   const bridge = createCampaignBridge(GatewayClient, { token, port: process.env.OPENCLAW_GATEWAY_PORT });
   const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
   try {

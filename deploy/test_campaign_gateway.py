@@ -68,6 +68,41 @@ for line in sys.stdin:
         a, b = self.calls()
         self.assertEqual(a["params"]["idempotencyKey"], b["params"]["idempotencyKey"])
 
+    def test_one_shot_client_exits_between_sends_and_preserves_delivery_identity(self):
+        client = gc.CampaignClient("same-promo:same-day", keep_alive=False)
+        for _ in range(2):
+            self.assertTrue(client.send("1@g.us", "hello", "/ad.png", "ads")[0])
+            self.assertIsNone(client.process)
+            self.assertIsNotNone(self.processes[-1].poll())
+        self.assertEqual(len(self.processes), 2)
+        a, b = self.calls()
+        self.assertEqual(a["params"], b["params"])
+
+    def test_one_shot_timeout_never_replays_the_send(self):
+        client = gc.CampaignClient("promo", timeout=0.15, keep_alive=False)
+        ok, output = client.send("1@g.us", "timeout", "/ad.png")
+        self.assertFalse(ok)
+        self.assertIn("outcome unknown", output)
+        self.assertEqual(len(self.calls()), 1)
+        self.assertEqual(len(self.processes), 1)
+        self.assertIsNone(client.process)
+
+    def test_one_shot_broadcast_releases_helper_before_the_random_gap(self):
+        image = self.root / "ad.png"
+        image.write_bytes(b"fixture")
+        targets = self.root / "targets.json"
+        targets.write_text('{"groups":["1@g.us","2@g.us"]}')
+        state = self.root / "state.json"
+        def gap(seconds):
+            self.assertTrue(self.processes)
+            self.assertTrue(all(process.poll() is not None for process in self.processes))
+        with patch.dict(os.environ, {"GENAIE_CAMPAIGN_TRANSPORT": "rpc-once"}):
+            self.assertEqual(pb.broadcast(text="hello", image=str(image), targets_file=str(targets),
+                state_file=str(state), argv=[], caps=None, cron_timeout=None,
+                start_jitter=0, send_delay=1, sleep=gap), 0)
+        self.assertEqual(len(self.processes), 2)
+        self.assertEqual(set(json.loads(state.read_text())["sent"]), {"1@g.us", "2@g.us"})
+
     def test_corrupt_trailing_data_is_discarded_before_a_healthy_restart(self):
         self.helper.write_text('''import sys,json
 for line in sys.stdin:

@@ -1,6 +1,24 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createCampaignBridge } from './gateway_campaign.mjs';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { createCampaignBridge, loadCampaignGatewayClient } from './gateway_campaign.mjs';
+
+test('narrow client loader rejects an upgraded package or ambiguous SDK export', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'campaign-loader-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.writeFile(path.join(root, 'package.json'), '{"version":"changed"}');
+  await assert.rejects(loadCampaignGatewayClient(root), /before upgrading/);
+  await fs.writeFile(path.join(root, 'package.json'), '{"version":"2026.9.9"}');
+  await fs.mkdir(path.join(root, 'dist/plugin-sdk'), { recursive: true });
+  const sdk = path.join(root, 'dist/plugin-sdk/gateway-runtime.js');
+  await fs.writeFile(sdk, 'export { OtherClient };');
+  await assert.rejects(loadCampaignGatewayClient(root), /export changed/);
+  await fs.writeFile(sdk, 'import { t as GatewayClient } from "../client-fixture.mjs";\n'.repeat(2) +
+    'export { GatewayClient };');
+  await assert.rejects(loadCampaignGatewayClient(root), /export changed/);
+});
 
 function fixture() {
   const instances = [];

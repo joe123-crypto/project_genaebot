@@ -33,6 +33,8 @@ def inspect(state, marker, channels, environment):
         "sourceCommit": source.group(1) if source else "unknown",
         "transport": environment.get("GENAIE_CAMPAIGN_TRANSPORT", "cli"),
         "catalogIdleRetirement": environment.get("GENAIE_CATALOG_IDLE_RETIREMENT", "0"),
+        "historyIdleRetirement": environment.get("GENAIE_HISTORY_IDLE_RETIREMENT", "0"),
+        "mallocArenaMax": environment.get("MALLOC_ARENA_MAX", "0"),
         "expectedAccounts": sorted(expected), "connectedAccounts": sorted(connected),
         "enabledJobs": sorted(jobs),
         "bindingsHash": hashlib.sha256(json.dumps(config.get("bindings", []), sort_keys=True).encode()).hexdigest(),
