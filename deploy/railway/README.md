@@ -400,8 +400,9 @@ The additional workflow profiles change one setting while preserving the others:
 | `history-trial` | `GENAIE_HISTORY_IDLE_RETIREMENT=1` | Set it to `0` and redeploy |
 | `allocator-trial` | `MALLOC_ARENA_MAX=2` | Set it to `0` (glibc default) and redeploy |
 | `sender-trial` | `GENAIE_CAMPAIGN_TRANSPORT=rpc-once` | Set transport to `cli` and redeploy |
+| `cache-trial` | `GENAIE_WHATSAPP_CACHE_CLEANUP=1` | Set it to `0` and redeploy |
 
-`preserve` retains all four runtime settings, including catalog retirement.
+`preserve` retains all five runtime settings, including catalog retirement.
 `baseline` restores CLI transport, stock catalog/history retention and glibc's
 default arena policy; `catalog-trial` selects that baseline plus catalog retirement.
 The release records all settings and validates them in the startup report;
@@ -435,6 +436,25 @@ history lanes through three cycles. Settled RSS was 470/417 MiB with default
 arenas and 482/413 MiB with two arenas: no repeatable settled-memory reduction.
 Keep the allocator trial disabled unless a matched production comparison supplies
 better evidence.
+
+### Expired WhatsApp metadata cleanup
+
+`GENAIE_WHATSAPP_CACHE_CLEANUP=1` opts into a guarded adapter-load patch for
+WhatsApp 2026.9.9 (`cache-trial` release profile). The release owns this setting,
+checks it in startup verification and restores it during rollback.
+Once per minute, each metadata owner's existing lifecycle
+releases only entries whose original expiry has passed from its local,
+reconnect and Baileys metadata caches. Fresh values, expiry times, metadata
+fetching, mentions, reconnect fallback and account routing stay unchanged.
+The unreferenced cleanup timer stops with its owner. No credentials, durable
+messages, campaigns or features are removed. Unset the variable or set it to
+`0` and redeploy to restore stock retention.
+
+Tests exercise the pinned adapter's actual cache-owner code with its socket
+replaced by a fixture, covering valid cache hits, expiry/refetch, reconnect
+fallback, owner shutdown and account isolation. This establishes behavior,
+not production RSS savings: V8 may retain freed pages for reuse. Measure a
+comparable campaign and idle interval before attributing billing savings.
 
 ### Nighttime measurements: October 28, 2026
 

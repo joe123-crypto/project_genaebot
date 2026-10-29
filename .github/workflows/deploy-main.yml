@@ -18,6 +18,7 @@ on:
           - history-trial
           - allocator-trial
           - sender-trial
+          - cache-trial
         default: preserve
 
 permissions:
@@ -110,6 +111,7 @@ jobs:
               python3 /usr/local/bin/patch-worker-idle.py /usr/local/lib/node_modules/openclaw --check
               python3 /usr/local/bin/patch-history-idle.py /usr/local/lib/node_modules/openclaw --check
               node --test --test-reporter=tap deploy/railway/whatsapp-lid-recovery.test.mjs \
+                deploy/railway/whatsapp-cache-cleanup.test.mjs \
                 deploy/railway/campaign-sdk.integration.test.mjs \
                 deploy/railway/worker-idle.integration.test.mjs \
                 deploy/railway/history-idle.integration.test.mjs \

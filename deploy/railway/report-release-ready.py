@@ -35,6 +35,7 @@ def inspect(state, marker, channels, environment):
         "catalogIdleRetirement": environment.get("GENAIE_CATALOG_IDLE_RETIREMENT", "0"),
         "historyIdleRetirement": environment.get("GENAIE_HISTORY_IDLE_RETIREMENT", "0"),
         "mallocArenaMax": environment.get("MALLOC_ARENA_MAX", "0"),
+        "whatsappCacheCleanup": environment.get("GENAIE_WHATSAPP_CACHE_CLEANUP", "0"),
         "expectedAccounts": sorted(expected), "connectedAccounts": sorted(connected),
         "enabledJobs": sorted(jobs),
         "bindingsHash": hashlib.sha256(json.dumps(config.get("bindings", []), sort_keys=True).encode()).hexdigest(),
