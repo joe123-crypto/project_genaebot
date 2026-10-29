@@ -174,8 +174,8 @@ allows time for the entrypoint's 330-second stale-lease handoff before the gatew
 can begin connecting its accounts.
 
 Release and compatibility results remain attached to the workflow as artifacts.
-A normal push preserves the current catalog retirement setting and keeps `cli`
-transport. Manual workflow runs default to `preserve`; explicitly choose `baseline`
+A normal push preserves the current runtime settings, including sender transport
+and the optional expired WhatsApp metadata cleanup. Manual workflow runs default to `preserve`; explicitly choose `baseline`
 to disable retirement or `catalog-trial` to enable it. A missing retirement setting
 uses the image baseline (disabled); unrecognized values stop the release before
 any production changes. Release artifacts record both the requested and resolved
@@ -877,6 +877,20 @@ profile opts the existing history-owner cleanup path into five-minute idle
 rotation; database writers and archive/reclamation workers keep upstream policy.
 `allocator-trial` separately tests `MALLOC_ARENA_MAX=2`. Normal releases preserve
 these settings and validate them at startup; exact-image rollback restores them.
+`cache-trial` enables `GENAIE_WHATSAPP_CACHE_CLEANUP=1`: each WhatsApp metadata
+owner releases already-expired local, reconnect and Baileys cache entries once
+per minute. Valid entries, existing expiry times, mention data, reconnect
+fallback and campaigns stay intact. The cleanup timer stops with its owner.
+It is disabled by default; set the flag to `0` and redeploy to opt out.
+See [expired metadata cleanup](deploy/railway/README.md#expired-whatsapp-metadata-cleanup)
+for validation coverage and measurement limits.
+The approved `standby-trial` profile enables daily overnight standby from
+17:00 until 05:45 Africa/Algiers. Both WhatsApp accounts, replies and CV requests
+are unavailable then. A container-local supervisor wakes the gateway without
+this desktop, preserves stored state and enabled crons, and defers shutdown for
+active work, pending deliveries or a campaign due before wake. This schedule is
+separate from spending limits; no hard compute cutoff is installed. See the
+[standby procedure](deploy/railway/README.md#approved-overnight-standby).
 See [the memory trial procedure and nighttime measurements](deploy/railway/README.md#nighttime-measurements-october-28-2026)
 before interpreting any short sample as sustained cost savings.
 

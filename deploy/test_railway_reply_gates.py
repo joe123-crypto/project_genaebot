@@ -333,7 +333,7 @@ class ReplyGateSyncTests(unittest.TestCase):
         self.assertLess(entrypoint.index('touch "$upgrade_marker.done"'), at)
         self.assertLess(entrypoint.index("sync-public-prompt.py \\"), at)
         self.assertLess(at, entrypoint.index("wait-gateway-lease.py"))
-        self.assertLess(at, entrypoint.index("exec runuser -u joseph -- openclaw gateway"))
+        self.assertLess(at, entrypoint.index("exec runuser -u joseph -- python3 /usr/local/bin/gateway-standby.py"))
         self.assertIn('"$LIVE_SOURCE/config/openclaw.template.json"', entrypoint)
         self.assertIn("REPLIES_DISABLED", entrypoint)
 

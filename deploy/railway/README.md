@@ -417,8 +417,10 @@ The additional workflow profiles change one setting while preserving the others:
 | `history-trial` | `GENAIE_HISTORY_IDLE_RETIREMENT=1` | Set it to `0` and redeploy |
 | `allocator-trial` | `MALLOC_ARENA_MAX=2` | Set it to `0` (glibc default) and redeploy |
 | `sender-trial` | `GENAIE_CAMPAIGN_TRANSPORT=rpc-once` | Set transport to `cli` and redeploy |
+| `cache-trial` | `GENAIE_WHATSAPP_CACHE_CLEANUP=1` | Set it to `0` and redeploy |
+| `standby-trial` | `GENAIE_OVERNIGHT_STANDBY=1` | Set it to `0` and redeploy |
 
-`preserve` retains all four runtime settings, including catalog retirement.
+`preserve` retains all six runtime settings, including catalog retirement.
 `baseline` restores CLI transport, stock catalog/history retention and glibc's
 default arena policy; `catalog-trial` selects that baseline plus catalog retirement.
 The release records all settings and validates them in the startup report;
@@ -452,6 +454,25 @@ history lanes through three cycles. Settled RSS was 470/417 MiB with default
 arenas and 482/413 MiB with two arenas: no repeatable settled-memory reduction.
 Keep the allocator trial disabled unless a matched production comparison supplies
 better evidence.
+
+### Expired WhatsApp metadata cleanup
+
+`GENAIE_WHATSAPP_CACHE_CLEANUP=1` opts into a guarded adapter-load patch for
+WhatsApp 2026.9.9 (`cache-trial` release profile). The release owns this setting,
+checks it in startup verification and restores it during rollback.
+Once per minute, each metadata owner's existing lifecycle
+releases only entries whose original expiry has passed from its local,
+reconnect and Baileys metadata caches. Fresh values, expiry times, metadata
+fetching, mentions, reconnect fallback and account routing stay unchanged.
+The unreferenced cleanup timer stops with its owner. No credentials, durable
+messages, campaigns or features are removed. Unset the variable or set it to
+`0` and redeploy to restore stock retention.
+
+Tests exercise the pinned adapter's actual cache-owner code with its socket
+replaced by a fixture, covering valid cache hits, expiry/refetch, reconnect
+fallback, owner shutdown and account isolation. This establishes behavior,
+not production RSS savings: V8 may retain freed pages for reuse. Measure a
+comparable campaign and idle interval before attributing billing savings.
 
 ### Nighttime measurements: October 28, 2026
 
@@ -563,3 +584,48 @@ remain enabled. Do not send test adverts. Archive only
 volume; retain cron receipts and all other runtime state. Restore the archived
 cache, previous source image and saved cron definitions only if undoing retirement.
 Memory savings require subsequent measurements and are not a release criterion.
+
+## Approved overnight standby
+
+The operator explicitly approved daily standby from **17:00 to 05:45
+Africa/Algiers**, with WhatsApp replies and CV requests unavailable during that
+window. `GENAIE_OVERNIGHT_STANDBY=1` enables the container-local Python supervisor;
+`0` (image default) executes the original gateway command directly. The
+`standby-trial` release profile enables only this flag and preserves other
+runtime settings. `preserve` carries it forward; baseline disables it and exact
+image rollback restores its prior value. This is a time schedule, never a
+spending-triggered stop or a hard compute budget cutoff.
+
+Every container starts the gateway once, even overnight, and requires a fresh
+successful release-readiness acknowledgment before it can enter standby. The
+entrypoint creates a private temporary directory, separate from persistent
+state, shared by the supervisor and request tracker. The service gate records
+only request counts, process ID and activity time; it records no customer data.
+The supervisor checks gateway lanes, enabled cron running/next-run markers,
+native running receipts, pending native/legacy deliveries, and the service-gate
+request counter. Missing or unrecognized state keeps it awake. Any enabled promo
+or feed due before the next wake also defers standby. Existing enabled cron
+definitions are never changed; overnight maintenance follows upstream missed-run
+behavior after startup.
+
+After a quiet minute and successful checks, a drain marker holds new requests
+with an availability reply. A second idle check at least a minute later permits
+SIGTERM. Active work or a failed check removes that marker and defers shutdown;
+there is no timeout that force-kills work to save money. The gateway's own
+shutdown releases native state ownership. A tiny HTTP responder then serves
+`/health`, `/healthz`, `/ready` and `/readyz` with HTTP 200 and explicit
+`gatewayAvailable:false`; other routes return 503. It closes before the morning
+gateway binds the same port. Wake uses the container's clock and Algeria timezone,
+independently of a desktop automation. Unexpected child exits are failures so
+Railway's existing restart policy applies.
+
+The initial estimate was about $5.5 less compute for the remaining billing cycle,
+based on prior overnight measurements. Supervisor overhead, pending-work delays,
+future storage/network fees and actual daytime use affect the result. Validate
+billed resource changes after a full overnight window; this does not guarantee a
+$15 invoice. Keep the existing warning-only alert and do not add a hard cutoff.
+Before activation, verify the connected main WhatsApp account and use the live
+campaign preflight above. The operator subsequently approved deployments with
+the advertising line offline: report it as degraded rather than blocking the
+release or disabling its account or campaigns. This does not bypass the standby
+activity guard; pending deliveries can still defer overnight shutdown.

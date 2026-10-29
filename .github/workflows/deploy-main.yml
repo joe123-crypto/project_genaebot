@@ -18,6 +18,8 @@ on:
           - history-trial
           - allocator-trial
           - sender-trial
+          - cache-trial
+          - standby-trial
         default: preserve
 
 permissions:
@@ -109,7 +111,9 @@ jobs:
               node -e '\''if(process.versions.node !== "26.12.1") process.exit(1); const {DatabaseSync}=require("node:sqlite");const d=new DatabaseSync(":memory:");d.prepare("select 1").get();d.close();'\''
               python3 /usr/local/bin/patch-worker-idle.py /usr/local/lib/node_modules/openclaw --check
               python3 /usr/local/bin/patch-history-idle.py /usr/local/lib/node_modules/openclaw --check
+              python3 deploy/test_gateway_standby_runtime.py
               node --test --test-reporter=tap deploy/railway/whatsapp-lid-recovery.test.mjs \
+                deploy/railway/whatsapp-cache-cleanup.test.mjs \
                 deploy/railway/campaign-sdk.integration.test.mjs \
                 deploy/railway/worker-idle.integration.test.mjs \
                 deploy/railway/history-idle.integration.test.mjs \

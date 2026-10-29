@@ -1,4 +1,5 @@
 import { getPluginConfig } from "./lib/config.js";
+import { trackStandbyActivity } from "./lib/standby-activity.js";
 import {
   getEventAccountId,
   getEventChannel,
@@ -264,7 +265,7 @@ export default {
       return { content: rewritten };
     });
 
-    api.on("before_dispatch", async (event, ctx) => {
+    api.on("before_dispatch", trackStandbyActivity(async (event, ctx) => {
       if (!isEnabled(api)) return;
       const channel = getEventChannel(event, ctx);
       if (!isWhatsAppChannel(channel)) return;
@@ -392,7 +393,7 @@ export default {
         `public-service-gate: member WhatsApp text deferred to agent sender=${sender} textLen=${text.length}`,
       );
       return;
-    });
+    }));
   },
 };
 

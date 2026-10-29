@@ -39,6 +39,8 @@ def inspect(state, marker, channels, environment):
         "catalogIdleRetirement": environment.get("GENAIE_CATALOG_IDLE_RETIREMENT", "0"),
         "historyIdleRetirement": environment.get("GENAIE_HISTORY_IDLE_RETIREMENT", "0"),
         "mallocArenaMax": environment.get("MALLOC_ARENA_MAX", "0"),
+        "whatsappCacheCleanup": environment.get("GENAIE_WHATSAPP_CACHE_CLEANUP", "0"),
+        "overnightStandby": environment.get("GENAIE_OVERNIGHT_STANDBY", "0"),
         "expectedAccounts": sorted(expected), "connectedAccounts": sorted(connected),
         "requiredAccounts": sorted(REQUIRED_ACCOUNTS),
         "disconnectedAccounts": sorted(disconnected), "degraded": bool(disconnected),
@@ -61,6 +63,9 @@ def main():
                                     check=True, timeout=min(15, max(1, deadline - time.monotonic())))
             report = inspect(state, marker, json.loads(result.stdout), environment)
             print(PREFIX + json.dumps(report), flush=True)
+            if environment.get("GENAIE_OVERNIGHT_STANDBY") == "1":
+                # Unique private directory per container; never reuse an old boot's readiness.
+                (Path(environment["GENAIE_STANDBY_RUNTIME"]) / "release-ready").touch(mode=0o600)
             return
         except (OSError, ValueError, sqlite3.Error, subprocess.SubprocessError):
             time.sleep(min(5, max(0, deadline - time.monotonic())))

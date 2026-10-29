@@ -54,7 +54,8 @@ class ReleaseTests(unittest.TestCase):
                 self.assertIn(f"GENAIE_CATALOG_IDLE_RETIREMENT={expected}", setting)
                 startup.assert_called_once_with("new", SHA, expected, {"fixture-promo"},
                     settings={"GENAIE_CAMPAIGN_TRANSPORT": "cli", "GENAIE_CATALOG_IDLE_RETIREMENT": expected,
-                              "GENAIE_HISTORY_IDLE_RETIREMENT": "0", "MALLOC_ARENA_MAX": "0"})
+                              "GENAIE_HISTORY_IDLE_RETIREMENT": "0", "MALLOC_ARENA_MAX": "0",
+                              "GENAIE_WHATSAPP_CACHE_CLEANUP": "0", "GENAIE_OVERNIGHT_STANDBY": "0"})
                 self.assertEqual(report["requestedProfile"], requested)
                 self.assertEqual(report["profile"], "catalog-trial" if expected == "1" else "baseline")
                 self.assertEqual(report["status"], "healthy")
@@ -71,10 +72,13 @@ class ReleaseTests(unittest.TestCase):
 
     def test_trials_change_one_setting_and_preserve_the_others(self):
         current = {"GENAIE_CAMPAIGN_TRANSPORT": "cli", "GENAIE_CATALOG_IDLE_RETIREMENT": "1",
-                   "GENAIE_HISTORY_IDLE_RETIREMENT": "0", "MALLOC_ARENA_MAX": "0"}
+                   "GENAIE_HISTORY_IDLE_RETIREMENT": "0", "MALLOC_ARENA_MAX": "0",
+                   "GENAIE_WHATSAPP_CACHE_CLEANUP": "0", "GENAIE_OVERNIGHT_STANDBY": "0"}
         for profile, key, value in [("history-trial", "GENAIE_HISTORY_IDLE_RETIREMENT", "1"),
                                     ("allocator-trial", "MALLOC_ARENA_MAX", "2"),
-                                    ("sender-trial", "GENAIE_CAMPAIGN_TRANSPORT", "rpc-once")]:
+                                    ("sender-trial", "GENAIE_CAMPAIGN_TRANSPORT", "rpc-once"),
+                                    ("cache-trial", "GENAIE_WHATSAPP_CACHE_CLEANUP", "1"),
+                                    ("standby-trial", "GENAIE_OVERNIGHT_STANDBY", "1")]:
             expected = {**current, key: value}
             self.assertEqual(RELEASE.resolve_settings(profile, current), expected)
             self.assertEqual(RELEASE.resolve_settings("preserve", expected), expected)
@@ -242,6 +246,7 @@ class ReleaseTests(unittest.TestCase):
                 if args[:2] == ("variable", "list"):
                     return {"SOURCE_COMMIT": "old", "GENAIE_CATALOG_IDLE_RETIREMENT": "1",
                             "GENAIE_HISTORY_IDLE_RETIREMENT": "1", "MALLOC_ARENA_MAX": "2",
+                            "GENAIE_WHATSAPP_CACHE_CLEANUP": "1",
                             "OTHER_SECRET": "fixture-private"}
                 if args[0] == "up": return {"deploymentId": "new"}
                 return {}
@@ -263,6 +268,7 @@ class ReleaseTests(unittest.TestCase):
             self.assertEqual(restore.call_args.args[1]["GENAIE_CATALOG_IDLE_RETIREMENT"], "1")
             self.assertEqual(restore.call_args.args[1]["GENAIE_HISTORY_IDLE_RETIREMENT"], "1")
             self.assertEqual(restore.call_args.args[1]["MALLOC_ARENA_MAX"], "2")
+            self.assertEqual(restore.call_args.args[1]["GENAIE_WHATSAPP_CACHE_CLEANUP"], "1")
             self.assertNotIn("OTHER_SECRET", restore.call_args.args[1])
             self.assertNotIn("fixture-private", json.dumps(report))
 
@@ -311,8 +317,10 @@ class ReadinessTests(unittest.TestCase):
                 database.commit()
             channels = {"channelAccounts": {"whatsapp": [{"accountId": key, "connected": True}
                                                         for key in ["default", "ads"]]}}
-            report = READY.inspect(state, marker, channels, {"RAILWAY_DEPLOYMENT_ID": "new"})
+            report = READY.inspect(state, marker, channels, {"RAILWAY_DEPLOYMENT_ID": "new",
+                                                           "GENAIE_WHATSAPP_CACHE_CLEANUP": "1"})
             self.assertEqual(report["sourceCommit"], SHA)
+            self.assertEqual(report["whatsappCacheCleanup"], "1")
             self.assertEqual(report["enabledJobs"], ["fixture-promo"])
             self.assertNotIn("fixture-private", json.dumps(report))
             channels["channelAccounts"]["whatsapp"].pop()
