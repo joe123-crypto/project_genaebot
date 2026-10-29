@@ -3,7 +3,7 @@
   "version": 1,
   "defaults": {
     "activity": "normal",
-    "caps_enabled": false,
+    "caps_enabled": true,
     "contact_account": "ads",
     "accounts": {
       "default": {

@@ -447,9 +447,9 @@ is a pure function of `(day, jid, promo set, cap)` -- identical in every cron
 process, needing no shared state and no lock, which matters because
 `json_store` is last-writer-wins and the eight crons can overlap.
 
-Caps are **off** until `defaults.caps_enabled` is `true` in membership.json, and
+Caps are **on** (`defaults.caps_enabled` is `true` in membership.json), and
 the engine fails open: a missing or broken membership file logs a warning and
-sends to every eligible group. Preview the effect before enabling it with
+sends to every eligible group. Preview the allowances with
 `./workspace/bin/list-groups --caps` (and `--date YYYY-MM-DD` for another day) or
 a promo's `--dry-run`, which prints each group's tier, cap, reply score and the
 campaigns today's rotation gives the allowance to. With every group left at the
