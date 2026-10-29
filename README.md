@@ -868,6 +868,16 @@ The speedup has not established a net billing improvement. Sends retain account 
 per-group state commits and stable per-day idempotency keys; an uncertain send is
 never automatically retried through a second transport. Dry runs start no helper.
 
+The `sender-trial` release profile selects `rpc-once`: the same upstream client
+loaded through a version-checked narrow SDK re-export, with its helper joined
+after each request so it holds no memory between sends. The `history-trial`
+profile opts the existing history-owner cleanup path into five-minute idle
+rotation; database writers and archive/reclamation workers keep upstream policy.
+`allocator-trial` separately tests `MALLOC_ARENA_MAX=2`. Normal releases preserve
+these settings and validate them at startup; exact-image rollback restores them.
+See [the memory trial procedure and nighttime measurements](deploy/railway/README.md#nighttime-measurements-october-28-2026)
+before interpreting any short sample as sustained cost savings.
+
 The image also applies `deploy/railway/patch-worker-idle.py` to the pinned
 model-catalog worker pool. It is **disabled by default**
 (`GENAIE_CATALOG_IDLE_RETIREMENT=0`). A controlled trial with the flag set to `1`

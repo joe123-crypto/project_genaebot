@@ -73,10 +73,14 @@ RUN npm install -g openclaw@2026.9.9 \
 COPY deploy/railway/patch-worker-idle.py /usr/local/bin/patch-worker-idle.py
 RUN python3 /usr/local/bin/patch-worker-idle.py /usr/local/lib/node_modules/openclaw
 
+COPY deploy/railway/patch-history-idle.py /usr/local/bin/patch-history-idle.py
+RUN python3 /usr/local/bin/patch-history-idle.py /usr/local/lib/node_modules/openclaw
+
 # The reusable client is opt-in: its speedup retains SDK memory during send gaps.
 # Keep the transient CLI default until campaign billing proves a win.
 ENV GENAIE_CAMPAIGN_TRANSPORT=cli
 ENV GENAIE_CATALOG_IDLE_RETIREMENT=0
+ENV GENAIE_HISTORY_IDLE_RETIREMENT=0
 
 # Bake the curated source overlay assembled in stage 1. The entrypoint syncs it
 # onto the state volume on every boot (source of truth for workspace/ and the

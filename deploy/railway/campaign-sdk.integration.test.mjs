@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import test from 'node:test';
-import { createCampaignBridge } from '../../workspace/lib/gateway_campaign.mjs';
+import { createCampaignBridge, loadCampaignGatewayClient } from '../../workspace/lib/gateway_campaign.mjs';
 
 if (process.env.GENAIE_REQUIRE_INTEGRATION === '1' && !process.env.GENAIE_OPENCLAW_ROOT) {
   throw new Error('required installed-runtime integration cannot skip');
@@ -15,7 +15,9 @@ test('installed SDK reuses a connection and never replays a lost send acknowledg
     const root = process.env.GENAIE_OPENCLAW_ROOT;
     const require = createRequire(path.join(root, 'package.json'));
     const { WebSocketServer } = require('ws');
-    const { GatewayClient } = await import(pathToFileURL(path.join(root, 'dist/plugin-sdk/gateway-runtime.js')));
+    const GatewayClient = await loadCampaignGatewayClient(root);
+    const sdk = await import(pathToFileURL(path.join(root, 'dist/plugin-sdk/gateway-runtime.js')));
+    assert.equal(GatewayClient, sdk.GatewayClient, 'narrow loader uses the identical upstream SDK client');
     const server = new WebSocketServer({ port: 0, host: '127.0.0.1' });
     await once(server, 'listening');
     const calls = [];

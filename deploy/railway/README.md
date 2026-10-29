@@ -32,7 +32,7 @@ the upload. Railway rebuilds the same source; the recorded digest identifies the
 image it actually produced, rather than asserting that separate builds are identical.
 
 The job checks a bounded, sanitized startup log record for the baked source SHA,
-CLI transport, catalog profile, both connected WhatsApp accounts and all twelve
+campaign transport, catalog/history policy, allocator setting, both connected WhatsApp accounts and all twelve
 campaigns. Failure restores the previous successful deployment's
 exact image digest and owned runtime settings, then verifies its startup. It
 never installs crons or sends a test message. Startup verification for both release
@@ -392,6 +392,70 @@ The image and explicit baseline release set `GENAIE_CATALOG_IDLE_RETIREMENT=0`.
 An explicit `catalog-trial` release enables it, and subsequent ordinary releases
 preserve that choice. Correctness passes do not establish
 a cost benefit.
+
+The additional workflow profiles change one setting while preserving the others:
+
+| Profile | Setting enabled | Restore that experiment |
+| --- | --- | --- |
+| `history-trial` | `GENAIE_HISTORY_IDLE_RETIREMENT=1` | Set it to `0` and redeploy |
+| `allocator-trial` | `MALLOC_ARENA_MAX=2` | Set it to `0` (glibc default) and redeploy |
+| `sender-trial` | `GENAIE_CAMPAIGN_TRANSPORT=rpc-once` | Set transport to `cli` and redeploy |
+
+`preserve` retains all four runtime settings, including catalog retirement.
+`baseline` restores CLI transport, stock catalog/history retention and glibc's
+default arena policy; `catalog-trial` selects that baseline plus catalog retirement.
+The release records all settings and validates them in the startup report;
+rollback restores the previous image and all owned settings. These trials must
+be measured separately before combining their results.
+
+`patch-history-idle.py` shortens only the existing history, projection and
+maintenance owner's idle rotation from thirty to five minutes when opted in.
+The owner still waits for active scopes to release, rotates/joins native workers,
+and only then releases database custody. Pool auto-retirement remains disabled.
+Writer, lease-heartbeat, archive/reclamation and usage-worker policies stay
+upstream. The required runtime test uses real SQLite databases and all three
+history lanes, verifies two retirement/recreation cycles, active-scope protection,
+integrity/data preservation and opt-out behavior. Do not extend this patch to
+other database owners without their own lifecycle tests.
+
+The `rpc-once` campaign transport loads the identical upstream `GatewayClient`
+through the pinned SDK's narrow client re-export. It starts one helper per
+request and joins it before returning, so no SDK process remains during random
+send gaps. It preserves account/media parameters, deterministic idempotency keys,
+per-group commits, reconnect queuing and the no-replay rule after an uncertain
+acknowledgement. The loader rejects a changed OpenClaw version or export contract.
+The persistent `rpc` transport remains available for controlled comparisons.
+
+An isolated October 29 fixture benchmark issued three read-only status requests
+per transport. Mean peak process RSS was about 215 MiB for the stock CLI and
+113 MiB for the narrow one-shot sender; mean process CPU was 2.58 versus 0.86
+seconds. These are local startup measurements, not production send latency or
+monthly savings. Two paired allocator tests each created/retired three real
+history lanes through three cycles. Settled RSS was 470/417 MiB with default
+arenas and 482/413 MiB with two arenas: no repeatable settled-memory reduction.
+Keep the allocator trial disabled unless a matched production comparison supplies
+better evidence.
+
+### Nighttime measurements: October 28, 2026
+
+Railway's four-minute samples from 20:00–23:00 UTC (21:00–00:00 Algeria;
+22:00–01:00 Zimbabwe) averaged 1.343 GB, ranging 1.316–1.404 GB, at 0.0246 CPU
+cores. The earlier 06:00–14:00 UTC window averaged 1.784 GB and peaked at 3.016 GB.
+These are decimal GB from Railway, not GiB. The deployment at 14:12 UTC changed
+the release between these windows, so the 25% difference is descriptive, not a
+controlled estimate of cron overhead. The last promo completed around 15:43 UTC;
+the live nighttime status also reported zero active cron runs.
+
+SSH snapshots around 23:35–23:53 UTC found roughly 1.09–1.10 GiB gateway RSS,
+with a 286–304 MiB main heap in use and two helper processes totaling about
+101 MiB RSS (some shared pages). The initial cgroup reading was 1.31 GiB,
+including about 127 MiB file cache and 66 MiB kernel memory. Source inspection
+subsequently increased file cache; exclude that disturbance from an application
+memory comparison. The latest detailed worker sample was from 15:37 UTC, with
+456 MiB in direct worker heaps and partial coverage. It describes daytime work
+and cannot be combined with nighttime counters as a precise RSS partition.
+
+### Installed runtime verification
 
 The required compatibility job exercises the actual catalog owner and worker,
 loads provider models and authentication, performs real model inference against
