@@ -12,6 +12,7 @@ import subprocess
 import time
 
 PREFIX = "GENAIE_RELEASE_READY "
+REQUIRED_ACCOUNTS = {"default"}
 
 
 def inspect(state, marker, channels, environment):
@@ -20,9 +21,12 @@ def inspect(state, marker, channels, environment):
     expected = {name for name, entry in whatsapp.get("accounts", {}).items()
                 if entry.get("enabled", True) and whatsapp.get("enabled", True)}
     accounts = channels.get("channelAccounts", {}).get("whatsapp", [])
-    connected = {entry.get("accountId") for entry in accounts if entry.get("connected")}
-    if not expected.issubset(connected):
-        raise ValueError("enabled WhatsApp accounts have not connected")
+    connected = {entry.get("accountId") for entry in accounts if entry.get("connected") is True}
+    if not REQUIRED_ACCOUNTS.issubset(expected):
+        raise ValueError("required main WhatsApp account is missing or disabled")
+    if not REQUIRED_ACCOUNTS.issubset(connected):
+        raise ValueError("required main WhatsApp account has not connected")
+    disconnected = expected - connected
     with closing(sqlite3.connect(f"file:{state / 'state/openclaw.sqlite'}?mode=ro", uri=True)) as database:
         jobs = [row[0] for row in database.execute("SELECT name FROM cron_jobs WHERE enabled=1")
                 if row[0].endswith(("-promo", "-feed"))]
@@ -38,6 +42,8 @@ def inspect(state, marker, channels, environment):
         "whatsappCacheCleanup": environment.get("GENAIE_WHATSAPP_CACHE_CLEANUP", "0"),
         "overnightStandby": environment.get("GENAIE_OVERNIGHT_STANDBY", "0"),
         "expectedAccounts": sorted(expected), "connectedAccounts": sorted(connected),
+        "requiredAccounts": sorted(REQUIRED_ACCOUNTS),
+        "disconnectedAccounts": sorted(disconnected), "degraded": bool(disconnected),
         "enabledJobs": sorted(jobs),
         "bindingsHash": hashlib.sha256(json.dumps(config.get("bindings", []), sort_keys=True).encode()).hexdigest(),
     }

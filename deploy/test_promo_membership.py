@@ -181,9 +181,9 @@ class MembershipFileTests(unittest.TestCase):
         self.assertTrue(statuses - {"active"},
                         "at least one paused (non-active) record must survive")
 
-    def test_caps_are_off_in_the_committed_file(self):
-        """Rollout phase A ships the machinery dark; flipping this is phase B."""
-        self.assertFalse(pm.caps_enabled(self.m))
+    def test_caps_are_enabled_in_the_committed_file(self):
+        """The active rollout enforces per-group posting allowances."""
+        self.assertTrue(pm.caps_enabled(self.m))
 
     def test_every_jid_is_a_group_jid(self):
         for jid in pm.groups(self.m):

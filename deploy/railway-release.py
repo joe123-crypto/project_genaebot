@@ -67,8 +67,8 @@ def validate_readiness(report, deployment_id, sha, profile, jobs, settings=None)
                 {SETTING_FIELDS[key]: value for key, value in settings.items()})
     if any(report.get(key) != value for key, value in expected.items()):
         raise ValueError("runtime settings do not match the release profile")
-    if not {"default", "ads"}.issubset(set(report.get("connectedAccounts", []))):
-        raise ValueError("both WhatsApp accounts must be connected")
+    if "default" not in report.get("connectedAccounts", []):
+        raise ValueError("main WhatsApp account must be connected")
     if {"vacancy-lamp-feed", "hustlers-feed", "job-scout-group-feed",
         "job-scout-hustlers-feed"}.intersection(report.get("enabledJobs", [])):
         raise ValueError("retired job feeds must not be enabled")
@@ -149,13 +149,16 @@ def verify_rollback_startup(deployment_id, timeout=600):
             if message.startswith(PREFIX):
                 report = json.loads(message[len(PREFIX):])
                 if report.get("deploymentId") == deployment_id:
-                    if report.get("ready") and {"default", "ads"}.issubset(report.get("connectedAccounts", [])):
+                    if report.get("ready") and "default" in report.get("connectedAccounts", []):
                         return
                     raise RuntimeError("rollback startup report is unhealthy")
             messages.append(message)
+        # An unlabeled listener can belong to ads. Never accept it as proof of
+        # main-line health; legacy images without account-level evidence fail
+        # closed rather than requiring the optional ads line or guessing.
         if any("[gateway] ready" in message for message in messages) and \
-           sum("Listening for WhatsApp inbound messages" in message for message in messages) >= 2 and \
-           all(any(f"[{account}] starting provider" in message for message in messages) for account in ["default", "ads"]):
+           any("[default]" in message and "Listening for WhatsApp inbound messages" in message
+               for message in messages):
             return
         time.sleep(5)
     raise TimeoutError("rollback image was restored but channel startup could not be verified")

@@ -13,8 +13,10 @@ Production runs on **Railway** (project `openclaw-gateway`, service `gateway`,
 environment `production`, EU West). `.github/workflows/deploy-main.yml` validates
 PRs and `main`, builds the pinned production runtime for integration tests, and
 releases `main` only after all three checks pass. The release job uploads an
-archive of the exact tested commit, verifies startup provenance, both WhatsApp
-accounts and the enabled jobs, and restores the previous image on failure.
+archive of the exact tested commit, verifies startup provenance, the connected
+main WhatsApp account and the enabled jobs, and restores the previous image on
+failure. The advertising account is optional for release readiness: an offline
+ad line is reported as degraded without blocking a healthy main-line deployment.
 
 This gate requires the production-scoped `RAILWAY_TOKEN` GitHub Actions secret
 and Railway's direct GitHub auto-deploy to be disconnected. Until the one-time
@@ -447,9 +449,9 @@ is a pure function of `(day, jid, promo set, cap)` -- identical in every cron
 process, needing no shared state and no lock, which matters because
 `json_store` is last-writer-wins and the eight crons can overlap.
 
-Caps are **off** until `defaults.caps_enabled` is `true` in membership.json, and
+Caps are **on** (`defaults.caps_enabled` is `true` in membership.json), and
 the engine fails open: a missing or broken membership file logs a warning and
-sends to every eligible group. Preview the effect before enabling it with
+sends to every eligible group. Preview the allowances with
 `./workspace/bin/list-groups --caps` (and `--date YYYY-MM-DD` for another day) or
 a promo's `--dry-run`, which prints each group's tier, cap, reply score and the
 campaigns today's rotation gives the allowance to. With every group left at the

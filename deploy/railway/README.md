@@ -32,7 +32,7 @@ the upload. Railway rebuilds the same source; the recorded digest identifies the
 image it actually produced, rather than asserting that separate builds are identical.
 
 The job checks a bounded, sanitized startup log record for the baked source SHA,
-campaign transport, catalog/history policy, allocator setting, both connected WhatsApp accounts and all twelve
+campaign transport, catalog/history policy, allocator setting, the connected main WhatsApp account and all twelve
 campaigns. Failure restores the previous successful deployment's
 exact image digest and owned runtime settings, then verifies its startup. It
 never installs crons or sends a test message. Startup verification for both release
@@ -171,9 +171,26 @@ normal merge. Turning the caps on is a one-line edit to that file
 
 4. Complete the live cron preflight below, then merge, watch the `main` workflow,
    and inspect its `railway-release` artifact.
-   Confirm `healthy`, the tested SHA, image digest, selected runtime flags, both accounts,
+   Confirm `healthy`, the tested SHA, image digest, selected runtime flags, the connected main account,
    all jobs, and no `rollbackError`. A missing secret fails the job before any
    production mutation; provision it before the cutover to avoid a deployment gap.
+
+The required WhatsApp account is `default` (the main line). It must remain enabled
+in configuration and connected at startup. `ads` is optional for deployment and
+rollback readiness, so its authentication outage no longer forces otherwise
+healthy releases to roll back. Startup records retain `expectedAccounts` and
+`connectedAccounts`, and also expose `requiredAccounts`, `disconnectedAccounts`
+and `degraded`. An offline configured ad line therefore appears as `ready:true`,
+`degraded:true`, `disconnectedAccounts:["ads"]`; this confirms deployment health,
+not working advertising delivery. No account, credential, job, routing rule or
+campaign definition is disabled or rewritten by this policy.
+
+The same main-line requirement applies to structured rollback reports. Legacy
+images with only an aggregate startup failure or unlabeled listener logs cannot
+prove which account connected; their exact image can still be restored, but the
+verifier fails closed rather than claiming main-line health from an ads listener.
+Those old images cannot emit the new detailed readiness record. All releases
+built with this policy report main-line readiness without waiting for ads.
 
 Require the three status checks and PRs in branch protection if the repository
 plan later supports it. The production gate is the deploy job's `needs` list

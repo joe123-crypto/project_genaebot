@@ -103,11 +103,45 @@ class ReleaseTests(unittest.TestCase):
         RELEASE.validate_readiness(self.report(), "new", SHA, "0", {"fixture-promo"})
         for key, wrong in [("ready", False), ("deploymentId", "old"), ("sourceCommit", "b"*40),
                            ("transport", "rpc"), ("catalogIdleRetirement", "1"),
-                           ("connectedAccounts", ["default"]), ("enabledJobs", [])]:
+                           ("connectedAccounts", ["ads"]), ("enabledJobs", [])]:
             report = self.report()
             report[key] = wrong
             with self.subTest(key=key), self.assertRaises(ValueError):
                 RELEASE.validate_readiness(report, "new", SHA, "0", {"fixture-promo"})
+
+    def test_release_and_rollback_accept_main_only_but_reject_ads_only(self):
+        for connected in [["default"], ["default", "ads"], ["ads"], []]:
+            report = {**self.report(), "connectedAccounts": connected,
+                      "requiredAccounts": ["default"], "degraded": connected == ["default"]}
+            logs = json.dumps({"message": RELEASE.PREFIX + json.dumps(report)})
+            with self.subTest(connected=connected), patch.object(RELEASE.subprocess, "run", return_value=
+                 subprocess.CompletedProcess(args=[], returncode=0, stdout=logs)):
+                if "default" in connected:
+                    RELEASE.validate_readiness(report, "new", SHA, "0", {"fixture-promo"})
+                    RELEASE.verify_rollback_startup("new")
+                else:
+                    with self.assertRaises(ValueError):
+                        RELEASE.validate_readiness(report, "new", SHA, "0", {"fixture-promo"})
+                    with self.assertRaises(RuntimeError):
+                        RELEASE.verify_rollback_startup("new")
+
+    def test_legacy_rollback_requires_main_identified_listener_and_ready_gateway(self):
+        for listener, gateway, accepted in [("[default] Listening for WhatsApp inbound messages", True, True),
+                                            ("[ads] Listening for WhatsApp inbound messages", True, False),
+                                            ("Listening for WhatsApp inbound messages", True, False),
+                                            ("[default] Listening for WhatsApp inbound messages", False, False)]:
+            messages = (["[gateway] ready"] if gateway else []) + [listener]
+            logs = "\n".join(json.dumps({"message": message}) for message in messages)
+            with self.subTest(listener=listener, gateway=gateway), \
+                 patch.object(RELEASE.subprocess, "run", return_value=subprocess.CompletedProcess(
+                     args=[], returncode=0, stdout=logs)), \
+                 patch.object(RELEASE.time, "monotonic", side_effect=[0, 0, 2]), \
+                 patch.object(RELEASE.time, "sleep"):
+                if accepted:
+                    RELEASE.verify_rollback_startup("new", timeout=1)
+                else:
+                    with self.assertRaises(TimeoutError):
+                        RELEASE.verify_rollback_startup("new", timeout=1)
 
     def test_readiness_rejects_retired_feeds_without_requiring_them(self):
         RELEASE.validate_readiness(self.report(), "new", SHA, "0", {"fixture-promo"})
@@ -290,6 +324,20 @@ class ReadinessTests(unittest.TestCase):
             self.assertEqual(report["enabledJobs"], ["fixture-promo"])
             self.assertNotIn("fixture-private", json.dumps(report))
             channels["channelAccounts"]["whatsapp"].pop()
+            report = READY.inspect(state, marker, channels, {})
+            self.assertTrue(report["ready"])
+            self.assertTrue(report["degraded"])
+            self.assertEqual(report["requiredAccounts"], ["default"])
+            self.assertEqual(report["expectedAccounts"], ["ads", "default"])
+            self.assertEqual(report["connectedAccounts"], ["default"])
+            self.assertEqual(report["disconnectedAccounts"], ["ads"])
+            channels["channelAccounts"]["whatsapp"] = [{"accountId": "ads", "connected": True}]
+            with self.assertRaises(ValueError):
+                READY.inspect(state, marker, channels, {})
+            channels["channelAccounts"]["whatsapp"] = [{"accountId": "default", "connected": True}]
+            config = json.loads((state / "openclaw.json").read_text())
+            config["channels"]["whatsapp"]["accounts"]["default"]["enabled"] = False
+            (state / "openclaw.json").write_text(json.dumps(config))
             with self.assertRaises(ValueError):
                 READY.inspect(state, marker, channels, {})
 
