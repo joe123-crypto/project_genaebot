@@ -624,7 +624,8 @@ based on prior overnight measurements. Supervisor overhead, pending-work delays,
 future storage/network fees and actual daytime use affect the result. Validate
 billed resource changes after a full overnight window; this does not guarantee a
 $15 invoice. Keep the existing warning-only alert and do not add a hard cutoff.
-Before activation, restore both WhatsApp accounts and use the live campaign
-preflight above. The advertising account was logged out on October 29; the
-operator chose to relink later, so preparation must not silently deploy a release
-that would fail the two-account readiness gate.
+Before activation, verify the connected main WhatsApp account and use the live
+campaign preflight above. The operator subsequently approved deployments with
+the advertising line offline: report it as degraded rather than blocking the
+release or disabling its account or campaigns. This does not bypass the standby
+activity guard; pending deliveries can still defer overnight shutdown.
