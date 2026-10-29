@@ -13,8 +13,10 @@ Production runs on **Railway** (project `openclaw-gateway`, service `gateway`,
 environment `production`, EU West). `.github/workflows/deploy-main.yml` validates
 PRs and `main`, builds the pinned production runtime for integration tests, and
 releases `main` only after all three checks pass. The release job uploads an
-archive of the exact tested commit, verifies startup provenance, both WhatsApp
-accounts and the enabled jobs, and restores the previous image on failure.
+archive of the exact tested commit, verifies startup provenance, the connected
+main WhatsApp account and the enabled jobs, and restores the previous image on
+failure. The advertising account is optional for release readiness: an offline
+ad line is reported as degraded without blocking a healthy main-line deployment.
 
 This gate requires the production-scoped `RAILWAY_TOKEN` GitHub Actions secret
 and Railway's direct GitHub auto-deploy to be disconnected. Until the one-time
