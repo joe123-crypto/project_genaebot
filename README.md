@@ -882,6 +882,13 @@ fallback and campaigns stay intact. The cleanup timer stops with its owner.
 It is disabled by default; set the flag to `0` and redeploy to opt out.
 See [expired metadata cleanup](deploy/railway/README.md#expired-whatsapp-metadata-cleanup)
 for validation coverage and measurement limits.
+The approved `standby-trial` profile enables daily overnight standby from
+17:00 until 05:45 Africa/Algiers. Both WhatsApp accounts, replies and CV requests
+are unavailable then. A container-local supervisor wakes the gateway without
+this desktop, preserves stored state and enabled crons, and defers shutdown for
+active work, pending deliveries or a campaign due before wake. This schedule is
+separate from spending limits; no hard compute cutoff is installed. See the
+[standby procedure](deploy/railway/README.md#approved-overnight-standby).
 See [the memory trial procedure and nighttime measurements](deploy/railway/README.md#nighttime-measurements-october-28-2026)
 before interpreting any short sample as sustained cost savings.
 

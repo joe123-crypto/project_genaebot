@@ -399,5 +399,11 @@ log "starting openclaw gateway on port $PORT as joseph (bind=lan, tailscale=off)
 export NODE_OPTIONS="${NODE_OPTIONS:-} --import=/usr/local/lib/genaie/whatsapp-lid-loader.mjs"
 # A bounded local check publishes sanitized readiness for the CI project token.
 # CI needs no SSH key or public gateway endpoint. This exits after one result.
+if [ "${GENAIE_OVERNIGHT_STANDBY:-0}" = "1" ]; then
+  GENAIE_STANDBY_RUNTIME="$(mktemp -d /tmp/genaie-standby.XXXXXX)"
+  export GENAIE_STANDBY_RUNTIME
+  chown joseph:joseph "$GENAIE_STANDBY_RUNTIME"
+fi
 runuser -u joseph -- python3 /usr/local/bin/report-release-ready.py &
-exec runuser -u joseph -- openclaw gateway --port "$PORT" --bind lan --tailscale off
+exec runuser -u joseph -- python3 /usr/local/bin/gateway-standby.py --port "$PORT" \
+  -- openclaw gateway --port "$PORT" --bind lan --tailscale off

@@ -17,13 +17,14 @@ PROJECT = "a251f752-3b49-4f72-8a71-4629bf2fced0"
 SERVICE = "503baf60-c897-4a77-812a-719195705031"
 ENVIRONMENT = "2cae37a4-8e24-41db-87ed-9a3a7c9eff22"
 OWNED = ("SOURCE_COMMIT", "GENAIE_CAMPAIGN_TRANSPORT", "GENAIE_CATALOG_IDLE_RETIREMENT",
-         "GENAIE_HISTORY_IDLE_RETIREMENT", "MALLOC_ARENA_MAX", "GENAIE_WHATSAPP_CACHE_CLEANUP")
-PROFILES = ("preserve", "baseline", "catalog-trial", "history-trial", "allocator-trial", "sender-trial", "cache-trial")
+         "GENAIE_HISTORY_IDLE_RETIREMENT", "MALLOC_ARENA_MAX", "GENAIE_WHATSAPP_CACHE_CLEANUP", "GENAIE_OVERNIGHT_STANDBY")
+PROFILES = ("preserve", "baseline", "catalog-trial", "history-trial", "allocator-trial", "sender-trial", "cache-trial", "standby-trial")
 SETTING_FIELDS = {"GENAIE_CAMPAIGN_TRANSPORT": "transport",
                   "GENAIE_CATALOG_IDLE_RETIREMENT": "catalogIdleRetirement",
                   "GENAIE_HISTORY_IDLE_RETIREMENT": "historyIdleRetirement",
                   "MALLOC_ARENA_MAX": "mallocArenaMax",
-                  "GENAIE_WHATSAPP_CACHE_CLEANUP": "whatsappCacheCleanup"}
+                  "GENAIE_WHATSAPP_CACHE_CLEANUP": "whatsappCacheCleanup",
+                  "GENAIE_OVERNIGHT_STANDBY": "overnightStandby"}
 PREFIX = "GENAIE_RELEASE_READY "
 SCOPE = ["--project", PROJECT, "--service", SERVICE, "--environment", ENVIRONMENT]
 
@@ -182,7 +183,7 @@ def resolve_profile(requested, variables):
 def resolve_settings(requested, variables):
     defaults = {"GENAIE_CAMPAIGN_TRANSPORT": "cli", "GENAIE_CATALOG_IDLE_RETIREMENT": "0",
                 "GENAIE_HISTORY_IDLE_RETIREMENT": "0", "MALLOC_ARENA_MAX": "0",
-                "GENAIE_WHATSAPP_CACHE_CLEANUP": "0"}
+                "GENAIE_WHATSAPP_CACHE_CLEANUP": "0", "GENAIE_OVERNIGHT_STANDBY": "0"}
     if requested in {"baseline", "catalog-trial"}:
         settings = defaults.copy()
         settings["GENAIE_CATALOG_IDLE_RETIREMENT"] = "1" if requested == "catalog-trial" else "0"
@@ -193,7 +194,8 @@ def resolve_settings(requested, variables):
     choices = {"GENAIE_CAMPAIGN_TRANSPORT": {"cli", "rpc", "rpc-once"},
                "GENAIE_CATALOG_IDLE_RETIREMENT": {"0", "1"},
                "GENAIE_HISTORY_IDLE_RETIREMENT": {"0", "1"}, "MALLOC_ARENA_MAX": {"0", "2"},
-               "GENAIE_WHATSAPP_CACHE_CLEANUP": {"0", "1"}}
+               "GENAIE_WHATSAPP_CACHE_CLEANUP": {"0", "1"},
+               "GENAIE_OVERNIGHT_STANDBY": {"0", "1"}}
     if any(value not in choices[key] for key, value in settings.items()):
         raise ValueError("cannot preserve an unrecognized memory/runtime setting")
     if requested == "history-trial":
@@ -204,6 +206,8 @@ def resolve_settings(requested, variables):
         settings["GENAIE_CAMPAIGN_TRANSPORT"] = "rpc-once"
     elif requested == "cache-trial":
         settings["GENAIE_WHATSAPP_CACHE_CLEANUP"] = "1"
+    elif requested == "standby-trial":
+        settings["GENAIE_OVERNIGHT_STANDBY"] = "1"
     return settings
 
 

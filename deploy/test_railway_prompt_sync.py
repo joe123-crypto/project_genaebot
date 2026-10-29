@@ -84,7 +84,7 @@ class PublicPromptSyncTests(unittest.TestCase):
         entrypoint = (ROOT / "deploy/railway/entrypoint.sh").read_text(encoding="utf-8")
         sync_at = entrypoint.index("sync-public-prompt.py")
         self.assertLess(entrypoint.index('touch "$upgrade_marker.done"'), sync_at)
-        self.assertLess(sync_at, entrypoint.index("exec runuser -u joseph -- openclaw gateway"))
+        self.assertLess(sync_at, entrypoint.index("exec runuser -u joseph -- python3 /usr/local/bin/gateway-standby.py"))
         dockerfile = (ROOT / "deploy/railway/Dockerfile").read_text(encoding="utf-8")
         self.assertIn("COPY deploy/railway/sync-public-prompt.py /usr/local/bin/sync-public-prompt.py", dockerfile)
 
