@@ -135,7 +135,7 @@ POST_TEXT = (
     "  • All Accessories & Installation\n"
     "\U0001F4B5 Price: $2400\n"
     "\n"
-    "\U0001F4CD Based in Bindura - We Come To You!\n"
+    "\U0001F4CD We operate all around Zimbabwe!\n"
     "\U0001F4DE WhatsApp: {bot_number} - Genaie"
 )
 
@@ -164,14 +164,14 @@ POST_TEXT_V2 = (
     "3️⃣ 1.5HP DC Pump - $2200\n"
     "4️⃣ 2HP DC Pump - $2400\n"
     "\n"
-    "\U0001F4CD Based in Bindura - We Come To You!\n"
+    "\U0001F4CD We operate all around Zimbabwe!\n"
     "\U0001F4DE WhatsApp: {bot_number} - Genaie"
 )
 
 POST_TEXT_V3 = (
     "\U0001F6B0 *Want water closer to home?*\n"
     "Complete solar borehole system installation packages. "
-    "Based in Bindura - We Come To You! \U0001F4CD\n"
+    "We operate all around Zimbabwe! \U0001F4CD\n"
     "\n"
     "*BOREHOLE SYSTEM INSTALLATION PACKAGES*\n"
     "\U0001F4B5 Package 1 - 0.75HP DC Pump with Control Box: *$1800*\n"
@@ -210,7 +210,7 @@ POST_TEXT_V4 = (
     "Pump & External Controller \u2022 Solar Panels \u2022 Solar Stand \u2022 "
     "Pipes & Cables \u2022 1 Garden Tap \u2022 All Accessories & Installation\n"
     "\n"
-    "\U0001F4CD Based in Bindura - We Come To You!\n"
+    "\U0001F4CD We operate all around Zimbabwe!\n"
     "\U0001F4DE WhatsApp: {bot_number} - Genaie"
 )
 
