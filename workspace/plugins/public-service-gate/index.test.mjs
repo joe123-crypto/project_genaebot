@@ -311,10 +311,10 @@ test("outbound WhatsApp replies never leave with an em dash", async () => {
   const handler = registerHandler({});
 
   const rewritten = await handler.messageSending(
-    { to: MEMBER, content: "We are based in Bindura, but we're mobile \u2014 we come to you." },
+    { to: MEMBER, content: "All our services operate all around Zimbabwe \u2014 where are you from?" },
     { channelId: "whatsapp", senderId: MEMBER },
   );
-  assert.equal(rewritten.content, "We are based in Bindura, but we're mobile, we come to you.");
+  assert.equal(rewritten.content, "All our services operate all around Zimbabwe, where are you from?");
   assert.equal(rewritten.cancel, undefined);
 
   const clean = await handler.messageSending(
@@ -504,8 +504,8 @@ test("business_info fails soft and points at a handoff when the page is missing"
 
 test("the deployed business info page carries the core facts", () => {
   const page = fs.readFileSync(new URL("../../docs/business-info.md", import.meta.url), "utf8");
-  assert.match(page, /We are based in Bindura, and we are mobile/);
-  assert.match(page, /Never give anything more specific than Bindura/);
+  assert.match(page, /All our services operate all around Zimbabwe\. Where are you from\?/);
+  assert.match(page, /Do not describe\s+us as based in Bindura/);
   assert.match(page, /Transport within local Bindura: \$550/);
   assert.match(page, /Any extra meter beyond 40m: \$25 per meter/);
   assert.match(page, /Big: \$20 per tree/);

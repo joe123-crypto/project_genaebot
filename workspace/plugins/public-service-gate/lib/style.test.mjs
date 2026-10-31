@@ -5,8 +5,8 @@ import { containsDash, stripDashes } from "./style.js";
 
 test("a spaced em dash becomes the comma a person would have typed", () => {
   assert.equal(
-    stripDashes("We are based in Bindura, but we're mobile — we come to you once you place an order."),
-    "We are based in Bindura, but we're mobile, we come to you once you place an order.",
+    stripDashes("All our services operate all around Zimbabwe — where are you from?"),
+    "All our services operate all around Zimbabwe, where are you from?",
   );
 });
 

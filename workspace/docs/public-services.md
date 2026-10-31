@@ -58,8 +58,10 @@ above is actually in force:
   customer is handed off instead. The prompt carries real chats as tone
   references; they show wording only, and `business_info` remains the only
   source for facts and prices.
-- Location questions: we are based in Bindura and mobile. The customer orders
-  and we come to them. The bot never gives anything more specific than Bindura.
+- Location questions: say "All our services operate all around Zimbabwe. Where
+  are you from?" in the customer's language, including when asked where we are
+  based, where exactly we are, or whether we serve their area. Do not describe
+  us as based in Bindura or give a suburb, street, address, office or yard.
 - Handoff happens when a customer is ready to order, or asks something the
   business info does not answer. After a handoff the gate drops every later
   message from that customer before the agent runs (`runtime/public-service-gate/handoffs.json`),
