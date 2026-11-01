@@ -5,7 +5,7 @@ import { expandHome, getPluginConfig } from "../lib/config.js";
 import { getServiceStatePath } from "../lib/state.js";
 
 const DATA = fileURLToPath(new URL("../../../data/", import.meta.url));
-export const BOREHOLE_SERVICES = ["survey", "drilling", "casing", "installation", "flushing", "deepening", "capacity_testing", "repair", "pump_retrieval"];
+export const BOREHOLE_SERVICES = ["survey", "drilling", "casing", "installation", "drilling_and_installation", "flushing", "deepening", "capacity_testing", "repair", "pump_retrieval"];
 const TTL = 24 * 60 * 60 * 1000;
 const normalize = (s) => String(s || "").normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
@@ -59,9 +59,11 @@ function save(api, sender, account, selection) {
 }
 
 function eligibleOffers(provider, request) {
-  return provider.offers.filter((o) => o.service === request.service
-    && (!request.pump_hp || o.pump_hp === request.pump_hp)
-    && (!request.casing_class || o.casing_class === request.casing_class));
+  const services = request.service === "drilling_and_installation" ? ["drilling", "installation"] : [request.service];
+  const offers = provider.offers.filter((o) => services.includes(o.service)
+    && (o.service !== "installation" || !request.pump_hp || o.pump_hp === request.pump_hp)
+    && (o.service !== "casing" || !request.casing_class || o.casing_class === request.casing_class));
+  return services.every((s) => offers.some((o) => o.service === s)) ? offers : [];
 }
 function publicOffer(o, request) {
   const result = { service: o.service, currency: o.currency, price: o.price, unit: o.unit || null };
@@ -96,7 +98,7 @@ export function lookupBorehole(api, sender, params, account = "default") {
       return covered && offers.length ? [{ p, offers, distance: distance(town, resolveTown(p.base, towns)) }] : [];
     });
     if (!candidates.length) return { status: "handoff", text: "A person needs to confirm an offer for your location and requirements. Use the borehole handoff action." };
-    if (request.service === "installation" && !request.pump_hp) {
+    if (["installation", "drilling_and_installation"].includes(request.service) && !request.pump_hp) {
       const sizes = [...new Set(candidates.flatMap((c) => c.offers.map((o) => o.pump_hp).filter(Number.isFinite)))].sort((a, b) => a - b);
       if (sizes.length) return { status: "needs_requirements", pump_sizes_hp: sizes, text: "What pump size do you need? These are the documented package sizes. If the customer needs sizing advice, use borehole handoff rather than choosing a pump for them." };
     }

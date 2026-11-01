@@ -176,7 +176,7 @@ export default {
             properties: {
               action: { type: "string", enum: publicServiceActions(api) },
               location: { type: "string", maxLength: 120, description: "borehole_info: customer's town or nearest major town, never an inferred location from an ad reference." },
-              service: { type: "string", enum: BOREHOLE_SERVICES, description: "borehole_info: requested service." },
+              service: { type: "string", enum: BOREHOLE_SERVICES, description: "borehole_info: requested service. Use drilling_and_installation when both are requested so offers come from one supplier." },
               pump_hp: { type: "number", exclusiveMinimum: 0, maximum: 100, description: "borehole_info: requested installation pump power in HP, only if supplied by customer." },
               depth_m: { type: "number", exclusiveMinimum: 0, maximum: 2000, description: "borehole_info: requested drilling depth in meters." },
               casing_class: { type: "integer", minimum: 1, maximum: 100, description: "borehole_info: requested casing class." },

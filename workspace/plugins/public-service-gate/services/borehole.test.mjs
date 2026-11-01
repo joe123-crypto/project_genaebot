@@ -130,3 +130,15 @@ test("invalid numeric requirements do not generate a quote", (t) => {
   const { lookup } = fixture(t);
   assert.equal(lookup({ location: "Bindura", service: "drilling", depth_m: -1 }).status, "needs_requirements");
 });
+
+test("drilling plus installation is matched to one provider, never mixed across lookups", (t) => {
+  const { api, lookup } = fixture(t);
+  lookup({ location: "Harare", service: "drilling", depth_m: 60 });
+  assert.equal(boreholeSelection(api, "customer").providerId, "big-player");
+  const result = lookup({ service: "drilling_and_installation", depth_m: 60, pump_hp: 1 });
+  assert.equal(boreholeSelection(api, "customer").providerId, "same-age-projects");
+  assert.equal(result.offers.find((o) => o.service === "drilling").drilling_subtotal, 1450);
+  assert.equal(result.offers.find((o) => o.service === "installation").price, 2000);
+  assert.equal(result.total, undefined);
+  assert.doesNotMatch(JSON.stringify(result), /Big Player|Same Age|Harare|Bindura/);
+});

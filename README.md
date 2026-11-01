@@ -933,7 +933,8 @@ for Same Age Projects (Bindura), Big Player (Harare) and Baltic Sea Drilling
 Skylight Solar is excluded: its fixed $10/month campaign remains independent.
 The public `borehole_info` action asks for customer location and requirements,
 filters documented service coverage, and ranks nearest base first, then known
-prices for equivalent offers. Town-centre distances come from the attributed
+prices for equivalent offers. Combined drilling and installation requests are
+matched to one supplier so prices are not mixed across companies. Town-centre distances come from the attributed
 GeoNames extract in `workspace/data/zimbabwe-towns.json`; ambiguous locations
 require clarification. No online geocoding runs during customer chats.
 Only anonymized offers and conditions reach the customer agent. Provider
