@@ -14,6 +14,7 @@ model-visible operational tool is `public_service`, declared by the
   model cannot supply or override a phone number, user ID, recipient, credential
   reference, command, or filesystem path.
 - Actions:
+  - `borehole_info`: asks for customer location and requirements, then returns suitable anonymized borehole offers and prices. Supplier identities and bases stay private. Unknown details require handoff.
   - `business_info`: returns `workspace/docs/business-info.md` (plugin config
     `businessInfoPath`), the single source for products, prices and what the
     bot may answer. It is read on every call, so editing that page changes the
@@ -74,7 +75,7 @@ above is actually in force:
 
 ## Service Catalog
 
-The facts live in `workspace/docs/business-info.md`. In summary:
+General facts live in `workspace/docs/business-info.md`. Borehole offers live in the private provider catalog `workspace/data/borehole-providers.json` and are retrieved through `borehole_info`, which returns only anonymized offers matched to customer location and requirements. Skylight Solar is excluded from this catalog. In summary:
 
 1. Building materials (partner, forwarded): bricks, quarry stones, sand, gravel.
 2. Fruit trees (partner, forwarded): grafted mango, pawpaw, orange, naartjie, lemon.
@@ -162,3 +163,5 @@ Never use one line to test the other: that is what started the loop on
 `railway ssh -- env -u OPENCLAW_HOME runuser -u joseph -- openclaw channels status`
 (the `env -u` is required; see README), or message it from a
 third number.
+
+Borehole-specific questions use `borehole_info` on every relevant turn, overriding the general one-lookup business information rule. Keep enquiries through Genaie; hand off when the requested answer is unavailable.

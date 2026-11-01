@@ -13,6 +13,7 @@
 + /lib/***
 + /plugins/***
 + /docs/***
++ /data/***
 + /cron/***
 + /skills.lock.json
 + /skills/

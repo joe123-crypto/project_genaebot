@@ -32,7 +32,7 @@ the upload. Railway rebuilds the same source; the recorded digest identifies the
 image it actually produced, rather than asserting that separate builds are identical.
 
 The job checks a bounded, sanitized startup log record for the baked source SHA,
-campaign transport, catalog/history policy, allocator setting, the connected main WhatsApp account and all twelve
+campaign transport, catalog/history policy, allocator setting, the connected main WhatsApp account and all ten
 campaigns. Failure restores the previous successful deployment's
 exact image digest and owned runtime settings, then verifies its startup. It
 never installs crons or sends a test message. Startup verification for both release
@@ -93,27 +93,26 @@ Cron job definitions (schedule, command, job timeout) are the exception to "merg
 it ships": they live in the gateway's cron state on the volume and change only when
 their `deploy/install-*.sh` installer is re-run (via `deploy/gateway-exec.sh`, i.e.
 `railway ssh`). For example, the promo crons' 7200 s job timeout set in
-`deploy/install-promo.sh` reaches production only after the twelve
+`deploy/install-promo.sh` reaches production only after the ten
 `install-*-promo.sh` installers run again; each installer now verifies the
 timeout it registered is the one the gateway reports back, and the promo engine
 reads that live value at run time so a not-yet-migrated job tightens its send
 gaps rather than being killed with groups unreached (see README).
 
-The same applies to the promo **schedules**, which moved off the hour (07:15,
-08:13, 08:40, 10:35, 11:39, 12:50, 13:21, 14:26, 17:06 `Africa/Harare`) so the
-account's daily pattern is not perfectly periodic. (big-player runs at 15:50,
-industrial-lighting at 10:05, and genaie-advertisers at 14:05 primarily on the
-"ads" line. All three also serve BULAWAYO ADVERTISEMENT on the default line,
-so these slots clear both accounts' preceding campaigns.) Merging
+The promo **schedules** are 07:15 (general borehole), 08:40, 10:05, 10:35,
+11:39, 12:50, 13:21 (independent Skylight Solar), 14:05, 14:26 and 17:06
+`Africa/Harare`. Big Player and borehole-paid are consolidated into the general
+borehole job; its installer removes their old registrations after verification.
+Merging
 that change ships nothing on its own. `deploy/promo-crons.json` is the declared
-cron state for all twelve campaigns --
+cron state for all ten campaigns --
 schedule, timezone, failure-alert target, command and the shared 7200 s job
 timeout -- and `deploy/reinstall-promo-crons.sh` is the one command that compares
 it to the gateway and applies it:
 
 ```sh
 ./deploy/reinstall-promo-crons.sh --check   # read-only: live state vs. what the repo declares
-./deploy/reinstall-promo-crons.sh           # re-run all twelve installers, then re-check
+./deploy/reinstall-promo-crons.sh           # re-run all ten installers, then re-check
 ```
 
 `--check` makes a single `openclaw cron list --all --json` read and changes
@@ -131,10 +130,11 @@ schedule and the installers would never notice it.
 `--only <promo>` retries a single campaign, `--dry-run` prints the plan without
 contacting the gateway, and `--json` is for an automated caller.
 
-The installers are unchanged and still do all the writing: the orchestrator execs
+The installers do all the writing; the borehole installer also retires its two
+superseded jobs after verifying the replacement: the orchestrator execs
 `deploy/install-<promo>-promo.sh` one at a time in schedule order, continues past
 a failure, and exits 1 with a summary naming what failed -- so one stale promo
-cannot leave the other ten unmigrated. `register_promo_cron` reads the schedule,
+cannot leave the other nine unmigrated. `register_promo_cron` reads the schedule,
 timezone, enabled flag and timeout back and fails loudly (printing the job's
 current state) when any of them is not what it just set: nothing else would catch
 a stale schedule, which is precisely what these installers exist to change.
@@ -568,7 +568,7 @@ schedule with `./deploy/reinstall-promo-crons.sh --check`).
 ## Retired daily job feeds: 2026-10-28
 
 Vacancy Lamp and Hustlers Marketplace job posting and the shared scraping/cache
-pipeline are removed. The twelve promo campaigns and both WhatsApp accounts
+pipeline are removed. The ten promo campaigns and both WhatsApp accounts
 remain required by release verification. Historical rollout notes above describe
 the earlier feed-enabled deployments.
 
@@ -578,7 +578,7 @@ without the flag. This retires current and legacy feed names via the gateway CLI
 source deployment alone does not remove volume-backed cron registrations.
 Deploy through the checked release workflow after the live cron preflight.
 The boot overlay uses `rsync --delete` to remove the retired source and wrapper.
-Verify the feed names are absent, both accounts connect and all twelve campaigns
+Verify the feed names are absent, both accounts connect and all ten campaigns
 remain enabled. Do not send test adverts. Archive only
 `runtime/job-scout/group-feed/` under a dated `retired/job-feeds/` directory on the
 volume; retain cron receipts and all other runtime state. Restore the archived

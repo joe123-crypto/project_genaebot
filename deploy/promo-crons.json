@@ -1,5 +1,5 @@
 {
-  "_comment": "Declared gateway cron state for the twelve WhatsApp promo campaigns -- the single source of truth for their schedule, timezone, failure-alert target, command and shared job timeout. deploy/reinstall-promo-crons.sh applies and verifies it; deploy/test_promo_cron_reinstall.py fails CI when a wrapper, install-promo.sh's timeout default or either README drifts from it. Cron state lives on the gateway's Railway volume, so merging a change here ships NOTHING until the installers are re-run.",
+  "_comment": "Declared gateway cron state for the ten WhatsApp promo campaigns -- the single source of truth for their schedule, timezone, failure-alert target, command and shared job timeout. deploy/reinstall-promo-crons.sh applies and verifies it; deploy/test_promo_cron_reinstall.py fails CI when a wrapper, install-promo.sh's timeout default or either README drifts from it. Cron state lives on the gateway's Railway volume, so merging a change here ships NOTHING until the installers are re-run.",
   "version": 1,
   "commandCwd": "/home/joseph/.openclaw/workspace",
   "timeoutSeconds": 7200,
@@ -9,22 +9,14 @@
       "name": "borehole-drilling-promo",
       "installer": "deploy/install-borehole-drilling-promo.sh",
       "envPrefix": "BOREHOLE_PROMO",
-      "cron": "13 8 * * *",
-      "tz": "Africa/Harare",
-      "failureAlertTo": "+263785632943",
-      "script": "/home/joseph/.openclaw/workspace/cron/borehole-drilling-promo/post_ad.py",
-      "legacyNames": []
-    },
-    {
-      "slug": "borehole-paid",
-      "name": "borehole-paid-promo",
-      "installer": "deploy/install-borehole-paid-promo.sh",
-      "envPrefix": "BOREHOLE_PAID_PROMO",
       "cron": "15 7 * * *",
       "tz": "Africa/Harare",
       "failureAlertTo": "+263785632943",
-      "script": "/home/joseph/.openclaw/workspace/cron/borehole-paid-promo/post_ad.py",
-      "legacyNames": []
+      "script": "/home/joseph/.openclaw/workspace/cron/borehole-drilling-promo/post_ad.py",
+      "legacyNames": [
+        "borehole-paid-promo",
+        "big-player-promo"
+      ]
     },
     {
       "slug": "fruit-trees",
@@ -101,17 +93,6 @@
       "tz": "Africa/Harare",
       "failureAlertTo": "+213563719936",
       "script": "/home/joseph/.openclaw/workspace/cron/genaie-leads-promo/post_ad.py",
-      "legacyNames": []
-    },
-    {
-      "slug": "big-player",
-      "name": "big-player-promo",
-      "installer": "deploy/install-big-player-promo.sh",
-      "envPrefix": "BIG_PLAYER_PROMO",
-      "cron": "50 15 * * *",
-      "tz": "Africa/Harare",
-      "failureAlertTo": "+263785632943",
-      "script": "/home/joseph/.openclaw/workspace/cron/big-player-promo/post_ad.py",
       "legacyNames": []
     },
     {

@@ -139,7 +139,7 @@ def classify(manifest, jobs, only=None):
         match = PROMO_ARGV_RE.search(" ".join(str(a) for a in argv))
         if not (name.endswith("-promo") or match):
             continue  # an unrelated gateway job is none of our business
-        if only and not (match and match.group(1) in selected_dirs):
+        if only and not ((match and match.group(1) in selected_dirs) or legacy_owner.get(name) in selected_dirs):
             continue
         row = {"name": name, "id": job.get("id"),
                "expr": (job.get("schedule") or {}).get("expr"),

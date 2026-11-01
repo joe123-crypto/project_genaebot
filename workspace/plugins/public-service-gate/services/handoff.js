@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { boreholeHandoffDetails } from "./borehole.js";
 
 import { expandHome, getPluginConfig } from "../lib/config.js";
 import { normalizePhone } from "../lib/events.js";
@@ -28,7 +29,7 @@ export const HANDOFF_CATEGORIES = [
 
 // Fruit trees and building materials are fulfilled by an outside partner reached
 // on this WhatsApp line. Everything else is followed up by Genaie directly from
-// this chat, so nothing is forwarded.
+// this chat. Borehole handoffs notify the operator, never the supplier directly.
 export const PARTNER_WHATSAPP = "+263775489417";
 const FORWARDED_CATEGORIES = new Set(["fruit_trees", "building_materials"]);
 const CATEGORY_LABELS = {
@@ -95,10 +96,10 @@ export async function handleHandoff(api, sender, category, details, accountId = 
   const resolved = normalizeHandoffCategory(category);
   if (customer && !customer.includes("@") && FORWARDED_CATEGORIES.has(resolved)) {
     await forwardToPartner(api, customer, resolved, detailsSnippet(details));
-  } else if (customer.includes("@")) {
+  } else if (customer.includes("@") || resolved === "borehole") {
     // A partner cannot call an opaque WhatsApp ID. Let the operator continue
     // in the original chat rather than inventing a customer phone number.
-    await notifyAdminOfIntake(api, customer, resolved, `Original WhatsApp line: ${accountId}. ${detailsSnippet(details)}`);
+    await notifyAdminOfIntake(api, customer, resolved, `Original WhatsApp line: ${accountId}. ${resolved === "borehole" ? boreholeHandoffDetails(api, sender, accountId) : ""} ${detailsSnippet(details)}`);
   }
   try {
     markHandedOff(api, customer, resolved);

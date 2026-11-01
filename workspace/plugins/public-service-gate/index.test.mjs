@@ -132,7 +132,7 @@ test("a disabled public service is omitted from the public service tool schema",
   const handler = registerHandler({ cvMakerEnabled: false });
   const tool = handler.publicTool({ agentId: "public", requesterSenderId: MEMBER, messageChannel: "whatsapp" });
 
-  assert.deepEqual(tool.parameters.properties.action.enum, ["business_info", "handoff"]);
+  assert.deepEqual(tool.parameters.properties.action.enum, ["business_info", "borehole_info", "handoff"]);
 
   const result = await tool.execute("test", { action: "cv_maker_start" });
   assert.match(result.content[0].text, /isn't available here right now/i);
@@ -502,12 +502,29 @@ test("business_info fails soft and points at a handoff when the page is missing"
   assert.match(result.content[0].text, /handoff/i);
 });
 
+test("borehole_info uses the bound sender and hands internal provider context only to the operator", async () => {
+  const handler = intakeHandler({ whatsappAdminUsers: [ADMIN] });
+  await withFakeOpenclaw(handler.dir, async (sent) => {
+    const tool = publicToolFor(handler, UNKNOWN);
+    const result = await tool.execute("test", { action: "borehole_info", location: "Harare", service: "drilling", depth_m: 60 });
+    assert.equal(JSON.parse(result.content[0].text).offers[0].drilling_subtotal, 1170);
+    assert.doesNotMatch(result.content[0].text, /Big Player|Harare|providerId/);
+    const handoff = await tool.execute("test", { action: "handoff", category: "borehole", details: "Site visit needed" });
+    assert.match(handoff.content[0].text, HANDOFF);
+    assert.doesNotMatch(handoff.content[0].text, /Big Player|Harare/);
+    assert.match(sent(), /Big Player, Harare/);
+    assert.match(sent(), new RegExp(ADMIN.replace(/\+/g, "\\+")));
+    assert.doesNotMatch(sent(), new RegExp(PARTNER.replace(/\+/g, "\\+")));
+  });
+});
+
 test("the deployed business info page carries the core facts", () => {
   const page = fs.readFileSync(new URL("../../docs/business-info.md", import.meta.url), "utf8");
   assert.match(page, /All our services operate all around Zimbabwe\. Where are you from\?/);
   assert.match(page, /Do not describe\s+us as based in Bindura/);
   assert.match(page, /Transport within local Bindura: \$550/);
-  assert.match(page, /Any extra meter beyond 40m: \$25 per meter/);
+  assert.match(page, /action `borehole_info`/);
+  assert.doesNotMatch(page, /Drilling, first 40m: \$950/);
   assert.match(page, /Big: \$20 per tree/);
   assert.match(page, /\$3 per tree, minimum 20 trees/);
   assert.match(page, /medium or big: available from 100 trees/);

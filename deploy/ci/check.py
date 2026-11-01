@@ -180,6 +180,8 @@ def check_staged_source(files: dict[str, str], checks: Checks) -> None:
         required = {
             "workspace/skills/cv-maker/SKILL.md",
             "workspace/docs/business-info.md",
+            "workspace/data/borehole-providers.json",
+            "workspace/data/zimbabwe-towns.json",
             "workspace/bin/cv-maker",
             "workspace/cv-maker/cv_maker.py",
             "workspace/USER.md",

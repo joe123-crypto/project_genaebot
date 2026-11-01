@@ -168,7 +168,7 @@ serialized `Deploy verified production commit` job is the production gate even
 when branch protection is unavailable. Superseded commits are skipped. The job
 archives the tested SHA, records the new deployment ID and image digest, and
 checks the baked source marker, selected runtime flags, both connected accounts
-and all twelve campaigns. A failed release restores the exact
+and all ten campaigns. A failed release restores the exact
 previous image and owned runtime settings, then checks its startup. Verification
 allows time for the entrypoint's 330-second stale-lease handoff before the gateway
 can begin connecting its accounts.
@@ -236,7 +236,7 @@ them from the live config first, then from the manifest.
 Cron jobs live in the gateway's own state on the Railway volume, so they survive
 deploys. Each has an idempotent installer under `deploy/` that registers or
 updates it; run one only when its schedule or command changes. All times are
-`Africa/Harare`. The twelve promo crons are declared together in
+`Africa/Harare`. The ten promo crons are declared together in
 `deploy/promo-crons.json` and reconciled with `./deploy/reinstall-promo-crons.sh`
 (see *Reconciling the promo crons* below).
 
@@ -277,27 +277,14 @@ updates it; run one only when its schedule or command changes. All times are
   batteries, welding machines, borehole drives, microwaves, PA systems) to the
   WhatsApp group JIDs listed in `workspace/cron/appliance-repairs-promo/targets.json`,
   reusing the same shared `promo_broadcast` delivery engine
-- **`borehole-drilling-promo`** (`install-borehole-drilling-promo.sh`, 08:13) runs
-  `workspace/cron/borehole-drilling-promo/post_ad.py`, a deterministic (no-agent) job
-  that posts the fixed solar-borehole installation ad (0.75HP/1HP/1.5HP/2HP DC pump
-  packages, each with tank, stand, solar and installation) to the WhatsApp group JIDs
-  listed in `workspace/cron/borehole-drilling-promo/targets.json`, rotating through four
-  bundled photos daily and reusing the same shared `promo_broadcast` delivery engine.
-  Its fourth caption variant ("El Nino is coming. Are you prepared?") cites and links
-  the Meteorological Services Department 2026-2027 seasonal forecast and always posts
-  with `assets/elnino.jpg` instead of the rotating photo.
-  Most groups get the ad daily; groups under the file's `weekly_groups` map are posted
-  to only on their configured weekdays, which is how MUTANDIRI VILLAGE RESIDENTS gets
-  the ad three times a week (Mon, Wed and Fri)
-- **`borehole-paid-promo`** (`install-borehole-paid-promo.sh`, 07:15) runs
-  `workspace/cron/borehole-paid-promo/post_ad.py`, a deterministic (no-agent) job that
-  posts a fixed PAID ADVERT for a third-party borehole siting/drilling company to the
-  WhatsApp group JIDs listed in `workspace/cron/borehole-paid-promo/targets.json`
-  (the same Bulawayo/Kwekwe/Gweru/Chiredzi/Mutare/Masvingo cohort as skylight-solar),
-  reusing the same shared `promo_broadcast` delivery engine. The advertiser's brand,
-  taglines and catalog link are stripped and every contact number is the bot's own, so
-  replies reach the bot and the paid ad's leads are attributable (ref prefix `PB`). This
-  is separate from the operator's own `borehole-drilling-promo` above
+- **`borehole-drilling-promo`** (`install-borehole-drilling-promo.sh`, 07:15)
+  posts a general drilling and solar borehole installation advert with four
+  rotating photos to 43 active groups. It consolidates Same Age Projects,
+  Big Player and Baltic Sea Drilling's previous campaign groups. Packages and
+  prices live in the private provider catalog rather than the captions.
+  MUTANDIRI VILLAGE RESIDENTS remains Mon/Wed/Fri only. The installer verifies
+  this retained job before running `retire-borehole-promos.sh` to remove the
+  old borehole-paid and Big Player registrations. Runtime history is retained.
 - **`skylight-solar-promo`** (`install-skylight-solar-promo.sh`, 13:21) runs
   `workspace/cron/skylight-solar-promo/post_ad.py`, a deterministic (no-agent) job
   that posts the fixed Skylight Solar ad (solar system packages and complete
@@ -306,8 +293,6 @@ updates it; run one only when its schedule or command changes. All times are
   through two bundled posters daily and reusing the same shared `promo_broadcast`
   delivery engine. The posters carry the prices, so the captions stay price-free and
   route replies to the bot's own number
-- **`big-player-promo`** (`install-big-player-promo.sh`, 15:50) posts the
-  operator's borehole/solar lead-gen ad with tracking prefix `BP`.
 - **`industrial-lighting-promo`** (`install-industrial-lighting-promo.sh`, 10:05)
   posts the fixed paid advert for Industrial Lighting Pvt Ltd with tracking prefix
   `IL`. Its bundled poster carries the packages and prices.
@@ -315,7 +300,7 @@ updates it; run one only when its schedule or command changes. All times are
   posts the fixed advertiser recruitment copy and operator-supplied photo daily,
   with tracking prefix `GA`.
 
-These three campaigns use the per-group accounts in their generated target files:
+These campaigns use the per-group accounts in their generated target files:
 CHIREDZI BUSINESS FORUM and CHIREDZI MARKETPLACE use the **ads** account, while
 BULAWAYO ADVERTISEMENT uses the **default** account. Existing campaign groups
 remain on the ads account. The shared advertised contact is the ads number.
@@ -325,19 +310,18 @@ Their slots allow preceding campaigns on both accounts to finish before sending.
 
 A promo cron's schedule, timezone and job timeout live in the gateway's cron state
 on the Railway volume, not in this repo, so merging a change to any of them ships
-nothing on its own. `deploy/promo-crons.json` declares what the twelve should be;
+nothing on its own. `deploy/promo-crons.json` declares what the ten should be;
 `./deploy/reinstall-promo-crons.sh --check` reports what the gateway actually has,
 and `./deploy/reinstall-promo-crons.sh` applies the manifest by re-running the
 installers and re-checking. Both need `railway` (or a local container) and run from
 a checkout, not from CI — CI does not install cron definitions, so it enforces that the
-manifest, the twelve wrappers, `install-promo.sh`'s timeout default and these READMEs
+manifest, the ten wrappers, `install-promo.sh`'s timeout default and these READMEs
 all agree. Run `--check` first and remove anything it reports as undeclared before
 reinstalling, or that campaign posts twice a day. Full procedure, including when in
 the day it is safe to run, is in `deploy/railway/README.md`.
 
-The eleven existing promo crons rotate between caption variants (the original
-operator copy plus rewordings with identical facts; three each, four for the
-borehole promo). Advertiser recruitment keeps one fixed caption. All twelve
+The nine existing promo crons rotate between caption variants (the original
+operator copy plus rewordings with identical facts; three each). Advertiser recruitment keeps one fixed caption. All ten
 carry a per-group tracking link. See *Promo caption rotation and ad ref tracking*
 below.
 
@@ -373,9 +357,9 @@ The job feeds are retired; see *Retired job feeds* above.
 Each promo also waits a **random 0-900 s before its first send**
 (`PROMO_START_JITTER_SECONDS`; `0` disables it). The gaps inside a run were
 already random, but every cron used to fire exactly on the hour, so the
-account's day-to-day pattern stayed perfectly periodic. The eight schedules are
-now spread off the hour as well (08:13, 08:40, 10:35, 11:39, 12:50, 13:21, 14:26,
-17:06 — declared in `deploy/promo-crons.json`, which CI checks these times
+account's day-to-day pattern stayed perfectly periodic. The ten schedules are
+now spread off the hour as well (07:15, 08:40, 10:05, 10:35, 11:39, 12:50,
+13:21, 14:05, 14:26, 17:06 — declared in `deploy/promo-crons.json`, which CI checks these times
 against), chosen so a campaign's latest possible finish -- base minute plus the
 full jitter plus a worst-case run -- never reaches the next campaign's slot. The
 wait is charged against the job's timeout budget, so the gap planning above sees
@@ -465,16 +449,14 @@ campaigns are the ones that come down.
 
 The shared promo engine (`workspace/lib/promo_broadcast.py`) accepts either one
 caption string (sent verbatim, as before) or a list of caption variants. Each
-promo now supplies three (the borehole promo four): its original operator copy as
-variant 1, plus rewordings that keep every fact identical (the borehole El Nino
-variant may additionally carry its cited forecast link, listed in `SOURCE_URLS`).
+promo supplies three caption variants, except advertiser recruitment's single
+fixed caption. Rewordings keep the advertised facts identical.
 A group's variant is `(post counter + sha256(group JID)) % <variant count>`, so a
 group never gets the same caption
 on two consecutive posts (weekly-limited groups count their own posting days) and
 groups are spread across variants on a given day. A promo may pass
 `variant_images={variant_index: image_path}` to pin a fixed image to one variant
-(the borehole El Nino variant uses `assets/elnino.jpg`); other variants keep the
-daily image rotation. `--dry-run` shows each group's variant, ref and any pinned
+while other variants keep the daily image rotation. `--dry-run` shows each group's variant, ref and any pinned
 image.
 
 Each promo also passes a `TRACKING` config (opt-in; a promo without one sends
@@ -942,3 +924,29 @@ still builds:
 ```bash
 docker build -f deploy/railway/Dockerfile .
 ```
+
+### Borehole provider catalog
+
+`workspace/data/borehole-providers.json` is the private, versioned source of truth
+for Same Age Projects (Bindura), Big Player (Harare) and Baltic Sea Drilling
+(Harare). Edit each provider's offers separately; unknown prices are `null`.
+Skylight Solar is excluded: its fixed $10/month campaign remains independent.
+The public `borehole_info` action asks for customer location and requirements,
+filters documented service coverage, and ranks nearest base first, then known
+prices for equivalent offers. Town-centre distances come from the attributed
+GeoNames extract in `workspace/data/zimbabwe-towns.json`; ambiguous locations
+require clarification. No online geocoding runs during customer chats.
+Only anonymized offers and conditions reach the customer agent. Provider
+selection is retained for 24 hours, keyed by WhatsApp sender and receiving account,
+in `runtime/public-service-gate/borehole-selections.json` alongside service state.
+Borehole handoffs notify the operator with the internal provider selection;
+provider names, base locations and direct contacts are never sent to customers.
+Missing information requires a handoff; travel charges and final site quotes
+are never assumed. Existing `PB`/`BP` tracking references remain recognized.
+
+After deploying the source in a quiet window, run
+`./deploy/retire-borehole-promos.sh --dry-run`, then
+`./deploy/reinstall-promo-crons.sh --only borehole-drilling` and finally
+`./deploy/reinstall-promo-crons.sh --check`. The installer migrates the retained
+schedule and retires only the two superseded registrations. Keep a live cron
+snapshot for recovery before migration; do not clear runtime delivery history.

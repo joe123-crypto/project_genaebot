@@ -2,13 +2,9 @@
 """
 Borehole-drilling daily ad poster.
 
-Posts a FIXED, predefined advert (caption + rotating image) for solar borehole
-system installation packages (0.75HP / 1HP / 1.5HP / 2HP DC pump packages) to a
-configured set of WhatsApp groups, once per day per group. There is NO AI/LLM
-generation involved: the post text is a set of hardcoded caption variants and the
-images are bundled assets that rotate daily, except the El Nino variant, which
-always uses assets/elnino.jpg and links the MSD seasonal forecast. This script is meant to run from an OpenClaw
-`--command` cron (deterministic, no agent turn).
+Posts a general drilling and solar-installation advert with four photos rotating
+daily. Provider-specific prices and packages are supplied by the customer-service
+catalog rather than the advert. Deterministic; no agent turn.
 
 Delivery, invite/JID resolution, per-group state, the weekly cadence, and the
 permission-error skip all live in the shared `workspace/lib/promo_broadcast.py`
@@ -65,163 +61,36 @@ _IMAGE_ASSETS = [
 ]
 IMAGE = os.environ.get("BOREHOLE_IMAGE") or _IMAGE_ASSETS
 
-# The El Nino caption variant (POST_TEXT_V4) always goes out with its own
-# matching photo instead of the daily rotation above.
-ELNINO_IMAGE = os.path.join(HERE, "assets", "elnino.jpg")
-
-# Zimbabwe Meteorological Services Department 2026-2027 seasonal forecast, cited
-# and linked by the El Nino variant.
-FORECAST_URL = (
-    "https://www.weatherzw.org.zw/products/seasonal-forecast/"
-    "2026-2027-seasonal-forecast/"
-)
-# External source links a variant may carry on top of the shared ad facts.
-SOURCE_URLS = (FORECAST_URL,)
-
-# Fixed advert. Package details are extracted from the operator-supplied poster
-# (packages only; the source brand/logo is deliberately dropped). Emoji are kept
-# as explicit \U escapes so the source stays ASCII-safe.
+# General captions; provider-specific packages and prices live in data/borehole-providers.json.
 POST_TEXT = (
-    "\U0001F4A7 *Bring water closer to home.* \U0001F4A7\n"
-    "*Professional borehole drilling you can depend on.*\n"
-    "\n"
-    "*BOREHOLE SYSTEM INSTALLATION PACKAGES*\n"
-    "\n"
-    "\U0001F4E6 PACKAGE 1: 0.75HP DC Pump with Control Box\n"
-    "  • 5000L Tank\n"
-    "  • 4 Meters Tank Stand\n"
-    "  • 0.75HP DC Pump\n"
-    "  • Pump & External Controller\n"
-    "  • Solar Panels\n"
-    "  • Solar Stand\n"
-    "  • Pipes & Cables\n"
-    "  • 1 Garden Tap\n"
-    "  • All Accessories & Installation\n"
-    "\U0001F4B5 Price: $1800\n"
-    "\n"
-    "\U0001F4E6 PACKAGE 2: 1HP DC Pump with Control Box\n"
-    "  • 5000L Tank\n"
-    "  • 4 Meters Tank Stand\n"
-    "  • 1HP DC Pump\n"
-    "  • Pump & External Controller\n"
-    "  • Solar Panels\n"
-    "  • Solar Stand\n"
-    "  • Pipes & Cables\n"
-    "  • 1 Garden Tap\n"
-    "  • All Accessories & Installation\n"
-    "\U0001F4B5 Price: $2000\n"
-    "\n"
-    "\U0001F4E6 PACKAGE 3: 1.5HP DC Pump with Control Box\n"
-    "  • 5000L Tank\n"
-    "  • 4 Meters Tank Stand\n"
-    "  • 1.5HP DC Pump\n"
-    "  • Pump & External Controller\n"
-    "  • Solar Panels\n"
-    "  • Solar Stand\n"
-    "  • Pipes & Cables\n"
-    "  • 1 Garden Tap\n"
-    "  • All Accessories & Installation\n"
-    "\U0001F4B5 Price: $2200\n"
-    "\n"
-    "\U0001F4E6 PACKAGE 4: 2HP DC Pump with Control Box\n"
-    "  • 5000L Tank\n"
-    "  • 4 Meters Tank Stand\n"
-    "  • 2HP DC Pump\n"
-    "  • Pump & External Controller\n"
-    "  • Solar Panels\n"
-    "  • Solar Stand\n"
-    "  • Pipes & Cables\n"
-    "  • 1 Garden Tap\n"
-    "  • All Accessories & Installation\n"
-    "\U0001F4B5 Price: $2400\n"
-    "\n"
-    "\U0001F4CD We operate all around Zimbabwe!\n"
-    "\U0001F4DE WhatsApp: {bot_number} - Genaie"
+    "💧 *Bring water closer to home.* 💧\n"
+    "*Professional borehole drilling & solar installation.*\n\n"
+    "Need a borehole drilled or a solar pumping system installed? Get in touch "
+    "to discuss the options available for your area.\n\n"
+    "📍 Services across Zimbabwe.\n"
+    "💬 Inbox us with your town or area and what you need. We’ll help you find "
+    "a suitable offer and explain the packages and prices.\n\n"
+    "📞 WhatsApp: {bot_number} - Genaie"
 )
-
-# Caption variants that rotate per group per day (see promo_broadcast) so the ad
-# doesn't read as copy-paste spam. Variant 1 is POST_TEXT verbatim; the others
-# reword/reorder only. Every fact (packages, contents, prices, location, number)
-# must stay IDENTICAL across variants -- never add a claim or offer here.
 POST_TEXT_V2 = (
-    "☀️ *Solar borehole systems, installed for you* ☀️\n"
-    "Bring water closer to home with professional borehole drilling you can "
-    "depend on.\n"
-    "\n"
-    "✅ *Every package includes:*\n"
-    "  • 5000L Tank\n"
-    "  • 4 Meters Tank Stand\n"
-    "  • Pump & External Controller\n"
-    "  • Solar Panels\n"
-    "  • Solar Stand\n"
-    "  • Pipes & Cables\n"
-    "  • 1 Garden Tap\n"
-    "  • All Accessories & Installation\n"
-    "\n"
-    "\U0001F4A7 *Choose your DC pump (with Control Box):*\n"
-    "1️⃣ 0.75HP DC Pump - $1800\n"
-    "2️⃣ 1HP DC Pump - $2000\n"
-    "3️⃣ 1.5HP DC Pump - $2200\n"
-    "4️⃣ 2HP DC Pump - $2400\n"
-    "\n"
-    "\U0001F4CD We operate all around Zimbabwe!\n"
-    "\U0001F4DE WhatsApp: {bot_number} - Genaie"
+    "☀️ *Water for your home, farm or business.* 💧\n\n"
+    "Looking for borehole drilling or solar borehole installation? Ask us about "
+    "the available services, installation packages and prices.\n\n"
+    "📍 Services across Zimbabwe.\n"
+    "💬 Where are you located, and what do you need? Inbox us so we can help "
+    "you find a suitable option for your area.\n\n"
+    "📞 WhatsApp: {bot_number} - Genaie"
 )
-
 POST_TEXT_V3 = (
-    "\U0001F6B0 *Want water closer to home?*\n"
-    "Complete solar borehole system installation packages. "
-    "We operate all around Zimbabwe! \U0001F4CD\n"
-    "\n"
-    "*BOREHOLE SYSTEM INSTALLATION PACKAGES*\n"
-    "\U0001F4B5 Package 1 - 0.75HP DC Pump with Control Box: *$1800*\n"
-    "\U0001F4B5 Package 2 - 1HP DC Pump with Control Box: *$2000*\n"
-    "\U0001F4B5 Package 3 - 1.5HP DC Pump with Control Box: *$2200*\n"
-    "\U0001F4B5 Package 4 - 2HP DC Pump with Control Box: *$2400*\n"
-    "\n"
-    "\U0001F4E6 All 4 packages come with: 5000L Tank • 4 Meters Tank Stand • "
-    "Pump & External Controller • Solar Panels • Solar Stand • Pipes & Cables • "
-    "1 Garden Tap • All Accessories & Installation\n"
-    "\n"
-    "\U0001F4A7 Professional borehole drilling you can depend on.\n"
-    "\U0001F4DE WhatsApp: {bot_number} - Genaie"
+    "🚰 *Planning a borehole or solar water system?*\n\n"
+    "We can help you explore borehole drilling and solar installation options "
+    "for your home, farm or business.\n\n"
+    "💬 Send us your town or area and your requirements. We’ll explain the "
+    "suitable offers, what’s included and the prices.\n\n"
+    "📍 Services across Zimbabwe.\n"
+    "📞 WhatsApp: {bot_number} - Genaie"
 )
-
-# El Nino / dry-season variant. The ONLY variant allowed an external claim: the
-# MSD seasonal forecast, attributed and linked via FORECAST_URL. Ad facts stay
-# identical to the other variants.
-POST_TEXT_V4 = (
-    "\u2600\ufe0f *El Nino is coming. Are you prepared?* \u2600\ufe0f\n"
-    "The Meteorological Services Department's seasonal forecast warns that El Nino "
-    "could bring a drier-than-normal season, with below-normal rains and long dry "
-    "spells expected, especially early in the season.\n"
-    "\U0001F4C4 Read the forecast: " + FORECAST_URL + "\n"
-    "\n"
-    "Don't wait for the wells and taps to run dry. Get a solar borehole system "
-    "installed now: professional borehole drilling you can depend on.\n"
-    "\n"
-    "*BOREHOLE SYSTEM INSTALLATION PACKAGES*\n"
-    "\U0001F4A7 Package 1 - 0.75HP DC Pump with Control Box: *$1800*\n"
-    "\U0001F4A7 Package 2 - 1HP DC Pump with Control Box: *$2000*\n"
-    "\U0001F4A7 Package 3 - 1.5HP DC Pump with Control Box: *$2200*\n"
-    "\U0001F4A7 Package 4 - 2HP DC Pump with Control Box: *$2400*\n"
-    "\n"
-    "\u2705 Every package includes: 5000L Tank \u2022 4 Meters Tank Stand \u2022 "
-    "Pump & External Controller \u2022 Solar Panels \u2022 Solar Stand \u2022 "
-    "Pipes & Cables \u2022 1 Garden Tap \u2022 All Accessories & Installation\n"
-    "\n"
-    "\U0001F4CD We operate all around Zimbabwe!\n"
-    "\U0001F4DE WhatsApp: {bot_number} - Genaie"
-)
-
-POST_TEXTS = [POST_TEXT, POST_TEXT_V2, POST_TEXT_V3, POST_TEXT_V4]
-
-# Variant index -> fixed image. BOREHOLE_IMAGE (a test override) still forces a
-# single image for every variant.
-VARIANT_IMAGES = (
-    {} if os.environ.get("BOREHOLE_IMAGE")
-    else {POST_TEXTS.index(POST_TEXT_V4): ELNINO_IMAGE}
-)
+POST_TEXTS = [POST_TEXT, POST_TEXT_V2, POST_TEXT_V3]
 
 # Per-group ref-coded wa.me link to the configured contact account.
 # {bot_number} and the link use defaults.contact_account when selected;
@@ -240,7 +109,6 @@ def main():
         state_file=STATE_FILE,
         tracking=TRACKING,
         promo_name="borehole-drilling-promo",
-        variant_images=VARIANT_IMAGES,
     )
 
 

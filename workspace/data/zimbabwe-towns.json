@@ -1,0 +1,972 @@
+{
+  "source": "https://download.geonames.org/export/dump/ZW.zip",
+  "attribution": "GeoNames, CC BY 4.0, https://www.geonames.org/; town-centre coordinates, not road distances.",
+  "retrieved": "2026-11-01",
+  "towns": [
+    {
+      "name": "Guruve",
+      "aliases": [
+        "Chiporiro",
+        "Chipuriro",
+        "Guruwe",
+        "Sipolilo"
+      ],
+      "lat": -16.65753,
+      "lon": 30.70301,
+      "geoname_id": 878519
+    },
+    {
+      "name": "Zvishavane",
+      "aliases": [
+        "Shabani",
+        "Shavani"
+      ],
+      "lat": -20.32674,
+      "lon": 30.06648,
+      "geoname_id": 878549
+    },
+    {
+      "name": "Victoria Falls",
+      "aliases": [
+        "Chutes Victoria",
+        "VFA",
+        "Viktoria Akvofalo"
+      ],
+      "lat": -17.93285,
+      "lon": 25.83066,
+      "geoname_id": 879431
+    },
+    {
+      "name": "Tsholotsho",
+      "aliases": [
+        "Shololezhou",
+        "Tjolotjo"
+      ],
+      "lat": -19.75562,
+      "lon": 27.76508,
+      "geoname_id": 879905
+    },
+    {
+      "name": "Shurugwi",
+      "aliases": [
+        "Churugwi",
+        "Salukwe",
+        "Selukwe"
+      ],
+      "lat": -19.67016,
+      "lon": 30.00589,
+      "geoname_id": 881164
+    },
+    {
+      "name": "Shangani",
+      "aliases": [],
+      "lat": -19.78333,
+      "lon": 29.36667,
+      "geoname_id": 881331
+    },
+    {
+      "name": "Shamva",
+      "aliases": [
+        "Tsambvi",
+        "Tsamvi"
+      ],
+      "lat": -17.31159,
+      "lon": 31.57561,
+      "geoname_id": 881345
+    },
+    {
+      "name": "Ruwa",
+      "aliases": [
+        "Ruva",
+        "lu wa",
+        "ruwa",
+        "rwwa",
+        "Рува",
+        "رووا",
+        "ルワ",
+        "魯瓦",
+        "鲁瓦"
+      ],
+      "lat": -17.88972,
+      "lon": 31.24472,
+      "geoname_id": 882009
+    },
+    {
+      "name": "Rusape",
+      "aliases": [
+        "Rusapi"
+      ],
+      "lat": -18.52785,
+      "lon": 32.12843,
+      "geoname_id": 882100
+    },
+    {
+      "name": "Redcliff",
+      "aliases": [
+        "Redcliffe",
+        "Redklif",
+        "Redkliff",
+        "Rehdkliff",
+        "reddokurifu",
+        "Редклиф",
+        "Редкліфф",
+        "Рэдклифф",
+        "ریڈکلف، زمبابوے",
+        "レッドクリフ"
+      ],
+      "lat": -19.03333,
+      "lon": 29.78333,
+      "geoname_id": 882599
+    },
+    {
+      "name": "Raffingora",
+      "aliases": [
+        "Rafingora",
+        "Рафингора"
+      ],
+      "lat": -17.03333,
+      "lon": 30.43333,
+      "geoname_id": 882722
+    },
+    {
+      "name": "Plumtree",
+      "aliases": [],
+      "lat": -20.48333,
+      "lon": 27.81667,
+      "geoname_id": 882859
+    },
+    {
+      "name": "Penhalonga",
+      "aliases": [],
+      "lat": -18.89112,
+      "lon": 32.69781,
+      "geoname_id": 882955
+    },
+    {
+      "name": "Odzi",
+      "aliases": [],
+      "lat": -18.96167,
+      "lon": 32.40557,
+      "geoname_id": 883183
+    },
+    {
+      "name": "Nyazura",
+      "aliases": [
+        "Inyazura",
+        "Nyazure"
+      ],
+      "lat": -18.70587,
+      "lon": 32.16796,
+      "geoname_id": 883258
+    },
+    {
+      "name": "Nyanga",
+      "aliases": [],
+      "lat": -18.21667,
+      "lon": 32.75,
+      "geoname_id": 883481
+    },
+    {
+      "name": "Norton",
+      "aliases": [
+        "Нортон"
+      ],
+      "lat": -17.88333,
+      "lon": 30.7,
+      "geoname_id": 884141
+    },
+    {
+      "name": "Mvurwi",
+      "aliases": [
+        "Dawsons",
+        "Umvukwes",
+        "n'vurui",
+        "ンヴルィ"
+      ],
+      "lat": -17.03333,
+      "lon": 30.85,
+      "geoname_id": 884798
+    },
+    {
+      "name": "Mvuma",
+      "aliases": [
+        "Muvumi",
+        "Umvuma"
+      ],
+      "lat": -19.27924,
+      "lon": 30.52828,
+      "geoname_id": 884814
+    },
+    {
+      "name": "Mutoko",
+      "aliases": [
+        "Mtoko"
+      ],
+      "lat": -17.39699,
+      "lon": 32.22677,
+      "geoname_id": 884927
+    },
+    {
+      "name": "Mutare",
+      "aliases": [
+        "Mutareh",
+        "Mutarė",
+        "Nyautare",
+        "UTA",
+        "Umtali",
+        "mu ta lei",
+        "mutale",
+        "mutare",
+        "mwtarh",
+        "mwtary",
+        "Мутаре",
+        "Мутарэ",
+        "موتاره",
+        "موتاري",
+        "موتاری",
+        "मुटारे",
+        "মুটারে",
+        "ਮੁਟਾਰੇ",
+        "ሙታሬ",
+        "ムタレ",
+        "穆塔雷",
+        "무타레"
+      ],
+      "lat": -18.9707,
+      "lon": 32.67086,
+      "geoname_id": 884979
+    },
+    {
+      "name": "Murewa",
+      "aliases": [
+        "Mrewa",
+        "Murehwa",
+        "mwrywa",
+        "موریوا"
+      ],
+      "lat": -17.64322,
+      "lon": 31.784,
+      "geoname_id": 885159
+    },
+    {
+      "name": "Mount Hampden",
+      "aliases": [
+        "Mount Hampden Junction",
+        "Mount Hampton",
+        "Musitkwe"
+      ],
+      "lat": -17.74167,
+      "lon": 30.93889,
+      "geoname_id": 885792
+    },
+    {
+      "name": "Mount Darwin",
+      "aliases": [
+        "Darwin",
+        "Fura",
+        "Mount Fura"
+      ],
+      "lat": -16.77251,
+      "lon": 31.58381,
+      "geoname_id": 885800
+    },
+    {
+      "name": "Mhangura",
+      "aliases": [
+        "Mangula"
+      ],
+      "lat": -16.89387,
+      "lon": 30.16828,
+      "geoname_id": 886146
+    },
+    {
+      "name": "Mazowe",
+      "aliases": [],
+      "lat": -17.50404,
+      "lon": 30.97388,
+      "geoname_id": 886384
+    },
+    {
+      "name": "Masvingo",
+      "aliases": [
+        "Fort Victoria",
+        "MVZ",
+        "Mashvingo",
+        "Nyanda",
+        "masabhingo",
+        "masavigo",
+        "masfynjw",
+        "masivinigo",
+        "masubingo",
+        "masvingo",
+        "maswyngw",
+        "maswynګw",
+        "Масвинго",
+        "Машвинго",
+        "ماسفينجو",
+        "ماسوينګو",
+        "ماسوینگو",
+        "मास्विंगो",
+        "মাসভিঙ্গো",
+        "ਮਾਸਵਿੰਗੋ",
+        "ማስቪንጎ",
+        "マスビンゴ"
+      ],
+      "lat": -20.06373,
+      "lon": 30.82766,
+      "geoname_id": 886763
+    },
+    {
+      "name": "Mashava",
+      "aliases": [
+        "Mashaba"
+      ],
+      "lat": -20.03665,
+      "lon": 30.48225,
+      "geoname_id": 886864
+    },
+    {
+      "name": "Marondera",
+      "aliases": [
+        "Marandellas",
+        "marondera",
+        "maronidera",
+        "marwndyra",
+        "marwnڈyra",
+        "Маронdera",
+        "مارونديرا",
+        "مارونڈیرا",
+        "मारोंडेरा",
+        "মারোন্ডেরা",
+        "ਮਾਰੋਂਡੇਰਾ",
+        "ማሮንደራ",
+        "マロンデラ"
+      ],
+      "lat": -18.18527,
+      "lon": 31.55193,
+      "geoname_id": 886990
+    },
+    {
+      "name": "Macheke",
+      "aliases": [
+        "Mucheki"
+      ],
+      "lat": -18.13901,
+      "lon": 31.84933,
+      "geoname_id": 888089
+    },
+    {
+      "name": "Lupane",
+      "aliases": [
+        "Lupani",
+        "lupane",
+        "luፓne",
+        "lwban",
+        "lwpan",
+        "rupane",
+        "Лупане",
+        "لوبان",
+        "لوپان",
+        "लुपाने",
+        "লুপানে",
+        "ਲੁਪਾਨੇ",
+        "ሉፓኔ",
+        "ルパネ"
+      ],
+      "lat": -18.93149,
+      "lon": 27.80696,
+      "geoname_id": 888225
+    },
+    {
+      "name": "Lalapanzi",
+      "aliases": [
+        "Lalapansi",
+        "Лалапанзи"
+      ],
+      "lat": -19.33225,
+      "lon": 30.17768,
+      "geoname_id": 888667
+    },
+    {
+      "name": "Kwekwe",
+      "aliases": [
+        "Hwe Hwe",
+        "Kvekve",
+        "Kvekvė",
+        "Que Que",
+        "kui kui shi",
+        "kwekwe",
+        "kwykwy",
+        "kwyykwyy",
+        "Квекве",
+        "كويكوى",
+        "کوئیکوئی",
+        "奎奎市",
+        "퀘퀘"
+      ],
+      "lat": -18.92809,
+      "lon": 29.81486,
+      "geoname_id": 888710
+    },
+    {
+      "name": "Karoi",
+      "aliases": [
+        "Karoyi",
+        "ka lai yi",
+        "karoi",
+        "karwy",
+        "Карои",
+        "کاروی",
+        "カロイ",
+        "卡萊伊"
+      ],
+      "lat": -16.80993,
+      "lon": 29.69247,
+      "geoname_id": 889191
+    },
+    {
+      "name": "Kariba",
+      "aliases": [
+        "KAB",
+        "ka li ba",
+        "kaliba",
+        "karyba",
+        "Кариба",
+        "كاريبا",
+        "کاریبا، زمبابوے",
+        "卡里巴",
+        "카리바"
+      ],
+      "lat": -16.51667,
+      "lon": 28.8,
+      "geoname_id": 889215
+    },
+    {
+      "name": "Kamativi Mine",
+      "aliases": [
+        "Kamativi",
+        "Kamitivi"
+      ],
+      "lat": -18.31563,
+      "lon": 27.05729,
+      "geoname_id": 889390
+    },
+    {
+      "name": "Kadoma",
+      "aliases": [
+        "Gatooma",
+        "Kadome",
+        "Katoma",
+        "ka duo ma",
+        "kadoma",
+        "Кадома",
+        "Кадоме",
+        "کادوما، زمبابوے",
+        "カドマ",
+        "卡多馬",
+        "카도마"
+      ],
+      "lat": -18.33328,
+      "lon": 29.91534,
+      "geoname_id": 889453
+    },
+    {
+      "name": "Inyati",
+      "aliases": [],
+      "lat": -19.67563,
+      "lon": 28.84687,
+      "geoname_id": 889723
+    },
+    {
+      "name": "Insiza",
+      "aliases": [],
+      "lat": -19.78333,
+      "lon": 29.2,
+      "geoname_id": 889795
+    },
+    {
+      "name": "Hwange",
+      "aliases": [
+        "Hvange",
+        "Hvangė",
+        "Khvange",
+        "WKI",
+        "Wange",
+        "Wankie",
+        "hwang-ge",
+        "hwanj",
+        "wan ji",
+        "wange",
+        "Хванге",
+        "هوانج",
+        "ワンゲ",
+        "万基",
+        "萬基",
+        "황게"
+      ],
+      "lat": -18.36446,
+      "lon": 26.49877,
+      "geoname_id": 889942
+    },
+    {
+      "name": "Headlands",
+      "aliases": [],
+      "lat": -18.27733,
+      "lon": 32.0515,
+      "geoname_id": 890242
+    },
+    {
+      "name": "Harare",
+      "aliases": [
+        "Arare",
+        "Charare",
+        "HRE",
+        "Hararensis Urbs",
+        "Harareo",
+        "Hararė",
+        "Kharare",
+        "Kharareh",
+        "Salisbury",
+        "ha la lei",
+        "halale",
+        "harare",
+        "harary",
+        "hrarh",
+        "hrary",
+        "Χαράρε",
+        "Хараре",
+        "Харарэ",
+        "Հարարե",
+        "הארארה",
+        "هارارى",
+        "هراره",
+        "هراري",
+        "ھارارې",
+        "ھەرارێ",
+        "ہرارے",
+        "हरारे",
+        "ਹਰਾਰੇ",
+        "ହାରାରେ",
+        "ஹராரே",
+        "ฮาราเร",
+        "ཧ་ར་རི།",
+        "ჰარარე",
+        "ሀራሬ",
+        "ハラレ",
+        "哈拉雷",
+        "하라레"
+      ],
+      "lat": -17.82772,
+      "lon": 31.05337,
+      "geoname_id": 890299
+    },
+    {
+      "name": "Gweru",
+      "aliases": [
+        "GWE",
+        "Gveru",
+        "Gvru",
+        "Gwelo",
+        "gaveru",
+        "gberu",
+        "guueruu",
+        "gveru",
+        "gwyrw",
+        "jwyrw",
+        "Гверу",
+        "Гвру",
+        "جويرو",
+        "گویرو",
+        "ग्वेरु",
+        "গ্বেরু",
+        "ਗਵੇਰੂ",
+        "ግweru",
+        "ግወሩ",
+        "グウェルゥ"
+      ],
+      "lat": -19.45,
+      "lon": 29.81667,
+      "geoname_id": 890422
+    },
+    {
+      "name": "Gwanda",
+      "aliases": [
+        "Gvanda",
+        "Jawunda",
+        "gavanda",
+        "gbanda",
+        "guan da",
+        "guwanda",
+        "gvanda",
+        "gwandaa",
+        "gwandh",
+        "jwnda",
+        "Гванда",
+        "جوندا",
+        "گوانداا",
+        "گوانده",
+        "گوانڈا",
+        "ग्वांडा",
+        "গ্বান্ডা",
+        "ਗਵਾਂਡਾ",
+        "ግwanida",
+        "ግዋንዳ",
+        "グワンダ",
+        "關達"
+      ],
+      "lat": -20.93622,
+      "lon": 29.00698,
+      "geoname_id": 890516
+    },
+    {
+      "name": "Gokwe",
+      "aliases": [],
+      "lat": -18.20476,
+      "lon": 28.9349,
+      "geoname_id": 890983
+    },
+    {
+      "name": "Glendale",
+      "aliases": [],
+      "lat": -17.35514,
+      "lon": 31.06718,
+      "geoname_id": 891099
+    },
+    {
+      "name": "Filabusi",
+      "aliases": [
+        "Emfelabuso"
+      ],
+      "lat": -20.53333,
+      "lon": 29.28502,
+      "geoname_id": 891515
+    },
+    {
+      "name": "Esigodini",
+      "aliases": [
+        "Essexvale"
+      ],
+      "lat": -20.28979,
+      "lon": 28.92261,
+      "geoname_id": 891699
+    },
+    {
+      "name": "Dorowa Mining Lease",
+      "aliases": [
+        "Dorowa",
+        "Dorowa Claims"
+      ],
+      "lat": -19.06667,
+      "lon": 31.75,
+      "geoname_id": 892156
+    },
+    {
+      "name": "Dete",
+      "aliases": [
+        "Dett"
+      ],
+      "lat": -18.61667,
+      "lon": 26.86667,
+      "geoname_id": 892440
+    },
+    {
+      "name": "Concession",
+      "aliases": [],
+      "lat": -17.38333,
+      "lon": 30.95,
+      "geoname_id": 892876
+    },
+    {
+      "name": "Chivhu",
+      "aliases": [
+        "Enkeldoorn"
+      ],
+      "lat": -19.02112,
+      "lon": 30.89218,
+      "geoname_id": 893172
+    },
+    {
+      "name": "Chirundu",
+      "aliases": [
+        "Chirunda",
+        "Chirundo",
+        "Chirundu Township",
+        "Otto Beit Bridge"
+      ],
+      "lat": -16.03333,
+      "lon": 28.85,
+      "geoname_id": 893397
+    },
+    {
+      "name": "Chiredzi",
+      "aliases": [
+        "BFO"
+      ],
+      "lat": -21.05,
+      "lon": 31.66667,
+      "geoname_id": 893485
+    },
+    {
+      "name": "Chipinge",
+      "aliases": [
+        "CHJ",
+        "Chipinga"
+      ],
+      "lat": -20.18833,
+      "lon": 32.62365,
+      "geoname_id": 893549
+    },
+    {
+      "name": "Chinhoyi",
+      "aliases": [
+        "Chinkhoi",
+        "Chinkhoji",
+        "Chinoyi",
+        "Cinhojis",
+        "Sinoia",
+        "chinhoi",
+        "chynhwy",
+        "chynhwyy",
+        "cinahayi",
+        "cinaho'i",
+        "cinahoyi",
+        "cinihoyi",
+        "qi nuo yi",
+        "tshynhwy",
+        "Činhojis",
+        "Чинхойи",
+        "Чинхої",
+        "Чинхоји",
+        "تشينهوي",
+        "چينهوي",
+        "چینهویی",
+        "چینہوئی",
+        "चिनहोयी",
+        "চিনহয়ী",
+        "ਚਿਨਹੋਈ",
+        "ችንሆይ",
+        "チンホイ",
+        "奇諾伊"
+      ],
+      "lat": -17.36667,
+      "lon": 30.2,
+      "geoname_id": 893697
+    },
+    {
+      "name": "Chimanimani",
+      "aliases": [
+        "Mandidzudzure",
+        "Melsetter"
+      ],
+      "lat": -19.8,
+      "lon": 32.86667,
+      "geoname_id": 893813
+    },
+    {
+      "name": "Chivi",
+      "aliases": [
+        "Chibi"
+      ],
+      "lat": -20.30729,
+      "lon": 30.51017,
+      "geoname_id": 894094
+    },
+    {
+      "name": "Chegutu",
+      "aliases": [
+        "Cheguto",
+        "Hartley",
+        "New Hartley"
+      ],
+      "lat": -18.13021,
+      "lon": 30.14074,
+      "geoname_id": 894239
+    },
+    {
+      "name": "Chakari",
+      "aliases": [
+        "Shagari"
+      ],
+      "lat": -18.06294,
+      "lon": 29.89246,
+      "geoname_id": 894413
+    },
+    {
+      "name": "Centenary",
+      "aliases": [],
+      "lat": -16.72289,
+      "lon": 31.11462,
+      "geoname_id": 894460
+    },
+    {
+      "name": "Bulawayo",
+      "aliases": [
+        "BUQ",
+        "Bulavajas",
+        "Bulavajo",
+        "Bulavejo",
+        "blawyw",
+        "bu la wa yue",
+        "bula'oyayo",
+        "bulava'i'o",
+        "bulavayo",
+        "bulawayo",
+        "bullawayo",
+        "burawayo",
+        "bwlawayw",
+        "bwlawyw",
+        "Булавайо",
+        "Булаваё",
+        "Булавајо",
+        "Булавейо",
+        "بلاویو",
+        "بولاوايو",
+        "بولاویو",
+        "बुलावायो",
+        "বুলাওয়ায়ো",
+        "ਬੁਲਾਵਾਇਓ",
+        "ቡላዋዮ",
+        "ブラワヨ",
+        "布拉瓦约",
+        "불라와요"
+      ],
+      "lat": -20.15,
+      "lon": 28.58333,
+      "geoname_id": 894701
+    },
+    {
+      "name": "Buhera",
+      "aliases": [
+        "Uhera"
+      ],
+      "lat": -19.32082,
+      "lon": 31.43959,
+      "geoname_id": 894712
+    },
+    {
+      "name": "Birchenough Bridge",
+      "aliases": [],
+      "lat": -19.96667,
+      "lon": 32.33333,
+      "geoname_id": 895045
+    },
+    {
+      "name": "Binga",
+      "aliases": [],
+      "lat": -17.62027,
+      "lon": 27.34139,
+      "geoname_id": 895057
+    },
+    {
+      "name": "Bindura",
+      "aliases": [
+        "Bindura Town",
+        "Kimberley Reefs",
+        "bidura",
+        "bindoura",
+        "bindura",
+        "binidura",
+        "bndwra",
+        "byndwra",
+        "Биндура",
+        "بندورا",
+        "بيندورا",
+        "बिंदुरा",
+        "বিন্দুরা",
+        "ਬਿੰਦੁਰਾ",
+        "ብንዱራ",
+        "ビンドゥラ"
+      ],
+      "lat": -17.30192,
+      "lon": 31.33056,
+      "geoname_id": 895061
+    },
+    {
+      "name": "Beitbridge",
+      "aliases": [
+        "Bajtbridz",
+        "Bajtbridzh",
+        "Beitbridzas",
+        "Beitbridžas",
+        "Beitbrug",
+        "bei te qiao",
+        "beitoburijji",
+        "bytbrydj",
+        "Байтбридж",
+        "Бајтбриџ",
+        "Беитбридге",
+        "بيتبريدج",
+        "بیٹبریج",
+        "ベイトブリッジ",
+        "貝特橋"
+      ],
+      "lat": -22.21667,
+      "lon": 30.0,
+      "geoname_id": 895269
+    },
+    {
+      "name": "Beatrice",
+      "aliases": [],
+      "lat": -18.25283,
+      "lon": 30.8473,
+      "geoname_id": 895308
+    },
+    {
+      "name": "Banket",
+      "aliases": [
+        "Banket Junction"
+      ],
+      "lat": -17.38333,
+      "lon": 30.4,
+      "geoname_id": 895417
+    },
+    {
+      "name": "Epworth",
+      "aliases": [
+        "Ehpuehrt",
+        "Эпуэрт"
+      ],
+      "lat": -17.89,
+      "lon": 31.1475,
+      "geoname_id": 1085510
+    },
+    {
+      "name": "Chitungwiza",
+      "aliases": [
+        "Chitungviza",
+        "Chytungviza",
+        "Citungviza",
+        "chytwngwyza",
+        "Čitungviza",
+        "Читунгвиза",
+        "Читунгвіза",
+        "Чытунгвіза",
+        "چیتونگویزا"
+      ],
+      "lat": -18.01274,
+      "lon": 31.07555,
+      "geoname_id": 1106542
+    },
+    {
+      "name": "Murambinda",
+      "aliases": [],
+      "lat": -19.27287,
+      "lon": 31.64962,
+      "geoname_id": 11281333
+    },
+    {
+      "name": "Harare Western Suburbs",
+      "aliases": [],
+      "lat": -17.8415,
+      "lon": 30.87674,
+      "geoname_id": 13132735
+    },
+    {
+      "name": "Mhangura Mine",
+      "aliases": [],
+      "lat": -16.89196,
+      "lon": 30.15902,
+      "geoname_id": 13132736
+    }
+  ]
+}

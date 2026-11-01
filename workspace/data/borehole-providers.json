@@ -1,0 +1,296 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "id": "same-age-projects",
+      "name": "Same Age Projects",
+      "base": "Bindura",
+      "coverage": {
+        "nationwide": true
+      },
+      "offers": [
+        {
+          "service": "survey",
+          "currency": "USD",
+          "price": 100,
+          "unit": "survey"
+        },
+        {
+          "service": "drilling",
+          "currency": "USD",
+          "price": 950,
+          "unit": "first 40 meters",
+          "included_depth_m": 40,
+          "extra_per_m": 25
+        },
+        {
+          "service": "casing",
+          "currency": "USD",
+          "price": 27,
+          "unit": "meter",
+          "casing_class": 6
+        },
+        {
+          "service": "casing",
+          "currency": "USD",
+          "price": 30,
+          "unit": "meter",
+          "casing_class": 10
+        },
+        {
+          "service": "installation",
+          "currency": "USD",
+          "price": 1800,
+          "unit": "package",
+          "pump_hp": 0.75,
+          "inclusions": [
+            "5000L tank",
+            "4 meter tank stand",
+            "DC pump with control box",
+            "Pump and external controller",
+            "Solar panels",
+            "Solar stand",
+            "Pipes and cables",
+            "1 garden tap",
+            "All accessories and installation"
+          ]
+        },
+        {
+          "service": "installation",
+          "currency": "USD",
+          "price": 2000,
+          "unit": "package",
+          "pump_hp": 1,
+          "inclusions": [
+            "5000L tank",
+            "4 meter tank stand",
+            "DC pump with control box",
+            "Pump and external controller",
+            "Solar panels",
+            "Solar stand",
+            "Pipes and cables",
+            "1 garden tap",
+            "All accessories and installation"
+          ]
+        },
+        {
+          "service": "installation",
+          "currency": "USD",
+          "price": 2200,
+          "unit": "package",
+          "pump_hp": 1.5,
+          "inclusions": [
+            "5000L tank",
+            "4 meter tank stand",
+            "DC pump with control box",
+            "Pump and external controller",
+            "Solar panels",
+            "Solar stand",
+            "Pipes and cables",
+            "1 garden tap",
+            "All accessories and installation"
+          ]
+        },
+        {
+          "service": "installation",
+          "currency": "USD",
+          "price": 2400,
+          "unit": "package",
+          "pump_hp": 2,
+          "inclusions": [
+            "5000L tank",
+            "4 meter tank stand",
+            "DC pump with control box",
+            "Pump and external controller",
+            "Solar panels",
+            "Solar stand",
+            "Pipes and cables",
+            "1 garden tap",
+            "All accessories and installation"
+          ]
+        }
+      ],
+      "conditions": [
+        "A combined drilling and installation total depends on drilling depth, casing needs and the chosen installation package.",
+        "Site-specific quotes, timing, travel charges and payment terms require confirmation."
+      ],
+      "sources": [
+        "Operator confirmed name and Bindura base in this conversation, 2026-11-01.",
+        "Existing workspace/docs/business-info.md borehole section; original installation advert."
+      ]
+    },
+    {
+      "id": "big-player",
+      "name": "Big Player",
+      "base": "Harare",
+      "coverage": {
+        "nationwide": true
+      },
+      "offers": [
+        {
+          "service": "drilling",
+          "currency": "USD",
+          "price": 750,
+          "unit": "first 40 meters",
+          "included_depth_m": 40,
+          "extra_per_m": 21,
+          "inclusions": [
+            "Class 6 casing, flushing and pipes as advertised"
+          ]
+        },
+        {
+          "service": "survey",
+          "currency": "USD",
+          "price": 80,
+          "unit": "survey",
+          "conditions": [
+            "The advertised survey/siting offer mentions a ZINWA permit in towns only; confirm permit arrangements with a person."
+          ]
+        },
+        {
+          "service": "casing",
+          "currency": "USD",
+          "price": 22,
+          "unit": "meter",
+          "conditions": [
+            "Double casing: class is not specified in the advert."
+          ]
+        },
+        {
+          "service": "installation",
+          "currency": "USD",
+          "price": null,
+          "unit": "package",
+          "inclusions": [
+            "Solar borehole installation with 5000L tank and tank stand; other specifications require confirmation"
+          ]
+        },
+        {
+          "service": "deepening",
+          "currency": "USD",
+          "price": null
+        },
+        {
+          "service": "flushing",
+          "currency": "USD",
+          "price": null
+        },
+        {
+          "service": "repair",
+          "currency": "USD",
+          "price": null
+        }
+      ],
+      "conditions": [
+        "Prices may vary by location; travel charges require confirmation.",
+        "Advertised terms: payment on site and same-day service; confirm timing and availability before promising a booking."
+      ],
+      "sources": [
+        "Operator confirmed Harare base, 2026-11-01.",
+        "Original big-player-promo caption and poster."
+      ],
+      "source_caption": "🌧️💧 *RAIN SEASON YASVIKA — CHENGETAI MVURA!* 💧🌧️\n\nVabereki, rain season yasvika — ngatichengetei mvura! Tinokuvhiirai borehole ne solar water system yakazara pamba, paplot kana pabhizimusi.\n\n‼️ *MUKANA NDIWOYU!* Musazononoka mozoti hee komazokwidza sei.\n🤑 *MITENGO TADEREDZA ZVEKARE!*\n\n🚰 *BOREHOLE DRILLING & INSTALLATION* (zvakazara):\n💦 Promotion: First 40m, class 6 — *$750* (casing ne flashing ipapo, ne ma pipes acho)\n💧 Extra meter: *$21* per meter (kubva pa first 40m)\n💧 Double casing: *$22* per m (kuvirikidza casing)\n💧 Survey / Siting: *$80* (ZINWA permit mu ma town chete)\n💧 Borehole deepening — huyai inbox\n💦 Borehole flushing / casing yakollapsa\n🛠️ Borehole services — any problem\n\n☀️ *SOLAR & WATER SYSTEMS:*\n💧 Borehole Solar Installation (ne 5000L tank ne tank stand ipapo)\n💧 Borehole Electrical Full Package Installation\n🏠 Home Complete Solar System: *1,5 KVA – 12 KVA*\n🏢 Solar Commercial System Installation\n\n💵 Payments are done on site — same-day service.\n📍 Prices may vary outside Harare (zvinoenderana nenzvimbo yamuri).\n🇿🇼 Service areas: across Zimbabwe.\n🎧 Tine audio inotsanangura zvizere — huyai inbox tikupei.\n\n📞 Call / WhatsApp: {bot_number}"
+    },
+    {
+      "id": "baltic-sea-drilling",
+      "name": "Baltic Sea Drilling",
+      "base": "Harare",
+      "address": "18 Western Rd, Greendale",
+      "coverage": {
+        "nationwide": false,
+        "towns": [
+          "Harare",
+          "Chegutu",
+          "Kwekwe",
+          "Gokwe",
+          "Gweru",
+          "Zvishavane",
+          "Bindura",
+          "Mvurwi",
+          "Guruve",
+          "Banket",
+          "Chinhoyi",
+          "Karoi",
+          "Kariba",
+          "Marondera",
+          "Macheke",
+          "Headlands",
+          "Rusape",
+          "Mutare",
+          "Nyanga",
+          "Chipinge",
+          "Birchenough Bridge",
+          "Buhera",
+          "Murambinda",
+          "Masvingo",
+          "Gutu",
+          "Bikita",
+          "Chiredzi",
+          "Chivi",
+          "Bulawayo",
+          "Plumtree",
+          "Gwanda",
+          "Lupane",
+          "Tsholotsho",
+          "Beitbridge"
+        ]
+      },
+      "offers": [
+        {
+          "service": "survey",
+          "currency": "USD",
+          "price": null
+        },
+        {
+          "service": "drilling",
+          "currency": "USD",
+          "price": null
+        },
+        {
+          "service": "casing",
+          "currency": "USD",
+          "price": null
+        },
+        {
+          "service": "pump_retrieval",
+          "currency": "USD",
+          "price": null
+        },
+        {
+          "service": "flushing",
+          "currency": "USD",
+          "price": null
+        },
+        {
+          "service": "capacity_testing",
+          "currency": "USD",
+          "price": null
+        },
+        {
+          "service": "deepening",
+          "currency": "USD",
+          "price": null
+        },
+        {
+          "service": "repair",
+          "currency": "USD",
+          "price": null
+        },
+        {
+          "service": "installation",
+          "currency": "USD",
+          "price": null
+        }
+      ],
+      "conditions": [
+        "Payment is made on site.",
+        "Prices, package specifications, travel charges and timing require confirmation."
+      ],
+      "sources": [
+        "Operator confirmed Harare base, 2026-11-01.",
+        "Original borehole-paid-promo caption; poster identifies Baltic Sea Drilling and address."
+      ],
+      "source_caption": "❗❗❗ *PAID ADVERT* ❗❗❗\n\n💧 *Borehole Siting & Drilling Services*\n\nGood day ladies and gentlemen. We carry out borehole siting and drilling in the following areas:\n\n*Mashonaland Central:* Harare, Chegutu, Kwekwe, Gokwe, Gweru, Zvishavane, Bindura, Mvurwi, Guruve\n*Mashonaland West:* Banket, Chinhoyi, Karoi, Kariba\n*Mashonaland East:* Marondera, Macheke, Headlands, Rusape\n*Manicaland:* Mutare, Nyanga, Chipinge, Birchenough Bridge, Buhera, Murambinda\n*Masvingo:* Masvingo City, Gutu, Bikita, Chiredzi, Chivi\n*Matabeleland:* Bulawayo, Plumtree, Gwanda, Lupani, Tsholotsho, Beitbridge\n\n...and surrounding areas. If you have a hole in any of the areas above, contact us for favourable rates and quotes.\n\n*Other services:*\n• Borehole survey / siting\n• Borehole drilling & casing\n• Pump fishing out\n• Borehole flushing\n• Capacity testing\n• Deepening\n• Borehole repairing\n• Pump installation (solar & electric)\n\n📞 Call / WhatsApp: {bot_number}\n🛑 Payment is made on site"
+    }
+  ]
+}
