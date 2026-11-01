@@ -20,6 +20,7 @@ import {
 import { clearServiceState } from "./lib/state.js";
 import { clearHandoff, isHandedOff } from "./lib/handoffs.js";
 import { recordAdRefs } from "./lib/ad-refs.js";
+import { BOREHOLE_SERVICES, lookupBorehole } from "./services/borehole.js";
 import { recordAndCheck as checkSiblingLine } from "./lib/sibling-lines.js";
 import { containsDash, stripDashes } from "./lib/style.js";
 import {
@@ -58,6 +59,7 @@ import {
 
 const PUBLIC_SERVICE_ACTIONS = [
   { name: "business_info", service: "core" },
+  { name: "borehole_info", service: "core" },
   { name: "handoff", service: "core" },
   { name: "cv_maker_start", service: "cvMaker" },
 ];
@@ -104,6 +106,7 @@ async function runPublicServiceAction(api, sender, action, text, params = {}) {
   if (!service || !isServiceEnabled(api, service)) return toolText({ text: serviceDisabledReply(api) });
   switch (action) {
     case "business_info": return toolText({ text: loadBusinessInfo(api) });
+    case "borehole_info": return toolText({ text: JSON.stringify(lookupBorehole(api, sender, params, params.accountId)) });
     case "handoff": return toolText(await handleHandoff(api, sender, params.category, params.details || text, params.accountId));
     // Open-DM mode starts the automated CV order (the gate then relays each
     // interview turn); classic allowlist mode keeps the agent-driven intro.
@@ -165,13 +168,18 @@ export default {
         const authorized = Boolean(sender && channel.includes("whatsapp"));
         return {
           name: "public_service",
-          description: "Perform one supported Genaie public-service action for the authenticated WhatsApp sender: business_info returns the current products, prices and answering rules; handoff passes the customer to a person (send its reply text exactly); cv_maker_start starts the automated CV interview. Identity is bound by the runtime and cannot be supplied by the model.",
+          description: "Perform one supported Genaie public-service action for the authenticated WhatsApp sender: business_info returns general business facts; borehole_info matches borehole offers to customer location and requirements and returns current prices; handoff passes the customer to a person (send its reply text exactly); cv_maker_start starts the automated CV interview. Identity is bound by the runtime and cannot be supplied by the model.",
           parameters: {
             type: "object",
             additionalProperties: false,
             required: ["action"],
             properties: {
               action: { type: "string", enum: publicServiceActions(api) },
+              location: { type: "string", maxLength: 120, description: "borehole_info: customer's town or nearest major town, never an inferred location from an ad reference." },
+              service: { type: "string", enum: BOREHOLE_SERVICES, description: "borehole_info: requested service. Use drilling_and_installation when both are requested so offers come from one supplier." },
+              pump_hp: { type: "number", exclusiveMinimum: 0, maximum: 100, description: "borehole_info: requested installation pump power in HP, only if supplied by customer." },
+              depth_m: { type: "number", exclusiveMinimum: 0, maximum: 2000, description: "borehole_info: requested drilling depth in meters." },
+              casing_class: { type: "integer", minimum: 1, maximum: 100, description: "borehole_info: requested casing class." },
               text: {
                 type: "string",
                 maxLength: 2000,
@@ -192,6 +200,7 @@ export default {
           async execute(_id, params) {
             if (!authorized) return toolText();
             return runPublicServiceAction(api, sender, params.action, String(params.text || ""), {
+              ...Object.fromEntries(["location", "service", "pump_hp", "depth_m", "casing_class"].filter((k) => params[k] !== undefined).map((k) => [k, params[k]])),
               category: String(params.category || ""),
               details: String(params.details || ""),
               accountId: getEventAccountId({}, ctx) || "default",

@@ -41,6 +41,9 @@
 
 # Cron definitions are tracked, runtime state/logs are not.
 !workspace/cron/
+!workspace/data/
+!workspace/data/*.json
+!workspace/data/*.md
 !workspace/cron/*/
 !workspace/cron/*/*.py
 !workspace/cron/*/*.sh
@@ -91,7 +94,7 @@
 !workspace/cron/appliance-repairs-promo/assets/*.jpg
 
 # Borehole-drilling promo campaign: editable target list + the rotating ad images
-# (developer-owned, deployed with the workspace). Daily 08:13 Africa/Harare cron.
+# (developer-owned, deployed with the workspace). Daily 07:15 Africa/Harare cron.
 !workspace/cron/borehole-drilling-promo/targets.json
 !workspace/cron/borehole-drilling-promo/assets/
 !workspace/cron/borehole-drilling-promo/assets/*.jpg

@@ -33,9 +33,6 @@
       "comment": "GENERATED from workspace/cron/membership.json by workspace/bin/make-promo-targets -- do not hand-edit. Add or remove a group by editing its 'promos' list in membership.json and regenerating (CI fails if this file drifts). Only groups with status 'active' reach this list, which is why admin-only, not-a-member and on-hold groups are absent. Invite links are NOT reliably resolvable on this gateway, so membership.json records group JIDs.",
       "weekly_comment": "Groups posted to only on specific weekdays instead of daily (the cron still runs every day; these are skipped on other days). Weekdays may be names (mon, tue, wed, thu, fri, sat, sun) or ints (Mon=0 .. Sun=6). Set per group under 'weekly' in membership.json."
     },
-    "borehole-paid": {
-      "comment": "GENERATED from workspace/cron/membership.json by workspace/bin/make-promo-targets -- do not hand-edit. Add or remove a group by editing its 'promos' list in membership.json and regenerating (CI fails if this file drifts). Only groups with status 'active' reach this list, which is why admin-only, not-a-member and on-hold groups are absent. Invite links are NOT reliably resolvable on this gateway, so membership.json records group JIDs."
-    },
     "fruit-trees": {
       "comment": "GENERATED from workspace/cron/membership.json by workspace/bin/make-promo-targets -- do not hand-edit. Add or remove a group by editing its 'promos' list in membership.json and regenerating (CI fails if this file drifts). Only groups with status 'active' reach this list, which is why admin-only, not-a-member and on-hold groups are absent. Invite links are NOT reliably resolvable on this gateway, so membership.json records group JIDs."
     },
@@ -59,9 +56,6 @@
     "genaie-leads": {
       "comment": "GENERATED from workspace/cron/membership.json by workspace/bin/make-promo-targets -- do not hand-edit. Add or remove a group by editing its 'promos' list in membership.json and regenerating (CI fails if this file drifts). Only groups with status 'active' reach this list, which is why admin-only, not-a-member and on-hold groups are absent. Invite links are NOT reliably resolvable on this gateway, so membership.json records group JIDs."
     },
-    "big-player": {
-      "comment": "GENERATED from workspace/cron/membership.json by workspace/bin/make-promo-targets -- do not hand-edit. Add or remove a group by editing its 'promos' list in membership.json and regenerating (CI fails if this file drifts). Only groups with status 'active' reach this list, which is why admin-only, not-a-member and on-hold groups are absent. Invite links are NOT reliably resolvable on this gateway, so membership.json records group JIDs."
-    },
     "industrial-lighting": {
       "comment": "GENERATED from workspace/cron/membership.json by workspace/bin/make-promo-targets -- do not hand-edit. Add or remove a group by editing its 'promos' list in membership.json and regenerating (CI fails if this file drifts). Only groups with status 'active' reach this list, which is why admin-only, not-a-member and on-hold groups are absent. Invite links are NOT reliably resolvable on this gateway, so membership.json records group JIDs."
     },
@@ -81,7 +75,7 @@
         "genaie-leads",
         "fruit-trees",
         "skylight-solar",
-        "borehole-paid"
+        "borehole-drilling"
       ]
     },
     "263786627810-1599925540@g.us": {
@@ -95,7 +89,7 @@
         "genaie-leads",
         "fruit-trees",
         "skylight-solar",
-        "borehole-paid"
+        "borehole-drilling"
       ]
     },
     "263788965610-1586021253@g.us": {
@@ -109,7 +103,7 @@
         "genaie-leads",
         "fruit-trees",
         "skylight-solar",
-        "borehole-paid"
+        "borehole-drilling"
       ]
     },
     "263786627810-1602907634@g.us": {
@@ -123,7 +117,7 @@
         "genaie-leads",
         "fruit-trees",
         "skylight-solar",
-        "borehole-paid"
+        "borehole-drilling"
       ]
     },
     "263713263553-1525083448@g.us": {
@@ -137,7 +131,7 @@
         "genaie-leads",
         "fruit-trees",
         "skylight-solar",
-        "borehole-paid"
+        "borehole-drilling"
       ]
     },
     "263713263553-1534001994@g.us": {
@@ -151,7 +145,7 @@
         "genaie-leads",
         "fruit-trees",
         "skylight-solar",
-        "borehole-paid"
+        "borehole-drilling"
       ]
     },
     "263782033305-1606359163@g.us": {
@@ -165,7 +159,7 @@
         "genaie-leads",
         "fruit-trees",
         "skylight-solar",
-        "borehole-paid"
+        "borehole-drilling"
       ]
     },
     "263782033305-1606361015@g.us": {
@@ -175,9 +169,9 @@
       "account": "ads",
       "daily_cap": null,
       "promos": [
-        "big-player",
         "industrial-lighting",
-        "genaie-advertisers"
+        "genaie-advertisers",
+        "borehole-drilling"
       ]
     },
     "263782033305-1592355579@g.us": {
@@ -187,8 +181,8 @@
       "account": "ads",
       "daily_cap": null,
       "promos": [
-        "big-player",
-        "industrial-lighting"
+        "industrial-lighting",
+        "borehole-drilling"
       ]
     },
     "263712716631-1612799459@g.us": {
@@ -202,7 +196,7 @@
         "genaie-leads",
         "fruit-trees",
         "skylight-solar",
-        "borehole-paid"
+        "borehole-drilling"
       ]
     },
     "263771610054-1606277509@g.us": {
@@ -216,7 +210,7 @@
         "genaie-leads",
         "fruit-trees",
         "skylight-solar",
-        "borehole-paid"
+        "borehole-drilling"
       ]
     },
     "263783787925-1612945522@g.us": {
@@ -239,7 +233,7 @@
         "genaie-leads",
         "fruit-trees",
         "skylight-solar",
-        "borehole-paid"
+        "borehole-drilling"
       ]
     },
     "263782033305-1590488184@g.us": {
@@ -253,7 +247,7 @@
         "genaie-leads",
         "fruit-trees",
         "skylight-solar",
-        "borehole-paid"
+        "borehole-drilling"
       ]
     },
     "263774484671-1608274743@g.us": {
@@ -267,7 +261,7 @@
         "genaie-leads",
         "fruit-trees",
         "skylight-solar",
-        "borehole-paid"
+        "borehole-drilling"
       ]
     },
     "263773818895-1590868294@g.us": {
@@ -281,7 +275,7 @@
         "genaie-leads",
         "fruit-trees",
         "skylight-solar",
-        "borehole-paid"
+        "borehole-drilling"
       ]
     },
     "263773773025-1613206558@g.us": {
@@ -295,7 +289,7 @@
         "genaie-leads",
         "fruit-trees",
         "skylight-solar",
-        "borehole-paid"
+        "borehole-drilling"
       ]
     },
     "120363432832732537@g.us": {
@@ -316,7 +310,7 @@
         "genaie-leads",
         "fruit-trees",
         "skylight-solar",
-        "borehole-paid"
+        "borehole-drilling"
       ]
     },
     "120363421153578257@g.us": {
@@ -330,7 +324,7 @@
         "genaie-leads",
         "fruit-trees",
         "skylight-solar",
-        "borehole-paid"
+        "borehole-drilling"
       ]
     },
     "120363286085033663@g.us": {
@@ -344,11 +338,11 @@
         "genaie-leads",
         "fruit-trees",
         "skylight-solar",
-        "borehole-paid"
+        "borehole-drilling"
       ]
     },
     "120363275485319265@g.us": {
-      "name": "Bindura Town  Business\ud83d\udcb0\ud83d\udcbb\ud83d\udcf1\ud83d\ude99",
+      "name": "Bindura Town  Business💰💻📱🚙",
       "source": "whatsapp",
       "status": "active",
       "daily_cap": null,
@@ -536,7 +530,7 @@
         "cv",
         "genaie",
         "skylight-solar",
-        "borehole-paid"
+        "borehole-drilling"
       ]
     },
     "120363426924923592@g.us": {
@@ -596,7 +590,7 @@
         "genaie",
         "genaie-leads",
         "skylight-solar",
-        "borehole-paid"
+        "borehole-drilling"
       ],
       "note": "discovered via the WhatsApp sender-key store on 2026-10-11"
     },
@@ -635,7 +629,7 @@
         "genaie-leads",
         "fruit-trees",
         "skylight-solar",
-        "borehole-paid"
+        "borehole-drilling"
       ]
     },
     "263785811799-1594293610@g.us": {
@@ -671,7 +665,7 @@
       "promos": [
         "fruit-trees",
         "skylight-solar",
-        "borehole-paid"
+        "borehole-drilling"
       ],
       "note": "joined 2026-10-14; the bot has not posted here yet, so posting permission is unverified until the first run"
     },
@@ -685,7 +679,7 @@
         "genaie",
         "genaie-leads",
         "skylight-solar",
-        "borehole-paid"
+        "borehole-drilling"
       ],
       "note": "joined 2026-10-14; the bot has not posted here yet, so posting permission is unverified until the first run"
     },
@@ -718,7 +712,7 @@
         "genaie-leads",
         "fruit-trees",
         "skylight-solar",
-        "borehole-paid"
+        "borehole-drilling"
       ]
     },
     "120363413442071640@g.us": {
@@ -908,9 +902,9 @@
       "account": "ads",
       "daily_cap": null,
       "promos": [
-        "big-player",
         "industrial-lighting",
-        "genaie-advertisers"
+        "genaie-advertisers",
+        "borehole-drilling"
       ],
       "note": "Discovered in the ads account sender-key store on 2026-10-25; name supplied by the operator."
     },
@@ -921,9 +915,9 @@
       "account": "ads",
       "daily_cap": null,
       "promos": [
-        "big-player",
         "industrial-lighting",
-        "genaie-advertisers"
+        "genaie-advertisers",
+        "borehole-drilling"
       ]
     },
     "263779541998-1547060119@g.us": {
@@ -933,9 +927,9 @@
       "account": "ads",
       "daily_cap": null,
       "promos": [
-        "big-player",
         "industrial-lighting",
-        "genaie-advertisers"
+        "genaie-advertisers",
+        "borehole-drilling"
       ]
     },
     "120363412512900877@g.us": {
@@ -945,9 +939,9 @@
       "account": "default",
       "daily_cap": null,
       "promos": [
-        "big-player",
         "industrial-lighting",
-        "genaie-advertisers"
+        "genaie-advertisers",
+        "borehole-drilling"
       ]
     },
     "263713611554-1588562864@g.us": {
@@ -957,9 +951,9 @@
       "account": "ads",
       "daily_cap": null,
       "promos": [
-        "big-player",
         "industrial-lighting",
-        "genaie-advertisers"
+        "genaie-advertisers",
+        "borehole-drilling"
       ]
     },
     "263773491386-1531974442@g.us": {
@@ -969,9 +963,9 @@
       "account": "ads",
       "daily_cap": null,
       "promos": [
-        "big-player",
         "industrial-lighting",
-        "genaie-advertisers"
+        "genaie-advertisers",
+        "borehole-drilling"
       ]
     },
     "263773491386-1578547813@g.us": {
@@ -980,9 +974,9 @@
       "account": "ads",
       "daily_cap": null,
       "promos": [
-        "big-player",
         "industrial-lighting",
-        "genaie-advertisers"
+        "genaie-advertisers",
+        "borehole-drilling"
       ],
       "name": "ONLINE MARKETING"
     },
@@ -992,9 +986,9 @@
       "account": "ads",
       "daily_cap": null,
       "promos": [
-        "big-player",
         "industrial-lighting",
-        "genaie-advertisers"
+        "genaie-advertisers",
+        "borehole-drilling"
       ],
       "name": "ONLINE MARKETING 2"
     },
@@ -1004,9 +998,9 @@
       "account": "ads",
       "daily_cap": null,
       "promos": [
-        "big-player",
         "industrial-lighting",
-        "genaie-advertisers"
+        "genaie-advertisers",
+        "borehole-drilling"
       ],
       "name": "ONLINE MARKETING 03"
     },

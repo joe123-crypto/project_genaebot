@@ -44,9 +44,7 @@ APPLIANCE_REPAIRS_NUMBER = "+263713911390"
 # promo dir -> (script, expected tracking prefix, expected link target)
 PROMOS = {
     "appliance-repairs-promo": ("post_ad.py", "AR", APPLIANCE_REPAIRS_NUMBER),
-    "big-player-promo": ("post_ad.py", "BP", ADS_NUMBER),
     "borehole-drilling-promo": ("post_ad.py", "BH", ADS_NUMBER),
-    "borehole-paid-promo": ("post_ad.py", "PB", ADS_NUMBER),
     "building-materials-promo": ("post_ad.py", "BM", ADS_NUMBER),
     "cv-promo": ("post_cv_ad.py", "CV", ADS_NUMBER),
     "fruit-trees-promo": ("post_ad.py", "FT", ADS_NUMBER),
@@ -288,7 +286,7 @@ class RefCodeTests(unittest.TestCase):
         # Only replies sent to the bot can be counted by the plugin, so a promo
         # that links to a third party's number stays out of its prefix list.
         self.assertEqual(plugin_prefixes,
-                         {p for _, p, n in PROMOS.values() if n in BOT_LINES})
+                         {p for _, p, n in PROMOS.values() if n in BOT_LINES} | {"BP", "PB"})
         self.assertIn("[0-9A-HJKMNP-TV-Z]{%d}" % pb.REF_CODE_LEN, src)
 
 
@@ -563,16 +561,16 @@ class PromoWiringTests(unittest.TestCase):
         finally:
             pb.send_ad = saved
 
-    def test_borehole_elnino_variant(self):
+    def test_borehole_general_caption_and_four_photos(self):
         m = load_promo("borehole-drilling-promo")
-        v4 = m.POST_TEXT_V4
-        self.assertIn(m.POST_TEXT_V4, m.POST_TEXTS)
-        self.assertIn("*El Nino is coming. Are you prepared?*", v4.splitlines()[0])
-        self.assertIn(m.FORECAST_URL, v4)
-        self.assertTrue(m.FORECAST_URL.startswith("https://www.weatherzw.org.zw/"))
-        self.assertTrue(os.path.isfile(m.ELNINO_IMAGE), m.ELNINO_IMAGE)
-        if not os.environ.get("BOREHOLE_IMAGE"):
-            self.assertEqual(m.VARIANT_IMAGES, {m.POST_TEXTS.index(v4): m.ELNINO_IMAGE})
+        self.assertEqual(len(m.POST_TEXTS), 3)
+        self.assertEqual(len(m._IMAGE_ASSETS), 4)
+        for caption in m.POST_TEXTS:
+            self.assertNotIn("$", caption)
+            self.assertIn("Zimbabwe", caption)
+            self.assertIn("{bot_number}", caption)
+            self.assertNotIn("El Nino", caption)
+        self.assertFalse(hasattr(m, "VARIANT_IMAGES"))
 
     def test_tracking_targets(self):
         for name, (_, prefix, number) in PROMOS.items():
@@ -601,9 +599,7 @@ class PromoWiringTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             state_env = {
                 "appliance-repairs-promo": "APPLIANCE_REPAIRS_STATE",
-                "big-player-promo": "BIG_PLAYER_STATE",
                 "borehole-drilling-promo": "BOREHOLE_STATE",
-                "borehole-paid-promo": "BOREHOLE_PAID_STATE",
                 "building-materials-promo": "BUILDING_MATERIALS_STATE",
                 "cv-promo": "CV_PROMO_STATE",
                 "fruit-trees-promo": "FRUIT_TREES_STATE",

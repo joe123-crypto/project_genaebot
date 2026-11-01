@@ -11,9 +11,15 @@ set -euo pipefail
 # shellcheck disable=SC1091  # sourced at runtime from the same deploy/ directory
 source "$(dirname "${BASH_SOURCE[0]}")/install-promo.sh"
 
+# Refuse migration while any affected campaign is active, before editing a job.
+bash "$(dirname "${BASH_SOURCE[0]}")/retire-borehole-promos.sh" --dry-run
+
 register_promo_cron \
   "borehole-drilling-promo" \
-  "${BOREHOLE_PROMO_CRON_EXPR:-13 8 * * *}" \
+  "${BOREHOLE_PROMO_CRON_EXPR:-15 7 * * *}" \
   "${BOREHOLE_PROMO_TZ:-Africa/Harare}" \
   "${BOREHOLE_PROMO_FAILURE_ALERT_TO:-+263785632943}" \
   "/home/joseph/.openclaw/workspace/cron/borehole-drilling-promo/post_ad.py"
+
+# Remove superseded registrations only after the retained job verifies successfully.
+bash "$(dirname "${BASH_SOURCE[0]}")/retire-borehole-promos.sh"
