@@ -876,6 +876,13 @@ separate from spending limits; no hard compute cutoff is installed. See the
 See [the memory trial procedure and nighttime measurements](deploy/railway/README.md#nighttime-measurements-october-28-2026)
 before interpreting any short sample as sustained cost savings.
 
+Use `python3 deploy/railway-memory-report.py` to inspect container, process and
+recorded worker memory over SSH, or add `--memory` to the cost report. Fresh
+worker counters (`--live-workers`) and the one-shot source-cache experiment
+(`--release-source-cache`) require explicit opt-in; neither runs automatically.
+See [memory attribution](deploy/railway/README.md#memory-attribution-november-2-2026)
+for sample freshness, probe cleanup and the limits of billing comparisons.
+
 The image also applies `deploy/railway/patch-worker-idle.py` to the pinned
 model-catalog worker pool. It is **disabled by default**
 (`GENAIE_CATALOG_IDLE_RETIREMENT=0`). A controlled trial with the flag set to `1`
