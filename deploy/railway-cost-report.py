@@ -7,6 +7,7 @@ Compare matched full-week workloads; forecasts and linear projections are not in
 
 import argparse
 from datetime import datetime, timezone
+import importlib.util
 import json
 from pathlib import Path
 import subprocess
@@ -56,6 +57,7 @@ def main():
     parser.add_argument("--since", default="7d", help="metric window, e.g. 1h or 7d")
     parser.add_argument("--until", help="freeze the end of the metric window in UTC")
     parser.add_argument("--baseline", type=Path, help="manually captured report at the start of this spend interval")
+    parser.add_argument("--memory", action="store_true", help="include a read-only SSH memory report; no inspector or restart")
     args = parser.parse_args()
     captured = datetime.now(timezone.utc)
     usage = railway("usage", "--workspace", WORKSPACE)
@@ -86,6 +88,11 @@ def main():
     }
     if args.baseline:
         report["spendInterval"] = compare(json.loads(args.baseline.read_text()), report)
+    if args.memory:
+        spec = importlib.util.spec_from_file_location("railway_memory_report", Path(__file__).with_name("railway-memory-report.py"))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        report["runtimeMemory"] = module.capture()
     print(json.dumps(report, indent=2))
 
 

@@ -296,7 +296,7 @@ reply-gate sync` line is never fatal but always worth reading.
 The October 11 OpenClaw/Node upgrade coincided with a sustained memory increase.
 Memory represented about 91% of compute usage on October 27. The target is about
 $10/month, retaining both WhatsApp lines and core bot capabilities. Keep one
-replica and the gateway always running; sleep would interrupt WhatsApp and cron.
+replica and preserve the approved overnight standby schedule described below.
 
 The workspace compute email alert is $8, with no hard shutdown limit. Inspect it
 with `railway usage limit status --json`. A forecast is not a spending cap.
@@ -473,6 +473,85 @@ replaced by a fixture, covering valid cache hits, expiry/refetch, reconnect
 fallback, owner shutdown and account isolation. This establishes behavior,
 not production RSS savings: V8 may retain freed pages for reuse. Measure a
 comparable campaign and idle interval before attributing billing savings.
+
+### Memory attribution: November 2, 2026
+
+Use the operator report before proposing another memory change. It reads cgroup
+counters, process RSS/PSS and the existing diagnostic recorder. It starts no
+gateway during standby and installs no collector:
+
+```sh
+python3 deploy/railway-memory-report.py > /tmp/gateway-memory.json
+python3 deploy/railway-cost-report.py --since 1h --memory > /tmp/gateway-baseline.json
+```
+
+The default report labels the recording timestamp and worker sample age. An idle
+gateway can return old startup samples; never subtract them from current RSS to
+infer native memory. Workers are grouped by their upstream diagnostic script
+names, which do not necessarily identify a unique owner. RSS, PSS, container file
+cache and V8 heap totals overlap. ArrayBuffers are already included in external
+memory. Worker coverage excludes nested workers.
+
+For fresh counters, explicitly opt into the bounded inspector probe:
+
+```sh
+python3 deploy/railway-memory-report.py --live-workers > /tmp/gateway-live-memory.json
+```
+
+This uses the pinned 2026.9.9 worker registry and public Node worker heap counters.
+It opens a temporary loopback inspector, checks the gateway PID, samples counters
+without pausing or dumping the heap, disconnects, and verifies port 9229 closes.
+An existing inspector is left untouched. A failed probe is reported separately;
+if cleanup could not be verified, inspect loopback port 9229. OS counters precede
+the transient CLI/Node probes. Exclude their overhead from a billing comparison.
+The installed-runtime integration test verifies inspector closure, real worker
+heap sampling, and a subsequent SQLite-backed history read.
+
+At 06:01 UTC, Railway reported $7.196443 in cycle-to-date usage: memory $6.511739
+(90.49%), CPU $0.413485, egress $0.190896 and volume $0.080323, with negligible
+backup charges. The cycle began October 20 at 18:50:31 UTC. OpenRouter/Vercel model
+charges are separate. The current deployment already enabled `rpc-once`, catalog
+and history retirement, expired-cache cleanup and overnight standby. November 1
+overnight memory settled around 64 MB before the November 2 wake. These are
+observations, not evidence for enabling the same optimizations again.
+
+A fresh 06:20 UTC probe measured 1,308,618,752 bytes gateway RSS, 312,423,200 bytes
+main heap used and 363,411,704 bytes across nine direct worker heaps. The history
+and maintenance lanes retained two workers totaling 113,281,512 bytes of heap;
+their request sequences were 316 and 230 despite both being idle at capture.
+Usage read/refresh lanes had no workers. Shorter idle timers could churn those
+repeatedly used workers. Disabling speculative history prewarm in an isolated
+fixture saved about 18 MiB of worker heap but did not establish a worthwhile
+whole-process reduction, so no prewarm or worker-policy change was shipped.
+
+The operator report also supports a one-shot source-page-cache experiment:
+
+```sh
+python3 deploy/railway-memory-report.py --release-source-cache > /tmp/gateway-source-cache-trial.json
+```
+
+This asks Linux to release clean `.js`, `.mjs`, `.cjs` and `.json` pages under the
+immutable installed OpenClaw `dist/` directory using `POSIX_FADV_DONTNEED`. It
+does not delete or rewrite files, follow symlinks, touch databases/credentials,
+release V8 objects, or invoke host-wide cache clearing. The scan has a 20-second
+budget; errors and incomplete scans are reported. No timer or startup change
+automatically repeats it. Future imports can read the same files normally.
+
+A single 06:26 UTC production trial advised 9,296 files (309,926,241 source bytes).
+After two seconds, file cache fell by 63,684,608 bytes (60.7 MiB), while container
+memory fell by 58,601,472 bytes (55.9 MiB). Concurrent anonymous memory increased.
+Resident source-page counts had substantially overstated reclaimable cache;
+shared/mapped pages and kernel advisory behavior prevent assuming all resident
+source is reclaimable or billed to this cgroup. This short, roughly 2.9% container
+decrease does not meet the existing 5% sustained-cost acceptance criterion.
+No automatic cleanup policy or new production worker patch is justified yet.
+
+Capture matched wake, post-campaign and idle reports with the same deployment
+and settings. Compare Railway raw metrics and actual full-week resource spend,
+record campaign/CV workload and standby hours, and exclude deploy overlaps and
+operator probes. Promote a candidate only after the existing full-week check
+passes; do not infer monthly savings from these snapshots. Private raw reports
+remain outside the repository.
 
 ### Nighttime measurements: October 28, 2026
 
