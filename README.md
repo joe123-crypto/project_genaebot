@@ -432,6 +432,12 @@ so across one cycle every campaign gets exactly `cap` turns and none starves. It
 is a pure function of `(day, jid, promo set, cap)` -- identical in every cron
 process, needing no shared state and no lock, which matters because
 `json_store` is last-writer-wins and the eight crons can overlap.
+A campaign switched off in `deploy/promo-crons.json` (`"enabled": false`, read
+from the image copy at `/usr/local/lib/genaie/promo-crons.json` on the gateway)
+takes no turns, so pausing one hands its slots to the campaigns still running
+instead of leaving them empty; a manual run or `--dry-run` of the paused
+campaign still sees its own rotation. A missing or unreadable manifest fails
+open to the old behaviour.
 
 Caps are **on** (`defaults.caps_enabled` is `true` in membership.json), and
 the engine fails open: a missing or broken membership file logs a warning and

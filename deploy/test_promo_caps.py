@@ -303,6 +303,81 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(kept, [])
 
 
+class DisabledCampaignTests(unittest.TestCase):
+    """A campaign the cron manifest switches off never posts, so it must not
+    take a group's daily turn (the CV pause of 2026-11-04 cost ~20 slots/day)."""
+
+    def setUp(self):
+        self.m = membership({
+            "1@g.us": {"promos": ["a", "b", "c", "d"], "activity": "quiet"},
+        }, bands={"busy": [6, 10], "normal": [4, 6], "quiet": [2, 2]})
+
+    def manifest(self, rows):
+        handle = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+        self.addCleanup(os.unlink, handle.name)
+        json.dump({"version": 1, "promos": rows}, handle)
+        handle.close()
+        return handle.name
+
+    def test_disabled_campaign_never_wins_a_turn(self):
+        for offset in range(8):
+            day = DAY + timedelta(days=offset)
+            info = pc.plan(self.m, ["1@g.us"], day=day, refs={},
+                           disabled={"a"})["1@g.us"]
+            self.assertNotIn("a", info["promos"])
+            self.assertNotIn("a", info["allowed"])
+            self.assertEqual(len(info["allowed"]), 2, day)
+
+    def test_running_campaigns_share_the_whole_cycle(self):
+        turns = Counter()
+        for offset in range(3):
+            info = pc.plan(self.m, ["1@g.us"], day=DAY + timedelta(days=offset),
+                           refs={}, disabled={"a"})["1@g.us"]
+            turns.update(info["allowed"])
+        self.assertEqual(turns, Counter({"b": 2, "c": 2, "d": 2}))
+
+    def test_other_campaigns_skip_a_disabled_one_when_filtering(self):
+        for offset in range(4):
+            day = DAY + timedelta(days=offset)
+            _, decisions = pc.filter_for_promo(self.m, "b", ["1@g.us"], day=day,
+                                               refs={}, disabled={"a"})
+            self.assertNotIn("a", decisions["1@g.us"]["allowed"])
+
+    def test_a_manual_run_of_the_disabled_campaign_still_gets_its_rotation(self):
+        """Running or dry-running a paused campaign by hand must behave as if it
+        were switched on, not report every group as capped."""
+        for offset in range(4):
+            day = DAY + timedelta(days=offset)
+            kept, _ = pc.filter_for_promo(self.m, "a", ["1@g.us"], day=day,
+                                          refs={}, disabled={"a"})
+            enabled_kept, _ = pc.filter_for_promo(self.m, "a", ["1@g.us"], day=day,
+                                                  refs={}, disabled=set())
+            self.assertEqual(kept, enabled_kept, day)
+
+    def test_disabled_promos_reads_only_explicit_false(self):
+        path = self.manifest([
+            {"slug": "a", "enabled": False},
+            {"slug": "b", "enabled": True},
+            {"slug": "c"},
+            {"slug": "d", "enabled": "false"},
+        ])
+        self.assertEqual(pc.disabled_promos([path]), {"a"})
+
+    def test_disabled_promos_fails_open(self):
+        missing = os.path.join(tempfile.gettempdir(), "no-such-promo-crons.json")
+        self.assertEqual(pc.disabled_promos([missing]), set())
+        bad = self.manifest([])
+        with open(bad, "w") as handle:
+            handle.write("{not json")
+        self.assertEqual(pc.disabled_promos([bad]), set())
+
+    def test_repo_manifest_is_found_and_matches_it(self):
+        declared = json.loads((ROOT / "deploy/promo-crons.json").read_text())
+        expected = set(row["slug"] for row in declared["promos"]
+                       if row.get("enabled") is False)
+        self.assertEqual(pc.disabled_promos(), expected)
+
+
 class SnapshotTests(unittest.TestCase):
     JID = "120363275485319265@g.us"
 
@@ -358,6 +433,13 @@ class SnapshotTests(unittest.TestCase):
 class EngineWiringTests(unittest.TestCase):
     """promo_broadcast must stay inert until membership.json turns caps on, and
     must never let a caps problem stop a day's ads."""
+
+    def setUp(self):
+        # Hermetic: these fixtures use real campaign names (cv, genaie), so the
+        # repo's cron manifest -- which may pause one of them -- must not leak in.
+        saved = pc.MANIFEST_CANDIDATES
+        pc.MANIFEST_CANDIDATES = ()
+        self.addCleanup(setattr, pc, "MANIFEST_CANDIDATES", saved)
 
     def test_promo_key_strips_the_directory_suffix(self):
         self.assertEqual(pb.promo_key("cv-promo"), "cv")
