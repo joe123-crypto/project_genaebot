@@ -789,6 +789,17 @@ text the cron would send. The variant index it reports is 0-based, exactly as
 `caption_for` returns it; `post_ad.py --dry-run` and the console both add one
 only when displaying it.
 
+A campaign the manifest switches off (`"enabled": false` in
+`deploy/promo-crons.json`) is still declared, still has copy and still has
+groups configured for it, but installs no cron and therefore never posts. Every
+payload says so rather than leaving the console to guess: `campaigns` and
+`preview/<slug>` carry `enabled`, `groups` carries a `disabledPromos` list so a
+screen can tell "campaign is off" from "held back by today's cap", and neither
+`allowedToday` nor `overview`'s `plannedSendsToday` counts a send for one. An
+absent `enabled` key means enabled, matching `install-promo.sh`,
+`railway-release.py` and `report-release-ready.py`; a non-boolean one is a
+manifest error and the bridge refuses rather than treat it as truthy.
+
 It ships disabled and holds no state. Enabling it is environment only, and
 `deploy/railway/README.md` has the recipe:
 [Operator console API](deploy/railway/README.md#operator-console-api).
