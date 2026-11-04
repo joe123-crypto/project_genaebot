@@ -86,7 +86,8 @@ export function recordLead(api, phone, text) {
 }
 
 // Best-effort WhatsApp alert to each configured admin when a new number first
-// messages the bot, so they know a customer conversation has started.
+// messages the bot, so they know a customer conversation has started. Alerts
+// always originate from default, independently of the receiving/default account.
 export async function notifyAdminOfLead(api, phone, text) {
   try {
     const target = normalizePhone(phone || "");
@@ -102,7 +103,7 @@ export async function notifyAdminOfLead(api, phone, text) {
       await helperLimiter(() =>
         runTextCommand(
           "openclaw",
-          ["message", "send", "--channel", "whatsapp", "--target", admin, "--message", body],
+          ["message", "send", "--channel", "whatsapp", "--account", "default", "--target", admin, "--message", body],
           { timeoutMs: HELPER_TIMEOUT_MS },
         ),
       );
@@ -129,7 +130,7 @@ export async function notifyAdminOfIntake(api, phone, serviceLabel, text) {
       await helperLimiter(() =>
         runTextCommand(
           "openclaw",
-          ["message", "send", "--channel", "whatsapp", "--target", admin, "--message", body],
+          ["message", "send", "--channel", "whatsapp", "--account", "default", "--target", admin, "--message", body],
           { timeoutMs: HELPER_TIMEOUT_MS },
         ),
       );

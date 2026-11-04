@@ -26,7 +26,7 @@
 
 # The openclaw CLI needs the gateway's own auth token, and must not inherit
 # OPENCLAW_HOME from the calling shell. Identical under both mechanisms.
-_GATEWAY_OPENCLAW_PAYLOAD='exec env -u OPENCLAW_HOME OPENCLAW_GATEWAY_TOKEN="$GATEWAY_AUTH_TOKEN" openclaw "$@"'
+_GATEWAY_OPENCLAW_PAYLOAD='exec env -u OPENCLAW_HOME HOME=/home/joseph OPENCLAW_GATEWAY_TOKEN="$GATEWAY_AUTH_TOKEN" openclaw "$@"'
 
 if [ -n "${OPENCLAW_EXEC_MODE:-}" ]; then
   _gateway_mode="$OPENCLAW_EXEC_MODE"
@@ -54,7 +54,9 @@ case "$_gateway_mode" in
     [ -n "${RAILWAY_SERVICE:-}" ] && _gateway_railway+=(--service "$RAILWAY_SERVICE")
     [ -n "${RAILWAY_ENVIRONMENT:-}" ] && _gateway_railway+=(--environment "$RAILWAY_ENVIRONMENT")
     GATEWAY_EXEC=("${_gateway_railway[@]}" --)
-    GATEWAY_OPENCLAW=("${_gateway_railway[@]}" -- sh -lc "$_GATEWAY_OPENCLAW_PAYLOAD" openclaw)
+    # SSH starts as root; the gateway and optional plugins belong to joseph.
+    # Keep raw GATEWAY_EXEC privileged for installers that need it.
+    GATEWAY_OPENCLAW=("${_gateway_railway[@]}" -- runuser -u joseph -- sh -lc "$_GATEWAY_OPENCLAW_PAYLOAD" openclaw)
     ;;
   *)
     printf 'ERROR: unsupported OPENCLAW_EXEC_MODE: %s (expected railway or docker)\n' "$_gateway_mode" >&2

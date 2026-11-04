@@ -294,7 +294,10 @@ capped at 1 MiB per day; failure or a full journal never stops the gateway.
 Authentication failures and session conflicts are not phone restriction notices.
 
 Before account recovery, inspect `openclaw channels status --json` through the
-existing gateway helper. Use **`--account ads`** on every ads login/logout command;
+existing gateway helper. Its OpenClaw commands run as `joseph`, with
+`HOME=/home/joseph` and `OPENCLAW_HOME` unset, matching the gateway's plugin
+installation. Raw installer commands retain their existing privileged access.
+Use **`--account ads`** on every ads login/logout command;
 never omit the account and accidentally operate on `default`. Do not create a
 standalone sender or concurrent login process for an already connected account.
 For terminal invalid authentication, first preserve a private copy of its auth
@@ -314,13 +317,25 @@ account are deferred. Other accounts continue. Deferred work is not queued for a
 catch-up burst. Record seven days of authenticated operation, including nightly
 sleep/wake results and any separately captured phone restriction notice.
 
+For the next round, ads runs **group broadcasts only**. The template and boot
+reply-gate synchronizer enforce `channels.whatsapp.accounts.ads.dmPolicy="disabled"`
+without disabling its listener. Native DM admission blocks automated replies,
+typing, service actions and enquiry-triggered alerts, including administrator
+and sibling-line DMs. Default customer replies remain open. Keep enquiry links
+on default and retain the current groups, campaigns and standby schedule.
+Deploy and verify the policy before a single ads relink if authentication is
+invalid; keep regular WhatsApp on the phone for this test. Review after seven
+days, recording manual replies and extra links as confounders. Do not
+automatically resume replies: restoring the template policy to `"open"` and
+deploying is a separate decision.
+
 ## Verify a deploy
 
 ```sh
 railway logs        # expect: [whatsapp] ... starting provider, [gateway] ready,
                     #         [entrypoint] synced source overlay from /opt/live-source/workspace,
                     #         [entrypoint] public WhatsApp prompt updated|unchanged
-                    #         [entrypoint] reply gates unchanged (9 paths already match the template)
+                    #         [entrypoint] reply gates unchanged (10 paths already match the template)
 ```
 
 The release artifact also retains the `GENAIE_RELEASE_READY` record emitted once
