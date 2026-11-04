@@ -7,6 +7,7 @@ import test from "node:test";
 
 import plugin, { createLimiter, isQueueFullError, runJsonCommand } from "./index.js";
 import { busyReply } from "./lib/runtime.js";
+import { notifyAdminOfIntake, notifyAdminOfLead } from "./services/membership.js";
 
 const MEMBER = "+233208864185";
 const UNKNOWN = "+19995550123";
@@ -444,8 +445,33 @@ test("a new sender's message reaches the agent, is recorded as a lead, and alert
       assert.match(handler.memberArgs(), /request --phone \+19995550123 --message Hello 5000 to Bindura hw much/);
       assert.match(sent(), new RegExp(`--target \\${ADMIN}`));
       assert.match(sent(), /New chat from \+19995550123/);
+      assert.match(sent(), /--account default --target/);
       assert.doesNotMatch(sent(), /allow/);
     });
+  });
+});
+
+test("lead and intake alerts use default even when the configured default sender is ads", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "admin-alert-account-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const api = {
+    config: {
+      channels: { whatsapp: { defaultAccount: "ads" } },
+      plugins: { entries: { "public-service-gate": {
+        config: { whatsappAdminUsers: [ADMIN] },
+      } } },
+    },
+    logger: { warn(message) { assert.fail(message); } },
+  };
+  await withFakeOpenclaw(dir, async (sent) => {
+    await notifyAdminOfLead(api, UNKNOWN, "Bricks enquiry");
+    await notifyAdminOfIntake(api, UNKNOWN, "Building materials", "5000 bricks");
+    const sends = sent().split("\n").filter(line => line.startsWith("message send"));
+    assert.equal(sends.length, 2);
+    for (const send of sends) {
+      assert.match(send, /--channel whatsapp --account default --target/);
+      assert.doesNotMatch(send, /--account ads/);
+    }
   });
 });
 

@@ -114,6 +114,7 @@ jobs:
               python3 deploy/test_gateway_standby_runtime.py
               node --test --test-reporter=tap deploy/railway/whatsapp-lid-recovery.test.mjs \
                 deploy/railway/whatsapp-health-audit.test.mjs \
+                deploy/railway/whatsapp-dm-policy.integration.test.mjs \
                 deploy/railway/whatsapp-cache-cleanup.test.mjs \
                 deploy/railway/campaign-sdk.integration.test.mjs \
                 deploy/railway/worker-idle.integration.test.mjs \
