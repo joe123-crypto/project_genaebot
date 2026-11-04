@@ -40,6 +40,7 @@ CAMPAIGN_KEYS = {
     "slug", "name", "cron", "hour", "minute", "timezone", "installer", "script",
     "failureAlertTo", "legacyNames", "timeoutSeconds", "captions", "tracking",
     "images", "targetCount", "weeklyCount", "accounts", "source", "error",
+    "enabled",
 }
 
 
@@ -74,7 +75,7 @@ class ConsoleReadTests(unittest.TestCase):
 
     def test_groups_describes_every_known_group_the_same_way(self):
         payload = self.ok("groups", "--date", DAY)
-        self.assertEqual(set(payload), {"date", "groups"})
+        self.assertEqual(set(payload), {"date", "disabledPromos", "groups"})
         self.assertEqual(payload["date"], DAY)
         self.assertTrue(payload["groups"])
         for row in payload["groups"]:
@@ -116,7 +117,8 @@ class ConsoleReadTests(unittest.TestCase):
 
     def test_preview_renders_the_caption_the_cron_would_send(self):
         payload = self.ok("preview", "borehole-drilling", "--date", DAY)
-        self.assertEqual(set(payload), {"slug", "captions", "tracking", "groups"})
+        self.assertEqual(set(payload),
+                         {"slug", "enabled", "captions", "tracking", "groups"})
         self.assertTrue(payload["groups"])
         for row in payload["groups"]:
             self.assertEqual(set(row), PREVIEW_KEYS, row.get("jid"))
@@ -151,6 +153,52 @@ class ConsoleReadTests(unittest.TestCase):
         for account in overview["accounts"]:
             self.assertEqual(set(account), {"id", "number", "isContact"})
 
+    # -- switched-off campaigns -------------------------------------------
+
+    def declared_disabled(self):
+        """Slugs the repository's own manifest switches off. Derived, not
+        hardcoded: re-enabling a campaign is a deliberate config change and
+        should not have to be mirrored here."""
+        manifest = json.loads((ROOT / "deploy/promo-crons.json").read_text())
+        return {promo["slug"] for promo in manifest["promos"]
+                if promo.get("enabled", True) is False}
+
+    def test_every_campaign_says_whether_it_is_switched_on(self):
+        disabled = self.declared_disabled()
+        self.assertTrue(disabled, "expected the manifest to switch one promo off")
+        records = self.ok("campaigns", "--date", DAY)["campaigns"]
+        for record in records:
+            self.assertIsInstance(record["enabled"], bool, record["slug"])
+            self.assertEqual(record["enabled"], record["slug"] not in disabled,
+                             record["slug"])
+        self.assertEqual(self.ok("groups", "--date", DAY)["disabledPromos"],
+                         sorted(disabled))
+
+    def test_a_switched_off_campaign_is_never_predicted_to_send(self):
+        """It installs no cron, so it cannot post today however the caps fall.
+        It stays in each group's configured promos, because the console has to
+        be able to show what switching it back on would restore."""
+        disabled = self.declared_disabled()
+        self.assertTrue(disabled, "expected the manifest to switch one promo off")
+        payload = self.ok("groups", "--date", DAY)
+        configured = set()
+        for row in payload["groups"]:
+            configured |= set(row["promos"]) & disabled
+            self.assertEqual(set(row["allowedToday"]) & disabled, set(), row["jid"])
+        self.assertTrue(configured,
+                        "expected a switched-off promo to still be configured")
+
+    def test_previewing_a_switched_off_campaign_shows_copy_but_no_sends(self):
+        for slug in sorted(self.declared_disabled()):
+            payload = self.ok("preview", slug, "--date", DAY)
+            self.assertFalse(payload["enabled"], slug)
+            self.assertTrue(payload["captions"], slug)
+            self.assertTrue(payload["groups"], slug)
+            # The copy is worth reading; the schedule is not. Nothing may claim
+            # this campaign posts today.
+            for row in payload["groups"]:
+                self.assertFalse(row["sendsToday"], row["jid"])
+
     def test_the_same_day_always_gives_the_same_answer(self):
         self.assertEqual(self.run_bridge("groups", "--date", DAY).stdout,
                          self.run_bridge("groups", "--date", DAY).stdout)
@@ -183,6 +231,36 @@ class ConsoleReadTests(unittest.TestCase):
             payload = json.loads(self.run_bridge(
                 "campaigns", GENAIE_PROMO_CRONS=manifest).stdout)
             self.assertEqual(payload["campaigns"], [])
+
+    def mutated_manifest(self, directory, mutate):
+        """The repository's own manifest with one promo altered, so these keep
+        real script paths and stay about the enabled key alone."""
+        manifest = json.loads((ROOT / "deploy/promo-crons.json").read_text())
+        mutate(manifest["promos"][0])
+        path = Path(directory) / "promo-crons.json"
+        path.write_text(json.dumps(manifest))
+        return path
+
+    def test_an_absent_enabled_key_means_switched_on(self):
+        """install-promo.sh, railway-release.py and report-release-ready.py all
+        default it to true, so a promo that never mentions it must read as on."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.mutated_manifest(
+                directory, lambda promo: promo.pop("enabled", None))
+            payload = json.loads(self.run_bridge(
+                "campaigns", GENAIE_PROMO_CRONS=path).stdout)
+            self.assertTrue(payload["campaigns"][0]["enabled"])
+
+    def test_a_non_boolean_enabled_is_refused_not_guessed(self):
+        """A string is truthy in Python, so guessing would silently promise
+        sends for a campaign the operator wrote off. railway-release.py rejects
+        a non-bool here too."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.mutated_manifest(
+                directory, lambda promo: promo.update({"enabled": "false"}))
+            code, message = self.refused("campaigns", GENAIE_PROMO_CRONS=path)
+            self.assertEqual(code, 1)
+            self.assertIn("enabled", message)
 
     # -- the read-only promise -------------------------------------------
 
