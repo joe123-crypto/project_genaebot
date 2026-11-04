@@ -708,3 +708,12 @@ campaign preflight above. The operator subsequently approved deployments with
 the advertising line offline: report it as degraded rather than blocking the
 release or disabling its account or campaigns. This does not bypass the standby
 activity guard; pending deliveries can still defer overnight shutdown.
+
+### Intentionally paused campaigns
+
+`cv-promo` is temporarily paused (`enabled: false` in `deploy/promo-crons.json`).
+Omitted `enabled` means true. Installers apply and verify the declared state,
+cron drift checks compare it, and releases require only enabled campaigns.
+Customer CV requests remain available during normal gateway hours. Correct the
+CV artwork contact before setting `enabled: true` and running the CV installer.
+A deployment does not register or re-enable cron jobs.

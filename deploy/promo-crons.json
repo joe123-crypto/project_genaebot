@@ -49,7 +49,8 @@
       "tz": "Africa/Harare",
       "failureAlertTo": "+213563719936",
       "script": "/home/joseph/.openclaw/workspace/cron/cv-promo/post_cv_ad.py",
-      "legacyNames": []
+      "legacyNames": [],
+      "enabled": false
     },
     {
       "slug": "building-materials",

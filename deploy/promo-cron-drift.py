@@ -51,6 +51,8 @@ def load_manifest(path):
     if not isinstance(timeout, int):
         raise ValueError("manifest has no integer timeoutSeconds")
     for promo in promos:
+        if type(promo.get("enabled", True)) is not bool:
+            raise ValueError("promo enabled must be a boolean")
         for key in ("slug", "name", "cron", "tz", "script"):
             if not promo.get(key):
                 raise ValueError("promo %r is missing %s" % (promo.get("slug"), key))
@@ -80,7 +82,7 @@ def compare_one(promo, job, timeout):
     """Return the list of gated fields that differ, as (field, declared, live)."""
     declared_argv = ["python3", promo["script"]]
     checks = [
-        ("enabled", True, job.get("enabled")),
+        ("enabled", promo.get("enabled", True), job.get("enabled")),
         ("schedule.expr", promo["cron"], (job.get("schedule") or {}).get("expr")),
         ("schedule.tz", promo["tz"], (job.get("schedule") or {}).get("tz")),
         ("payload.argv", declared_argv, (job.get("payload") or {}).get("argv")),

@@ -37,6 +37,12 @@ ADS_NUMBER = "+263790453292"
 # bot-line promo (copy uses {bot_number}, replies reach the ad-ref recorder), as
 # opposed to one pinned to a third party's number.
 BOT_LINES = frozenset({BOT_NUMBER, ADS_NUMBER})
+# The line every bot-line promo advertises (membership.json
+# defaults.contact_account). Pinned to the default line while the ads line is
+# logged out of the gateway (since 2026-10-29): a wa.me link to an unlinked line
+# reaches neither the public agent nor the ad-ref recorder.
+CONTACT_ACCOUNT = "default"
+CONTACT_NUMBER = BOT_NUMBER
 # APPLIANCE REPAIRS PL's own WhatsApp number: the one promo whose link does not
 # go to the bot, so its replies never reach the plugin's ad-ref recorder.
 APPLIANCE_REPAIRS_NUMBER = "+263713911390"
@@ -44,15 +50,15 @@ APPLIANCE_REPAIRS_NUMBER = "+263713911390"
 # promo dir -> (script, expected tracking prefix, expected link target)
 PROMOS = {
     "appliance-repairs-promo": ("post_ad.py", "AR", APPLIANCE_REPAIRS_NUMBER),
-    "borehole-drilling-promo": ("post_ad.py", "BH", ADS_NUMBER),
-    "building-materials-promo": ("post_ad.py", "BM", ADS_NUMBER),
-    "cv-promo": ("post_cv_ad.py", "CV", ADS_NUMBER),
-    "fruit-trees-promo": ("post_ad.py", "FT", ADS_NUMBER),
-    "genaie-advertisers-promo": ("post_ad.py", "GA", ADS_NUMBER),
-    "genaie-leads-promo": ("post_ad.py", "GL", ADS_NUMBER),
-    "genaie-promo": ("post_ad.py", "GN", ADS_NUMBER),
-    "industrial-lighting-promo": ("post_ad.py", "IL", ADS_NUMBER),
-    "skylight-solar-promo": ("post_ad.py", "SK", ADS_NUMBER),
+    "borehole-drilling-promo": ("post_ad.py", "BH", CONTACT_NUMBER),
+    "building-materials-promo": ("post_ad.py", "BM", CONTACT_NUMBER),
+    "cv-promo": ("post_cv_ad.py", "CV", CONTACT_NUMBER),
+    "fruit-trees-promo": ("post_ad.py", "FT", CONTACT_NUMBER),
+    "genaie-advertisers-promo": ("post_ad.py", "GA", CONTACT_NUMBER),
+    "genaie-leads-promo": ("post_ad.py", "GL", CONTACT_NUMBER),
+    "genaie-promo": ("post_ad.py", "GN", CONTACT_NUMBER),
+    "industrial-lighting-promo": ("post_ad.py", "IL", CONTACT_NUMBER),
+    "skylight-solar-promo": ("post_ad.py", "SK", CONTACT_NUMBER),
 }
 
 PLUGIN_AD_REFS = ROOT / "workspace/plugins/public-service-gate/lib/ad-refs.js"
@@ -556,7 +562,7 @@ class PromoWiringTests(unittest.TestCase):
                 self.assertEqual(account, expected[target])
                 self.assertEqual(image, m.IMAGE)
                 self.assertTrue(text.startswith(m.POST_TEXT + "\n\n"))
-                self.assertIn("wa.me/263790453292?text=", text)
+                self.assertIn("wa.me/%s?text=" % pb.wa_digits(CONTACT_NUMBER), text)
                 self.assertIn(pb.ref_code("GA", target), text)
         finally:
             pb.send_ad = saved
@@ -639,7 +645,7 @@ class PromoWiringTests(unittest.TestCase):
         for name, (_, prefix, number) in PROMOS.items():
             m = load_promo(name)
             targets = json.loads(Path(m.TARGETS_FILE).read_text())
-            self.assertEqual(targets["contact_account"], "ads", name)
+            self.assertEqual(targets["contact_account"], CONTACT_ACCOUNT, name)
             selected = m.TRACKING.get("number") or targets["account_numbers"][targets["contact_account"]]
             self.assertEqual(selected, number, name)
             for jid in all_target_jids(name):
@@ -648,7 +654,8 @@ class PromoWiringTests(unittest.TestCase):
                     caption = pb.render_caption(variant, ref, link, pb.DEFAULT_LINK_LINE,
                                                 bot_number=selected)
                     self.assertIn("wa.me/%s?" % pb.wa_digits(number), caption, name)
-                    self.assertNotIn(pb.wa_digits(BOT_NUMBER), caption, name)
+                    for other in BOT_LINES - {number}:
+                        self.assertNotIn(pb.wa_digits(other), caption, name)
                     self.assertNotIn("{bot_number}", caption, name)
 
     def test_refs_flag_prints_mapping_without_sending(self):

@@ -469,21 +469,25 @@ may instead place the link itself with the `{ref_link}` / `{ref}` placeholders.
 | Promo | Prefix | Link target |
 |---|---|---|
 | appliance-repairs-promo | AR | +263713911390 (the repair shop, pinned) |
-| borehole-drilling-promo | BH | the ads contact account (bot) |
-| building-materials-promo | BM | the ads contact account (bot) |
-| cv-promo | CV | the ads contact account (bot) |
-| fruit-trees-promo | FT | the ads contact account (bot) |
-| genaie-leads-promo | GL | the ads contact account (bot) |
-| genaie-promo | GN | the ads contact account (bot) |
-| skylight-solar-promo | SK | the ads contact account (bot) |
+| borehole-drilling-promo | BH | the contact account (bot) |
+| building-materials-promo | BM | the contact account (bot) |
+| cv-promo | CV | the contact account (bot) |
+| fruit-trees-promo | FT | the contact account (bot) |
+| genaie-leads-promo | GL | the contact account (bot) |
+| genaie-promo | GN | the contact account (bot) |
+| skylight-solar-promo | SK | the contact account (bot) |
 
 The bot advertises from two WhatsApp lines so neither account is a member of a
 suspiciously large number of groups. `membership.json` maps each account to the
 number it advertises (`defaults.accounts`) and tags each group with the account
 that joined it (`account`, absent means the `default` line); a group can only be
 posted to by the line that is actually a member of it. Public enquiries use
-`defaults.contact_account` (`ads`): both `{bot_number}` in the copy and the
-`wa.me` link advertise **+263790453292**, whichever account sends the post.
+`defaults.contact_account` (`default`): both `{bot_number}` in the copy and the
+`wa.me` link advertise **+263785632943**, whichever account sends the post.
+It was `ads` (+263790453292) until that line was logged out of the gateway on
+2026-10-29; switch it back (and regenerate targets) once the ads line is relinked,
+because a link to an unlinked line reaches neither the public agent nor the
+ad-ref recorder that feeds the per-group caps.
 The account-number map still records each line's actual identity. An explicit
 third-party `TRACKING.number` (appliance-repairs) takes precedence. Without
 `contact_account`, the engine retains the original per-sender contact behavior.
@@ -958,3 +962,13 @@ After deploying the source in a quiet window, run
 `./deploy/reinstall-promo-crons.sh --check`. The installer migrates the retained
 schedule and retires only the two superseded registrations. Keep a live cron
 snapshot for recovery before migration; do not clear runtime delivery history.
+
+### Temporary CV promotion pause
+
+The `cv-promo` cron is intentionally disabled via `enabled: false` in
+`deploy/promo-crons.json`. Customer CV requests remain available during normal
+gateway hours. Cron installers preserve this pause; release checks require only
+campaigns declared enabled. The original CV poster still contains the offline
+ads contact number and must be corrected before re-enabling this campaign.
+Restore `enabled: true` and run the CV installer to resume; a merge alone does
+not change the live cron state.
