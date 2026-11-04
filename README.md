@@ -401,6 +401,54 @@ membership.json. `workspace/bin/list-groups` prints the whole picture
 (`--caps` adds today's allowance, `--json` one object per group); it is
 read-only and never contacts the gateway.
 
+### Moving membership to Firestore (phase 1: built, nothing reads it yet)
+
+membership.json cannot be edited at runtime: `entrypoint.sh` rsyncs
+`workspace/` from the image with `--delete` on every boot, so any change to it
+needs a deploy. Operator config is moving to Firestore, edited in the Firebase
+Console. **Until the cutover, membership.json stays the source of truth** and
+production reads nothing from Firestore.
+
+What exists now:
+
+- `workspace/lib/operator_config.py` reads four collections (`settings/defaults`,
+  `lines/<id>`, `campaigns/<slug>`, `groups/<jid>`) back into exactly the
+  membership.json shape, using field names identical to the file. Each document
+  also carries `rank`, because Firestore lists by ID but send order decides
+  which groups a short run reaches.
+- **Targeting fails closed.** If Firestore is unreachable, the last-known-good
+  snapshot in `runtime/firestore/` is used. With no snapshot either, `load()`
+  raises and the caller must send nothing. The repo's membership.json is
+  deliberately never a fallback: after cutover it would be stale targeting.
+- **Validation is per document.** A malformed group is quarantined (excluded
+  and reported) without touching the rest. A malformed settings, line or
+  campaign document falls back to the snapshot. Deleting a campaign drops it
+  from groups' lists with a warning, rather than quarantining every group that
+  listed it.
+- Transport is Firestore REST over `urllib`, because the image has no package
+  install step. `workspace/lib/gcp_token.mjs` signs the service-account JWT
+  with Node's built-in `node:crypto`, the one thing the standard library cannot
+  do. The key reaches it over stdin, never argv.
+- Each read diffs against the previous snapshot and appends what changed to
+  `runtime/firestore/changes-YYYY-MM.jsonl`, since Console edits keep no
+  history of their own.
+
+Seeding and the parity gate:
+
+```sh
+deploy/seed-firestore.py --key seed-key.json            # dry run: what would change
+deploy/seed-firestore.py --key seed-key.json --write    # mirror membership.json
+deploy/seed-firestore.py --key seed-key.json --verify   # 0 only if Firestore == file
+```
+
+`--verify` reads back through the same `operator_config` code production will
+use, and passes only if every field, the order of groups, lines and campaigns,
+and every campaign's generated targets.json match the file exactly.
+`deploy/test_operator_config_parity.py` runs the same check offline in CI
+against the real membership, and against the live project with
+`GENAIE_FIRESTORE_INTEGRATION=1`. Use a seed key (Cloud Datastore User) on your
+own machine only. The runtime key is read-only.
+
 ### Per-group daily ad caps
 
 How many ads a group got used to be an accident of how many promos listed it: a
