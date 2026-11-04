@@ -1,0 +1,408 @@
+#!/usr/bin/env python3
+"""Print the operator console's read model as JSON: groups, campaigns, a
+per-campaign preview, or an overview of all three.
+
+Read-only. Every number here comes from the bot's own modules rather than a
+reimplementation, so the console can never disagree with what the cron will
+actually send: the group table, caps and rotation from promo_membership and
+promo_caps, the caption variant and ref code from promo_broadcast, the copy and
+tracking config from each campaign's own module, and the declared schedule from
+deploy/promo-crons.json.
+
+It never writes and never contacts the gateway, so it is safe to run locally, on
+the gateway, or behind the console API.
+
+Usage:
+  console-read overview [--date YYYY-MM-DD]
+  console-read groups [--date YYYY-MM-DD]
+  console-read campaigns [--date YYYY-MM-DD]
+  console-read preview SLUG [--date YYYY-MM-DD]
+
+Prints one JSON document on stdout. On failure prints {"error": ...} and exits
+non-zero, so a caller never has to parse a traceback.
+
+Std-lib only.
+"""
+
+import importlib.util
+import json
+import os
+import sys
+from datetime import date
+from pathlib import Path
+
+WORKSPACE = Path(__file__).resolve().parents[1]
+LIB_DIR = str(WORKSPACE / "lib")
+if LIB_DIR not in sys.path:
+    sys.path.insert(0, LIB_DIR)
+
+import promo_membership  # noqa: E402
+import promo_caps  # noqa: E402
+import promo_broadcast  # noqa: E402
+
+MEMBERSHIP = promo_membership.default_path(str(WORKSPACE))
+
+# The declared cron manifest lives under deploy/, which stage-openclaw-source.sh
+# never copies into the container, so the image carries its own baked copy
+# beside the other runtime helpers. First readable candidate wins.
+MANIFEST_CANDIDATES = (
+    str(WORKSPACE.parent / "deploy" / "promo-crons.json"),
+    "/usr/local/lib/genaie/promo-crons.json",
+)
+
+COMMANDS = ("overview", "groups", "campaigns", "preview")
+
+
+# Exit codes, so a caller can tell "you asked for something that is not here"
+# from "this tool could not do its job" without parsing the message.
+EXIT_ERROR = 1
+EXIT_NOT_FOUND = 3
+
+
+class BridgeError(Exception):
+    """A condition the caller should see as a message, not a traceback."""
+
+
+class NotFound(BridgeError):
+    """The caller named something that does not exist."""
+
+
+def parse_args(args):
+    """Hand-rolled like the sibling tools: a command, an optional slug, --date."""
+    command = None
+    slug = None
+    day = None
+    rest = list(args)
+    while rest:
+        token = rest.pop(0)
+        if token == "--date":
+            if not rest:
+                raise BridgeError("--date wants YYYY-MM-DD")
+            day = rest.pop(0)
+        elif token.startswith("--"):
+            raise BridgeError("unknown option %r" % token)
+        elif command is None:
+            command = token
+        elif slug is None:
+            slug = token
+        else:
+            raise BridgeError("unexpected argument %r" % token)
+    if command not in COMMANDS:
+        raise BridgeError("command must be one of %s" % ", ".join(COMMANDS))
+    if command == "preview" and not slug:
+        raise BridgeError("preview needs a campaign slug")
+    return command, slug, day
+
+
+def parse_day(raw):
+    if not raw:
+        return date.today()
+    try:
+        return date(*(int(part) for part in raw.split("-")))
+    except (TypeError, ValueError) as exc:
+        raise BridgeError("--date wants YYYY-MM-DD, got %r" % raw) from exc
+
+
+def membership():
+    loaded = promo_membership.load(MEMBERSHIP)
+    if loaded is None:
+        raise BridgeError("membership file not found: %s" % MEMBERSHIP)
+    return loaded
+
+
+def manifest():
+    # An explicit GENAIE_PROMO_CRONS is used exactly as given. Falling back to a
+    # different manifest than the operator named would be worse than failing,
+    # because every campaign's schedule and tracking would come from it.
+    override = os.environ.get("GENAIE_PROMO_CRONS")
+    candidates = [override] if override else list(MANIFEST_CANDIDATES)
+    for candidate in candidates:
+        try:
+            with open(candidate, encoding="utf-8") as handle:
+                return json.load(handle)
+        except FileNotFoundError:
+            continue
+    raise BridgeError("no cron manifest at: %s" % ", ".join(candidates))
+
+
+# ---------------------------------------------------------------------------
+# groups
+# ---------------------------------------------------------------------------
+
+def group_rows(day):
+    """One record per known group: the membership fields plus today's cap and
+    which campaigns today's rotation hands that allowance to. Mirrors
+    list-groups --json --caps and stays read-only, so it never records a
+    cap snapshot."""
+    m = membership()
+    groups = promo_membership.groups(m)
+    decisions = promo_caps.plan(m, list(groups), day=day, record=False)
+
+    rows = []
+    for jid, entry in groups.items():
+        decision = decisions.get(jid) or {}
+        weekly = entry.get("weekly") or {}
+        allowed = decision.get("allowed")
+        rows.append(
+            {
+                "jid": jid,
+                "name": entry.get("name"),
+                "source": entry.get("source"),
+                "status": promo_membership.status_of(entry),
+                "activity": promo_membership.activity_of(m, entry),
+                "account": promo_membership.account_of(entry),
+                "dailyCapOverride": entry.get("daily_cap"),
+                "promos": list(entry.get("promos") or []),
+                "weekly": {key: [str(token) for token in value] for key, value in weekly.items()},
+                "note": entry.get("note"),
+                "cap": decision.get("cap"),
+                "replyScore": decision.get("score"),
+                # ``allowed`` is None for a group with no cap decision, which
+                # means every targeted promo may post; show that as the full set.
+                "allowedToday": sorted(allowed) if allowed is not None else list(entry.get("promos") or []),
+            }
+        )
+    return rows
+
+
+def accounts(m):
+    numbers = promo_membership.account_numbers(m) or {}
+    contact = (m.get("defaults") or {}).get("contact_account")
+    return [
+        {"id": account, "number": number, "isContact": account == contact}
+        for account, number in sorted(numbers.items())
+    ]
+
+
+# ---------------------------------------------------------------------------
+# campaigns
+# ---------------------------------------------------------------------------
+
+def script_path(script):
+    """Manifest scripts are absolute container paths. Re-root them on this
+    workspace, which is a no-op in the container and maps onto the checkout
+    when running from a clone."""
+    marker = "/workspace/"
+    index = script.find(marker)
+    if index == -1:
+        return Path(script)
+    return WORKSPACE / script[index + len(marker):]
+
+
+def import_campaign(path):
+    """Import a campaign's post script to read its copy and tracking config.
+
+    Every campaign module guards its entry point with ``if __name__ ==
+    "__main__"``, so importing one runs no sends and touches no state.
+    """
+    spec = importlib.util.spec_from_file_location("_campaign_%s" % path.parent.name, path)
+    if spec is None or spec.loader is None:
+        raise BridgeError("cannot import campaign module %s" % path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def as_list(value):
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    return [value]
+
+
+def cron_time(expression):
+    parts = (expression or "").split()
+    if len(parts) < 2:
+        return None, None
+    try:
+        return int(parts[1]), int(parts[0])
+    except ValueError:
+        return None, None
+
+
+def campaign_records(day):
+    m = membership()
+    declared = manifest()
+
+    records = []
+    for entry in declared.get("promos", []):
+        slug = entry["slug"]
+        script = script_path(entry["script"])
+        captions = []
+        tracking = {}
+        images = []
+        error = None
+        try:
+            module = import_campaign(script)
+            captions = [str(text) for text in as_list(getattr(module, "POST_TEXTS", None))]
+            tracking = dict(getattr(module, "TRACKING", {}) or {})
+            raw_images = getattr(module, "IMAGE", None)
+            if raw_images is None:
+                raw_images = getattr(module, "IMAGE_PATH", None)
+            images = [os.path.basename(str(image)) for image in as_list(raw_images)]
+        except Exception as exc:  # the console must still list a broken campaign
+            error = "%s: %s" % (type(exc).__name__, exc)
+
+        daily_jids, weekly_jids = promo_membership.groups_for_promo(m, slug)
+        all_jids = list(daily_jids) + list(weekly_jids)
+        entries = promo_membership.groups(m)
+        per_account = {}
+        for jid in all_jids:
+            account = promo_membership.account_of(entries.get(jid))
+            per_account[account] = per_account.get(account, 0) + 1
+
+        hour, minute = cron_time(entry.get("cron", ""))
+        records.append(
+            {
+                "slug": slug,
+                "name": entry.get("name"),
+                "cron": entry.get("cron"),
+                "hour": hour,
+                "minute": minute,
+                "timezone": entry.get("tz"),
+                "installer": entry.get("installer"),
+                "script": str(script),
+                "failureAlertTo": entry.get("failureAlertTo"),
+                "legacyNames": list(entry.get("legacyNames") or []),
+                "timeoutSeconds": declared.get("timeoutSeconds"),
+                "captions": captions,
+                "tracking": tracking,
+                "images": images,
+                "targetCount": len(all_jids),
+                "weeklyCount": len(weekly_jids),
+                "accounts": per_account,
+                "source": "git",
+                "error": error,
+            }
+        )
+    records.sort(key=lambda row: (row["hour"] if row["hour"] is not None else 99, row["minute"] or 0))
+    return records
+
+
+# ---------------------------------------------------------------------------
+# preview
+# ---------------------------------------------------------------------------
+
+def preview(slug, day):
+    """Per-group caption variant, ref code and link for one campaign.
+
+    Uses the engine's own caption_for/ref_code helpers, so the preview is the
+    same text the cron would send.
+    """
+    m = membership()
+    declared = manifest()
+
+    entry = next((row for row in declared.get("promos", []) if row["slug"] == slug), None)
+    if entry is None:
+        raise NotFound("unknown campaign %r" % slug)
+
+    module = import_campaign(script_path(entry["script"]))
+    captions = [str(text) for text in as_list(getattr(module, "POST_TEXTS", None))]
+    tracking = dict(getattr(module, "TRACKING", {}) or {})
+
+    daily_jids, weekly_jids = promo_membership.groups_for_promo(m, slug)
+    all_jids = list(daily_jids) + list(weekly_jids)
+    decisions = promo_caps.plan(m, list(promo_membership.groups(m)), day=day, record=False)
+    numbers = promo_membership.account_numbers(m) or {}
+    contact_account = (m.get("defaults") or {}).get("contact_account")
+    entries = promo_membership.groups(m)
+
+    rows = []
+    for jid in all_jids:
+        group = entries.get(jid, {})
+        decision = decisions.get(jid) or {}
+        allowed = decision.get("allowed")
+        account = promo_membership.account_of(group)
+        # The advertised number is the configured contact line when one is set,
+        # otherwise whichever line actually posts to this group.
+        bot_number = numbers.get(contact_account) if contact_account else None
+        bot_number = bot_number or numbers.get(account)
+
+        # caption_for's ``allowed`` is the group's posting WEEKDAYS, so a weekly
+        # group's variants still step by one per actual post. It is not the caps
+        # decision. Daily groups pass None.
+        weekdays = [
+            promo_broadcast._parse_weekday(token)
+            for token in (weekly_jids.get(jid) or [])
+        ]
+        weekdays = sorted({index for index in weekdays if index is not None}) or None
+
+        variant, rendered, ref = None, None, None
+        if captions:
+            variant, rendered, ref = promo_broadcast.caption_for(
+                jid, captions, day=day, allowed=weekdays,
+                tracking=tracking, bot_number=bot_number,
+            )
+
+        rows.append(
+            {
+                "jid": jid,
+                "name": group.get("name"),
+                "account": account,
+                "contactNumber": tracking.get("number") or bot_number,
+                "ref": ref,
+                "variant": variant,
+                "caption": rendered,
+                "cap": decision.get("cap"),
+                "sendsToday": allowed is None or slug in allowed,
+                "allowedToday": sorted(allowed) if allowed is not None else [],
+                "weekly": [str(token) for token in (weekly_jids.get(jid) or [])],
+            }
+        )
+    return {"slug": slug, "captions": captions, "tracking": tracking, "groups": rows}
+
+
+# ---------------------------------------------------------------------------
+# overview
+# ---------------------------------------------------------------------------
+
+def overview(day):
+    m = membership()
+    groups = promo_membership.groups(m)
+
+    by_status = {}
+    for entry in groups.values():
+        status = entry.get("status", "active")
+        by_status[status] = by_status.get(status, 0) + 1
+
+    campaigns = campaign_records(day)
+    rows = group_rows(day)
+    planned = sum(len(row["allowedToday"]) for row in rows if row["status"] == "active")
+
+    return {
+        "date": day.isoformat(),
+        "groupsByStatus": by_status,
+        "groupTotal": len(groups),
+        "campaignTotal": len(campaigns),
+        "plannedSendsToday": planned,
+        "accounts": accounts(m),
+        "capsEnabled": bool((m.get("defaults") or {}).get("caps_enabled")),
+        "campaigns": campaigns,
+    }
+
+
+def main(argv):
+    try:
+        command, slug, raw_day = parse_args(argv)
+        day = parse_day(raw_day)
+        if command == "groups":
+            payload = {"date": day.isoformat(), "groups": group_rows(day)}
+        elif command == "campaigns":
+            payload = {"date": day.isoformat(), "campaigns": campaign_records(day)}
+        elif command == "preview":
+            payload = preview(slug, day)
+        else:
+            payload = overview(day)
+    except BridgeError as exc:
+        json.dump({"error": str(exc)}, sys.stdout)
+        sys.stdout.write("\n")
+        return EXIT_NOT_FOUND if isinstance(exc, NotFound) else EXIT_ERROR
+
+    json.dump(payload, sys.stdout, ensure_ascii=False)
+    sys.stdout.write("\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

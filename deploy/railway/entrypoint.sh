@@ -116,6 +116,7 @@ SECRET_KEYS=(
   AI_GATEWAY_API_KEY
   AGENT_GENAI_INTERNAL_API_KEY
   GATEWAY_AUTH_TOKEN
+  CONSOLE_API_TOKEN
   APP_BASE_URL
   PUBLIC_BASE_URL
   WHATSAPP_ADMIN_ENABLED
@@ -403,6 +404,13 @@ if [ "${GENAIE_OVERNIGHT_STANDBY:-0}" = "1" ]; then
   GENAIE_STANDBY_RUNTIME="$(mktemp -d /tmp/genaie-standby.XXXXXX)"
   export GENAIE_STANDBY_RUNTIME
   chown joseph:joseph "$GENAIE_STANDBY_RUNTIME"
+fi
+# Read-only operator console API, off unless explicitly enabled. Backgrounded
+# and never waited on, like the readiness probe below, so neither a crash nor a
+# slow start here can abort this boot or disturb the gateway.
+if [ "${GENAIE_CONSOLE_API:-0}" = "1" ]; then
+  runuser -u joseph -- python3 /usr/local/bin/console-api.py &
+  log "console api enabled on port ${CONSOLE_API_PORT:-18790}"
 fi
 runuser -u joseph -- python3 /usr/local/bin/report-release-ready.py &
 # setpriv execs the supervisor directly. runuser handles SIGTERM itself and

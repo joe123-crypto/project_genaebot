@@ -699,6 +699,50 @@ Do **not** trigger a manual ad send to test — the CV-promo campaign delivers o
 cron at 11:39 Africa/Harare (declared in `deploy/promo-crons.json`; confirm the live
 schedule with `./deploy/reinstall-promo-crons.sh --check`).
 
+## Operator console API
+
+Off unless explicitly enabled. What it serves and what it refuses is in the
+repository README: [Operator Console API](../../README.md#operator-console-api).
+
+```sh
+railway variables --set GENAIE_CONSOLE_API=1 \
+  --set CONSOLE_API_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')" \
+  && railway redeploy                                              # console api on
+railway variables --unset GENAIE_CONSOLE_API && railway redeploy    # console api off
+```
+
+`CONSOLE_API_TOKEN` is in the entrypoint's `SECRET_KEYS`, so it lands in the
+volume `.env` at 0600 owner joseph and is never baked into the image. The server
+refuses to start without one of at least 32 characters, so it cannot come up
+unauthenticated. Neither variable is release-managed in `deploy/railway-release.py`,
+so a deploy neither sets nor clears them; they behave like `REPLIES_DISABLED`.
+
+It listens on `CONSOLE_API_PORT` (default 18790), never the gateway's 18789. The
+entrypoint reassigns `PORT` to the gateway's port before any child starts, so a
+process that read `$PORT` here would collide with the gateway; this is why the
+console API names its own variable instead.
+
+Confirm it is up from inside the container, which needs no public domain:
+
+```sh
+railway ssh -- curl -fsS http://127.0.0.1:18790/internal/console/health
+```
+
+Reaching it from outside needs a Railway domain whose target port is
+`CONSOLE_API_PORT`. That exposes only this API; 18789 stays private.
+
+The launch is backgrounded and never waited on, it owns no healthcheck, and the
+server wraps its own entry point, so a fault can only kill the console API. Two
+limits keep it from crowding the gateway it shares a container with, where the
+hazard is not a crash but unbounded subprocess fan-out: at most two
+`console-read` processes at a time, answering 503 beyond that, and successful
+responses cached for 30 seconds.
+
+The campaign routes need the declared cron manifest. `deploy/stage-openclaw-source.sh`
+does not stage `deploy/`, so the Dockerfile bakes `deploy/promo-crons.json` to
+`/usr/local/lib/genaie/promo-crons.json`. A 502 reading `no cron manifest at`
+means that copy is missing from the image.
+
 ## Retired daily job feeds: 2026-10-28
 
 Vacancy Lamp and Hustlers Marketplace job posting and the shared scraping/cache

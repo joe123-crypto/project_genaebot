@@ -96,6 +96,10 @@ COPY deploy/railway/sync-reply-gates.py /usr/local/bin/sync-reply-gates.py
 COPY deploy/railway/sync-runtime-plugins.py /usr/local/bin/sync-runtime-plugins.py
 COPY deploy/railway/report-release-ready.py /usr/local/bin/report-release-ready.py
 COPY deploy/railway/gateway-standby.py /usr/local/bin/gateway-standby.py
+COPY deploy/railway/console-api.py /usr/local/bin/console-api.py
+# console-read resolves the declared cron manifest from deploy/, which
+# stage-openclaw-source.sh never stages, so bake a copy beside the helpers.
+COPY deploy/promo-crons.json /usr/local/lib/genaie/promo-crons.json
 RUN python3 -c 'from zoneinfo import ZoneInfo; ZoneInfo("Africa/Algiers")'
 COPY deploy/railway/wait-gateway-lease.py /usr/local/bin/wait-gateway-lease.py
 COPY deploy/railway/whatsapp-lid-loader.mjs deploy/railway/whatsapp-lid-recovery.mjs deploy/railway/whatsapp-cache-cleanup.mjs deploy/railway/whatsapp-health-audit.mjs /usr/local/lib/genaie/
