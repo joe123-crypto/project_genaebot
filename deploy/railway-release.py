@@ -76,6 +76,12 @@ def validate_readiness(report, deployment_id, sha, profile, jobs, settings=None)
         raise ValueError("required campaigns are not enabled")
 
 
+def required_campaigns(entries):
+    if any(type(item.get("enabled", True)) is not bool for item in entries):
+        raise ValueError("campaign enabled must be a boolean")
+    return {item["name"] for item in entries if item.get("enabled", True)}
+
+
 def startup_result(deployment_id, sha, profile, jobs, timeout=600, settings=None):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -241,7 +247,7 @@ def release(root, sha, profile, report):
         manifest = json.loads((Path(temporary) / "deploy/promo-crons.json").read_text())
         entries = manifest if isinstance(manifest, list) else manifest.get("promos", manifest.get("jobs", []))
         # The repository's manifest is the authority; never install or edit crons here.
-        jobs = {item["name"] for item in entries}
+        jobs = required_campaigns(entries)
         idle = settings["GENAIE_CATALOG_IDLE_RETIREMENT"]
         identifier = None
         upload_started = False

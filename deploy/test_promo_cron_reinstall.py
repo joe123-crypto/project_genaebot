@@ -70,7 +70,7 @@ def live_jobs(drop=(), patch=None, extra=()):
         job = {
             "id": "id-" + promo["slug"],
             "name": promo["name"],
-            "enabled": True,
+            "enabled": promo.get("enabled", True),
             "schedule": {"expr": promo["cron"], "tz": promo["tz"]},
             "payload": {
                 "argv": ["python3", promo["script"]],
@@ -164,7 +164,7 @@ class ManifestContractTests(unittest.TestCase):
     def test_installer_self_verify_covers_schedule_timezone_timeout_and_enabled(self):
         text = (ROOT / "deploy/install-promo.sh").read_text(encoding="utf-8")
         for needle in (".schedule.expr == $expr", ".schedule.tz == $tz",
-                       ".payload.timeoutSeconds == $timeout", ".enabled == true"):
+                       ".payload.timeoutSeconds == $timeout", ".enabled == $enabled"):
             self.assertIn(needle, text)
 
     def test_self_verify_runs_after_the_failure_alert_edit(self):
@@ -255,7 +255,13 @@ class DriftComparatorTests(unittest.TestCase):
         self.assertIn("schedule.tz", out)
 
     def test_a_disabled_job_is_drift_even_with_the_right_schedule(self):
-        code, out, _ = run_comparator(live_jobs(patch={"cv-promo": {"enabled": False}}))
+        code, out, _ = run_comparator(live_jobs(patch={"genaie-promo": {"enabled": False}}))
+        self.assertEqual(code, 1)
+        self.assertIn("enabled", out)
+
+    def test_reenabled_paused_cv_is_drift(self):
+        self.assertEqual(run_comparator(live_jobs())[0], 0)
+        code, out, _ = run_comparator(live_jobs(patch={"cv-promo": {"enabled": True}}))
         self.assertEqual(code, 1)
         self.assertIn("enabled", out)
 
@@ -401,6 +407,14 @@ class OrchestratorTests(unittest.TestCase):
         seen = [p["name"] for p in MANIFEST["promos"]
                 if re.search(r"--name %s\b" % re.escape(p["name"]), calls)]
         self.assertEqual(seen, [p["name"] for p in MANIFEST["promos"]])
+
+    def test_cv_installer_keeps_pause(self):
+        proc, calls = self.run_orchestrator("--only", "cv")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        edits = [line for line in calls.splitlines() if "--name cv-promo" in line]
+        self.assertEqual(len(edits), 1)
+        self.assertIn("--disable", edits[0])
+        self.assertNotIn("--enable", edits[0])
 
     def test_one_failing_installer_does_not_stop_the_others(self):
         # cv-promo's live row never matches, so register_promo_cron's self-verify fails.

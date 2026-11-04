@@ -962,3 +962,13 @@ After deploying the source in a quiet window, run
 `./deploy/reinstall-promo-crons.sh --check`. The installer migrates the retained
 schedule and retires only the two superseded registrations. Keep a live cron
 snapshot for recovery before migration; do not clear runtime delivery history.
+
+### Temporary CV promotion pause
+
+The `cv-promo` cron is intentionally disabled via `enabled: false` in
+`deploy/promo-crons.json`. Customer CV requests remain available during normal
+gateway hours. Cron installers preserve this pause; release checks require only
+campaigns declared enabled. The original CV poster still contains the offline
+ads contact number and must be corrected before re-enabling this campaign.
+Restore `enabled: true` and run the CV installer to resume; a merge alone does
+not change the live cron state.

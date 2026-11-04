@@ -33,6 +33,14 @@ PROMO_CRON_TIMEOUT_SECONDS="${PROMO_CRON_TIMEOUT_SECONDS:-7200}"
 
 register_promo_cron() {
   local name="$1" cron_expr="$2" tz="$3" alert_to="$4" script="$5"
+  local enabled enable_flag
+  local -a add_flags=()
+  enabled="$(jq -r --arg name "$name" '.promos[] | select(.name == $name) | if has("enabled") then .enabled else true end' "$(dirname "${BASH_SOURCE[0]}")/promo-crons.json")"
+  case "$enabled" in
+    true) enable_flag=--enable ;;
+    false) enable_flag=--disable; add_flags=(--disabled) ;;
+    *) printf 'ERROR: invalid enabled state for %s\n' "$name" >&2; return 1 ;;
+  esac
   local command_argv
   command_argv="$(printf '["python3","%s"]' "$script")"
 
@@ -54,7 +62,7 @@ register_promo_cron() {
       --command-cwd /home/joseph/.openclaw/workspace \
       --timeout-seconds "$PROMO_CRON_TIMEOUT_SECONDS" \
       --no-deliver \
-      --enable >/dev/null
+      "$enable_flag" >/dev/null
   else
     "${openclaw[@]}" cron add \
       --name "$name" \
@@ -66,7 +74,7 @@ register_promo_cron() {
       --command-cwd /home/joseph/.openclaw/workspace \
       --timeout-seconds "$PROMO_CRON_TIMEOUT_SECONDS" \
       --no-deliver \
-      --json >/dev/null
+      "${add_flags[@]}" --json >/dev/null
   fi
 
   jobs_json="$("${openclaw[@]}" cron list --all --json)"
@@ -92,10 +100,10 @@ register_promo_cron() {
   # to fail here too -- nothing else would catch it.
   if ! "${openclaw[@]}" cron list --all --json | jq -e \
     --arg name "$name" --arg expr "$cron_expr" --arg tz "$tz" \
-    --argjson timeout "$PROMO_CRON_TIMEOUT_SECONDS" \
+    --argjson timeout "$PROMO_CRON_TIMEOUT_SECONDS" --argjson enabled "$enabled" \
     '.jobs[] | select(
       .name == $name and
-      .enabled == true and
+      .enabled == $enabled and
       .schedule.expr == $expr and
       .schedule.tz == $tz and
       .payload.timeoutSeconds == $timeout

@@ -24,6 +24,15 @@ SHA = "a" * 40
 
 
 class ReleaseTests(unittest.TestCase):
+    def test_intentionally_paused_campaigns_are_not_required_for_release(self):
+        entries = [{"name": "cv-promo", "enabled": False}, {"name": "fixture-promo"}]
+        jobs = RELEASE.required_campaigns(entries)
+        self.assertEqual(jobs, {"fixture-promo"})
+        RELEASE.validate_readiness(self.report(), "new", SHA, "0", jobs)
+        for enabled in ("false", None, 0):
+            with self.assertRaises(ValueError):
+                RELEASE.required_campaigns([{"name": "cv-promo", "enabled": enabled}])
+
     def test_preserve_and_explicit_profiles_reach_the_release_and_readiness_check(self):
         for requested, current, expected in [("preserve", "1", "1"),
                                              ("preserve", "0", "0"),
