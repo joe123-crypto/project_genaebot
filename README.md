@@ -743,6 +743,57 @@ railway ssh -- python3 /home/joseph/.openclaw/deploy/patch-openclaw-config.py --
 The template remains the tracked source of truth for what the config *should* be;
 `openclaw.json` and its backup/pre-update variants are gitignored.
 
+## Operator Console API
+
+`deploy/railway/console-api.py` serves the operator console's read model over
+HTTP beside the gateway. It is read-only by construction: every response is the
+stdout of `workspace/bin/console-read`, which reads `workspace/cron/membership.json`,
+the ad-reply counters the caps derive from, and each campaign's own module. It
+never writes, never contacts the gateway, and never records a cap snapshot, so
+reading it cannot move the rotation on. There is no endpoint that changes
+anything.
+
+Routes, GET or HEAD only, under `/internal/console/`:
+
+| Route | Returns |
+|---|---|
+| `health` | `{"ok": true}` and nothing else; needs no token |
+| `overview` | group counts by status, today's planned sends, the lines, every campaign |
+| `groups` | one record per known group: status, line, tier, cap, campaigns, note |
+| `campaigns` | one record per declared promo: slot, captions, tracking, reach |
+| `preview/<slug>` | per group, the caption variant, ref code and link that campaign would send |
+
+Each data route takes an optional `?date=YYYY-MM-DD`. Anything else is refused:
+an unknown path or an unusable slug is 404, an unparseable date or an unexpected
+query parameter is 400, any write method is 405, and a request body is 400
+rather than read.
+
+Because `console-read` imports the bot's own `promo_membership`, `promo_caps`
+and `promo_broadcast` rather than reimplementing them, a preview is the same
+text the cron would send. The variant index it reports is 0-based, exactly as
+`caption_for` returns it; `post_ad.py --dry-run` and the console both add one
+only when displaying it.
+
+It ships disabled and holds no state. Enabling it is environment only, and
+`deploy/railway/README.md` has the recipe:
+[Operator console API](deploy/railway/README.md#operator-console-api).
+
+Run it against this checkout the same way production does:
+
+```sh
+CONSOLE_API_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')" \
+  CONSOLE_READ_BIN="$PWD/workspace/bin/console-read" \
+  CONSOLE_API_BIND=127.0.0.1 \
+  python3 deploy/railway/console-api.py
+```
+
+Or read the same payloads with no server at all:
+
+```sh
+./workspace/bin/console-read overview
+./workspace/bin/console-read preview borehole-drilling --date 2026-11-04
+```
+
 ## Operational Changes
 
 ### WhatsApp connected but not receiving direct messages
