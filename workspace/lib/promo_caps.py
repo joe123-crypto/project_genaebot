@@ -60,6 +60,20 @@ HISTORY_PATH = os.environ.get(
     "/home/joseph/.openclaw/runtime/promo-caps/ad-ref-history.json",
 )
 
+# The declared cron manifest (deploy/promo-crons.json). A campaign it switches
+# off (``"enabled": false``) never runs, so it must not win a group's daily turn:
+# otherwise a paused campaign silently burns slots the running ones could use.
+# GENAIE_PROMO_CRONS, when set, is the only path read (as in console-read); the
+# repo copy serves CI and local runs, the image copy serves the gateway.
+_MANIFEST_OVERRIDE = os.environ.get("GENAIE_PROMO_CRONS")
+MANIFEST_CANDIDATES = (
+    (_MANIFEST_OVERRIDE,) if _MANIFEST_OVERRIDE else (
+        os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                     "..", "..", "deploy", "promo-crons.json"),
+        "/usr/local/lib/genaie/promo-crons.json",
+    )
+)
+
 # A reply is worth one extra ad per day above the band floor...
 SCORE_PER_STEP = 1.0
 # ...weighted by how recent the group's newest reply is, so a group that stops
@@ -88,6 +102,28 @@ def load_ad_refs(path=None):
     raw = json_store.load_json(path or AD_REFS_PATH, {})
     refs = raw.get("refs") if isinstance(raw, dict) else None
     return dict(refs) if isinstance(refs, dict) else {}
+
+
+def disabled_promos(paths=None):
+    """Membership keys of the campaigns the cron manifest switches off.
+
+    Fail-open: no manifest, unreadable JSON or a non-boolean ``enabled`` yields an
+    empty set, i.e. the old behaviour where every listed campaign takes turns.
+    Only an explicit ``false`` removes a campaign from the rotation."""
+    for path in (paths if paths is not None else MANIFEST_CANDIDATES):
+        if not path:
+            continue
+        try:
+            with open(path, encoding="utf-8") as handle:
+                declared = json.load(handle)
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError):
+            return set()
+        rows = declared.get("promos") if isinstance(declared, dict) else None
+        return set(str(row.get("slug")) for row in (rows or [])
+                   if isinstance(row, dict) and row.get("enabled") is False)
+    return set()
 
 
 def recency_weight(last_seen, today):
@@ -243,9 +279,14 @@ def previous_scores(jids, day, history=None, path=None):
     return ad_ref_scores(jids, refs=days.get(stamp) or {}, today=_as_date(stamp))
 
 
-def plan(m, jids, day=None, refs=None, history=None, record=False):
+def plan(m, jids, day=None, refs=None, history=None, record=False,
+         disabled=None):
     """``{jid: info}`` for one day, where info is
     ``{"tier", "score", "cap", "promos", "allowed"}``.
+
+    ``promos`` leaves out campaigns the cron manifest switches off (``disabled``,
+    read via :func:`disabled_promos` when not given), so the rotation only hands
+    a group's allowance to campaigns that will actually post.
 
     ``allowed`` is the promos that may post to that group today. Groups absent
     from membership.json are returned with ``cap=None`` and every promo allowed,
@@ -258,6 +299,9 @@ def plan(m, jids, day=None, refs=None, history=None, record=False):
         snapshot_ad_refs(refs, today=day)
     scores = ad_ref_scores(jids, refs=refs, today=day)
     prior = previous_scores(jids, day, history=history)
+    if disabled is None:
+        disabled = disabled_promos()
+    disabled = set(disabled or ())
 
     out = {}
     for jid in jids:
@@ -271,7 +315,8 @@ def plan(m, jids, day=None, refs=None, history=None, record=False):
         if prior is not None:
             before = target_cap(m, jid, prior.get(jid, 0.0))
         cap = smooth_cap(target, before)
-        promos = promo_membership.promos_for_group(m, jid)
+        promos = [p for p in promo_membership.promos_for_group(m, jid)
+                  if p not in disabled]
         out[jid] = {
             "tier": promo_membership.activity_of(m, entry),
             "score": scores.get(jid, 0.0),
@@ -283,11 +328,20 @@ def plan(m, jids, day=None, refs=None, history=None, record=False):
     return out
 
 
-def filter_for_promo(m, promo, jids, day=None, refs=None, history=None, record=False):
+def filter_for_promo(m, promo, jids, day=None, refs=None, history=None, record=False,
+                     disabled=None):
     """``(kept, decisions)``: the subset of ``jids`` that ``promo`` may post to
     today, plus the full per-group plan for logging. A group missing from
-    membership.json is kept."""
-    decisions = plan(m, jids, day=day, refs=refs, history=history, record=record)
+    membership.json is kept.
+
+    ``promo`` itself is never treated as disabled here: whoever is running it
+    (an operator's manual run or ``--dry-run`` of a paused campaign) gets the
+    rotation it would have if it were switched on."""
+    if disabled is None:
+        disabled = disabled_promos()
+    disabled = set(disabled or ()) - {promo}
+    decisions = plan(m, jids, day=day, refs=refs, history=history, record=record,
+                     disabled=disabled)
     kept = [j for j in jids
             if decisions[j]["allowed"] is None or promo in decisions[j]["allowed"]]
     return kept, decisions
