@@ -131,6 +131,7 @@ class ReplyGateSyncTests(unittest.TestCase):
         w["dmPolicy"] = "open"
         w["allowFrom"] = ["+263785632943", "*"]
         w["accounts"]["default"]["enabled"] = True
+        w["accounts"]["ads"]["dmPolicy"] = "disabled"
         entries = expected["plugins"]["entries"]
         entries["public-service-gate"]["config"]["enabled"] = True
         entries["public-service-gate"]["config"]["cvMakerPaymentDetails"] = (
@@ -169,6 +170,30 @@ class ReplyGateSyncTests(unittest.TestCase):
         self.assertEqual(status, "unchanged")
         self.assertEqual(self.config.stat().st_mtime_ns, before)
         self.assertIn("unchanged", " ".join(lines))
+
+    def test_ads_dm_pause_survives_boot_without_disabling_broadcasts(self) -> None:
+        ads = self.live["channels"]["whatsapp"]["accounts"]["ads"]
+        ads.update({"dmPolicy": "open", "authDir": "/private/ads-auth"})
+        self.write_live()
+        self.sync()
+        w = self.read()["channels"]["whatsapp"]
+        self.assertEqual(w["accounts"]["ads"], {
+            "enabled": True, "dmPolicy": "disabled", "authDir": "/private/ads-auth",
+        })
+        self.assertEqual(w["dmPolicy"], "open")
+        self.assertTrue(w["accounts"]["default"]["enabled"])
+        self.assertEqual(w["groupPolicy"], "disabled")
+        self.assertEqual(self.sync()[0], "unchanged")
+
+    def test_ads_replies_resume_only_when_template_policy_changes(self) -> None:
+        self.sync()
+        template = tracked_template()
+        template["channels"]["whatsapp"]["accounts"]["ads"]["dmPolicy"] = "open"
+        self.template.write_text(json.dumps(template), encoding="utf-8")
+        self.sync()
+        ads = self.read()["channels"]["whatsapp"]["accounts"]["ads"]
+        self.assertEqual(ads["dmPolicy"], "open")
+        self.assertTrue(ads["enabled"])
 
     def test_creates_a_missing_gated_path(self) -> None:
         self.config.write_text(json.dumps({"channels": {"whatsapp": {}}}), encoding="utf-8")
@@ -246,6 +271,8 @@ class ReplyGateSyncTests(unittest.TestCase):
         self.assertIs(w["enabled"], True)
         self.assertEqual(w["dmPolicy"], "open")
         self.assertIs(w["accounts"]["default"]["enabled"], True)
+        self.assertIs(w["accounts"]["ads"]["enabled"], True)
+        self.assertEqual(w["accounts"]["ads"]["dmPolicy"], "disabled")
         self.assertIs(entries["whatsapp"]["enabled"], True)
         self.assertIs(entries["public-service-gate"]["enabled"], True)
         self.assertIs(entries["public-service-gate"]["config"]["enabled"], True)
@@ -265,7 +292,8 @@ class ReplyGateSyncTests(unittest.TestCase):
             self.assertIn("REPLIES_DISABLED", run.stdout)
             synced = self.read()
             self.assertFalse(synced["channels"]["whatsapp"]["accounts"]["default"]["enabled"])
-            # Nothing else moved: the gates it would otherwise force stay off.
+            self.assertEqual(synced["channels"]["whatsapp"]["accounts"]["ads"]["dmPolicy"], "disabled")
+            # Default's other reply gates stay off; ads keeps its separate pause.
             self.assertEqual(synced["channels"]["whatsapp"]["dmPolicy"], "allowlist")
             self.assertEqual(synced["channels"]["whatsapp"]["allowFrom"], ["+263785632943"])
 

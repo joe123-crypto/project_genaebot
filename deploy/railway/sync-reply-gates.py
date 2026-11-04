@@ -9,6 +9,8 @@ to "allowlist" with only the admin number in channels.whatsapp.allowFrom, so the
 bot answered the operator and nobody else.
 
 This sets each gate listed in GATED_PATHS to its template value on every boot.
+The ads account's DM policy is disabled for the broadcast-only trial; its
+listener remains enabled so scheduled group advertising can continue.
 Only scalar leaves are written -- no object or array is ever replaced -- so the
 live-only plugin keys that openclaw.plugin.json still requires survive untouched
 (replacing a config subtree is what crashlooped production on 2026-10-12).
@@ -43,6 +45,7 @@ DEFAULT_APPLIER = Path(__file__).resolve().parent.parent / "patch-openclaw-confi
 GATED_PATHS: list[list[str]] = [
     ["channels", "whatsapp", "enabled"],
     ["channels", "whatsapp", "dmPolicy"],
+    ["channels", "whatsapp", "accounts", "ads", "dmPolicy"],
     ["channels", "whatsapp", "accounts", "default", "enabled"],
     ["plugins", "entries", "whatsapp", "enabled"],
     ["plugins", "entries", "public-service-gate", "enabled"],
@@ -62,10 +65,10 @@ NEVER_WRITE: frozenset[str] = frozenset(
         # time, so forcing this would delete admin routing. Checked, not written.
         "bindings",
         # Group replies are hard-blocked in public-service-gate/index.js and this
-        # script only ever turns replies ON; forcing a policy off breaks that.
+        # script does not govern group access.
         "channels.whatsapp.groupPolicy",
-        # The template says false while the live ads line is on. Forcing it would
-        # silence a working advertising line on every deploy.
+        # Listener enablement is operator-controlled. Disabling the listener
+        # would also stop advertising, unlike the governed ads DM policy.
         "channels.whatsapp.accounts.ads.enabled",
     }
 )
@@ -73,6 +76,7 @@ NEVER_WRITE: frozenset[str] = frozenset(
 DMPOLICY_PATH = ["channels", "whatsapp", "dmPolicy"]
 ALLOWFROM_PATH = ["channels", "whatsapp", "allowFrom"]
 DEFAULT_ACCOUNT_ENABLED = ["channels", "whatsapp", "accounts", "default", "enabled"]
+ADS_DM_POLICY = ["channels", "whatsapp", "accounts", "ads", "dmPolicy"]
 ENV_KILL_SWITCH = "REPLIES_DISABLED"
 
 
@@ -215,6 +219,15 @@ def sync(
 
     changed: list[str] = []
     if truthy(os.environ.get(ENV_KILL_SWITCH)):
+        # The existing kill switch controls default listener enablement. It
+        # must not bypass the independent ads broadcast-only policy on boot.
+        for path, found, have, want in plan_changes(live, template, get_path):
+            if path != ADS_DM_POLICY:
+                continue
+            set_path(live, path, want)
+            note = f"{dotted(path)} {render(found, have)} -> {json.dumps(want)}"
+            changed.append(note)
+            lines.append("reply gates: " + note)
         found, have = get_path(live, DEFAULT_ACCOUNT_ENABLED)
         if found and have is False:
             lines.append(f"reply gates: {ENV_KILL_SWITCH} set; replies already off")

@@ -237,7 +237,7 @@
       "defaultAccount": "default",
       "accounts": {
         "default": { "enabled": true },
-        "ads": { "enabled": true }
+        "ads": { "enabled": true, "dmPolicy": "disabled" }
       },
       "streaming": {
         "block": {

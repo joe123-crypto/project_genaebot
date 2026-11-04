@@ -485,9 +485,8 @@ posted to by the line that is actually a member of it. Public enquiries use
 `defaults.contact_account` (`default`): both `{bot_number}` in the copy and the
 `wa.me` link advertise **+263785632943**, whichever account sends the post.
 It was `ads` (+263790453292) until that line was logged out of the gateway on
-2026-10-29; switch it back (and regenerate targets) once the ads line is relinked,
-because a link to an unlinked line reaches neither the public agent nor the
-ad-ref recorder that feeds the per-group caps.
+2026-10-29. Keep contact routing on default throughout the broadcast-only trial:
+ads does not process customer DMs even after it is relinked.
 The account-number map still records each line's actual identity. An explicit
 third-party `TRACKING.number` (appliance-repairs) takes precedence. Without
 `contact_account`, the engine retains the original per-sender contact behavior.
@@ -507,6 +506,17 @@ The ads line is limited to **10 active groups and 29 campaign/group combinations
 assignments remain available for restoration. These are configured eligibility
 counts, before caps and weekly rules, not confirmed deliveries.
 
+The next round is **ads group advertising without automated DM replies**.
+The tracked account override `channels.whatsapp.accounts.ads.dmPolicy: "disabled"`
+is enforced on every boot, while `ads.enabled` remains operator-controlled.
+The adapter's native inbound gate drops ads DMs before the agent, typing,
+service actions and enquiry-triggered admin alerts. It sends no pause notice or
+pairing challenge. This covers customer, administrator, self-chat and sibling-line
+DMs. Default continues to handle customer conversations and admin alerts; alerts
+explicitly send through account `default`. Group replies remain disabled on both
+accounts. The ads phone stays on regular WhatsApp for this round; default uses
+WhatsApp Business. Client identity and reply timing settings are unchanged.
+
 Each campaign reads gateway account status immediately before sending. Targets
 for an offline or unknown account are deferred without submitting them or marking
 them sent; other connected accounts continue. There is no automatic catch-up.
@@ -522,15 +532,20 @@ days, capped at 1 MiB per day; `GENAIE_WHATSAPP_HEALTH_AUDIT=0` disables writing
 Railway uses zero deployment overlap and a 360-second graceful drain. Nightly
 standby remains 17:00–05:45 Africa/Algiers.
 
-Start the seven-day observation only after the reduced targets are live and ads
-is authenticated. Record phone restriction notices separately from socket failures,
-and avoid discretionary deployments, manual reconnects or campaign changes during
-the trial. An offline day does not establish restriction-free advertising.
+Deploy and verify the ads DM policy before one operator-assisted relink if its
+credentials are invalid. Start the seven-day observation only once ads is
+authenticated and broadcasts can run. Record connection events and campaign
+receipts alongside any phone restriction notice. Record manual replies, device
+links and deployments as confounders; avoid discretionary reconnects or campaign
+changes. An offline day does not establish restriction-free advertising.
+Replies stay disabled after seven days until an explicit decision to resume them.
+To resume, change the tracked ads `dmPolicy` to `"open"` and deploy; a valid
+session does not need another relink just to change that policy.
 
 ### The two lines talking to each other
 
-Both lines auto-reply, so the moment one DMs the other they answer each other
-forever: on 2026-10-20 a single test message produced an endless "Silent." /
+When both lines have DM replies enabled, one DMing the other can make them answer
+each other forever: on 2026-10-20 a single test message produced an endless "Silent." /
 "👌" exchange until one account was disabled. Nothing upstream prevents it.
 OpenClaw's pair loop protection needs a reliable inbound bot identity
 (`allowBots`), which a WhatsApp DM cannot provide, so WhatsApp is not a supported
