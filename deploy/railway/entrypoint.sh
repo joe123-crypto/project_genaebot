@@ -405,5 +405,9 @@ if [ "${GENAIE_OVERNIGHT_STANDBY:-0}" = "1" ]; then
   chown joseph:joseph "$GENAIE_STANDBY_RUNTIME"
 fi
 runuser -u joseph -- python3 /usr/local/bin/report-release-ready.py &
-exec runuser -u joseph -- python3 /usr/local/bin/gateway-standby.py --port "$PORT" \
+# setpriv execs the supervisor directly. runuser handles SIGTERM itself and
+# force-kills its child after two seconds, defeating the gateway's drain budget.
+# HOME is already /home/joseph in the runtime image; supplementary groups are
+# initialized for the same unprivileged account used by all setup commands.
+exec setpriv --reuid=joseph --regid=joseph --init-groups python3 /usr/local/bin/gateway-standby.py --port "$PORT" \
   -- openclaw gateway --port "$PORT" --bind lan --tailscale off

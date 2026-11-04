@@ -44,14 +44,14 @@ def test_broadcast_sends_all_then_is_idempotent_same_day(tmp_path, monkeypatch):
     targets = _targets(tmp_path, ["1@g.us", "2@g.us"])
     state = str(tmp_path / "state.json")
 
-    rc = pb.broadcast(text="hi", image=_image(tmp_path), targets_file=targets,
+    rc = pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, text="hi", image=_image(tmp_path), targets_file=targets,
                       state_file=state, send_delay=0, argv=[])
     assert rc == 0
     assert sent == ["1@g.us", "2@g.us"]
     assert set(json_store.load_json(state, {})["sent"]) == {"1@g.us", "2@g.us"}
 
     sent.clear()
-    rc = pb.broadcast(text="hi", image=_image(tmp_path), targets_file=targets,
+    rc = pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, text="hi", image=_image(tmp_path), targets_file=targets,
                       state_file=state, send_delay=0, argv=[])
     assert rc == 0
     assert sent == []  # every group already sent today
@@ -61,7 +61,7 @@ def test_permission_error_is_skipped_not_failed_and_not_marked_sent(tmp_path, mo
     monkeypatch.setattr(pb, "send_ad", _record_sender([], False, "forbidden: only admins can send"))
     targets = _targets(tmp_path, ["1@g.us"])
     state = str(tmp_path / "state.json")
-    rc = pb.broadcast(text="hi", image=_image(tmp_path), targets_file=targets,
+    rc = pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, text="hi", image=_image(tmp_path), targets_file=targets,
                       state_file=state, send_delay=0, argv=[])
     assert rc == 0
     assert json_store.load_json(state, {})["sent"] == {}
@@ -71,7 +71,7 @@ def test_hard_send_failure_returns_nonzero(tmp_path, monkeypatch):
     monkeypatch.setattr(pb, "send_ad", _record_sender([], False, "temporary network error"))
     targets = _targets(tmp_path, ["1@g.us"])
     state = str(tmp_path / "state.json")
-    rc = pb.broadcast(text="hi", image=_image(tmp_path), targets_file=targets,
+    rc = pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, text="hi", image=_image(tmp_path), targets_file=targets,
                       state_file=state, send_delay=0, argv=[])
     assert rc == 1
 
@@ -101,7 +101,7 @@ def test_not_dispatched_error_is_not_resent_and_marked_sent(tmp_path, monkeypatc
     waits = []
     targets = _targets(tmp_path, ["1@g.us", "2@g.us"])
     state = str(tmp_path / "state.json")
-    rc = pb.broadcast(text="hi", image=_image(tmp_path), targets_file=targets,
+    rc = pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, text="hi", image=_image(tmp_path), targets_file=targets,
                       state_file=state, send_delay=0, argv=[], sleep=waits.append,
                       start_jitter=0, cron_timeout=None)
     assert rc == 0
@@ -118,8 +118,8 @@ def test_not_dispatched_group_is_not_reposted_on_a_same_day_rerun(tmp_path, monk
     state = str(tmp_path / "state.json")
     kw = dict(text="hi", image=_image(tmp_path), targets_file=targets, state_file=state,
               send_delay=0, argv=[], sleep=lambda s: None, start_jitter=0, cron_timeout=None)
-    assert pb.broadcast(**kw) == 0
-    assert pb.broadcast(**kw) == 0
+    assert pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, **kw) == 0
+    assert pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, **kw) == 0
     assert sent == ["1@g.us"]  # the rerun skips it: the gateway already has it
 
 
@@ -139,7 +139,7 @@ def test_ambiguous_errors_are_not_retried(tmp_path, monkeypatch):
         waits = []
         targets = _targets(tmp_path, ["1@g.us"])
         state = str(tmp_path / "state.json")
-        rc = pb.broadcast(text="hi", image=_image(tmp_path), targets_file=targets,
+        rc = pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, text="hi", image=_image(tmp_path), targets_file=targets,
                           state_file=state, send_delay=0, argv=[], sleep=waits.append,
                           start_jitter=0, cron_timeout=None)
         assert rc == 1
@@ -149,7 +149,7 @@ def test_ambiguous_errors_are_not_retried(tmp_path, monkeypatch):
 
 def test_missing_image_returns_nonzero(tmp_path):
     targets = _targets(tmp_path, ["1@g.us"])
-    rc = pb.broadcast(text="hi", image=str(tmp_path / "absent.png"), targets_file=targets,
+    rc = pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, text="hi", image=str(tmp_path / "absent.png"), targets_file=targets,
                       state_file=str(tmp_path / "state.json"), send_delay=0, argv=[])
     assert rc == 1
 
@@ -159,7 +159,7 @@ def test_weekly_group_excluded_off_its_configured_day(tmp_path, monkeypatch):
     monkeypatch.setattr(pb, "send_ad", _record_sender(sent, True, '{"messageId":"m"}'))
     not_today = (date.today().weekday() + 1) % 7
     targets = _targets(tmp_path, ["daily@g.us"], weekly={"weekly@g.us": [not_today]})
-    rc = pb.broadcast(text="hi", image=_image(tmp_path), targets_file=targets,
+    rc = pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, text="hi", image=_image(tmp_path), targets_file=targets,
                       state_file=str(tmp_path / "state.json"), send_delay=0, argv=[])
     assert rc == 0
     assert sent == ["daily@g.us"]  # weekly-limited group is not eligible today

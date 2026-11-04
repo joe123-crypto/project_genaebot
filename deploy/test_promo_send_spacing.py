@@ -83,6 +83,7 @@ class SendSpacingTests(unittest.TestCase):
         targets = self.tmp / "targets.json"
         targets.write_text(json.dumps(data))
         kwargs.setdefault("rng", RecordingRng())
+        kwargs.setdefault("account_status", lambda accounts: {a: True for a in accounts})
         kwargs.setdefault("cron_timeout", None)  # no gateway lookup in tests
         # Off unless a test asks for it, so the gap assertions below see only
         # the between-send gaps. StartJitterTests covers it explicitly.

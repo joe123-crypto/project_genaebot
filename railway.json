@@ -5,6 +5,8 @@
     "dockerfilePath": "deploy/railway/Dockerfile"
   },
   "deploy": {
+    "overlapSeconds": 0,
+    "drainingSeconds": 360,
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 10,
     "numReplicas": 1

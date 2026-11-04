@@ -496,6 +496,33 @@ after changing contact routing.
 | `default` | +263785632943 | the original line; also the admin/self-chat number |
 | `ads` | +263790453292 | second line, added to share the group load; live and enabled since the sibling-line guard shipped |
 
+### Advertising stability trial
+
+The ads line is limited to **10 active groups and 29 campaign/group combinations**.
+`let's build bindura` and `BULAWAYO ADVERTS` are `on-hold`; their original campaign
+assignments remain available for restoration. These are configured eligibility
+counts, before caps and weekly rules, not confirmed deliveries.
+
+Each campaign reads gateway account status immediately before sending. Targets
+for an offline or unknown account are deferred without submitting them or marking
+them sent; other connected accounts continue. There is no automatic catch-up.
+An already-submitted request with an uncertain result keeps its existing duplicate
+protection. Campaign SDK connections are clients of the gateway, not additional
+WhatsApp sessions.
+
+A private, bounded lifecycle journal at `runtime/whatsapp-health/events-YYYY-MM-DD.jsonl`
+records account, deployment, connection, event and reason, without messages,
+recipients or credentials. It distinguishes watchdog recovery, transport errors,
+logged-out authentication, conflicts and planned process stops. It retains 14 UTC
+days, capped at 1 MiB per day; `GENAIE_WHATSAPP_HEALTH_AUDIT=0` disables writing.
+Railway uses zero deployment overlap and a 360-second graceful drain. Nightly
+standby remains 17:00–05:45 Africa/Algiers.
+
+Start the seven-day observation only after the reduced targets are live and ads
+is authenticated. Record phone restriction notices separately from socket failures,
+and avoid discretionary deployments, manual reconnects or campaign changes during
+the trial. An offline day does not establish restriction-free advertising.
+
 ### The two lines talking to each other
 
 Both lines auto-reply, so the moment one DMs the other they answer each other

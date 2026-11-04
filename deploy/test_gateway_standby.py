@@ -145,19 +145,43 @@ while True:time.sleep(.02)
                     second_night[0] = True
                 if data["starts"] == 3:
                     signal.raise_signal(signal.SIGTERM)
+            audit = []
             try:
                 result = S.supervise([sys.executable, "-c", child_code, str(counter), str(port)], root, root, port,
                     clock=lambda: current[0], wait=wait, idle_check=lambda *_args: (True, "idle"),
-                    launch=launch, ready_file=ready, monotonic=lambda: ticks[0])
+                    launch=launch, ready_file=ready, monotonic=lambda: ticks[0],
+                    audit=lambda _state, event, reason, planned, _now: audit.append((event, reason, planned)))
                 self.assertEqual(result, 0)
                 self.assertEqual(health_seen, [1, 2])
                 self.assertEqual(json.loads(counter.read_text()), {"starts": 3, "stops": 3, "data": "preserved"})
                 self.assertTrue(all(child.poll() is not None for child in children))
+                self.assertEqual(sum(event == "gateway_start" for event, *_ in audit), 3)
+                self.assertEqual(sum(event == "planned_stop" and reason == "overnight_standby"
+                                     for event, reason, _ in audit), 2)
+                self.assertIn(("planned_stop", "platform_signal", True), audit)
+                self.assertNotIn(("gateway_stopped", "unexpected_exit", False), audit)
             finally:
                 for child in children:
                     if child.poll() is None:
                         child.terminate()
                         child.wait(timeout=5)
+
+    def test_process_audit_is_private_and_contains_no_config_or_customer_data(self):
+        with tempfile.TemporaryDirectory() as temp:
+            state = Path(temp)
+            (state / "openclaw.json").write_text(json.dumps({"gateway": {"token": "secret"},
+                "channels": {"whatsapp": {"accounts": {"ads": {"enabled": True},
+                    "default": {"enabled": True}, "off": {"enabled": False}}}}}))
+            with patch.dict(os.environ, {"GENAIE_WHATSAPP_HEALTH_AUDIT": "1"}):
+                S.audit_lifecycle(state, "planned_stop", "overnight_standby", True,
+                                  datetime(2026, 11, 4, 17, tzinfo=S.ZONE))
+            file = state / "runtime/whatsapp-health/events-2026-11-04.jsonl"
+            records = [json.loads(line) for line in file.read_text().splitlines()]
+            self.assertEqual({r["accountId"] for r in records}, {"ads", "default"})
+            self.assertEqual(records[0]["timestamp"], "2026-11-04T16:00:00.000Z")
+            self.assertTrue(all(r["planned"] for r in records))
+            self.assertNotIn("secret", file.read_text())
+            self.assertEqual(file.stat().st_mode & 0o777, 0o600)
 
 
 if __name__ == "__main__":

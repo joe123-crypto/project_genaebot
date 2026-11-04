@@ -97,7 +97,7 @@ for line in sys.stdin:
             self.assertTrue(self.processes)
             self.assertTrue(all(process.poll() is not None for process in self.processes))
         with patch.dict(os.environ, {"GENAIE_CAMPAIGN_TRANSPORT": "rpc-once"}):
-            self.assertEqual(pb.broadcast(text="hello", image=str(image), targets_file=str(targets),
+            self.assertEqual(pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, text="hello", image=str(image), targets_file=str(targets),
                 state_file=str(state), argv=[], caps=None, cron_timeout=None,
                 start_jitter=0, send_delay=1, sleep=gap), 0)
         self.assertEqual(len(self.processes), 2)
@@ -163,7 +163,7 @@ for line in sys.stdin:
         targets = self.root / "targets.json"
         targets.write_text('{"groups":["1@g.us"]}')
         with patch.dict(os.environ, {"GENAIE_CAMPAIGN_TRANSPORT": "rpc"}):
-            result = pb.broadcast(text="hello", image=str(image), targets_file=str(targets),
+            result = pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, text="hello", image=str(image), targets_file=str(targets),
                                   state_file=str(self.root / "state.json"),
                                   argv=["--dry-run"], caps=None)
         self.assertEqual(result, 0)
@@ -180,8 +180,8 @@ for line in sys.stdin:
                          state_file=str(state), argv=[], caps=None, cron_timeout=None,
                          start_jitter=0, send_delay=0)
         with patch.dict(os.environ, {"GENAIE_CAMPAIGN_TRANSPORT": "rpc"}):
-            self.assertEqual(pb.broadcast(**arguments), 0)
-            self.assertEqual(pb.broadcast(**arguments), 0)
+            self.assertEqual(pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, **arguments), 0)
+            self.assertEqual(pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, **arguments), 0)
         self.assertEqual(len(self.processes), 1)
         self.assertEqual(len(self.calls()), 2)
         self.assertEqual(set(json.loads(state.read_text())["sent"]), {"1@g.us", "2@g.us"})
@@ -194,7 +194,7 @@ for line in sys.stdin:
         targets.write_text('{"groups":["1@g.us"]}')
         state = self.root / "state.json"
         with patch.dict(os.environ, {"GENAIE_CAMPAIGN_TRANSPORT": "rpc"}):
-            self.assertEqual(pb.broadcast(text="queued", image=str(image),
+            self.assertEqual(pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, text="queued", image=str(image),
                 targets_file=str(targets), state_file=str(state), argv=[], caps=None,
                 cron_timeout=None, start_jitter=0, send_delay=0), 0)
         self.assertEqual(len(self.calls()), 1)

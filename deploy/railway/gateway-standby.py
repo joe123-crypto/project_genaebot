@@ -8,11 +8,12 @@ Unknown activity or failed probes defer standby; no timeout kills active work.
 
 import argparse
 from contextlib import closing
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import sqlite3
 import subprocess
@@ -137,9 +138,45 @@ def log(message):
     print("[standby] " + message, flush=True)
 
 
+def audit_lifecycle(state, event, reason, planned, now):
+    """Append planned process transitions to the same private lifecycle journal.
+
+    The adapter records socket events. These process records explain whether a
+    socket stop coincided with standby, a deployment signal, or an unexpected exit.
+    """
+    if os.environ.get("GENAIE_WHATSAPP_HEALTH_AUDIT") == "0":
+        return
+    try:
+        config = json.loads((state / "openclaw.json").read_text())
+        whatsapp = config.get("channels", {}).get("whatsapp", {})
+        accounts = whatsapp.get("accounts", {"default": {}})
+        stamp = now.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        directory = state / "runtime/whatsapp-health"
+        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        deployment = os.environ.get("RAILWAY_DEPLOYMENT_ID", "")
+        deployment = deployment if re.fullmatch(r"[A-Za-z0-9_-]{1,128}", deployment) else None
+        for account, settings in accounts.items():
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", account) or not settings.get("enabled", True):
+                continue
+            record = {"timestamp": stamp, "accountId": account, "deploymentId": deployment,
+                      "runId": None, "connectionId": None, "event": event, "reason": reason,
+                      "statusCode": None, "planned": planned}
+            body = (json.dumps(record) + "\n").encode()
+            fd = os.open(directory / f"events-{stamp[:10]}.jsonl", os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+            try:
+                if os.fstat(fd).st_size + len(body) <= 1024 * 1024:
+                    os.write(fd, body)
+            finally:
+                os.close(fd)
+    except (OSError, ValueError, TypeError, AttributeError):
+        # Missing configuration during an offline test or unavailable audit storage
+        # must not affect supervision or expose configuration values.
+        pass
+
+
 def supervise(command, directory, state, port, *, clock=None, wait=None, idle_check=can_stop,
               launch=subprocess.Popen, health_factory=HealthServer, ready_file=None,
-              monotonic=time.monotonic):
+              monotonic=time.monotonic, audit=audit_lifecycle):
     clock = clock or (lambda: datetime.now(ZONE))
     stopping = threading.Event()
     wait = wait or stopping.wait
@@ -173,6 +210,7 @@ def supervise(command, directory, state, port, *, clock=None, wait=None, idle_ch
                 closing_file.unlink(missing_ok=True)
                 (directory / "requests.json").unlink(missing_ok=True)
                 child = launch(command)
+                audit(state, "gateway_start", "startup" if first_boot else "scheduled_wake", not first_boot, now)
                 first_boot = False
                 draining = False
                 log("gateway started; automatic morning wake is local to this container")
@@ -180,8 +218,10 @@ def supervise(command, directory, state, port, *, clock=None, wait=None, idle_ch
                 code = child.returncode
                 child = None
                 if not draining:
+                    audit(state, "gateway_stopped", "unexpected_exit", False, now)
                     log("gateway exited unexpectedly; handing recovery to the platform")
                     return code or 1
+                audit(state, "gateway_stopped", "overnight_standby", True, now)
                 draining = False
                 # If graceful shutdown crossed wake time, restart immediately.
                 if standby_window(clock()) is None:
@@ -203,6 +243,7 @@ def supervise(command, directory, state, port, *, clock=None, wait=None, idle_ch
                         reason = "new requests held while existing work drains"
                     elif idle and (now - closed_at).total_seconds() >= QUIET_SECONDS:
                         log("idle verified; requesting graceful gateway shutdown")
+                        audit(state, "planned_stop", "overnight_standby", True, now)
                         child.send_signal(signal.SIGTERM)
                         draining = True
                     elif not idle:
@@ -213,9 +254,11 @@ def supervise(command, directory, state, port, *, clock=None, wait=None, idle_ch
                         last_reason = reason
             wait(1)
         if child is not None and child.poll() is None:
+            audit(state, "planned_stop", "platform_signal", True, clock())
             child.send_signal(signal.SIGTERM)
             # Never force-kill in-flight requests to reach a cost target.
             child.wait()
+            audit(state, "gateway_stopped", "platform_signal", True, clock())
         return 0
     finally:
         close_health()

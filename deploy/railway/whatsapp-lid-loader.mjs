@@ -7,12 +7,43 @@ export const SUPPORTED_WHATSAPP_VERSION = '2026.9.9';
 const checkedPackages = new Set();
 const HELPER = new URL('./whatsapp-lid-recovery.mjs', import.meta.url).href;
 const CACHE_HELPER = new URL('./whatsapp-cache-cleanup.mjs', import.meta.url).href;
+const HEALTH_HELPER = new URL('./whatsapp-health-audit.mjs', import.meta.url).href;
 const CACHE_MARKER = '// GENAIE_WHATSAPP_EXPIRED_CACHE_CLEANUP_V1';
 const CACHE_START = '\t\tif (started || closed) return;\n\t\tstarted = true;\n\t\tconst listen = (event, listener) => {';
 const FROM = 'const from = group ? remoteJid : await socketSession.resolveInboundJid(remoteJid);';
 const SENDER = 'const senderE164 = group ? participantJid ? await socketSession.resolveInboundJid(participantJid) : null : from;';
 const PHONE_NORMALIZER = 'function normalizeWhatsAppIngressPhone(value) {\n\tconst trimmed = value.trim();\n\tif (!trimmed) return null;\n\treturn normalizeE164(trimmed);\n}';
 const MARKER = '// GENAIE_WHATSAPP_LID_RECOVERY_V1';
+
+export function patchWhatsAppHealthAudit(source) {
+  const marker = '// GENAIE_WHATSAPP_HEALTH_AUDIT_V1';
+  if (source.includes(marker)) return source;
+  const changes = [
+    ['\tconst controller = new WhatsAppConnectionController({',
+      '\tconst genaieAudit = genaieCreateWhatsAppHealthAudit({ accountId: account.accountId, runId });\n'],
+    ['\t\t\tconst connectionId = newConnectionId();\n\t\t\tconst shouldDebounce',
+      '\t\t\tgenaieAudit({ event: "connect_attempt", connectionId });\n', true],
+    ['\t\t\t\t\t\tconst watchdogReason = transportSilentMs > transportTimeoutMs ? "transport-inactive" : "app-silent";',
+      '\n\t\t\t\t\t\tgenaieAudit({ event: "watchdog", connectionId: snapshot.connectionId, reason: watchdogReason });', true],
+    ['\t\t\t\tif (setupDecision) {',
+      '\n\t\t\t\t\tgenaieAudit({ event: "setup_failure", connectionId, statusCode: setupDecision.normalized.statusCode, reason: setupDecision.healthState });', true],
+    ['\t\t\tstatusController.noteConnected();',
+      '\n\t\t\tgenaieAudit({ event: "connected", connectionId, reason: "connected" });', true],
+    ['\t\t\tstatusController.noteReconnectAttempts(controller.getReconnectAttempts());',
+      '\t\t\tgenaieAudit({ event: "disconnected", connectionId, statusCode: decision.normalized.statusCode, reason: decision.healthState });\n'],
+    ['\t\tstatusController.markStopped();',
+      '\t\tgenaieAudit({ event: "stopped", reason: stopRequested() || sigintStop ? "shutdown" : "stopped", planned: stopRequested() || sigintStop });\n'],
+  ];
+  for (const [anchor, addition, after] of changes) {
+    if (source.split(anchor).length !== 2) throw new Error('WhatsApp lifecycle audit contract changed; review adapter before upgrading');
+    // The connection ID anchor spans the next declaration; insert between them.
+    const replacement = anchor.includes('const shouldDebounce')
+      ? anchor.replace('\n\t\t\tconst shouldDebounce', '\n' + addition + '\t\t\tconst shouldDebounce')
+      : after ? anchor + addition : addition + anchor;
+    source = source.replace(anchor, replacement);
+  }
+  return `${marker}\nimport { createWhatsAppHealthAudit as genaieCreateWhatsAppHealthAudit } from ${JSON.stringify(HEALTH_HELPER)};\n` + source;
+}
 
 export function patchWhatsAppCacheCleanup(source) {
   if (source.includes(CACHE_MARKER)) return source;
@@ -78,6 +109,7 @@ registerHooks({
     if (!patch) return result;
     const source = typeof result.source === 'string' ? result.source : new TextDecoder().decode(result.source);
     let patched = patch(source);
+    if (patch === patchWhatsAppMonitor) patched = patchWhatsAppHealthAudit(patched);
     if (patch === patchWhatsAppMonitor && process.env.GENAIE_WHATSAPP_CACHE_CLEANUP === '1') patched = patchWhatsAppCacheCleanup(patched);
     return { ...result, source: patched };
   },

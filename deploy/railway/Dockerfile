@@ -83,6 +83,7 @@ ENV GENAIE_CATALOG_IDLE_RETIREMENT=0
 ENV GENAIE_HISTORY_IDLE_RETIREMENT=0
 ENV GENAIE_WHATSAPP_CACHE_CLEANUP=0
 ENV GENAIE_OVERNIGHT_STANDBY=0
+ENV GENAIE_WHATSAPP_HEALTH_AUDIT=1
 
 # Bake the curated source overlay assembled in stage 1. The entrypoint syncs it
 # onto the state volume on every boot (source of truth for workspace/ and the
@@ -97,7 +98,7 @@ COPY deploy/railway/report-release-ready.py /usr/local/bin/report-release-ready.
 COPY deploy/railway/gateway-standby.py /usr/local/bin/gateway-standby.py
 RUN python3 -c 'from zoneinfo import ZoneInfo; ZoneInfo("Africa/Algiers")'
 COPY deploy/railway/wait-gateway-lease.py /usr/local/bin/wait-gateway-lease.py
-COPY deploy/railway/whatsapp-lid-loader.mjs deploy/railway/whatsapp-lid-recovery.mjs deploy/railway/whatsapp-cache-cleanup.mjs /usr/local/lib/genaie/
+COPY deploy/railway/whatsapp-lid-loader.mjs deploy/railway/whatsapp-lid-recovery.mjs deploy/railway/whatsapp-cache-cleanup.mjs deploy/railway/whatsapp-health-audit.mjs /usr/local/lib/genaie/
 RUN chmod 0755 /usr/local/bin/entrypoint.sh /usr/local/bin/sync-public-prompt.py \
     /usr/local/bin/sync-reply-gates.py /usr/local/bin/sync-runtime-plugins.py \
     /usr/local/bin/wait-gateway-lease.py
