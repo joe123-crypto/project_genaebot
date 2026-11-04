@@ -85,6 +85,36 @@ def gateway_env():
     return env
 
 
+def account_connectivity(accounts):
+    """Read existing listeners, never start a WhatsApp session or probe the phone.
+
+    Missing/malformed status fails closed for the requested accounts. This check
+    precedes submission, unlike an uncertain result from an already-issued send.
+    """
+    result = {account: False for account in accounts}
+    try:
+        client = active_client()
+        if client is not None:
+            ok, output = client.request("channels.status", {})
+            if not ok:
+                return result
+            status = json.loads(output)
+        else:
+            response = subprocess.run(
+                ["openclaw", "channels", "status", "--json"],
+                env=gateway_env(), capture_output=True, text=True, timeout=30,
+                check=True)
+            status = json.loads(response.stdout)
+        for entry in status["channelAccounts"]["whatsapp"]:
+            account = entry.get("accountId")
+            if account in result:
+                result[account] = entry.get("connected") is True
+    except (OSError, ValueError, KeyError, TypeError, AttributeError,
+            subprocess.SubprocessError):
+        sys.stderr.write("WARN: WhatsApp account status unavailable; pending sends deferred.\n")
+    return result
+
+
 # ---------------------------------------------------------- weekly cadence ----
 # Some groups get the ad only on specific weekdays (e.g. twice a week) instead of
 # daily. weekday() uses Mon=0 .. Sun=6. Weekday tokens in targets.json may be
@@ -918,7 +948,7 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
               tracking=None, promo_name=None, variant_images=None,
               send_delay_min=None, send_delay_max=None, rng=None, sleep=None,
               cron_timeout=_PROBE_CRON_TIMEOUT, start_jitter=None,
-              caps=_PROBE_CAPS, membership_path=None):
+              caps=_PROBE_CAPS, membership_path=None, account_status=None):
     """Resolve targets, skip groups already sent today (and weekly-limited groups
     off their configured weekday), then send the advert to each pending group,
     committing state per group so a crash or retry never double-posts. Returns a
@@ -1090,17 +1120,28 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
         print("Waiting %.0f s before the first send (start jitter)." % jitter)
         sleep(jitter)
 
+    # Take one fresh snapshot after jitter, immediately before submission. A
+    # known-offline target never enters the gateway queue and gets no receipt.
+    check_accounts = account_status or account_connectivity
+    accounts = {account_for(jid) for jid in pending}
+    connected = check_accounts(accounts)
+    unavailable = {account for account in accounts if connected.get(account) is not True}
     failures = 0
     skipped = 0
+    deferred = 0
     queued = 0
     sent = 0
-    for i, jid in enumerate(pending):
-        if i > 0:
+    attempted = 0
+    for jid in pending:
+        account = account_for(jid)
+        if account in unavailable:
+            deferred += 1
+            continue
+        if attempted > 0:
             # Random (not fixed) gap between send attempts: a metronome-regular
             # cadence is what WhatsApp spam detection reportedly flags. State is
             # committed per group before this sleep, so a kill mid-gap is safe.
             sleep(rng.uniform(gap_min, gap_max))
-        account = account_for(jid)
         number = number_for(jid)
         if bot_number_used and not number:
             # Can't render this group's own advertised number: skip rather than
@@ -1115,6 +1156,13 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
                                       tracking=tracking, bot_number=number)
         ok, out = send_ad(jid, caption, variant_images.get(idx, image_path),
                           account=account)
+        attempted += 1
+        if not ok and is_not_dispatched_error(out):
+            # This request may already be queued upstream. Preserve its existing
+            # uncertain-send handling below, but do not submit more work to a
+            # listener now known to be offline.
+            if check_accounts({account}).get(account) is not True:
+                unavailable.add(account)
         if (not ok) and (not is_permission_error(out)) and is_not_dispatched_error(out):
             # Link was mid-reconnect: the gateway queued this send and replays it
             # on reconnect (see NOT_DISPATCHED_MARKERS). Re-sending would post the
@@ -1143,6 +1191,10 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
 
     save_state(state_file, st)  # persist any newly-cached invite resolutions
 
-    print("SENT %d/%d (queued %d, skipped %d, failures %d)"
-          % (sent, len(pending), queued, skipped, failures))
+    if deferred:
+        sys.stderr.write("DEFERRED %d targets: WhatsApp accounts unavailable (%s); "
+                         "not submitted or marked sent. No automatic catch-up.\n"
+                         % (deferred, ", ".join(sorted(unavailable))))
+    print("SENT %d/%d (queued %d, skipped %d, failures %d, deferred %d)"
+          % (sent, len(pending), queued, skipped, failures, deferred))
     return 1 if failures else 0

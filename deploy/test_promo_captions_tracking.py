@@ -185,7 +185,7 @@ class VariantRotationTests(unittest.TestCase):
                 targets = Path(tmp, "targets.json")
                 targets.write_text(json.dumps({"groups": self.JIDS[:6]}))
                 state = Path(tmp, "state.json")
-                rc = pb.broadcast(text=self.VARIANTS, image=str(img),
+                rc = pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, text=self.VARIANTS, image=str(img),
                                   targets_file=str(targets), state_file=str(state),
                                   send_delay=0, argv=[], start_jitter=0, caps=None)
                 self.assertEqual(rc, 0)
@@ -210,7 +210,7 @@ class VariantRotationTests(unittest.TestCase):
                 pinned.write_bytes(b"img")
                 targets = Path(tmp, "targets.json")
                 targets.write_text(json.dumps({"groups": self.JIDS[:12]}))
-                rc = pb.broadcast(text=self.VARIANTS, image=str(img),
+                rc = pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, text=self.VARIANTS, image=str(img),
                                   targets_file=str(targets),
                                   state_file=str(Path(tmp, "state.json")),
                                   send_delay=0, argv=[], start_jitter=0, caps=None,
@@ -234,7 +234,7 @@ class VariantRotationTests(unittest.TestCase):
                 img.write_bytes(b"img")
                 Path(tmp, "t.json").write_text(json.dumps({"groups": self.JIDS[:3]}))
                 with redirect_stdout(io.StringIO()):
-                    rc = pb.broadcast(text=self.VARIANTS, image=str(img),
+                    rc = pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, text=self.VARIANTS, image=str(img),
                                       targets_file=str(Path(tmp, "t.json")),
                                       state_file=str(Path(tmp, "s.json")),
                                       send_delay=0, argv=[], start_jitter=0, caps=None,
@@ -254,7 +254,7 @@ class VariantRotationTests(unittest.TestCase):
                 targets = Path(tmp, "targets.json")
                 targets.write_text(json.dumps({"groups": ["1@g.us", "2@g.us"]}))
                 text = "Fixed {not a placeholder} caption"
-                pb.broadcast(text=text, image=str(img), targets_file=str(targets),
+                pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, text=text, image=str(img), targets_file=str(targets),
                              state_file=str(Path(tmp, "s.json")), send_delay=0, argv=[], start_jitter=0, caps=None)
                 self.assertEqual(sent, [text, text])
         finally:
@@ -329,7 +329,7 @@ class LinkAndPlaceholderTests(unittest.TestCase):
     def test_tracking_requires_prefix(self):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(ValueError):
-                pb.broadcast(text="x", image=str(Path(tmp, "a.png")),
+                pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, text="x", image=str(Path(tmp, "a.png")),
                              targets_file=str(Path(tmp, "t.json")),
                              state_file=str(Path(tmp, "s.json")),
                              argv=[], tracking={"number": "+263785632943"})
@@ -344,7 +344,7 @@ class LinkAndPlaceholderTests(unittest.TestCase):
             targets = Path(tmp, "t.json")
             targets.write_text(json.dumps({"groups": ["1@g.us"]}))
             with self.assertRaises(ValueError):
-                pb.broadcast(text="Call {bot_number}", image=str(img),
+                pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, text="Call {bot_number}", image=str(img),
                              targets_file=str(targets),
                              state_file=str(Path(tmp, "s.json")),
                              argv=[], start_jitter=0, caps=None)
@@ -379,7 +379,7 @@ class AccountRoutingTests(unittest.TestCase):
         try:
             img = Path(tmp, "ad.png")
             img.write_bytes(b"img")
-            rc = pb.broadcast(image=str(img), targets_file=str(self._targets(tmp, contact_account)),
+            rc = pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, image=str(img), targets_file=str(self._targets(tmp, contact_account)),
                               state_file=str(Path(tmp, "s.json")),
                               send_delay=0, argv=[], start_jitter=0, caps=None,
                               **kwargs)
@@ -490,7 +490,7 @@ class AccountRoutingTests(unittest.TestCase):
                 img = Path(tmp, "ad.png")
                 img.write_bytes(b"img")
                 with redirect_stdout(io.StringIO()) as buf:
-                    rc = pb.broadcast(text="Call {bot_number}", image=str(img),
+                    rc = pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, text="Call {bot_number}", image=str(img),
                                       targets_file=str(Path(tmp, "missing.json")),
                                       state_file=str(Path(tmp, "s.json")),
                                       tracking=self.TRACK, promo_name="genaie-promo",
@@ -539,8 +539,6 @@ class PromoWiringTests(unittest.TestCase):
             "263773491386-1578547813@g.us": "ads",
             "263773491386-1578547921@g.us": "ads",
             "263776554037-1383758077@g.us": "ads",
-            "120363046894354726@g.us": "ads",
-            "120363433121439254@g.us": "ads",
         }
         sent = []
         saved = pb.send_ad
@@ -554,8 +552,8 @@ class PromoWiringTests(unittest.TestCase):
                               tracking=m.TRACKING, promo_name="genaie-advertisers-promo",
                               send_delay=0, start_jitter=0, cron_timeout=None,
                               caps=None, argv=[])
-                self.assertEqual(pb.broadcast(**kwargs), 0)
-                self.assertEqual(pb.broadcast(**kwargs), 0)
+                self.assertEqual(pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, **kwargs), 0)
+                self.assertEqual(pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, **kwargs), 0)
             self.assertEqual(len(sent), len(expected))
             self.assertEqual({target for target, *_ in sent}, set(expected))
             for target, text, image, account in sent:

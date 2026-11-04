@@ -119,7 +119,7 @@ export function createWhatsAppInboundMessageNormalizer(options) {
     const senderE164 = group ? participantJid ? await socketSession.resolveInboundJid(participantJid) : null : from;
     return { from, senderE164, ingressIdentity: normalizeWhatsAppIngressPhone(from) };
   }};
-}`);
+}` + fs.readFileSync(new URL('./fixtures/whatsapp-lifecycle-2026.9.9.js', import.meta.url), 'utf8'));
   const runner = path.join(f.root, 'run.mjs');
   fs.writeFileSync(runner, `import {createWhatsAppInboundMessageNormalizer} from ${JSON.stringify(adapter)};
 const factory = createWhatsAppInboundMessageNormalizer({cfg:{},accountId:'ads',socketSession:{resolveInboundJid:async()=>null}});

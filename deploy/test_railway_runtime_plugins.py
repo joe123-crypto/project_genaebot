@@ -84,7 +84,7 @@ class RuntimePluginTests(unittest.TestCase):
         position = entrypoint.index("python3 /usr/local/bin/sync-runtime-plugins.py")
         self.assertLess(entrypoint.index('touch "$upgrade_marker.done"'), position)
         self.assertLess(position, entrypoint.index("# Non-fatal on purpose:"))
-        self.assertLess(position, entrypoint.index("exec runuser -u joseph -- python3 /usr/local/bin/gateway-standby.py"))
+        self.assertLess(position, entrypoint.index("exec setpriv --reuid=joseph --regid=joseph --init-groups python3 /usr/local/bin/gateway-standby.py"))
         self.assertIn("COPY deploy/railway/sync-runtime-plugins.py /usr/local/bin/sync-runtime-plugins.py",
                       (ROOT / "deploy/railway/Dockerfile").read_text())
 

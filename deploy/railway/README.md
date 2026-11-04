@@ -274,6 +274,46 @@ pushed via the CLI; auto-seed extracts `openclaw-state.tgz` / `runtime-seed.tgz`
 volume root on boot. See the entrypoint (`deploy/railway/entrypoint.sh`, steps 0–1.6) and
 the project memory notes for the full seed/stuck-session recovery procedure.
 
+## WhatsApp stability and account recovery
+
+The checked-in Railway deploy configuration sets `overlapSeconds: 0` and
+`drainingSeconds: 360`, covering OpenClaw's 330-second shutdown budget. Keep one
+replica and the native ownership lease; do not shorten the drain or manually clear
+a live lease. The final privilege drop uses `setpriv` to exec the supervisor directly,
+so `runuser` cannot cut its graceful shutdown short with its two-second kill timer. Scheduled standby remains enabled with its existing quiet-work guard.
+The supervisor records planned standby, morning wake and platform shutdown signals;
+the adapter records account-specific socket transitions using existing callbacks.
+No new reconnect controller, timer, polling worker or watchdog setting is added.
+
+Audit files live on the persistent volume at
+`/home/joseph/.openclaw/runtime/whatsapp-health/events-YYYY-MM-DD.jsonl`. They contain
+UTC timestamp, accountId, deploymentId, runId, connectionId, event, reason,
+statusCode and planned. The journal is private (0600), retains 14 UTC days and is
+capped at 1 MiB per day; failure or a full journal never stops the gateway.
+`GENAIE_WHATSAPP_HEALTH_AUDIT=0` disables both adapter and supervisor audit writes.
+Authentication failures and session conflicts are not phone restriction notices.
+
+Before account recovery, inspect `openclaw channels status --json` through the
+existing gateway helper. Use **`--account ads`** on every ads login/logout command;
+never omit the account and accidentally operate on `default`. Do not create a
+standalone sender or concurrent login process for an already connected account.
+For terminal invalid authentication, first preserve a private copy of its auth
+directory, stop the affected listener with the account-specific logout command,
+then perform one account-specific QR login and verify status. Logout deliberately
+clears that account's credentials, so use it only for confirmed invalid authentication,
+not transient reconnects. A phone scan is an operator action; do not retry QR login
+automatically or send a test ad. A session conflict requires checking competing
+owners before deciding whether relinking is necessary.
+
+The ads trial pauses `let's build bindura` and `BULAWAYO ADVERTS`, leaving exactly
+10 active ads groups and 29 configured campaign/group combinations. Campaigns check
+existing listener status after start jitter; unavailable targets are not submitted
+or marked sent. If an already-issued request loses its listener, its existing
+uncertain-send receipt is preserved while remaining targets for the disconnected
+account are deferred. Other accounts continue. Deferred work is not queued for a
+catch-up burst. Record seven days of authenticated operation, including nightly
+sleep/wake results and any separately captured phone restriction notice.
+
 ## Verify a deploy
 
 ```sh

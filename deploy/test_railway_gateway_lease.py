@@ -108,7 +108,7 @@ class GatewayLeaseWaitTests(unittest.TestCase):
         entrypoint = (ROOT / "deploy/railway/entrypoint.sh").read_text(encoding="utf-8")
         wait_at = entrypoint.index("wait-gateway-lease.py")
         self.assertLess(entrypoint.index("sync-public-prompt.py \\"), wait_at)
-        self.assertLess(wait_at, entrypoint.index("exec runuser -u joseph -- python3 /usr/local/bin/gateway-standby.py"))
+        self.assertLess(wait_at, entrypoint.index("exec setpriv --reuid=joseph --regid=joseph --init-groups python3 /usr/local/bin/gateway-standby.py"))
         dockerfile = (ROOT / "deploy/railway/Dockerfile").read_text(encoding="utf-8")
         self.assertIn("COPY deploy/railway/wait-gateway-lease.py /usr/local/bin/wait-gateway-lease.py", dockerfile)
 

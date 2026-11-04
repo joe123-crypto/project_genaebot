@@ -7,6 +7,7 @@ import signal
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -21,6 +22,29 @@ spec.loader.exec_module(S)
 
 @unittest.skipUnless(os.environ.get("GENAIE_OPENCLAW_ROOT"), "installed runtime is exercised in the native CI job")
 class RuntimeTests(unittest.TestCase):
+    def test_privilege_drop_allows_shutdown_longer_than_runusers_two_second_limit(self):
+        code = '''import json,os,signal,time
+def stop(*_args):
+ time.sleep(3)
+ os.write(1,b"drained\\n")
+ raise SystemExit(0)
+signal.signal(signal.SIGTERM,stop)
+os.write(1,(json.dumps({"uid":os.getuid(),"gid":os.getgid()})+"\\n").encode())
+signal.pause()
+'''
+        process = subprocess.Popen(["setpriv", "--reuid=joseph", "--regid=joseph", "--init-groups",
+                                    sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(json.loads(process.stdout.readline()), {"uid": 1000, "gid": 1000})
+            process.send_signal(signal.SIGTERM)
+            output, _ = process.communicate(timeout=10)
+            self.assertEqual(process.returncode, 0)
+            self.assertEqual(output.strip(), "drained")
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+
     def test_real_gateway_restarts_with_same_native_state_after_two_standbys(self):
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp)
