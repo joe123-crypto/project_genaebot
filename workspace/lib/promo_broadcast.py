@@ -742,6 +742,32 @@ def _env_seconds(name, default):
     return _seconds(raw, name, default)
 
 
+# A routine WhatsApp Web reconnect (status 500/428/503) relinks within a few
+# seconds; give a dropped listener this long to return before deferring the rest
+# of its groups. PROMO_RECONNECT_GRACE_SECONDS=0 restores the immediate deferral.
+DEFAULT_RECONNECT_GRACE = 90.0
+RECONNECT_POLL_SECONDS = 5.0
+
+
+def wait_for_account(check_accounts, account, sleep=None, grace=None,
+                     poll=RECONNECT_POLL_SECONDS):
+    """True once ``account`` reports connected, polling every ``poll`` seconds
+    for up to ``grace`` seconds (default ``PROMO_RECONNECT_GRACE_SECONDS``, else
+    90 s). Reads listener status only; never starts a session or sends."""
+    sleep = sleep or time.sleep
+    if grace is None:
+        grace = _env_seconds("PROMO_RECONNECT_GRACE_SECONDS", DEFAULT_RECONNECT_GRACE)
+    waited = 0.0
+    while True:
+        if check_accounts({account}).get(account) is True:
+            return True
+        if waited >= grace:
+            return False
+        step = min(poll, grace - waited)
+        sleep(step)
+        waited += step
+
+
 def send_gap_bounds(send_delay=None, send_delay_min=None, send_delay_max=None):
     """(min, max) seconds between consecutive sends. A legacy fixed
     ``send_delay`` pins both bounds to it; otherwise each bound comes from its
@@ -1162,8 +1188,12 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
         if not ok and is_not_dispatched_error(out):
             # This request may already be queued upstream. Preserve its existing
             # uncertain-send handling below, but do not submit more work to a
-            # listener now known to be offline.
-            if check_accounts({account}).get(account) is not True:
+            # listener now known to be offline -- unless it comes back within a
+            # short grace. WhatsApp drops the Web socket with a 500 every hour or
+            # so and relinks in seconds; on 2026-11-05 a send that landed in that
+            # half-second window deferred the remaining 15 default-line groups of
+            # the borehole run for the whole day.
+            if not wait_for_account(check_accounts, account, sleep):
                 unavailable.add(account)
         if (not ok) and (not is_permission_error(out)) and is_not_dispatched_error(out):
             # Link was mid-reconnect: the gateway queued this send and replays it

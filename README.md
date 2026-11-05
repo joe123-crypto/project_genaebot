@@ -602,6 +602,9 @@ WhatsApp Business. Client identity and reply timing settings are unchanged.
 Each campaign reads gateway account status immediately before sending. Targets
 for an offline or unknown account are deferred without submitting them or marking
 them sent; other connected accounts continue. There is no automatic catch-up.
+If a line drops mid-run, the campaign polls its status every 5 s for up to 90 s
+(`PROMO_RECONNECT_GRACE_SECONDS`, 0 disables) before deferring that line's
+remaining groups, so a routine status-500 relink no longer costs the day's ads.
 An already-submitted request with an uncertain result keeps its existing duplicate
 protection. Campaign SDK connections are clients of the gateway, not additional
 WhatsApp sessions.
