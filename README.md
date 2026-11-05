@@ -474,7 +474,8 @@ because the entrypoint's variable sanitiser would mangle a multi-line JSON
 value. `GCP_SERVICE_ACCOUNT_B64` is in the entrypoint's `SECRET_KEYS`, so it
 lands in the volume `.env` at 0600. Neither variable is release-managed, so a
 deploy neither sets nor clears them. For a one-off check from a shell on the
-gateway: `python3 workspace/lib/config_shadow.py` (exit 1 on any difference).
+gateway: `runuser -u joseph -- python3 workspace/lib/config_shadow.py` (exit 1 on any
+difference; as joseph, so the files it writes stay writable by the cron runs).
 
 ### Per-group daily ad caps
 
