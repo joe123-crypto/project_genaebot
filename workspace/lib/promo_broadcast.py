@@ -773,6 +773,28 @@ def wait_for_account(check_accounts, account, sleep=None, grace=None,
         waited += step
 
 
+def reconnect_grace(run_deadline, remaining, gap_max):
+    """Seconds :func:`wait_for_account` may wait mid-run. The configured grace
+    (``PROMO_RECONNECT_GRACE_SECONDS``, else 90 s), shortened so the groups still
+    to send -- at the planned worst case of ``SEND_ALLOWANCE_SECONDS`` plus the
+    longest gap each -- fit before the cron job's timeout at ``run_deadline``
+    (a ``time.monotonic()`` value; ``None`` when no timeout is known). Without
+    this cap a 90 s wait, repeated on every drop of a flapping line, could get
+    the run killed before groups on healthy lines were reached."""
+    grace = _env_seconds("PROMO_RECONNECT_GRACE_SECONDS", DEFAULT_RECONNECT_GRACE)
+    if run_deadline is None:
+        return grace
+    needed = len(remaining) * (SEND_ALLOWANCE_SECONDS + gap_max)
+    room = max(0.0, run_deadline - time.monotonic() - needed)
+    if room < grace:
+        sys.stderr.write(
+            "WARN: reconnect grace cut from %.0f s to %.0f s so the %d groups "
+            "still to send fit inside this cron job's timeout.\n"
+            % (grace, room, len(remaining)))
+        return room
+    return grace
+
+
 def send_gap_bounds(send_delay=None, send_delay_min=None, send_delay_max=None):
     """(min, max) seconds between consecutive sends. A legacy fixed
     ``send_delay`` pins both bounds to it; otherwise each bound comes from its
@@ -1152,6 +1174,9 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
     if jitter > 0:
         print("Waiting %.0f s before the first send (start jitter)." % jitter)
         sleep(jitter)
+    # When cron will kill this job: a reconnect wait mid-run must leave room for
+    # the groups still to come (see reconnect_grace below).
+    run_deadline = time.monotonic() + budget if budget else None
 
     # Take one fresh snapshot after jitter, immediately before submission. A
     # known-offline target never enters the gateway queue and gets no receipt.
@@ -1165,7 +1190,7 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
     queued = 0
     sent = 0
     attempted = 0
-    for jid in pending:
+    for position, jid in enumerate(pending):
         account = account_for(jid)
         if account in unavailable:
             deferred += 1
@@ -1207,7 +1232,10 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
             # socket with a 500 every hour or so and relinks in seconds; on
             # 2026-11-05 a send that landed in that window deferred the remaining
             # 15 default-line groups of the borehole run for the whole day.
-            if not wait_for_account(check_accounts, account, sleep):
+            grace = reconnect_grace(run_deadline, [
+                j for j in pending[position + 1:] if account_for(j) not in unavailable],
+                gap_max)
+            if not wait_for_account(check_accounts, account, sleep, grace=grace):
                 unavailable.add(account)
             if not is_permission_error(out):
                 continue

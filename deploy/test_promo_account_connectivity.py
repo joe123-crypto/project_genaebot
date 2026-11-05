@@ -28,7 +28,7 @@ class ConnectivityTests(unittest.TestCase):
             for targets in (ROOT / "workspace/cron").glob("*-promo/targets.json"):
                 self.assertNotIn(jid, targets.read_text())
 
-    def run_campaign(self, status, sender):
+    def run_campaign(self, status, sender, cron_timeout=None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "image.jpg").write_bytes(b"fixture")
@@ -37,7 +37,7 @@ class ConnectivityTests(unittest.TestCase):
             with patch.object(pb, "send_ad", side_effect=sender) as send:
                 result = pb.broadcast(text="fixture", image=str(root / "image.jpg"),
                     targets_file=str(root / "targets.json"), state_file=str(root / "state.json"),
-                    argv=[], start_jitter=0, cron_timeout=None, caps=None, send_delay=0,
+                    argv=[], start_jitter=0, cron_timeout=cron_timeout, caps=None, send_delay=0,
                     account_status=status, sleep=self.naps.append)
             return result, json.loads((root / "state.json").read_text())["sent"], send.call_args_list
 
@@ -104,6 +104,27 @@ class ConnectivityTests(unittest.TestCase):
             self.assertFalse(pb.wait_for_account(lambda _: {"ads": False}, "ads",
                                                  sleep=self.naps.append, grace=90))
         self.assertLessEqual(len(self.naps), 2)
+
+    def test_reconnect_wait_never_eats_the_time_later_groups_need(self):
+        # 20 s left, two groups still to send at 12 s each: no room to wait, so
+        # ads is deferred at once and the default-line group still goes out.
+        def sender(target, *_args, **_kwargs):
+            return ((False, "No active WhatsApp Web listener (account: ads)") if target == "1@g.us"
+                    else (True, '{"messageId":"m"}'))
+        snapshots = iter([{"ads": True, "default": True}])
+        result, sent, calls = self.run_campaign(lambda _: next(snapshots, {"ads": False}),
+                                                sender, cron_timeout=20)
+        self.assertEqual(result, 0)
+        self.assertEqual([c.args[0] for c in calls], ["1@g.us", "3@g.us"])
+        self.assertEqual(set(sent), {"1@g.us", "3@g.us"})
+        self.assertEqual(sum(self.naps), 0)
+
+    def test_reconnect_grace_is_shortened_to_the_cron_budget(self):
+        with patch.object(pb.time, "monotonic", return_value=1000.0):
+            self.assertEqual(pb.reconnect_grace(None, ["a"] * 50, 60), pb.DEFAULT_RECONNECT_GRACE)
+            self.assertEqual(pb.reconnect_grace(2000.0, ["a"] * 2, 30), pb.DEFAULT_RECONNECT_GRACE)
+            self.assertEqual(pb.reconnect_grace(1100.0, ["a"] * 2, 20), 36.0)
+            self.assertEqual(pb.reconnect_grace(1050.0, ["a"] * 2, 20), 0.0)
 
     def test_zero_grace_restores_immediate_deferral(self):
         calls = []
