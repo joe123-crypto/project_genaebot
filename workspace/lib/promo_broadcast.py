@@ -753,15 +753,20 @@ def wait_for_account(check_accounts, account, sleep=None, grace=None,
                      poll=RECONNECT_POLL_SECONDS):
     """True once ``account`` reports connected, polling every ``poll`` seconds
     for up to ``grace`` seconds (default ``PROMO_RECONNECT_GRACE_SECONDS``, else
-    90 s). Reads listener status only; never starts a session or sends."""
+    90 s). The grace counts wall-clock time, including slow status reads; a
+    read already in flight at the deadline is allowed to finish. Reads listener
+    status only; never starts a session or sends."""
     sleep = sleep or time.sleep
     if grace is None:
         grace = _env_seconds("PROMO_RECONNECT_GRACE_SECONDS", DEFAULT_RECONNECT_GRACE)
+    # Bounded by both the sleeps taken (deterministic under an injected sleep)
+    # and wall-clock time, so slow status reads cannot stretch the grace.
+    deadline = time.monotonic() + grace
     waited = 0.0
     while True:
         if check_accounts({account}).get(account) is True:
             return True
-        if waited >= grace:
+        if waited >= grace or time.monotonic() >= deadline:
             return False
         step = min(poll, grace - waited)
         sleep(step)
@@ -1185,27 +1190,27 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
         ok, out = send_ad(jid, caption, variant_images.get(idx, image_path),
                           account=account)
         attempted += 1
-        if not ok and is_not_dispatched_error(out):
-            # This request may already be queued upstream. Preserve its existing
-            # uncertain-send handling below, but do not submit more work to a
-            # listener now known to be offline -- unless it comes back within a
-            # short grace. WhatsApp drops the Web socket with a 500 every hour or
-            # so and relinks in seconds; on 2026-11-05 a send that landed in that
-            # half-second window deferred the remaining 15 default-line groups of
-            # the borehole run for the whole day.
-            if not wait_for_account(check_accounts, account, sleep):
-                unavailable.add(account)
         if (not ok) and (not is_permission_error(out)) and is_not_dispatched_error(out):
             # Link was mid-reconnect: the gateway queued this send and replays it
             # on reconnect (see NOT_DISPATCHED_MARKERS). Re-sending would post the
-            # ad twice, so mark it sent and do not retry.
+            # ad twice, so mark it sent and do not retry. Receipted before the
+            # recovery wait below, so a kill during that wait cannot re-send it.
             sent_map[jid] = today
             save_state(state_file, st)
             queued += 1
             sys.stderr.write(
                 "QUEUED (link mid-reconnect; gateway replays it, not re-sent) %s:\n%s\n"
                 % (jid, out))
-            continue
+        if not ok and is_not_dispatched_error(out):
+            # Do not submit more work to a listener now known to be offline --
+            # unless it comes back within a short grace. WhatsApp drops the Web
+            # socket with a 500 every hour or so and relinks in seconds; on
+            # 2026-11-05 a send that landed in that window deferred the remaining
+            # 15 default-line groups of the borehole run for the whole day.
+            if not wait_for_account(check_accounts, account, sleep):
+                unavailable.add(account)
+            if not is_permission_error(out):
+                continue
         if ok:
             sent_map[jid] = today
             save_state(state_file, st)  # commit per group: crash/retry never double-posts

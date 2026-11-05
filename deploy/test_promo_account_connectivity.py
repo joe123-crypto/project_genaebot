@@ -78,6 +78,33 @@ class ConnectivityTests(unittest.TestCase):
         self.assertEqual(set(sent), {"1@g.us", "2@g.us", "3@g.us"})
         self.assertEqual([n for n in self.naps if n], [pb.RECONNECT_POLL_SECONDS] * 2)
 
+    def test_uncertain_send_is_receipted_before_the_recovery_wait(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "image.jpg").write_bytes(b"fixture")
+            (root / "targets.json").write_text(json.dumps({"groups": ["1@g.us", "2@g.us"]}))
+            state = root / "state.json"
+            seen = []
+            def status(accounts):
+                if seen or state.exists():
+                    seen.append(json.loads(state.read_text())["sent"])
+                return {"default": not seen or len(seen) > 1}
+            sends = iter([(False, "No active WhatsApp Web listener (account: default)"),
+                          (True, '{"messageId":"m"}')])
+            with patch.object(pb, "send_ad", side_effect=lambda *a, **k: next(sends)):
+                pb.broadcast(text="fixture", image=str(root / "image.jpg"),
+                    targets_file=str(root / "targets.json"), state_file=str(state),
+                    argv=[], start_jitter=0, cron_timeout=None, caps=None, send_delay=0,
+                    account_status=status, sleep=self.naps.append)
+            self.assertIn("1@g.us", seen[0])
+
+    def test_grace_is_wall_clock_bounded_when_status_reads_are_slow(self):
+        clock = iter(range(0, 1000, 60))  # every read costs a minute
+        with patch.object(pb.time, "monotonic", side_effect=lambda: next(clock)):
+            self.assertFalse(pb.wait_for_account(lambda _: {"ads": False}, "ads",
+                                                 sleep=self.naps.append, grace=90))
+        self.assertLessEqual(len(self.naps), 2)
+
     def test_zero_grace_restores_immediate_deferral(self):
         calls = []
         def status(accounts):
