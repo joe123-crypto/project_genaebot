@@ -743,6 +743,32 @@ does not stage `deploy/`, so the Dockerfile bakes `deploy/promo-crons.json` to
 `/usr/local/lib/genaie/promo-crons.json`. A 502 reading `no cron manifest at`
 means that copy is missing from the image.
 
+## Firestore shadow mode
+
+Off unless explicitly enabled. What it compares, and why a run cannot be
+affected, is in the repository README:
+[Moving membership to Firestore](../../README.md#moving-membership-to-firestore-phase-2-shadow-mode-nothing-acts-on-it-yet).
+
+```sh
+railway variables --set GCP_SERVICE_ACCOUNT_B64="$(base64 -w0 runtime-key.json)" \
+  --set GENAIE_CONFIG_SOURCE=shadow && railway redeploy        # shadow on
+railway variables --unset GENAIE_CONFIG_SOURCE && railway redeploy   # shadow off
+```
+
+`GCP_SERVICE_ACCOUNT_B64` is the read-only runtime key (Cloud Datastore
+Viewer), base64-encoded so the entrypoint's sanitiser cannot mangle the key's
+newlines. It is in the entrypoint's `SECRET_KEYS`, so it lands in the volume
+`.env` at 0600 owner joseph and is never baked into the image; cron scripts
+inherit it from the gateway's environment. Neither variable is release-managed
+in `deploy/railway-release.py`, so a deploy neither sets nor clears them.
+
+Each campaign run then logs `[config-shadow]` lines to its stderr, and the
+newest result is in `runtime/firestore/shadow.json`. Check by hand:
+
+```sh
+railway ssh -- runuser -u joseph -- python3 /home/joseph/.openclaw/workspace/lib/config_shadow.py
+```
+
 ## Retired daily job feeds: 2026-10-28
 
 Vacancy Lamp and Hustlers Marketplace job posting and the shared scraping/cache

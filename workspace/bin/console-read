@@ -39,6 +39,7 @@ if LIB_DIR not in sys.path:
 import promo_membership  # noqa: E402
 import promo_caps  # noqa: E402
 import promo_broadcast  # noqa: E402
+import config_shadow  # noqa: E402
 
 MEMBERSHIP = promo_membership.default_path(str(WORKSPACE))
 
@@ -125,6 +126,26 @@ def manifest():
     raise BridgeError("no cron manifest at: %s" % ", ".join(candidates))
 
 
+def promo_enabled(entry):
+    """Whether a declared campaign actually runs. An absent key means enabled,
+    which is how install-promo.sh, railway-release.py and report-release-ready.py
+    all read it. A non-bool is a manifest error for them too, so it is one here
+    rather than a silently truthy string."""
+    value = entry.get("enabled", True)
+    if type(value) is not bool:
+        raise BridgeError("promo %r has non-boolean enabled=%r"
+                          % (entry.get("slug"), value))
+    return value
+
+
+def disabled_promos(declared):
+    """Slugs the manifest switches off. They stay configured on their groups and
+    their copy is still worth previewing, but the cron never installs them, so
+    nothing here may predict a send for one."""
+    return set(entry["slug"] for entry in declared.get("promos", [])
+               if not promo_enabled(entry))
+
+
 # ---------------------------------------------------------------------------
 # groups
 # ---------------------------------------------------------------------------
@@ -137,12 +158,18 @@ def group_rows(day):
     m = membership()
     groups = promo_membership.groups(m)
     decisions = promo_caps.plan(m, list(groups), day=day, record=False)
+    disabled = disabled_promos(manifest())
 
     rows = []
     for jid, entry in groups.items():
         decision = decisions.get(jid) or {}
         weekly = entry.get("weekly") or {}
         allowed = decision.get("allowed")
+        # ``allowed`` is None for a group with no cap decision, which means every
+        # targeted promo may post. Either way a switched-off campaign is dropped:
+        # it installs no cron, so counting it would promise a send that cannot
+        # happen.
+        today = sorted(allowed) if allowed is not None else list(entry.get("promos") or [])
         rows.append(
             {
                 "jid": jid,
@@ -157,9 +184,7 @@ def group_rows(day):
                 "note": entry.get("note"),
                 "cap": decision.get("cap"),
                 "replyScore": decision.get("score"),
-                # ``allowed`` is None for a group with no cap decision, which
-                # means every targeted promo may post; show that as the full set.
-                "allowedToday": sorted(allowed) if allowed is not None else list(entry.get("promos") or []),
+                "allowedToday": [promo for promo in today if promo not in disabled],
             }
         )
     return rows
@@ -257,6 +282,11 @@ def campaign_records(day):
             {
                 "slug": slug,
                 "name": entry.get("name"),
+                # A switched-off campaign is still declared, still has copy and
+                # still has groups configured for it. What it does not have is a
+                # cron, so the console must not present it as something that
+                # posts on its schedule.
+                "enabled": promo_enabled(entry),
                 "cron": entry.get("cron"),
                 "hour": hour,
                 "minute": minute,
@@ -297,6 +327,7 @@ def preview(slug, day):
     if entry is None:
         raise NotFound("unknown campaign %r" % slug)
 
+    enabled = promo_enabled(entry)
     module = import_campaign(script_path(entry["script"]))
     captions = [str(text) for text in as_list(getattr(module, "POST_TEXTS", None))]
     tracking = dict(getattr(module, "TRACKING", {}) or {})
@@ -345,17 +376,27 @@ def preview(slug, day):
                 "variant": variant,
                 "caption": rendered,
                 "cap": decision.get("cap"),
-                "sendsToday": allowed is None or slug in allowed,
+                "sendsToday": enabled and (allowed is None or slug in allowed),
                 "allowedToday": sorted(allowed) if allowed is not None else [],
                 "weekly": [str(token) for token in (weekly_jids.get(jid) or [])],
             }
         )
-    return {"slug": slug, "captions": captions, "tracking": tracking, "groups": rows}
+    return {"slug": slug, "enabled": enabled, "captions": captions,
+            "tracking": tracking, "groups": rows}
 
 
 # ---------------------------------------------------------------------------
 # overview
 # ---------------------------------------------------------------------------
+
+def config_shadow_status():
+    """Phase 2 of the Firestore move: whether runs compare Firestore with
+    membership.json, and what the newest comparison found. ``lastCheck`` is
+    ``None`` until a run has checked; its ``checkedAt`` lets the console tell a
+    current result from one left over after shadow mode was switched off."""
+    current, warning = config_shadow.mode()
+    return {"mode": current, "warning": warning, "lastCheck": config_shadow.read_result()}
+
 
 def overview(day):
     m = membership()
@@ -378,6 +419,7 @@ def overview(day):
         "plannedSendsToday": planned,
         "accounts": accounts(m),
         "capsEnabled": bool((m.get("defaults") or {}).get("caps_enabled")),
+        "configShadow": config_shadow_status(),
         "campaigns": campaigns,
     }
 
@@ -387,7 +429,13 @@ def main(argv):
         command, slug, raw_day = parse_args(argv)
         day = parse_day(raw_day)
         if command == "groups":
-            payload = {"date": day.isoformat(), "groups": group_rows(day)}
+            # A group keeps a switched-off campaign in its configured promos, so
+            # the screen needs the off list to say WHY one is not posting today.
+            # Without it a disabled campaign is indistinguishable from one the
+            # daily cap held back.
+            payload = {"date": day.isoformat(),
+                       "disabledPromos": sorted(disabled_promos(manifest())),
+                       "groups": group_rows(day)}
         elif command == "campaigns":
             payload = {"date": day.isoformat(), "campaigns": campaign_records(day)}
         elif command == "preview":

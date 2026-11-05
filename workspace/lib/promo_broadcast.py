@@ -64,6 +64,7 @@ from datetime import date
 
 import json_store
 from gateway_campaign import active_client, campaign_transport
+import config_shadow
 
 
 # ------------------------------------------------------------------ gateway ----
@@ -741,6 +742,59 @@ def _env_seconds(name, default):
     return _seconds(raw, name, default)
 
 
+# A routine WhatsApp Web reconnect (status 500/428/503) relinks within a few
+# seconds; give a dropped listener this long to return before deferring the rest
+# of its groups. PROMO_RECONNECT_GRACE_SECONDS=0 restores the immediate deferral.
+DEFAULT_RECONNECT_GRACE = 90.0
+RECONNECT_POLL_SECONDS = 5.0
+
+
+def wait_for_account(check_accounts, account, sleep=None, grace=None,
+                     poll=RECONNECT_POLL_SECONDS):
+    """True once ``account`` reports connected, polling every ``poll`` seconds
+    for up to ``grace`` seconds (default ``PROMO_RECONNECT_GRACE_SECONDS``, else
+    90 s). The grace counts wall-clock time, including slow status reads; a
+    read already in flight at the deadline is allowed to finish. Reads listener
+    status only; never starts a session or sends."""
+    sleep = sleep or time.sleep
+    if grace is None:
+        grace = _env_seconds("PROMO_RECONNECT_GRACE_SECONDS", DEFAULT_RECONNECT_GRACE)
+    # Bounded by both the sleeps taken (deterministic under an injected sleep)
+    # and wall-clock time, so slow status reads cannot stretch the grace.
+    deadline = time.monotonic() + grace
+    waited = 0.0
+    while True:
+        if check_accounts({account}).get(account) is True:
+            return True
+        if waited >= grace or time.monotonic() >= deadline:
+            return False
+        step = min(poll, grace - waited)
+        sleep(step)
+        waited += step
+
+
+def reconnect_grace(run_deadline, remaining, gap_max):
+    """Seconds :func:`wait_for_account` may wait mid-run. The configured grace
+    (``PROMO_RECONNECT_GRACE_SECONDS``, else 90 s), shortened so the groups still
+    to send -- at the planned worst case of ``SEND_ALLOWANCE_SECONDS`` plus the
+    longest gap each -- fit before the cron job's timeout at ``run_deadline``
+    (a ``time.monotonic()`` value; ``None`` when no timeout is known). Without
+    this cap a 90 s wait, repeated on every drop of a flapping line, could get
+    the run killed before groups on healthy lines were reached."""
+    grace = _env_seconds("PROMO_RECONNECT_GRACE_SECONDS", DEFAULT_RECONNECT_GRACE)
+    if run_deadline is None:
+        return grace
+    needed = len(remaining) * (SEND_ALLOWANCE_SECONDS + gap_max)
+    room = max(0.0, run_deadline - time.monotonic() - needed)
+    if room < grace:
+        sys.stderr.write(
+            "WARN: reconnect grace cut from %.0f s to %.0f s so the %d groups "
+            "still to send fit inside this cron job's timeout.\n"
+            % (grace, room, len(remaining)))
+        return room
+    return grace
+
+
 def send_gap_bounds(send_delay=None, send_delay_min=None, send_delay_max=None):
     """(min, max) seconds between consecutive sends. A legacy fixed
     ``send_delay`` pins both bounds to it; otherwise each bound comes from its
@@ -944,6 +998,7 @@ def apply_caps(promo_name, jids, day, caps=_PROBE_CAPS, membership_path=None,
 
 
 @campaign_transport
+@config_shadow.alongside
 def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=None,
               tracking=None, promo_name=None, variant_images=None,
               send_delay_min=None, send_delay_max=None, rng=None, sleep=None,
@@ -1119,6 +1174,9 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
     if jitter > 0:
         print("Waiting %.0f s before the first send (start jitter)." % jitter)
         sleep(jitter)
+    # When cron will kill this job: a reconnect wait mid-run must leave room for
+    # the groups still to come (see reconnect_grace below).
+    run_deadline = time.monotonic() + budget if budget else None
 
     # Take one fresh snapshot after jitter, immediately before submission. A
     # known-offline target never enters the gateway queue and gets no receipt.
@@ -1132,7 +1190,7 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
     queued = 0
     sent = 0
     attempted = 0
-    for jid in pending:
+    for position, jid in enumerate(pending):
         account = account_for(jid)
         if account in unavailable:
             deferred += 1
@@ -1157,23 +1215,30 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
         ok, out = send_ad(jid, caption, variant_images.get(idx, image_path),
                           account=account)
         attempted += 1
-        if not ok and is_not_dispatched_error(out):
-            # This request may already be queued upstream. Preserve its existing
-            # uncertain-send handling below, but do not submit more work to a
-            # listener now known to be offline.
-            if check_accounts({account}).get(account) is not True:
-                unavailable.add(account)
         if (not ok) and (not is_permission_error(out)) and is_not_dispatched_error(out):
             # Link was mid-reconnect: the gateway queued this send and replays it
             # on reconnect (see NOT_DISPATCHED_MARKERS). Re-sending would post the
-            # ad twice, so mark it sent and do not retry.
+            # ad twice, so mark it sent and do not retry. Receipted before the
+            # recovery wait below, so a kill during that wait cannot re-send it.
             sent_map[jid] = today
             save_state(state_file, st)
             queued += 1
             sys.stderr.write(
                 "QUEUED (link mid-reconnect; gateway replays it, not re-sent) %s:\n%s\n"
                 % (jid, out))
-            continue
+        if not ok and is_not_dispatched_error(out):
+            # Do not submit more work to a listener now known to be offline --
+            # unless it comes back within a short grace. WhatsApp drops the Web
+            # socket with a 500 every hour or so and relinks in seconds; on
+            # 2026-11-05 a send that landed in that window deferred the remaining
+            # 15 default-line groups of the borehole run for the whole day.
+            grace = reconnect_grace(run_deadline, [
+                j for j in pending[position + 1:] if account_for(j) not in unavailable],
+                gap_max)
+            if not wait_for_account(check_accounts, account, sleep, grace=grace):
+                unavailable.add(account)
+            if not is_permission_error(out):
+                continue
         if ok:
             sent_map[jid] = today
             save_state(state_file, st)  # commit per group: crash/retry never double-posts

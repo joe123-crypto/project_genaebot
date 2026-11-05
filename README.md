@@ -401,6 +401,82 @@ membership.json. `workspace/bin/list-groups` prints the whole picture
 (`--caps` adds today's allowance, `--json` one object per group); it is
 read-only and never contacts the gateway.
 
+### Moving membership to Firestore (phase 2: shadow mode, nothing acts on it yet)
+
+membership.json cannot be edited at runtime: `entrypoint.sh` rsyncs
+`workspace/` from the image with `--delete` on every boot, so any change to it
+needs a deploy. Operator config is moving to Firestore, edited in the Firebase
+Console. **Until the cutover, membership.json stays the source of truth.**
+Production acts on nothing from Firestore; shadow mode (below) only compares.
+
+What exists now:
+
+- `workspace/lib/operator_config.py` reads four collections (`settings/defaults`,
+  `lines/<id>`, `campaigns/<slug>`, `groups/<jid>`) back into exactly the
+  membership.json shape, using field names identical to the file. Each document
+  also carries `rank`, because Firestore lists by ID but send order decides
+  which groups a short run reaches.
+- **Targeting fails closed.** If Firestore is unreachable, the last-known-good
+  snapshot in `runtime/firestore/` is used. With no snapshot either, `load()`
+  raises and the caller must send nothing. The repo's membership.json is
+  deliberately never a fallback: after cutover it would be stale targeting.
+- **Validation is per document.** A malformed group is quarantined (excluded
+  and reported) without touching the rest. A malformed settings, line or
+  campaign document falls back to the snapshot. Deleting a campaign drops it
+  from groups' lists with a warning, rather than quarantining every group that
+  listed it.
+- Transport is Firestore REST over `urllib`, because the image has no package
+  install step. `workspace/lib/gcp_token.mjs` signs the service-account JWT
+  with Node's built-in `node:crypto`, the one thing the standard library cannot
+  do. The key reaches it over stdin, never argv.
+- Each read diffs against the previous snapshot and appends what changed to
+  `runtime/firestore/changes-YYYY-MM.jsonl`, since Console edits keep no
+  history of their own.
+
+Seeding and the parity gate:
+
+```sh
+deploy/seed-firestore.py --key seed-key.json            # dry run: what would change
+deploy/seed-firestore.py --key seed-key.json --write    # mirror membership.json
+deploy/seed-firestore.py --key seed-key.json --verify   # 0 only if Firestore == file
+```
+
+`--verify` reads back through the same `operator_config` code production will
+use, and passes only if every field, the order of groups, lines and campaigns,
+and every campaign's generated targets.json match the file exactly.
+`deploy/test_operator_config_parity.py` runs the same check offline in CI
+against the real membership, and against the live project with
+`GENAIE_FIRESTORE_INTEGRATION=1`. Use a seed key (Cloud Datastore User) on your
+own machine only. The runtime key is read-only.
+
+Shadow mode (phase 2) checks the copy against real runs before anything acts on
+it. Off by default; two Railway variables turn it on:
+
+```sh
+railway variables --set GCP_SERVICE_ACCOUNT_B64="$(base64 -w0 runtime-key.json)" \
+  --set GENAIE_CONFIG_SOURCE=shadow && railway redeploy        # shadow on
+railway variables --unset GENAIE_CONFIG_SOURCE && railway redeploy   # shadow off
+```
+
+With `GENAIE_CONFIG_SOURCE=shadow`, every campaign run reads Firestore in a
+background thread while it sends from membership.json as usual, then logs
+`[config-shadow] ...` lines to stderr: a match, or each difference. A missing
+key, an outage, a hang or a bug in the check changes nothing about the run;
+a check still in flight when the run ends is abandoned after 10 s. The newest
+result is kept in `runtime/firestore/shadow.json` and reported by
+`console-read overview` as `configShadow`, so drift reaches the Genaie
+console rather than only the run logs. The read also keeps the fail-closed
+snapshot and the change log current. `GENAIE_CONFIG_SOURCE=firestore` is
+reserved for the cutover and is refused (with a warning) until then.
+
+The key is the read-only runtime key (Cloud Datastore Viewer), base64-encoded
+because the entrypoint's variable sanitiser would mangle a multi-line JSON
+value. `GCP_SERVICE_ACCOUNT_B64` is in the entrypoint's `SECRET_KEYS`, so it
+lands in the volume `.env` at 0600. Neither variable is release-managed, so a
+deploy neither sets nor clears them. For a one-off check from a shell on the
+gateway: `runuser -u joseph -- python3 workspace/lib/config_shadow.py` (exit 1 on any
+difference; as joseph, so the files it writes stay writable by the cron runs).
+
 ### Per-group daily ad caps
 
 How many ads a group got used to be an accident of how many promos listed it: a
@@ -432,6 +508,12 @@ so across one cycle every campaign gets exactly `cap` turns and none starves. It
 is a pure function of `(day, jid, promo set, cap)` -- identical in every cron
 process, needing no shared state and no lock, which matters because
 `json_store` is last-writer-wins and the eight crons can overlap.
+A campaign switched off in `deploy/promo-crons.json` (`"enabled": false`, read
+from the image copy at `/usr/local/lib/genaie/promo-crons.json` on the gateway)
+takes no turns, so pausing one hands its slots to the campaigns still running
+instead of leaving them empty; a manual run or `--dry-run` of the paused
+campaign still sees its own rotation. A missing or unreadable manifest fails
+open to the old behaviour.
 
 Caps are **on** (`defaults.caps_enabled` is `true` in membership.json), and
 the engine fails open: a missing or broken membership file logs a warning and
@@ -520,6 +602,11 @@ WhatsApp Business. Client identity and reply timing settings are unchanged.
 Each campaign reads gateway account status immediately before sending. Targets
 for an offline or unknown account are deferred without submitting them or marking
 them sent; other connected accounts continue. There is no automatic catch-up.
+If a line drops mid-run, the campaign polls its status every 5 s for up to 90 s
+(`PROMO_RECONNECT_GRACE_SECONDS`, 0 disables) before deferring that line's
+remaining groups, so a routine status-500 relink no longer costs the day's ads.
+The wait is shortened when the groups still to send would otherwise not fit
+inside the cron job's timeout.
 An already-submitted request with an uncertain result keeps its existing duplicate
 protection. Campaign SDK connections are clients of the gateway, not additional
 WhatsApp sessions.
@@ -788,6 +875,17 @@ and `promo_broadcast` rather than reimplementing them, a preview is the same
 text the cron would send. The variant index it reports is 0-based, exactly as
 `caption_for` returns it; `post_ad.py --dry-run` and the console both add one
 only when displaying it.
+
+A campaign the manifest switches off (`"enabled": false` in
+`deploy/promo-crons.json`) is still declared, still has copy and still has
+groups configured for it, but installs no cron and therefore never posts. Every
+payload says so rather than leaving the console to guess: `campaigns` and
+`preview/<slug>` carry `enabled`, `groups` carries a `disabledPromos` list so a
+screen can tell "campaign is off" from "held back by today's cap", and neither
+`allowedToday` nor `overview`'s `plannedSendsToday` counts a send for one. An
+absent `enabled` key means enabled, matching `install-promo.sh`,
+`railway-release.py` and `report-release-ready.py`; a non-boolean one is a
+manifest error and the bridge refuses rather than treat it as truthy.
 
 It ships disabled and holds no state. Enabling it is environment only, and
 `deploy/railway/README.md` has the recipe:
