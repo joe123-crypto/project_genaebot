@@ -39,6 +39,7 @@ if LIB_DIR not in sys.path:
 import promo_membership  # noqa: E402
 import promo_caps  # noqa: E402
 import promo_broadcast  # noqa: E402
+import config_shadow  # noqa: E402
 
 MEMBERSHIP = promo_membership.default_path(str(WORKSPACE))
 
@@ -388,6 +389,15 @@ def preview(slug, day):
 # overview
 # ---------------------------------------------------------------------------
 
+def config_shadow_status():
+    """Phase 2 of the Firestore move: whether runs compare Firestore with
+    membership.json, and what the newest comparison found. ``lastCheck`` is
+    ``None`` until a run has checked; its ``checkedAt`` lets the console tell a
+    current result from one left over after shadow mode was switched off."""
+    current, warning = config_shadow.mode()
+    return {"mode": current, "warning": warning, "lastCheck": config_shadow.read_result()}
+
+
 def overview(day):
     m = membership()
     groups = promo_membership.groups(m)
@@ -409,6 +419,7 @@ def overview(day):
         "plannedSendsToday": planned,
         "accounts": accounts(m),
         "capsEnabled": bool((m.get("defaults") or {}).get("caps_enabled")),
+        "configShadow": config_shadow_status(),
         "campaigns": campaigns,
     }
 

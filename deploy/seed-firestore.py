@@ -62,14 +62,10 @@ class SeedError(Exception):
 
 def manifest_switches(manifest):
     """``{slug: bool}`` from the cron manifest, house semantics."""
-    out = {}
-    for row in manifest.get("promos") or []:
-        value = row.get("enabled", True)
-        if not isinstance(value, bool):
-            raise SeedError("promo-crons.json: %s has non-boolean enabled=%r"
-                            % (row.get("slug"), value))
-        out[row["slug"]] = value
-    return out
+    try:
+        return operator_config.manifest_switches(manifest)
+    except operator_config.ConfigInvalid as ex:
+        raise SeedError(str(ex))
 
 
 def documents(membership, switches):
@@ -97,36 +93,9 @@ def documents(membership, switches):
     }
 
 
-def parity_diff(expected, expected_switches, got, got_switches):
-    """Human-readable differences; empty means the copy is exact. Content is
-    compared field by field, then order (which decides who a short run reaches),
-    then the generated targets for every campaign -- the payload the send path
-    actually consumes."""
-    problems = []
-    canon = lambda value: json.dumps(value, sort_keys=True, ensure_ascii=False)  # noqa: E731
-    exp_docs = operator_config._by_document(expected, expected_switches)
-    got_docs = operator_config._by_document(got, got_switches)
-    for key in sorted(set(exp_docs) | set(got_docs)):
-        if key not in got_docs:
-            problems.append("%s/%s is missing from Firestore" % key)
-        elif key not in exp_docs:
-            problems.append("%s/%s is in Firestore but not in the file" % key)
-        elif canon(exp_docs[key]) != canon(got_docs[key]):
-            fields = sorted(name for name in set(exp_docs[key]) | set(got_docs[key])
-                            if canon(exp_docs[key].get(name)) != canon(got_docs[key].get(name)))
-            problems.append("%s/%s differs in %s" % (key + (", ".join(fields),)))
-    for label, pick in (("group", lambda m: list(m.get("groups") or {})),
-                        ("line", lambda m: list((m.get("defaults") or {}).get("accounts") or {})),
-                        ("campaign", lambda m: list(m.get("promos") or {}))):
-        if set(pick(expected)) == set(pick(got)) and pick(expected) != pick(got):
-            problems.append("%s order differs" % label)
-    if not problems:
-        for promo in expected.get("promos") or {}:
-            want = promo_membership.dumps_targets(promo_membership.targets_payload(expected, promo))
-            have = promo_membership.dumps_targets(promo_membership.targets_payload(got, promo))
-            if want != have:
-                problems.append("generated targets for %s differ" % promo)
-    return problems
+# The comparison lives beside the reader so the seed's --verify and production's
+# shadow mode judge parity by exactly the same rules.
+parity_diff = operator_config.parity_diff
 
 
 def load_sources():
