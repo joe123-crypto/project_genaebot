@@ -64,6 +64,7 @@ from datetime import date
 
 import json_store
 from gateway_campaign import active_client, campaign_transport
+import config_shadow
 
 
 # ------------------------------------------------------------------ gateway ----
@@ -944,6 +945,7 @@ def apply_caps(promo_name, jids, day, caps=_PROBE_CAPS, membership_path=None,
 
 
 @campaign_transport
+@config_shadow.alongside
 def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=None,
               tracking=None, promo_name=None, variant_images=None,
               send_delay_min=None, send_delay_max=None, rng=None, sleep=None,

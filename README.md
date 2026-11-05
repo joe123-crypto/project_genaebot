@@ -401,13 +401,13 @@ membership.json. `workspace/bin/list-groups` prints the whole picture
 (`--caps` adds today's allowance, `--json` one object per group); it is
 read-only and never contacts the gateway.
 
-### Moving membership to Firestore (phase 1: built, nothing reads it yet)
+### Moving membership to Firestore (phase 2: shadow mode, nothing acts on it yet)
 
 membership.json cannot be edited at runtime: `entrypoint.sh` rsyncs
 `workspace/` from the image with `--delete` on every boot, so any change to it
 needs a deploy. Operator config is moving to Firestore, edited in the Firebase
-Console. **Until the cutover, membership.json stays the source of truth** and
-production reads nothing from Firestore.
+Console. **Until the cutover, membership.json stays the source of truth.**
+Production acts on nothing from Firestore; shadow mode (below) only compares.
 
 What exists now:
 
@@ -448,6 +448,33 @@ and every campaign's generated targets.json match the file exactly.
 against the real membership, and against the live project with
 `GENAIE_FIRESTORE_INTEGRATION=1`. Use a seed key (Cloud Datastore User) on your
 own machine only. The runtime key is read-only.
+
+Shadow mode (phase 2) checks the copy against real runs before anything acts on
+it. Off by default; two Railway variables turn it on:
+
+```sh
+railway variables --set GCP_SERVICE_ACCOUNT_B64="$(base64 -w0 runtime-key.json)" \
+  --set GENAIE_CONFIG_SOURCE=shadow && railway redeploy        # shadow on
+railway variables --unset GENAIE_CONFIG_SOURCE && railway redeploy   # shadow off
+```
+
+With `GENAIE_CONFIG_SOURCE=shadow`, every campaign run reads Firestore in a
+background thread while it sends from membership.json as usual, then logs
+`[config-shadow] ...` lines to stderr: a match, or each difference. A missing
+key, an outage, a hang or a bug in the check changes nothing about the run;
+a check still in flight when the run ends is abandoned after 10 s. The newest
+result is kept in `runtime/firestore/shadow.json` and reported by
+`console-read overview` as `configShadow`, so drift reaches the Genaie
+console rather than only the run logs. The read also keeps the fail-closed
+snapshot and the change log current. `GENAIE_CONFIG_SOURCE=firestore` is
+reserved for the cutover and is refused (with a warning) until then.
+
+The key is the read-only runtime key (Cloud Datastore Viewer), base64-encoded
+because the entrypoint's variable sanitiser would mangle a multi-line JSON
+value. `GCP_SERVICE_ACCOUNT_B64` is in the entrypoint's `SECRET_KEYS`, so it
+lands in the volume `.env` at 0600. Neither variable is release-managed, so a
+deploy neither sets nor clears them. For a one-off check from a shell on the
+gateway: `python3 workspace/lib/config_shadow.py` (exit 1 on any difference).
 
 ### Per-group daily ad caps
 

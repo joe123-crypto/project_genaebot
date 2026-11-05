@@ -163,6 +163,28 @@ class ConsoleReadTests(unittest.TestCase):
         return {promo["slug"] for promo in manifest["promos"]
                 if promo.get("enabled", True) is False}
 
+    def test_overview_reports_shadow_mode_off_by_default(self):
+        with tempfile.TemporaryDirectory() as state:
+            done = self.run_bridge("overview", "--date", DAY, GENAIE_CONFIG_SOURCE="",
+                                   GENAIE_FIRESTORE_DIR=state)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(json.loads(done.stdout)["configShadow"],
+                         {"mode": "file", "warning": None, "lastCheck": None})
+
+    def test_overview_carries_the_newest_shadow_check(self):
+        with tempfile.TemporaryDirectory() as state:
+            check = {"checkedAt": "2026-11-05T06:00:00Z", "status": "drift",
+                     "source": "firestore", "degraded": None,
+                     "problems": ["groups/x@g.us differs in status"], "notes": []}
+            with open(os.path.join(state, "shadow.json"), "w") as handle:
+                json.dump(check, handle)
+            done = self.run_bridge("overview", "--date", DAY, GENAIE_CONFIG_SOURCE="shadow",
+                                   GENAIE_FIRESTORE_DIR=state)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stderr, "")
+        shadow = json.loads(done.stdout)["configShadow"]
+        self.assertEqual((shadow["mode"], shadow["lastCheck"]), ("shadow", check))
+
     def test_every_campaign_says_whether_it_is_switched_on(self):
         disabled = self.declared_disabled()
         self.assertTrue(disabled, "expected the manifest to switch one promo off")
