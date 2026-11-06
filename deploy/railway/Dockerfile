@@ -97,6 +97,7 @@ COPY deploy/railway/sync-runtime-plugins.py /usr/local/bin/sync-runtime-plugins.
 COPY deploy/railway/report-release-ready.py /usr/local/bin/report-release-ready.py
 COPY deploy/railway/gateway-standby.py /usr/local/bin/gateway-standby.py
 COPY deploy/railway/console-api.py /usr/local/bin/console-api.py
+COPY deploy/railway/console_accounts.py /usr/local/bin/console_accounts.py
 # console-read resolves the declared cron manifest from deploy/, which
 # stage-openclaw-source.sh never stages, so bake a copy beside the helpers.
 COPY deploy/promo-crons.json /usr/local/lib/genaie/promo-crons.json

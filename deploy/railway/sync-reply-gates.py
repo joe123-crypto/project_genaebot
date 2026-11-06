@@ -8,7 +8,8 @@ outage and the repo held no trace of it: channels.whatsapp.dmPolicy had been set
 to "allowlist" with only the admin number in channels.whatsapp.allowFrom, so the
 bot answered the operator and nobody else.
 
-This sets each gate listed in GATED_PATHS to its template value on every boot.
+This sets reply policy gates to their template values on every boot. Default
+account enablement is seeded only when absent; an operator pause survives boot.
 The ads account's DM policy is disabled for the broadcast-only trial; its
 listener remains enabled so scheduled group advertising can continue.
 Only scalar leaves are written -- no object or array is ever replaced -- so the
@@ -134,6 +135,8 @@ def plan_changes(live: dict, template: dict, get_path) -> list[tuple[list[str], 
     for path in GATED_PATHS:
         _, want = get_path(template, path)
         found, have = get_path(live, path)
+        if path == DEFAULT_ACCOUNT_ENABLED and found and isinstance(have, bool):
+            continue
         if found and type(have) is type(want) and have == want:
             continue
         changes.append((path, found, have, want))

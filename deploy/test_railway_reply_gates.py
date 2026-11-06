@@ -118,10 +118,13 @@ class ReplyGateSyncTests(unittest.TestCase):
             _, want = PATCHER.get_path(template, path)
             found, have = PATCHER.get_path(synced, path)
             self.assertTrue(found, f"{SYNC.dotted(path)} missing after sync")
-            self.assertEqual(have, want, SYNC.dotted(path))
+            if path == SYNC.DEFAULT_ACCOUNT_ENABLED:
+                self.assertFalse(have, "operator pause must survive startup")
+            else:
+                self.assertEqual(have, want, SYNC.dotted(path))
         joined = " ".join(lines)
         self.assertIn("channels.whatsapp.dmPolicy", joined)
-        self.assertIn("channels.whatsapp.accounts.default.enabled", joined)
+        self.assertNotIn("channels.whatsapp.accounts.default.enabled", joined)
 
     def test_leaves_every_other_key_untouched(self) -> None:
         self.sync()
@@ -130,7 +133,7 @@ class ReplyGateSyncTests(unittest.TestCase):
         w = expected["channels"]["whatsapp"]
         w["dmPolicy"] = "open"
         w["allowFrom"] = ["+263785632943", "*"]
-        w["accounts"]["default"]["enabled"] = True
+        w["accounts"]["default"]["enabled"] = False
         w["accounts"]["ads"]["dmPolicy"] = "disabled"
         entries = expected["plugins"]["entries"]
         entries["public-service-gate"]["config"]["enabled"] = True
@@ -181,7 +184,7 @@ class ReplyGateSyncTests(unittest.TestCase):
             "enabled": True, "dmPolicy": "disabled", "authDir": "/private/ads-auth",
         })
         self.assertEqual(w["dmPolicy"], "open")
-        self.assertTrue(w["accounts"]["default"]["enabled"])
+        self.assertFalse(w["accounts"]["default"]["enabled"])
         self.assertEqual(w["groupPolicy"], "disabled")
         self.assertEqual(self.sync()[0], "unchanged")
 

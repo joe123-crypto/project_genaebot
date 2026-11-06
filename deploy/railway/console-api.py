@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Serve the operator console's read model over HTTP, beside the gateway.
 
-Read-only by construction: every response is the stdout of
-workspace/bin/console-read, which never writes and never contacts the gateway.
-There is no endpoint here that changes anything.
+Campaign and membership reads use workspace/bin/console-read, which never
+writes or contacts the gateway. Account routes use a separate authenticated
+gateway control bridge for live status, pairing, pause/start, and unlink.
 
 It runs as a backgrounded child of the entrypoint, is never waited on, and wraps
 main() so a fault can only ever kill this process. It does not own the
@@ -16,7 +16,7 @@ real hazard is not a crash but unbounded subprocess fan-out exhausting memory:
   * at most MAX_CONCURRENCY bridge processes at any moment (503 beyond that)
   * successful responses are cached for CACHE_TTL_SECONDS
 
-Routes, all GET or HEAD:
+Read routes, GET or HEAD:
 
   /internal/console/health            no auth; {"ok": true} and nothing else
   /internal/console/overview          bearer
@@ -24,7 +24,15 @@ Routes, all GET or HEAD:
   /internal/console/campaigns         bearer
   /internal/console/preview/<slug>    bearer
 
-Each data route takes an optional ?date=YYYY-MM-DD. Anything else is refused.
+These read routes take an optional ?date=YYYY-MM-DD.
+Account routes (bearer, no cache):
+  GET /internal/console/accounts
+  GET /internal/console/accounts/link-sessions/<id>
+  POST /internal/console/accounts                  {"id": "sales"}
+  POST /internal/console/accounts/<id>/<action>    {} (link/unlink/pause/start)
+The account helper holds one persistent Node bridge; conflicting requests get
+409. QR sessions are temporary, while account enablement and login live in the
+gateway's durable state. Request bodies are bounded to 2048 bytes.
 
 Environment:
   CONSOLE_API_TOKEN   required, >= MIN_TOKEN_LENGTH chars; the server refuses to
@@ -36,8 +44,8 @@ Environment:
                       cron manifest that deploy/ never stages into the image
 
 SIGTERM is not forwarded here (tini runs without -g), so this process is killed
-outright at container teardown. That is safe: it holds no state and writes
-nothing.
+outright at container teardown. The gateway owns persisted state; pairing
+sessions are temporary and can be resumed through a new Link attempt.
 
 Std-lib only.
 """
@@ -52,6 +60,10 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
+
+# Also works when loaded by importlib in the deployment tests.
+sys.path.insert(0, os.path.dirname(__file__))
+from console_accounts import AccountControls
 
 PREFIX = "/internal/console/"
 DATA_ROUTES = ("overview", "groups", "campaigns")
@@ -182,6 +194,10 @@ class Handler(BaseHTTPRequestHandler):
     sys_version = ""
     protocol_version = "HTTP/1.1"
 
+    def setup(self):
+        super().setup()
+        self.connection.settimeout(60)
+
     def log_message(self, fmt, *args):
         log(fmt % args)
 
@@ -210,7 +226,62 @@ class Handler(BaseHTTPRequestHandler):
         self.send_any(405, b'{"error": "method not allowed"}', True,
                       headers=(("Allow", "GET, HEAD"),))
 
-    do_POST = do_PUT = do_PATCH = do_DELETE = do_OPTIONS = refuse_other_methods
+    do_PUT = do_PATCH = do_DELETE = do_OPTIONS = refuse_other_methods
+
+    def account_request(self, route, query, method, with_body=True):
+        """Account routes never enter the read bridge or its 30-second cache."""
+        if query:
+            self.send_any(400, b'{"error":"Account routes take no query parameters."}', with_body)
+            return
+        parts = route.split("/")
+        request = None
+        if method == "GET" and parts == ["accounts"]:
+            request = {"action": "list"}
+        elif method == "GET" and len(parts) == 3 and parts[:2] == ["accounts", "link-sessions"]:
+            if re.fullmatch(r"[a-f0-9-]{36}", parts[2]):
+                request = {"action": "link-status", "sessionId": parts[2]}
+        elif method == "POST":
+            try:
+                size = int(self.headers.get("Content-Length") or "0")
+                if self.headers.get("Transfer-Encoding") or not 0 < size <= 2048:
+                    raise ValueError()
+                if self.headers.get("Content-Type", "").split(";", 1)[0].strip() != "application/json":
+                    raise ValueError()
+                payload = json.loads(self.rfile.read(size))
+                if not isinstance(payload, dict):
+                    raise ValueError()
+                if parts == ["accounts"] and set(payload) == {"id"}:
+                    request = {"action": "link", "accountId": payload["id"], "create": True}
+                elif (len(parts) == 3 and parts[0] == "accounts"
+                      and parts[2] in {"link", "unlink", "pause", "start"} and not payload):
+                    request = {"action": parts[2], "accountId": parts[1]}
+                if request and (not isinstance(request["accountId"], str) or
+                                not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", request["accountId"])):
+                    raise ValueError()
+            except (ValueError, TypeError, UnicodeError):
+                self.send_any(400, b'{"error":"Invalid account request."}', True)
+                return
+        if request is None:
+            self.send_any(404, b'{"error":"not found"}', with_body)
+            return
+        status, body = self.server.console["accounts"].run(request)
+        # An uncertain write may still have reached the gateway; clear cached
+        # configuration reads even on failure, and never replay it automatically.
+        if method == "POST":
+            bridge = self.server.console["bridge"]
+            with bridge.lock:
+                bridge.cache.clear()
+        self.send_any(status, body, with_body)
+
+    def do_POST(self):
+        split = urlsplit(self.path)
+        if not split.path.startswith(PREFIX + "accounts"):
+            self.refuse_other_methods()
+            return
+        if not authorized(self.headers.get("Authorization"), self.server.console["token"]):
+            self.send_any(401, b'{"error":"unauthorized"}', True)
+            return
+        self.account_request(split.path[len(PREFIX):], split.query, "POST")
 
     def respond(self, with_body):
         config = self.server.console
@@ -238,6 +309,13 @@ class Handler(BaseHTTPRequestHandler):
         if not authorized(self.headers.get("Authorization"), config["token"]):
             self.send_any(401, b'{"error": "unauthorized"}', with_body,
                           headers=(("WWW-Authenticate", "Bearer"),))
+            return
+
+        if route == "accounts" or route.startswith("accounts/"):
+            if not with_body:
+                self.send_any(405, b'{"error":"Use GET for account status."}', False)
+                return
+            self.account_request(route, split.query, "GET", with_body)
             return
 
         try:
@@ -301,7 +379,12 @@ def build_server(bind, port, token, bridge_path, **kwargs):
             "CONSOLE_API_TOKEN must be at least %d characters" % MIN_TOKEN_LENGTH)
     server = ThreadingHTTPServer((bind, port), Handler)
     server.daemon_threads = True
-    server.console = {"token": token, "bridge": Bridge(bridge_path, **kwargs)}
+    close_server = server.server_close
+    def close():
+        server.console["accounts"].close()
+        close_server()
+    server.server_close = close
+    server.console = {"token": token, "bridge": Bridge(bridge_path, **kwargs), "accounts": AccountControls()}
     return server
 
 

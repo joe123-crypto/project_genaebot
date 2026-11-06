@@ -96,6 +96,41 @@ class ConsoleApiTests(unittest.TestCase):
             with error:
                 return error.code, error.read(), dict(error.headers)
 
+    def test_account_routes_use_separate_uncached_controls(self):
+        base = self.serve()
+        controls = self.server.console["accounts"]
+        with unittest.mock.patch.object(controls, "run", return_value=(200, b'{"accounts":[]}')) as run:
+            for _ in range(2):
+                self.assertEqual(self.fetch(base + "/accounts")[0], 200)
+            self.assertEqual(run.call_count, 2)
+            self.assertEqual(run.call_args.args, ({"action": "list"},))
+            self.assertEqual(self.server.console["bridge"].runs, 0)
+
+    def test_account_mutations_validate_auth_body_and_route(self):
+        base = self.serve()
+        controls = self.server.console["accounts"]
+        def post(route, payload, token=TOKEN):
+            request = urllib.request.Request(base + route, data=payload,
+                headers={"Content-Type": "application/json", "Authorization": "Bearer " + token}, method="POST")
+            try:
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    return response.status
+            except urllib.error.HTTPError as error:
+                with error:
+                    return error.code
+        with unittest.mock.patch.object(controls, "run", return_value=(200, b'{"ok":true}')) as run:
+            self.assertEqual(post("/accounts/ads/pause", b"{}", "wrong"), 401)
+            self.assertEqual(post("/accounts/ads/pause", b"{broken"), 400)
+            self.assertEqual(post("/accounts/ads/pause", b'{"force":true}'), 404)
+            self.assertEqual(post("/accounts/ads/remove", b"{}"), 404)
+            self.assertEqual(post("/accounts", b'{"id":123}'), 400)
+            self.assertEqual(post("/accounts", b'{"id":["sales"]}'), 400)
+            self.assertFalse(run.called)
+            self.assertEqual(post("/accounts", b'{"id":"sales"}'), 200)
+            self.assertEqual(run.call_args.args, ({"action": "link", "accountId": "sales", "create": True},))
+            self.assertEqual(post("/accounts/ads/pause", b"{}"), 200)
+            self.assertEqual(run.call_args.args, ({"action": "pause", "accountId": "ads"},))
+
     # -- starting up ------------------------------------------------------
 
     def test_refuses_to_start_without_a_long_enough_token(self):
