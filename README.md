@@ -897,14 +897,14 @@ The template remains the tracked source of truth for what the config *should* be
 ## Operator Console API
 
 `deploy/railway/console-api.py` serves the operator console's read model over
-HTTP beside the gateway. It is read-only by construction: every response is the
-stdout of `workspace/bin/console-read`, which reads `workspace/cron/membership.json`,
+HTTP beside the gateway. Campaign and membership responses come from
+`workspace/bin/console-read`, which reads `workspace/cron/membership.json`,
 the ad-reply counters the caps derive from, and each campaign's own module. It
 never writes, never contacts the gateway, and never records a cap snapshot, so
-reading it cannot move the rotation on. There is no endpoint that changes
-anything.
+reading it cannot move the rotation on. Separate account endpoints contact the
+running gateway for live status and account controls.
 
-Routes, GET or HEAD only, under `/internal/console/`:
+Read routes, GET or HEAD, under `/internal/console/`:
 
 | Route | Returns |
 |---|---|
@@ -916,8 +916,7 @@ Routes, GET or HEAD only, under `/internal/console/`:
 
 Each data route takes an optional `?date=YYYY-MM-DD`. Anything else is refused:
 an unknown path or an unusable slug is 404, an unparseable date or an unexpected
-query parameter is 400, any write method is 405, and a request body is 400
-rather than read.
+query parameter is 400. These read routes reject write methods and request bodies.
 
 Because `console-read` imports the bot's own `promo_membership`, `promo_caps`
 and `promo_broadcast` rather than reimplementing them, a preview is the same
@@ -936,9 +935,50 @@ absent `enabled` key means enabled, matching `install-promo.sh`,
 `railway-release.py` and `report-release-ready.py`; a non-boolean one is a
 manifest error and the bridge refuses rather than treat it as truthy.
 
-It ships disabled and holds no state. Enabling it is environment only, and
+It ships disabled. Enabling it is environment only, and
 `deploy/railway/README.md` has the recipe:
 [Operator console API](deploy/railway/README.md#operator-console-api).
+
+### WhatsApp account controls
+
+The same bearer-authenticated API now exposes:
+
+| Method | Route under `/internal/console/` | Body / result |
+|---|---|---|
+| GET | `accounts` | Live account state and observation time; no read cache |
+| POST | `accounts` | `{"id":"sales"}` creates an account and QR session |
+| POST | `accounts/<id>/link` | `{}` starts or resumes a QR session |
+| GET | `accounts/link-sessions/<session-id>` | QR updates and pairing completion |
+| POST | `accounts/<id>/pause` | `{}` disables and stops, retaining login |
+| POST | `accounts/<id>/start` | `{}` enables and starts with saved login |
+| POST | `accounts/<id>/unlink` | `{}` disables, stops and clears login |
+
+Unlink retains configuration, group assignments, contact references and history.
+Permanent removal is not implemented. New accounts have no assignments and set
+both DM and group reply policies to disabled. Existing reply policies survive
+all four controls. Account status merges the gateway runtime with saved login
+presence/phone identity; no credentials or raw configuration are returned.
+
+`deploy/railway/console_accounts.py` serializes access to one persistent
+`workspace/lib/console_accounts.mjs` bridge. It uses the pinned gateway SDK and
+RPCs, with conflict-checked `config.set` writes and no requested gateway restart.
+A configuration still waiting to apply is reported rather than treated as active.
+Unknown write outcomes are never replayed. QR sessions expire after three minutes;
+closing a console dialog stops polling, and Link resumes an active attempt.
+Native pairing is checked before conflicting controls, including after API restart.
+
+The default account's explicit enabled flag is now preserved on boot; absent
+flags are initialized from the template. `REPLIES_DISABLED=1` still forces it off
+and prevents Start/Link. After removing that kill switch, explicitly Start the
+account to resume. Ads DM policy remains governed by the tracked template.
+Already submitted messages may still arrive after Pause or Unlink.
+
+Controls require the live API beside a running OpenClaw **2026.9.9** gateway and
+its existing `GATEWAY_AUTH_TOKEN`. Local checkout-only reads cannot manage accounts.
+During overnight standby operations report unavailable; they do not wake the gateway.
+For a checkout server, `OPENCLAW_STATE_DIR` must point at the gateway state whose
+`workspace/lib/console_accounts.mjs` contains this version. No tests scan a real
+WhatsApp QR code or mutate a production account.
 
 Run it against this checkout the same way production does:
 

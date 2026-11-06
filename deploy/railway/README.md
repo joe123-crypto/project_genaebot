@@ -736,7 +736,16 @@ server wraps its own entry point, so a fault can only kill the console API. Two
 limits keep it from crowding the gateway it shares a container with, where the
 hazard is not a crash but unbounded subprocess fan-out: at most two
 `console-read` processes at a time, answering 503 beyond that, and successful
-responses cached for 30 seconds.
+campaign/membership responses cached for 30 seconds. Account routes bypass that
+cache and use one persistent, serialized gateway SDK bridge; overlapping account
+requests return 409. The image must include `console_accounts.py` and stage the
+new `workspace/lib/console_accounts.mjs`. Deploy the backend before enabling the
+console controls. The gateway token stays inside the container; the local console
+uses only `BOT_API_BASE_URL` and the matching `BOT_API_TOKEN`.
+
+Pause and Unlink persist disabled state on the volume. Startup preserves this
+state for default as well as ads. `REPLIES_DISABLED=1` still overrides Start;
+after removing it, use Start explicitly. Existing reply policies remain intact.
 
 The campaign routes need the declared cron manifest. `deploy/stage-openclaw-source.sh`
 does not stage `deploy/`, so the Dockerfile bakes `deploy/promo-crons.json` to
