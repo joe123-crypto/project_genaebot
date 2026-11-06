@@ -583,9 +583,9 @@ after changing contact routing.
 
 ### Advertising stability trial
 
-The ads line is limited to **10 active groups and 29 campaign/group combinations**.
-`let's build bindura` and `BULAWAYO ADVERTS` are `on-hold`; their original campaign
-assignments remain available for restoration. These are configured eligibility
+The ads line has **12 active groups and 35 campaign/group combinations**.
+`let's build bindura` and `BULAWAYO ADVERTS` are active again for fruit trees,
+building materials and Genaie advertisers. These are configured eligibility
 counts, before caps and weekly rules, not confirmed deliveries.
 
 The next round is **ads group advertising without automated DM replies**.

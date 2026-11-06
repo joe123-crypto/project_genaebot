@@ -16,17 +16,23 @@ class ConnectivityTests(unittest.TestCase):
     def setUp(self):
         self.naps = []
 
-    def test_ads_trial_restores_the_ten_group_29_combination_baseline(self):
+    def test_ads_groups_restored_to_twelve_groups_and_35_combinations(self):
         membership = json.loads((ROOT / "workspace/cron/membership.json").read_text())
         active = {jid: g for jid, g in membership["groups"].items()
                   if g.get("account", "default") == "ads" and g["status"] == "active"}
-        self.assertEqual(len(active), 10)
-        self.assertEqual(sum(len(g["promos"]) for g in active.values()), 29)
+        self.assertEqual(len(active), 12)
+        self.assertEqual(sum(len(g["promos"]) for g in active.values()), 35)
         for jid in ("120363046894354726@g.us", "120363433121439254@g.us"):
-            self.assertEqual(membership["groups"][jid]["status"], "on-hold")
-            self.assertEqual(len(membership["groups"][jid]["promos"]), 3)
+            self.assertIn(jid, active)
+            promos = {"fruit-trees", "building-materials", "genaie-advertisers"}
+            self.assertEqual(set(active[jid]["promos"]), promos)
             for targets in (ROOT / "workspace/cron").glob("*-promo/targets.json"):
-                self.assertNotIn(jid, targets.read_text())
+                payload = json.loads(targets.read_text())
+                if targets.parent.name.removesuffix("-promo") in promos:
+                    self.assertIn(jid, payload["groups"])
+                    self.assertEqual(payload["accounts"][jid], "ads")
+                else:
+                    self.assertNotIn(jid, targets.read_text())
 
     def run_campaign(self, status, sender, cron_timeout=None):
         with tempfile.TemporaryDirectory() as directory:
