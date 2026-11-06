@@ -731,6 +731,50 @@ railway ssh -- curl -fsS http://127.0.0.1:18790/internal/console/health
 Reaching it from outside needs a Railway domain whose target port is
 `CONSOLE_API_PORT`. That exposes only this API; 18789 stays private.
 
+### Enabling operator-config writes
+
+Off unless a write key is installed, and separate from enabling the API at all.
+What the write route does and refuses is in the repository README:
+[Changing operator config from the console](../../README.md#changing-operator-config-from-the-console).
+
+```sh
+railway variables --set GCP_SERVICE_ACCOUNT_WRITE_B64="$(base64 -w0 write-key.json)" \
+  && railway redeploy                                                  # writes on
+railway variables --unset GCP_SERVICE_ACCOUNT_WRITE_B64 && railway redeploy  # writes off
+```
+
+The key needs **Cloud Datastore User**, and it must be its own key: do not reuse
+the seed key from your laptop, and do not widen the runtime key
+(`GCP_SERVICE_ACCOUNT_B64`), which stays Cloud Datastore Viewer so no campaign
+run can rewrite the config it is about to act on. Base64 for the same reason as
+the runtime key: the entrypoint's sanitiser would mangle the key's newlines.
+
+Unlike every other secret here, this one is **not** in `SECRET_KEYS`. That list
+is exported into the shell that execs the gateway, so everything on it reaches
+every cron run. The entrypoint captures this one, `unset`s it, and passes it to
+the console API child alone; the boot log says which mode it came up in:
+
+```text
+console api enabled on port 18790 (config writes on)
+console api enabled on port 18790 (read-only: no write key)
+```
+
+It is not release-managed, so a deploy neither sets nor clears it. Confirm the
+surface from inside the container -- 503 means the API is up and writes are off,
+which is the state it ships in:
+
+```sh
+railway ssh -- curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+  -H "Authorization: Bearer $CONSOLE_API_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"fields":{"note":"probe"},"dryRun":true}' \
+  "http://127.0.0.1:18790/internal/console/config/settings/defaults"
+```
+
+A `dryRun` change is validated and reported without being written, which is the
+safe way to check a key works. Remember that writes land in Firestore, so until
+`GENAIE_CONFIG_SOURCE=firestore` they change the store without changing what
+production acts on.
+
 The launch is backgrounded and never waited on, it owns no healthcheck, and the
 server wraps its own entry point, so a fault can only kill the console API. Two
 limits keep it from crowding the gateway it shares a container with, where the

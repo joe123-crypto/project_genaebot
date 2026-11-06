@@ -45,19 +45,33 @@ if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
 import operator_config  # noqa: E402
+import operator_writer  # noqa: E402
 import promo_membership  # noqa: E402
 
 MEMBERSHIP = ROOT / "workspace" / "cron" / "membership.json"
 MANIFEST = ROOT / "deploy" / "promo-crons.json"
-# Rank in steps of ten, so a group added between two others in the Console
-# needs no renumbering of its neighbours.
-RANK_STEP = 10
-# Firestore's limit on writes in one commit.
-COMMIT_BATCH = 500
+# Shaping documents and writing them is shared with the console's write bridge,
+# so the two cannot disagree about what a legal document looks like or how a
+# change reaches Firestore.
+plan_writes = operator_writer.plan_writes
+RANK_STEP = operator_writer.RANK_STEP
+COMMIT_BATCH = operator_writer.COMMIT_BATCH
 
 
 class SeedError(Exception):
     pass
+
+
+def documents(membership, switches):
+    """The shared shaping, plus the precondition only the seed has: its two
+    sources must declare the same campaigns. ``operator_writer.documents`` reads
+    each slug's switch by name, and a slug in one source and not the other is a
+    mistake in the repo, not something to paper over with a default."""
+    declared = list(membership.get("promos") or {})
+    if sorted(declared) != sorted(switches):
+        raise SeedError("membership promos %s and promo-crons.json slugs %s differ"
+                        % (sorted(declared), sorted(switches)))
+    return operator_writer.documents(membership, switches)
 
 
 def manifest_switches(manifest):
@@ -66,31 +80,6 @@ def manifest_switches(manifest):
         return operator_config.manifest_switches(manifest)
     except operator_config.ConfigInvalid as ex:
         raise SeedError(str(ex))
-
-
-def documents(membership, switches):
-    """``{collection: [(doc_id, fields)]}`` -- plain decoded fields, in file order,
-    each carrying a ``rank`` so Firestore's by-ID listing can be put back in order."""
-    declared = list((membership.get("promos") or {}))
-    if sorted(declared) != sorted(switches):
-        raise SeedError("membership promos %s and promo-crons.json slugs %s differ"
-                        % (sorted(declared), sorted(switches)))
-    settings = dict((name, membership[name])
-                    for name in operator_config.TOP_LEVEL_SETTINGS if name in membership)
-    settings.update((k, v) for k, v in (membership.get("defaults") or {}).items()
-                    if k != "accounts")
-
-    def ranked(items):
-        return [(doc_id, dict(data, rank=index * RANK_STEP))
-                for index, (doc_id, data) in enumerate(items)]
-
-    return {
-        "settings": [(operator_config.SETTINGS_DOC, settings)],
-        "lines": ranked(((membership.get("defaults") or {}).get("accounts") or {}).items()),
-        "campaigns": ranked((slug, dict(meta, enabled=switches[slug]))
-                            for slug, meta in (membership.get("promos") or {}).items()),
-        "groups": ranked((membership.get("groups") or {}).items()),
-    }
 
 
 # The comparison lives beside the reader so the seed's --verify and production's
@@ -132,41 +121,6 @@ def _token(creds, cache_dir):
     return operator_config.access_token(
         creds, os.path.join(cache_dir, "token.json"), opener=urllib.request.urlopen,
         signer=operator_config.node_signer, now=time.time, sleep=time.sleep)
-
-
-def plan_writes(desired, existing):
-    """``(writes, strays, unchanged)``: documents to create or replace, documents
-    Firestore has that the file does not, and how many already match."""
-    writes, strays, unchanged = [], [], 0
-    for collection in operator_config.COLLECTIONS:
-        have = dict(existing.get(collection) or [])
-        want = dict(desired.get(collection) or [])
-        for doc_id, fields in want.items():
-            if have.get(doc_id) == fields:
-                unchanged += 1
-            else:
-                writes.append((collection, doc_id, fields, doc_id in have))
-        strays.extend((collection, doc_id) for doc_id in have if doc_id not in want)
-    return writes, strays, unchanged
-
-
-def commit(project, token, writes, deletes):
-    """Apply full-document replaces and deletes, ``COMMIT_BATCH`` at a time.
-    A replace without an update mask overwrites the whole document, which is what
-    makes re-running the seed idempotent."""
-    base = "projects/%s/databases/(default)/documents" % project
-    operations = [{"update": {"name": "%s/%s/%s" % (base, collection, doc_id),
-                              "fields": operator_config.encode_fields(fields)}}
-                  for collection, doc_id, fields, _ in writes]
-    operations += [{"delete": "%s/%s/%s" % (base, collection, doc_id)}
-                   for collection, doc_id in deletes]
-    url = "%s/%s:commit" % (operator_config.API_ROOT, base)
-    for start in range(0, len(operations), COMMIT_BATCH):
-        body = json.dumps({"writes": operations[start:start + COMMIT_BATCH]}).encode("utf-8")
-        operator_config._request(url, opener=urllib.request.urlopen, sleep=time.sleep,
-                                 data=body, method="POST",
-                                 headers=dict(operator_config._auth(token),
-                                              **{"Content-Type": "application/json"}))
 
 
 def main(argv):
@@ -216,7 +170,8 @@ def main(argv):
             if not args.write:
                 print("dry run: nothing written (use --write)")
                 return 0
-            commit(creds["project_id"], token, writes, strays if args.prune else [])
+            operator_writer.commit(creds["project_id"], token, writes,
+                                   strays if args.prune else [])
             print("written to project %s" % creds["project_id"])
             return 0
     except SeedError as ex:

@@ -410,8 +410,26 @@ fi
 # and never waited on, like the readiness probe below, so neither a crash nor a
 # slow start here can abort this boot or disturb the gateway.
 if [ "${GENAIE_CONSOLE_API:-0}" = "1" ]; then
-  runuser -u joseph -- python3 /usr/local/bin/console-api.py &
-  log "console api enabled on port ${CONSOLE_API_PORT:-18790}"
+  # The operator-config write key is deliberately NOT in SECRET_KEYS. That list
+  # is exported into this shell, so the gateway and every cron run it spawns
+  # inherit it -- and a campaign run must not be able to rewrite the config it is
+  # about to act on. Capture it, remove it from this environment, and hand it to
+  # this one child. Sanitised the same way SECRET_KEYS values are, because a
+  # Railway variable can carry surrounding whitespace or quotes.
+  console_write_key="${GCP_SERVICE_ACCOUNT_WRITE_B64:-}"
+  unset GCP_SERVICE_ACCOUNT_WRITE_B64
+  console_write_key="${console_write_key#"${console_write_key%%[![:space:]]*}"}"
+  console_write_key="${console_write_key%"${console_write_key##*[![:space:]]}"}"
+  console_write_key="${console_write_key#\"}"; console_write_key="${console_write_key%\"}"
+  console_write_key="${console_write_key#\'}"; console_write_key="${console_write_key%\'}"
+  GCP_SERVICE_ACCOUNT_WRITE_B64="$console_write_key" \
+    runuser -u joseph -- python3 /usr/local/bin/console-api.py &
+  if [ -n "$console_write_key" ]; then
+    log "console api enabled on port ${CONSOLE_API_PORT:-18790} (config writes on)"
+  else
+    log "console api enabled on port ${CONSOLE_API_PORT:-18790} (read-only: no write key)"
+  fi
+  unset console_write_key
 fi
 runuser -u joseph -- python3 /usr/local/bin/report-release-ready.py &
 # setpriv execs the supervisor directly. runuser handles SIGTERM itself and

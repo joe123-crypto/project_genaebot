@@ -34,6 +34,20 @@ The account helper holds one persistent Node bridge; conflicting requests get
 409. QR sessions are temporary, while account enablement and login live in the
 gateway's durable state. Request bodies are bounded to 2048 bytes.
 
+Operator-config writes (bearer, no cache):
+  POST /internal/console/config/<collection>/<id>
+       {"fields": {...}, "actor": "...", "dryRun": false}
+
+<collection> is groups, lines, campaigns or settings, and <id> is
+percent-encoded because a group JID carries an "@". Every change goes through
+workspace/bin/console-write, which judges it with the bot's own
+promo_membership.validate and refuses anything that would stop a group being
+advertised to; this process only checks that a request is worth forwarding.
+Writes are serialised, never cached, and clear the read cache afterwards. They
+need GCP_SERVICE_ACCOUNT_WRITE_B64 -- a key with Cloud Datastore User, separate
+from the read-only runtime key the cron runs carry -- and answer 503 without it,
+which is how the write surface ships inert.
+
 Environment:
   CONSOLE_API_TOKEN   required, >= MIN_TOKEN_LENGTH chars; the server refuses to
                       start without it, so it can never come up unauthenticated
@@ -59,7 +73,7 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 # Also works when loaded by importlib in the deployment tests.
 sys.path.insert(0, os.path.dirname(__file__))
@@ -69,6 +83,19 @@ PREFIX = "/internal/console/"
 DATA_ROUTES = ("overview", "groups", "campaigns")
 SLUG_RE = re.compile(r"\A[a-z0-9][a-z0-9-]{0,63}\Z")
 DATE_RE = re.compile(r"\A[0-9]{4}-[0-9]{2}-[0-9]{2}\Z")
+
+# Operator-config writes. The collections are operator_writer.EDITABLE's keys;
+# this process does not import the bot's modules (it lives in the image, they
+# live on the volume), so it checks the shape of a request and leaves every
+# judgement about the DATA to console-write, which uses the bot's own validator.
+CONFIG_COLLECTIONS = ("groups", "lines", "campaigns", "settings")
+# A document id is a group JID, a line id, a campaign slug or "defaults".
+DOC_ID_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._@+-]{0,127}\Z")
+# Statuses console-write is allowed to choose. Anything else means it returned
+# something we do not understand, which is a bad gateway, not the caller's fault.
+WRITE_STATUSES = frozenset((200, 400, 404, 409, 503))
+WRITE_TIMEOUT_SECONDS = 30
+WRITE_KEY_VAR = "GCP_SERVICE_ACCOUNT_WRITE_B64"
 
 MIN_TOKEN_LENGTH = 32
 MAX_CONCURRENCY = 2
@@ -87,8 +114,16 @@ def log(message):
 
 
 def default_bridge():
+    return _volume_bin("console-read")
+
+
+def default_write_bridge():
+    return _volume_bin("console-write")
+
+
+def _volume_bin(name):
     state = os.environ.get("OPENCLAW_STATE_DIR") or DEFAULT_STATE_DIR
-    return os.path.join(state, "workspace", "bin", "console-read")
+    return os.path.join(state, "workspace", "bin", name)
 
 
 class Bridge:
@@ -177,6 +212,72 @@ class Bridge:
             return 502, b'{"error": "bridge failed"}'
         finally:
             self.slots.release()
+
+
+class WriteBridge:
+    """Runs console-write, one change at a time.
+
+    Serialised rather than capped: ``operator_writer`` reads the live config,
+    applies one patch and writes the whole document back, so two writes running
+    at once could each miss the other's change. One at a time removes that race
+    for everything coming through this API. It cannot remove it for a Firebase
+    Console edit made at the same moment -- Firestore has no transaction here and
+    the Console does not come through this path -- so the audit trail is what
+    tells an operator what actually happened.
+
+    Nothing is cached: a write's answer is about this moment, and serving a
+    stale one would tell an operator a change landed that did not."""
+
+    def __init__(self, path, timeout=WRITE_TIMEOUT_SECONDS):
+        self.path = path
+        self.timeout = timeout
+        self.lock = threading.Lock()
+        self.runs = 0
+
+    def run(self, request):
+        """Return (status, body). Never raises, and never leaks stderr."""
+        payload = json.dumps(request).encode("utf-8")
+        with self.lock:
+            self.runs += 1
+            try:
+                done = subprocess.run(
+                    [sys.executable, "-I", self.path], input=payload,
+                    capture_output=True, timeout=self.timeout,
+                )
+            except subprocess.TimeoutExpired:
+                # The change may or may not have landed. Say so rather than
+                # implying it did not; a caller re-reads instead of retrying.
+                log("write timed out after %ss: %s/%s"
+                    % (self.timeout, request.get("collection"), request.get("id")))
+                return 504, b'{"error": "the change may or may not have been ' \
+                             b'applied; re-read before retrying"}'
+            except OSError as exc:
+                log("cannot run %s: %s" % (self.path, exc))
+                return 502, b'{"error": "write bridge unavailable"}'
+
+        status = write_status(done.stdout)
+        if status is None:
+            log("write bridge exited %d: %s | %s/%s" % (
+                done.returncode,
+                (done.stderr or b"").decode("utf-8", "replace").strip()[:500],
+                request.get("collection"), request.get("id")))
+            return 502, b'{"error": "write bridge failed"}'
+        return status, done.stdout
+
+
+def write_status(stdout):
+    """The status console-write chose, or ``None`` when its answer is not one
+    this process is willing to pass on."""
+    try:
+        payload = json.loads(stdout or b"")
+    except ValueError:
+        return None
+    if not isinstance(payload, dict) or not isinstance(payload.get("ok"), bool):
+        return None
+    status = payload.get("status")
+    if status in WRITE_STATUSES and payload["ok"] == (status == 200):
+        return status
+    return None
 
 
 def curated(stdout):
@@ -273,8 +374,78 @@ class Handler(BaseHTTPRequestHandler):
                 bridge.cache.clear()
         self.send_any(status, body, with_body)
 
+    def config_request(self, route, query, with_body=True):
+        """POST /internal/console/config/<collection>/<id>
+
+        Body: {"fields": {...}, "actor": "...", "dryRun": false}. The id is
+        percent-encoded by the caller, because a group JID carries an "@".
+
+        This checks only that the request has a shape worth forwarding. What a
+        legal value is, and whether the change would stop a group being
+        advertised to, is console-write's judgement -- it has the bot's own
+        validator and this process does not."""
+        if query:
+            self.send_any(400, b'{"error":"Config routes take no query parameters."}',
+                          with_body)
+            return
+        if not (os.environ.get(WRITE_KEY_VAR) or "").strip():
+            # The key is the capability. Without it the route is honest about why
+            # rather than pretending it does not exist, because an operator who
+            # has just set a token needs to know what else is missing.
+            self.send_any(503, b'{"error":"Operator-config writes are not enabled '
+                               b'on this gateway."}', with_body)
+            return
+        # The route is settled before the body is looked at, so "no such
+        # document" and "that change is not a change" cannot answer alike.
+        parts = route.split("/")
+        try:
+            doc_id = unquote(parts[2]) if len(parts) == 3 else ""
+        except UnicodeError:
+            doc_id = ""
+        if not (len(parts) == 3 and parts[0] == "config"
+                and parts[1] in CONFIG_COLLECTIONS and DOC_ID_RE.match(doc_id)):
+            self.send_any(404, b'{"error":"not found"}', with_body)
+            return
+
+        try:
+            size = int(self.headers.get("Content-Length") or "0")
+            if self.headers.get("Transfer-Encoding") or not 0 < size <= 2048:
+                raise ValueError()
+            if self.headers.get("Content-Type", "").split(";", 1)[0].strip() != "application/json":
+                raise ValueError()
+            payload = json.loads(self.rfile.read(size))
+            if not isinstance(payload, dict):
+                raise ValueError()
+            if set(payload) - {"fields", "actor", "dryRun"}:
+                raise ValueError()
+            if not isinstance(payload.get("fields"), dict):
+                raise ValueError()
+        except (ValueError, TypeError, UnicodeError):
+            self.send_any(400, b'{"error":"Invalid config change."}', True)
+            return
+
+        request = {"collection": parts[1], "id": doc_id, "fields": payload["fields"]}
+        for name in ("actor", "dryRun"):
+            if name in payload:
+                request[name] = payload[name]
+
+        status, body = self.server.console["writes"].run(request)
+        # A change the caller can see means every cached read of it is wrong. An
+        # uncertain write may still have landed, so clear on failure too.
+        bridge = self.server.console["bridge"]
+        with bridge.lock:
+            bridge.cache.clear()
+        self.send_any(status, body, with_body)
+
     def do_POST(self):
         split = urlsplit(self.path)
+        if split.path.startswith(PREFIX + "config/"):
+            if not authorized(self.headers.get("Authorization"),
+                              self.server.console["token"]):
+                self.send_any(401, b'{"error":"unauthorized"}', True)
+                return
+            self.config_request(split.path[len(PREFIX):], split.query)
+            return
         if not split.path.startswith(PREFIX + "accounts"):
             self.refuse_other_methods()
             return
@@ -373,7 +544,7 @@ def authorized(header, token):
     return hmac.compare_digest(presented.encode("utf-8"), token.encode("utf-8"))
 
 
-def build_server(bind, port, token, bridge_path, **kwargs):
+def build_server(bind, port, token, bridge_path, write_path=None, **kwargs):
     if len(token or "") < MIN_TOKEN_LENGTH:
         raise ValueError(
             "CONSOLE_API_TOKEN must be at least %d characters" % MIN_TOKEN_LENGTH)
@@ -384,7 +555,9 @@ def build_server(bind, port, token, bridge_path, **kwargs):
         server.console["accounts"].close()
         close_server()
     server.server_close = close
-    server.console = {"token": token, "bridge": Bridge(bridge_path, **kwargs), "accounts": AccountControls()}
+    server.console = {"token": token, "bridge": Bridge(bridge_path, **kwargs),
+                      "accounts": AccountControls(),
+                      "writes": WriteBridge(write_path or default_write_bridge())}
     return server
 
 
@@ -399,7 +572,8 @@ def main():
         return 78
 
     try:
-        server = build_server(bind, port, token, bridge_path)
+        server = build_server(bind, port, token, bridge_path,
+                              os.environ.get("CONSOLE_WRITE_BIN") or default_write_bridge())
     except ValueError as exc:
         log("%s; refusing to start" % exc)
         return 78
