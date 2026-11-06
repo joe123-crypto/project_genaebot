@@ -24,9 +24,11 @@ order. Unranked documents sort after ranked ones, by ID.
 Why the failure handling is shaped the way it is:
 
 * **Targeting fails closed.** If Firestore cannot be read, the last-known-good
-  snapshot under ``runtime/firestore/`` is used. With no snapshot either,
+  snapshot under ``runtime/firestore/`` is used, but only while it is younger
+  than :data:`SNAPSHOT_MAX_AGE_SECONDS`. With no snapshot, or one past that age,
   :func:`load` raises :class:`ConfigUnavailable` and the caller must send
-  nothing. The repository's membership.json is deliberately not a fallback: once
+  nothing. "Fail closed" has to mean closed rather than stale: a snapshot served
+  indefinitely would keep advertising to a group an operator had paused. The repository's membership.json is deliberately not a fallback: once
   Firestore is canonical that file is stale, and falling back to it would bring
   old targeting back -- re-posting into a group someone had paused.
 * **Validation is per document.** The Firebase Console has no schema and no CI
@@ -76,6 +78,11 @@ HTTP_HINTS = {
     404: " (no Firestore database in this project, or the wrong project)",
 }
 PAGE_SIZE = 300
+
+# How stale the last-known-good snapshot may be before it stops counting as
+# config at all. Long enough to ride out an outage that spans a day's runs,
+# short enough that a paused group cannot be advertised for a second day.
+SNAPSHOT_MAX_AGE_SECONDS = 48 * 3600
 
 TOKEN_LIFETIME_SECONDS = 3600
 # Mint a fresh token this long before the cached one expires, so a request is
@@ -686,7 +693,7 @@ def load(env=None, *, opener=None, signer=None, now=None, sleep=None, log=None):
         clean, report = quarantine(membership, undecodable)
     except (ConfigUnavailable, ConfigInvalid) as ex:
         log("Firestore unusable (%s); using the last-known-good snapshot" % ex)
-        return _from_snapshot(directory, str(ex))
+        return _from_snapshot(directory, str(ex), now=now)
 
     at = datetime.datetime.fromtimestamp(now(), datetime.timezone.utc)
     stamp = at.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -710,12 +717,41 @@ def load(env=None, *, opener=None, signer=None, now=None, sleep=None, log=None):
             "report": report, "fetchedAt": stamp, "degraded": None}
 
 
-def _from_snapshot(directory, why):
+def _snapshot_age_seconds(snapshot, now):
+    """How old the snapshot is, or ``None`` when it does not say. A snapshot
+    written by :func:`load` always carries ``fetchedAt``."""
+    stamp = snapshot.get("fetchedAt")
+    if not isinstance(stamp, str):
+        return None
+    try:
+        at = datetime.datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=datetime.timezone.utc)
+    except ValueError:
+        return None
+    return now() - at.timestamp()
+
+
+def _from_snapshot(directory, why, now=None):
+    now = now or time.time
     snapshot = _read_json(snapshot_path(directory))
     if (not isinstance(snapshot, dict) or not isinstance(snapshot.get("membership"), dict)
             or not isinstance(snapshot.get("enabled"), dict)):
         raise ConfigUnavailable("Firestore unusable (%s) and no snapshot at %s"
                                 % (why, snapshot_path(directory)))
+    # Yesterday's targeting through a short outage is fine. Last week's is not:
+    # it is how a group an operator paused gets advertised again, which is the
+    # one failure this whole path exists to prevent. Past the bound there is no
+    # trustworthy config, and the caller must send nothing.
+    age = _snapshot_age_seconds(snapshot, now)
+    if age is None:
+        raise ConfigUnavailable("Firestore unusable (%s) and the snapshot at %s does "
+                                "not say when it was taken"
+                                % (why, snapshot_path(directory)))
+    if age > SNAPSHOT_MAX_AGE_SECONDS:
+        raise ConfigUnavailable(
+            "Firestore unusable (%s) and the snapshot is %.0f h old, past the %.0f h "
+            "limit; refusing to act on stale targeting"
+            % (why, age / 3600.0, SNAPSHOT_MAX_AGE_SECONDS / 3600.0))
     try:
         clean, report = quarantine(snapshot["membership"])
     except ConfigInvalid as ex:

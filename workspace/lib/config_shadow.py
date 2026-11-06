@@ -2,19 +2,19 @@
 """Shadow mode: read operator config from Firestore beside membership.json, act
 on the file, and record every difference.
 
-This is phase 2 of moving operator config into Firestore (see
-``operator_config``). Before production acts on Firestore it has to agree with
-the file through days of real runs, not just on the day it was seeded. Shadow
-mode is how that is checked without Firestore ever deciding where an ad goes.
+This is the step before the cutover (see ``operator_config`` for the store and
+``promo_config`` for what a run acts on). Before production acts on Firestore it
+has to agree with the file through days of real runs, not just on the day it was
+seeded. Shadow mode is how that is checked without Firestore ever deciding where
+an ad goes.
 
-Switched by one variable:
+``promo_config`` owns the switch; this module only asks whether to shadow:
 
-    GENAIE_CONFIG_SOURCE   unset or "file"  shadow mode off (today's behaviour)
+    GENAIE_CONFIG_SOURCE   unset or "file"  shadow mode off
                            "shadow"         every campaign run also reads Firestore
-
-Any other value is reported and treated as "file". In particular "firestore",
-the phase 3 value, is NOT honoured yet: acting on Firestore needs the cutover
-code, and a variable set early must not pretend it arrived.
+                           "firestore"      nothing to shadow -- the run reads
+                                            Firestore for real and reports what
+                                            it found itself
 
 In shadow mode each campaign run starts the read in a background thread and
 collects the result as it finishes, so a slow or unreachable Firestore costs
@@ -51,9 +51,12 @@ if LIB not in sys.path:
     sys.path.insert(0, LIB)
 
 import operator_config  # noqa: E402
+import promo_config  # noqa: E402
 
-MODE_VAR = "GENAIE_CONFIG_SOURCE"
-FILE, SHADOW = "file", "shadow"
+# One module reads the switch. This one only asks whether to shadow; what a run
+# ACTS on is promo_config.resolve's business.
+MODE_VAR = promo_config.MODE_VAR
+FILE, SHADOW, FIRESTORE = promo_config.FILE, promo_config.SHADOW, promo_config.FIRESTORE
 RESULT_FILE = "shadow.json"
 # How long a finished run waits for a check still in flight. Normally the check
 # is done long before the last send; this bounds the cost of a hung Firestore
@@ -63,24 +66,18 @@ JOIN_SECONDS = 10.0
 # The cron manifest, where each campaign's on/off switch is declared today. The
 # image bakes a copy outside deploy/, which is never staged into the container.
 WORKSPACE = Path(LIB).parent
-MANIFEST_CANDIDATES = (
-    str(WORKSPACE.parent / "deploy" / "promo-crons.json"),
-    "/usr/local/lib/genaie/promo-crons.json",
-)
+MANIFEST_CANDIDATES = promo_config.MANIFEST_CANDIDATES
 PREFIX = "[config-shadow]"
 
 
 def mode(env=None):
-    """``(mode, warning)``: ``"file"`` or ``"shadow"``, plus a message when the
-    variable holds something this phase does not act on."""
-    env = os.environ if env is None else env
-    raw = (env.get(MODE_VAR) or "").strip().lower()
-    if raw in ("", FILE):
-        return FILE, None
-    if raw == SHADOW:
-        return SHADOW, None
-    return FILE, ("%s=%r is not supported yet; acting on membership.json and "
-                  "skipping the shadow check" % (MODE_VAR, env.get(MODE_VAR)))
+    """``(mode, warning)``: the setting as :func:`promo_config.mode` reads it.
+
+    Shadow mode only has something to say while the file is what a run acts on.
+    Once the mode is ``firestore`` the run reads Firestore for real and reports
+    what it found itself, so there is nothing left to shadow and :func:`start`
+    does nothing."""
+    return promo_config.mode(env)
 
 
 def result_path(env=None):
