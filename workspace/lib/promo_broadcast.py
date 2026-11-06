@@ -65,6 +65,8 @@ from datetime import date
 import json_store
 from gateway_campaign import active_client, campaign_transport
 import config_shadow
+import operator_config
+import promo_config
 
 
 # ------------------------------------------------------------------ gateway ----
@@ -149,17 +151,25 @@ def _parse_weekday(token):
 
 
 # ------------------------------------------------------------------ targets ----
-def load_targets(targets_file):
+# Every reader below takes EITHER an already-resolved targets payload (a dict)
+# or a path to a targets file. A run resolves its payload once, in
+# ``promo_config.resolve``, and passes that dict down: the engine used to open
+# the file five times, so a config change landing mid-run could split one run
+# across two configs. The path form is what the per-promo CI tests use.
+def load_targets(source):
     """Return the list of raw target entries (JIDs and/or invite links)."""
-    try:
-        with open(targets_file) as f:
-            data = json.load(f)
-    except FileNotFoundError:
-        sys.stderr.write("ERROR: targets file not found: %s\n" % targets_file)
-        return []
-    except json.JSONDecodeError as ex:
-        sys.stderr.write("ERROR: targets file is not valid JSON: %s\n" % ex)
-        return []
+    if isinstance(source, dict):
+        data = source
+    else:
+        try:
+            with open(source) as f:
+                data = json.load(f)
+        except FileNotFoundError:
+            sys.stderr.write("ERROR: targets file not found: %s\n" % source)
+            return []
+        except json.JSONDecodeError as ex:
+            sys.stderr.write("ERROR: targets file is not valid JSON: %s\n" % ex)
+            return []
     groups = data.get("groups", []) if isinstance(data, dict) else data
     out = []
     for g in groups or []:
@@ -168,26 +178,28 @@ def load_targets(targets_file):
     return out
 
 
-def _targets_doc(targets_file):
-    """The targets file as a dict, or {} when it is absent, unreadable, not JSON
-    or not an object. Shared by the optional-section readers below, which all
-    treat a missing section as "nothing configured" rather than an error;
-    :func:`load_targets` reports its own failures instead, because a promo with
-    no resolvable group list has nothing to do."""
+def _targets_doc(source):
+    """The targets payload as a dict, or {} when the file is absent, unreadable,
+    not JSON or not an object. Shared by the optional-section readers below,
+    which all treat a missing section as "nothing configured" rather than an
+    error; :func:`load_targets` reports its own failures instead, because a promo
+    with no resolvable group list has nothing to do."""
+    if isinstance(source, dict):
+        return source
     try:
-        with open(targets_file) as f:
+        with open(source) as f:
             data = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         return {}
     return data if isinstance(data, dict) else {}
 
 
-def load_weekly_targets(targets_file):
+def load_weekly_targets(source):
     """Return {jid: frozenset(weekday ints)} for groups posted to only on certain
     weekdays. A JID listed here is posted to ONLY on its weekdays; a JID absent
     from this map (i.e. only in "groups") is posted to every day. Entries with no
     valid weekday, or a bad JID, are ignored."""
-    raw = _targets_doc(targets_file).get("weekly_groups") or {}
+    raw = _targets_doc(source).get("weekly_groups") or {}
     out = {}
     if isinstance(raw, dict):
         for jid, days in raw.items():
@@ -211,13 +223,13 @@ def load_weekly_targets(targets_file):
 DEFAULT_ACCOUNT = "default"
 
 
-def load_account_targets(targets_file):
+def load_account_targets(source):
     """Return {jid: account_id} for groups whose ad is sent from a non-default
     WhatsApp account. A JID absent from the map (i.e. only in "groups") is sent
     from the default account. The map lets the promo group-load be spread across
     two WhatsApp numbers so no single account is a member of a suspiciously large
     number of groups."""
-    raw = _targets_doc(targets_file).get("accounts") or {}
+    raw = _targets_doc(source).get("accounts") or {}
     out = {}
     if isinstance(raw, dict):
         for jid, account in raw.items():
@@ -228,12 +240,12 @@ def load_account_targets(targets_file):
     return out
 
 
-def load_account_numbers(targets_file):
+def load_account_numbers(source):
     """Return {account_id: advertised_number} so the engine can render each
     group's caption + wa.me link with the selected contact account
     (or the posting account when no contact is selected). Comes from membership.json's
     defaults.accounts, carried into every targets.json by make-promo-targets."""
-    raw = _targets_doc(targets_file).get("account_numbers") or {}
+    raw = _targets_doc(source).get("account_numbers") or {}
     out = {}
     if isinstance(raw, dict):
         for account, number in raw.items():
@@ -954,10 +966,15 @@ def promo_key(promo_name):
 
 
 def apply_caps(promo_name, jids, day, caps=_PROBE_CAPS, membership_path=None,
-               record=True):
+               record=True, membership=None, switches=None):
     """Drop the groups whose daily ad allowance is spoken for by other campaigns
     today (see :mod:`promo_caps`). Returns ``(kept, decisions)``, with
     ``decisions`` empty when caps are off.
+
+    ``membership`` and ``switches`` come from the run's single
+    ``promo_config.resolve``, so the caps read the same config the targeting did
+    rather than re-reading the file (or Firestore) for themselves. Without them
+    the membership file and the cron manifest are read, as before.
 
     Deliberately fail-open: a missing membership file, bad data or an import
     problem leaves every group in place and logs a warning. A capacity nicety
@@ -967,7 +984,7 @@ def apply_caps(promo_name, jids, day, caps=_PROBE_CAPS, membership_path=None,
     try:
         import promo_membership
 
-        m = promo_membership.load(membership_path)
+        m = membership if membership is not None else promo_membership.load(membership_path)
         if m is None:
             return list(jids), {}
         if caps is _PROBE_CAPS:
@@ -976,8 +993,12 @@ def apply_caps(promo_name, jids, day, caps=_PROBE_CAPS, membership_path=None,
             import promo_caps as caps_mod
         else:
             caps_mod = caps
+        disabled = None
+        if switches is not None:
+            disabled = [slug for slug, on in switches.items() if not on]
         kept, decisions = caps_mod.filter_for_promo(
-            m, promo_key(promo_name), list(jids), day=day, record=record)
+            m, promo_key(promo_name), list(jids), day=day, record=record,
+            disabled=disabled)
     except Exception as ex:  # fail-open, loudly
         sys.stderr.write("WARN: per-group caps not applied (%s: %s); sending to "
                          "every eligible group.\n" % (type(ex).__name__, ex))
@@ -1003,7 +1024,8 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
               tracking=None, promo_name=None, variant_images=None,
               send_delay_min=None, send_delay_max=None, rng=None, sleep=None,
               cron_timeout=_PROBE_CRON_TIMEOUT, start_jitter=None,
-              caps=_PROBE_CAPS, membership_path=None, account_status=None):
+              caps=_PROBE_CAPS, membership_path=None, account_status=None,
+              resolve_config=None):
     """Resolve targets, skip groups already sent today (and weekly-limited groups
     off their configured weekday), then send the advert to each pending group,
     committing state per group so a crash or retry never double-posts. Returns a
@@ -1033,6 +1055,10 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
     membership.json sets ``caps_enabled``. ``caps=None`` disables it outright and
     ``caps=<module>`` injects an alternative, both for tests.
 
+    Where the targeting comes from is :func:`promo_config.resolve`'s decision --
+    the generated targets file, or Firestore. It is resolved once per run, and
+    ``resolve_config`` injects an alternative resolver for tests.
+
     ``rng`` (anything with a ``uniform`` method, default the ``random`` module),
     ``sleep`` (default ``time.sleep``), ``cron_timeout`` (default: ask the
     gateway; None disables the fit) and ``membership_path`` are injectable for
@@ -1060,11 +1086,41 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
             sys.stderr.write("ERROR: promo image missing: %s\n" % path)
             return 1
 
-    entries = load_targets(targets_file)
-    weekly = load_weekly_targets(targets_file)
-    account_map = load_account_targets(targets_file)       # {jid: account}
-    account_numbers = load_account_numbers(targets_file)   # {account: number}
-    contact_account = _targets_doc(targets_file).get("contact_account")
+    # Where this run's targeting comes from -- the generated targets file, or
+    # Firestore. Resolved ONCE: every reader below works off this one payload, so
+    # a config change landing mid-run cannot split the run across two configs.
+    try:
+        source = (resolve_config or promo_config.resolve)(
+            promo_name, targets_file=targets_file, membership_path=membership_path)
+    except operator_config.ConfigUnavailable as ex:
+        # Firestore is canonical and unreadable, with no usable snapshot. There is
+        # no safe targeting to fall back to -- the repo's membership.json would be
+        # stale, which is how a paused group gets advertised again. Send nothing,
+        # and exit non-zero so the cron's failure alert fires.
+        sys.stderr.write("ERROR: no operator config to act on: %s\n" % ex)
+        print("NO_REPLY")
+        return 1
+
+    # A campaign the operator has switched off still has its cron registered on
+    # the gateway volume, so the run itself has to stand down. Only in firestore
+    # mode: there the switch is the live pause control. A hand-run or --dry-run of
+    # a paused campaign still previews, matching promo_caps, which never treats
+    # the promo being run as disabled.
+    if source["mode"] == promo_config.FIRESTORE and source["enabled"] is False:
+        if dry:
+            sys.stderr.write("NOTE: %s is switched off; previewing anyway.\n" % promo_name)
+        else:
+            sys.stderr.write("%s is switched off in the operator config; "
+                             "sending nothing.\n" % promo_name)
+            print("NO_REPLY")
+            return 0
+
+    targets = source["doc"]
+    entries = load_targets(targets)
+    weekly = load_weekly_targets(targets)
+    account_map = load_account_targets(targets)       # {jid: account}
+    account_numbers = load_account_numbers(targets)   # {account: number}
+    contact_account = targets.get("contact_account")
 
     # Contact routing is independent of the group's posting account. Explicit
     # third-party tracking destinations retain precedence.
@@ -1093,15 +1149,19 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
         return 0
     if contact_account is not None and (
             not isinstance(contact_account, str) or contact_account not in account_numbers):
-        raise ValueError("contact_account must name an account with a number; "
-                         "regenerate targets.json with make-promo-targets")
+        raise ValueError("contact_account must name an account with a number "
+                         "(%s): check defaults.accounts, and regenerate "
+                         "targets.json with make-promo-targets when the source "
+                         "is the file" % source["source"])
     # Checked only once there is something to send, so a missing/unreadable
     # targets file still exits quietly above (load_targets reports it) instead of
     # being misreported here as a stale, un-regenerated one.
     if bot_number_used and not account_numbers:
         raise ValueError(
-            "this promo advertises a per-account number but targets.json has no "
-            "account_numbers map; regenerate it with make-promo-targets")
+            "this promo advertises a per-account number but the targets payload "
+            "(%s) has no account_numbers map; check defaults.accounts, and "
+            "regenerate targets.json with make-promo-targets when the source is "
+            "the file" % source["source"])
 
     st = load_state(state_file)
     jids = resolve_targets(all_entries, st, dry=dry)
@@ -1124,7 +1184,9 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
     # promo may be asked to stand down for a group it still targets.
     eligible, cap_decisions = apply_caps(promo_name, eligible, day, caps=caps,
                                          membership_path=membership_path,
-                                         record=not dry)
+                                         record=not dry,
+                                         membership=source["membership"],
+                                         switches=source["switches"])
     sent_map = st["sent"]
     pending = [j for j in eligible if sent_map.get(j) != today]
 

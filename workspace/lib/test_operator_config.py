@@ -329,6 +329,41 @@ class FallbackTest(Harness):
         with self.assertRaises(oc.ConfigUnavailable):
             self.load()
 
+    def test_a_snapshot_still_inside_the_age_limit_is_served(self):
+        self.load()
+        self.firestore.down = True
+        self.clock[0] += oc.SNAPSHOT_MAX_AGE_SECONDS - 60
+        self.assertEqual(self.load()["source"], "snapshot")
+
+    def test_a_snapshot_past_the_age_limit_means_send_nowhere(self):
+        # Fail closed has to mean closed, not stale: serving a week-old snapshot
+        # would keep advertising to a group the operator paused days ago.
+        self.load()
+        self.firestore.down = True
+        self.clock[0] += oc.SNAPSHOT_MAX_AGE_SECONDS + 60
+        with self.assertRaises(oc.ConfigUnavailable) as caught:
+            self.load()
+        self.assertIn("past the", str(caught.exception))
+
+    def test_a_snapshot_that_does_not_say_when_it_was_taken_is_not_trusted(self):
+        self.load()
+        path = oc.snapshot_path(self.env["GENAIE_FIRESTORE_DIR"])
+        snap = read(path)
+        del snap["fetchedAt"]
+        with open(path, "w") as f:
+            json.dump(snap, f)
+        self.firestore.down = True
+        with self.assertRaises(oc.ConfigUnavailable):
+            self.load()
+
+    def test_a_live_read_refreshes_the_age(self):
+        self.load()
+        self.clock[0] += oc.SNAPSHOT_MAX_AGE_SECONDS - 60
+        self.load()                      # live, so the snapshot is rewritten
+        self.clock[0] += 120             # past the limit measured from the FIRST read
+        self.firestore.down = True
+        self.assertEqual(self.load()["source"], "snapshot")
+
     def test_a_transient_failure_is_retried_once(self):
         self.firestore.fail_next = [503]
         self.assertEqual(self.load()["source"], "firestore")

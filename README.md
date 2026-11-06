@@ -401,13 +401,40 @@ membership.json. `workspace/bin/list-groups` prints the whole picture
 (`--caps` adds today's allowance, `--json` one object per group); it is
 read-only and never contacts the gateway.
 
-### Moving membership to Firestore (phase 2: shadow mode, nothing acts on it yet)
+### Moving membership to Firestore
 
 membership.json cannot be edited at runtime: `entrypoint.sh` rsyncs
 `workspace/` from the image with `--delete` on every boot, so any change to it
 needs a deploy. Operator config is moving to Firestore, edited in the Firebase
-Console. **Until the cutover, membership.json stays the source of truth.**
-Production acts on nothing from Firestore; shadow mode (below) only compares.
+Console. **One variable decides what a run acts on**, and
+`workspace/lib/promo_config.py` is the only thing that reads it:
+
+| `GENAIE_CONFIG_SOURCE` | A campaign run acts on | Also |
+|---|---|---|
+| unset or `file` | membership.json + the generated `targets.json` | — |
+| `shadow` | the same | compares Firestore with the file on every run |
+| `firestore` | **Firestore** | reports what it read; nothing to shadow |
+
+`promo_config.resolve` answers the question **once per run** and hands back the
+targets payload, the membership the caps derive from, and each campaign's
+on/off switch. One read matters beyond the cutover: the engine used to open the
+targets file five times, so a config change landing mid-run could split one run
+across two configs.
+
+The two sources fail differently on purpose. The file cannot fail closed -- it
+ships inside the image, so if it is missing the build is wrong, not the data --
+and that path keeps its old behaviour down to the stderr wording, which is what
+makes flipping the variable back a true rollback. Firestore fails closed; see
+below.
+
+With `firestore`, a campaign whose `campaigns/<slug>.enabled` is false **sends
+nothing even though its cron is still registered** on the volume. That is the
+point: pausing a campaign becomes a config edit rather than an installer run.
+A `--dry-run` of a paused campaign still previews, matching `promo_caps`, which
+never treats the campaign being run as disabled. Note that after the cutover
+there are two switches and a campaign is on only if both are: `promo-crons.json`
+decides whether a cron exists at all, Firestore decides whether a run that fires
+sends. `console-read` reports the **effective** switch for that reason.
 
 What exists now:
 
@@ -417,9 +444,13 @@ What exists now:
   also carries `rank`, because Firestore lists by ID but send order decides
   which groups a short run reaches.
 - **Targeting fails closed.** If Firestore is unreachable, the last-known-good
-  snapshot in `runtime/firestore/` is used. With no snapshot either, `load()`
-  raises and the caller must send nothing. The repo's membership.json is
-  deliberately never a fallback: after cutover it would be stale targeting.
+  snapshot in `runtime/firestore/` is used -- but only while it is younger than
+  `operator_config.SNAPSHOT_MAX_AGE_SECONDS` (48 h). With no snapshot, or one
+  past that age, `load()` raises, the run sends nothing and exits non-zero so
+  the cron's failure alert fires. "Fail closed" has to mean closed rather than
+  stale: a snapshot served indefinitely would keep advertising to a group an
+  operator had paused days ago. The repo's membership.json is deliberately never
+  a fallback either: after cutover it would be stale targeting.
 - **Validation is per document.** A malformed group is quarantined (excluded
   and reported) without touching the rest. A malformed settings, line or
   campaign document falls back to the snapshot. Deleting a campaign drops it
@@ -449,14 +480,25 @@ against the real membership, and against the live project with
 `GENAIE_FIRESTORE_INTEGRATION=1`. Use a seed key (Cloud Datastore User) on your
 own machine only. The runtime key is read-only.
 
-Shadow mode (phase 2) checks the copy against real runs before anything acts on
-it. Off by default; two Railway variables turn it on:
+Shadow mode checks the copy against real runs before anything acts on it. Off by
+default; two Railway variables turn it on, and a third value cuts over:
 
 ```sh
 railway variables --set GCP_SERVICE_ACCOUNT_B64="$(base64 -w0 runtime-key.json)" \
   --set GENAIE_CONFIG_SOURCE=shadow && railway redeploy        # shadow on
+railway variables --set GENAIE_CONFIG_SOURCE=firestore && railway redeploy  # cut over
+railway variables --set GENAIE_CONFIG_SOURCE=shadow && railway redeploy     # roll back
 railway variables --unset GENAIE_CONFIG_SOURCE && railway redeploy   # shadow off
 ```
+
+**Do not cut over without checking parity first.** The gate is
+`deploy/seed-firestore.py --key seed-key.json --verify` (exit 0) plus several
+consecutive days of `status: "exact"` with `source: "firestore"` from shadow
+mode. Pick a window with no promo run due (see
+[deploy/railway/README.md](deploy/railway/README.md)), since the flip needs a
+redeploy. While membership.json and the targets files are still in the repo and
+still CI-verified against each other, rolling back is one variable and no code
+deploy -- so keep editing the file alongside Firestore until the file is retired.
 
 With `GENAIE_CONFIG_SOURCE=shadow`, every campaign run reads Firestore in a
 background thread while it sends from membership.json as usual, then logs
@@ -466,8 +508,15 @@ a check still in flight when the run ends is abandoned after 10 s. The newest
 result is kept in `runtime/firestore/shadow.json` and reported by
 `console-read overview` as `configShadow`, so drift reaches the Genaie
 console rather than only the run logs. The read also keeps the fail-closed
-snapshot and the change log current. `GENAIE_CONFIG_SOURCE=firestore` is
-reserved for the cutover and is refused (with a warning) until then.
+snapshot and the change log current, so by cutover the path an outage depends on
+has been exercised for days.
+
+With `GENAIE_CONFIG_SOURCE=firestore` there is nothing left to shadow: the run
+reads Firestore for real and reports what it found itself, as
+`[operator-source]` and `[operator-config]` lines. `console-read overview` then
+carries `configSource` -- the mode, whether the read was live or came from the
+snapshot, and any quarantined groups -- and `list-groups` names the store in its
+header, so neither can show the file while production acts on Firestore.
 
 The key is the read-only runtime key (Cloud Datastore Viewer), base64-encoded
 because the entrypoint's variable sanitiser would mangle a multi-line JSON

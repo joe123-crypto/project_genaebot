@@ -743,17 +743,46 @@ does not stage `deploy/`, so the Dockerfile bakes `deploy/promo-crons.json` to
 `/usr/local/lib/genaie/promo-crons.json`. A 502 reading `no cron manifest at`
 means that copy is missing from the image.
 
-## Firestore shadow mode
+## Firestore: shadow mode and the cutover
 
-Off unless explicitly enabled. What it compares, and why a run cannot be
-affected, is in the repository README:
-[Moving membership to Firestore](../../README.md#moving-membership-to-firestore-phase-2-shadow-mode-nothing-acts-on-it-yet).
+Off unless explicitly enabled. What each mode means, what shadow mode compares,
+and why a shadow run cannot affect a send, is in the repository README:
+[Moving membership to Firestore](../../README.md#moving-membership-to-firestore).
 
 ```sh
 railway variables --set GCP_SERVICE_ACCOUNT_B64="$(base64 -w0 runtime-key.json)" \
   --set GENAIE_CONFIG_SOURCE=shadow && railway redeploy        # shadow on
+railway variables --set GENAIE_CONFIG_SOURCE=firestore && railway redeploy  # cut over
+railway variables --set GENAIE_CONFIG_SOURCE=shadow && railway redeploy     # roll back
 railway variables --unset GENAIE_CONFIG_SOURCE && railway redeploy   # shadow off
 ```
+
+Before the cutover, in this order:
+
+1. `deploy/seed-firestore.py --key seed-key.json --verify` exits 0 (from your own
+   machine; the runtime key cannot write).
+2. Shadow mode has reported `status: "exact"` with `source: "firestore"` for
+   several consecutive days -- a snapshot matching proves less than a live read
+   matching, so check the source, not just the status.
+3. The window has no promo run due and no unfinished `cron_run_receipts` (see
+   *Deploy preflight* above). The flip needs a redeploy.
+
+After it, on the next run: `[operator-source]` and `[operator-config]` lines on
+the run's stderr with no quarantine warnings, a refreshed
+`runtime/firestore/operator-config.json`, and a delivery count matching the
+previous day's for that campaign. `./workspace/bin/console-read overview` reports
+`configSource.source` as `firestore`.
+
+Rolling back is one variable and no code deploy, as long as membership.json and
+the generated targets files are still in the repo: the file path is byte-identical
+to the day before the flip. That stops being true once the file is retired, so
+keep editing it alongside Firestore until then.
+
+Note that a paused campaign now has two switches. `promo-crons.json` decides
+whether the gateway has a cron at all; Firestore's `campaigns/<slug>.enabled`
+decides whether a run that fires sends anything. In `firestore` mode a run of a
+switched-off campaign prints `NO_REPLY` and sends nothing, which is how pausing a
+campaign stops needing an installer run on the volume.
 
 `GCP_SERVICE_ACCOUNT_B64` is the read-only runtime key (Cloud Datastore
 Viewer), base64-encoded so the entrypoint's sanitiser cannot mangle the key's
@@ -762,8 +791,8 @@ newlines. It is in the entrypoint's `SECRET_KEYS`, so it lands in the volume
 inherit it from the gateway's environment. Neither variable is release-managed
 in `deploy/railway-release.py`, so a deploy neither sets nor clears them.
 
-Each campaign run then logs `[config-shadow]` lines to its stderr, and the
-newest result is in `runtime/firestore/shadow.json`. Check by hand:
+In shadow mode each campaign run logs `[config-shadow]` lines to its stderr, and
+the newest result is in `runtime/firestore/shadow.json`. Check by hand:
 
 ```sh
 railway ssh -- runuser -u joseph -- python3 /home/joseph/.openclaw/workspace/lib/config_shadow.py

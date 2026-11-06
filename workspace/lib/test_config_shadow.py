@@ -51,12 +51,19 @@ class ModeTest(unittest.TestCase):
         self.assertEqual(config_shadow.mode({"GENAIE_CONFIG_SOURCE": "file"}), ("file", None))
         self.assertEqual(config_shadow.mode({"GENAIE_CONFIG_SOURCE": " Shadow "}), ("shadow", None))
 
-    def test_the_cutover_value_is_not_honoured_early(self):
-        # Setting phase 3's value before the cutover code exists must not look
-        # like it worked: the run stays on the file and says so.
-        current, warning = config_shadow.mode({"GENAIE_CONFIG_SOURCE": "firestore"})
+    def test_an_unknown_value_stays_on_the_file_and_says_so(self):
+        current, warning = config_shadow.mode({"GENAIE_CONFIG_SOURCE": "firestoer"})
         self.assertEqual(current, "file")
-        self.assertIn("not supported yet", warning)
+        self.assertIn("is not one of", warning)
+
+    def test_there_is_nothing_to_shadow_once_firestore_is_canonical(self):
+        # After the cutover the run reads Firestore for real and reports what it
+        # found itself; a second, comparing read would be pure cost.
+        current, warning = config_shadow.mode({"GENAIE_CONFIG_SOURCE": "firestore"})
+        self.assertEqual((current, warning), ("firestore", None))
+        err = io.StringIO()
+        self.assertIsNone(config_shadow.start({"GENAIE_CONFIG_SOURCE": "firestore"}, err=err))
+        self.assertEqual(err.getvalue(), "")
 
 
 class CheckTest(unittest.TestCase):
