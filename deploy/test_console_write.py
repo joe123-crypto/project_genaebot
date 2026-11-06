@@ -31,6 +31,7 @@ if LIB not in sys.path:
 
 import operator_config  # noqa: E402
 import operator_writer  # noqa: E402
+from test_operator_config import creds_b64  # noqa: E402
 
 
 def load():
@@ -44,7 +45,10 @@ def load():
 
 
 CW = load()
-KEY = "eyJjbGllbnRfZW1haWwiOiAid3JpdGVyIn0="
+# Built, not written down: a base64 literal in a variable called KEY is what a
+# real leaked key looks like, and the secret scan is right to say so. This is the
+# same fake service-account key the reader's tests use.
+KEY = creds_b64(client_email="writer@genaie.iam.gserviceaccount.com")
 REQUEST = {"collection": "groups", "id": "x@g.us", "fields": {"status": "on-hold"}}
 
 

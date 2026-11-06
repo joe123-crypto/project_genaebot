@@ -79,7 +79,9 @@ class Harness(unittest.TestCase):
         patched.start()
         self.addCleanup(patched.stop)
         # The key is the capability; most cases need the surface switched on.
-        self.set_key("eyJrIjogMX0=")
+        # Deliberately not key-shaped: the API only checks that a key is
+        # configured, never decodes it, so anything non-empty exercises the gate.
+        self.set_key("not-a-real-key")
 
     def set_key(self, value):
         patched = unittest.mock.patch.dict(
