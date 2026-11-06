@@ -954,6 +954,7 @@ def fit_gap_bounds(lo, hi, count, timeout):
 # ------------------------------------------------------------- group caps ----
 # Sentinel: load membership.json and obey its caps_enabled setting.
 _PROBE_CAPS = object()
+_PROBE_MEMBERSHIP = object()
 PROMO_DIR_SUFFIX = "-promo"
 
 
@@ -966,14 +967,15 @@ def promo_key(promo_name):
 
 
 def apply_caps(promo_name, jids, day, caps=_PROBE_CAPS, membership_path=None,
-               record=True, membership=None, switches=None):
+               record=True, membership=_PROBE_MEMBERSHIP, switches=None):
     """Drop the groups whose daily ad allowance is spoken for by other campaigns
     today (see :mod:`promo_caps`). Returns ``(kept, decisions)``, with
     ``decisions`` empty when caps are off.
 
     ``membership`` and ``switches`` come from the run's single
     ``promo_config.resolve``, so the caps read the same config the targeting did
-    rather than re-reading the file (or Firestore) for themselves. Without them
+    rather than re-reading the file (or Firestore) for themselves. Explicit
+    ``membership=None`` means resolution found no usable membership. Without them
     the membership file and the cron manifest are read, as before.
 
     Deliberately fail-open: a missing membership file, bad data or an import
@@ -984,7 +986,8 @@ def apply_caps(promo_name, jids, day, caps=_PROBE_CAPS, membership_path=None,
     try:
         import promo_membership
 
-        m = membership if membership is not None else promo_membership.load(membership_path)
+        m = (promo_membership.load(membership_path)
+             if membership is _PROBE_MEMBERSHIP else membership)
         if m is None:
             return list(jids), {}
         if caps is _PROBE_CAPS:

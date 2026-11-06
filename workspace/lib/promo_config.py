@@ -200,7 +200,14 @@ def resolve(promo, targets_file=None, membership_path=None, env=None, err=None,
     doc = {}
     if targets_file:
         doc, _ = targets_doc_from_file(targets_file, err=err)
-    membership = promo_membership.load(membership_path)
+    try:
+        membership = promo_membership.load(membership_path)
+    except ValueError as ex:
+        membership = None
+        warning = ("WARN: per-group caps not applied (%s: %s); sending to "
+                   "every eligible group." % (type(ex).__name__, ex))
+        notes.append(warning)
+        err.write(warning + "\n")
     switches = manifest_switches(env)
     return {"source": FILE, "mode": current, "doc": doc, "membership": membership,
             "switches": switches, "enabled": switches.get(slug),

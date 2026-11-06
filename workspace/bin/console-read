@@ -195,8 +195,9 @@ def group_rows(day):
     cap snapshot."""
     m = membership()
     groups = promo_membership.groups(m)
-    decisions = promo_caps.plan(m, list(groups), day=day, record=False)
     disabled = disabled_promos(manifest())
+    decisions = promo_caps.plan(m, list(groups), day=day, record=False,
+                                disabled=disabled)
 
     rows = []
     for jid, entry in groups.items():
@@ -372,7 +373,8 @@ def preview(slug, day):
 
     daily_jids, weekly_jids = promo_membership.groups_for_promo(m, slug)
     all_jids = list(daily_jids) + list(weekly_jids)
-    decisions = promo_caps.plan(m, list(promo_membership.groups(m)), day=day, record=False)
+    decisions = promo_caps.plan(m, list(promo_membership.groups(m)), day=day, record=False,
+                                disabled=disabled_promos(declared))
     numbers = promo_membership.account_numbers(m) or {}
     contact_account = (m.get("defaults") or {}).get("contact_account")
     entries = promo_membership.groups(m)

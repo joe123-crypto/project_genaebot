@@ -61,14 +61,14 @@ def parse_args(argv):
     return opts
 
 
-def rows(m, day, want_caps):
+def rows(m, day, want_caps, disabled=None):
     """One dict per group, in membership order. ``promos`` labels weekly-limited
     promos with their weekdays, as the targets files record them."""
     decisions = {}
     if want_caps:
         # Never records a snapshot: this tool is strictly read-only.
         decisions = promo_caps.plan(m, list(promo_membership.groups(m)), day=day,
-                                    record=False)
+                                    record=False, disabled=disabled)
     out = []
     for jid, entry in promo_membership.groups(m).items():
         weekly = entry.get("weekly") or {}
@@ -161,7 +161,8 @@ def main(argv):
         sys.stderr.write("WARN: %s: %s\n" % (source_label(config), e))
 
     want_caps = opts["caps"] or opts["json"]
-    all_rows = rows(m, opts["day"], want_caps)
+    all_rows = rows(m, opts["day"], want_caps,
+                    disabled={slug for slug, on in config["switches"].items() if not on})
     if opts["json"]:
         for r in all_rows:
             print(json.dumps(r, ensure_ascii=False))
