@@ -5,12 +5,14 @@ from pathlib import Path
 import select
 import subprocess
 import threading
+import time
 
 
 class AccountControls:
-    def __init__(self, bridge=None):
+    def __init__(self, bridge=None, response_timeout=55):
         state = os.environ.get("OPENCLAW_STATE_DIR") or "/home/joseph/.openclaw"
         self.bridge = bridge or str(Path(state) / "workspace/lib/console_accounts.mjs")
+        self.response_timeout = response_timeout
         self.lock = threading.Lock()
         self.process = None
 
@@ -39,9 +41,18 @@ class AccountControls:
                 )
             self.process.stdin.write(json.dumps(request).encode() + b"\n")
             self.process.stdin.flush()
-            if not select.select([self.process.stdout], [], [], 55)[0]:
-                raise TimeoutError()
-            line = self.process.stdout.readline(1024 * 1024)
+            deadline = time.monotonic() + self.response_timeout
+            line = bytearray()
+            while b"\n" not in line:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not select.select([self.process.stdout], [], [], remaining)[0]:
+                    raise TimeoutError()
+                chunk = os.read(self.process.stdout.fileno(), 65536)
+                if not chunk or len(line) + len(chunk) > 1024 * 1024:
+                    raise ValueError()
+                line.extend(chunk)
+            if line.count(b"\n") != 1 or not line.endswith(b"\n"):
+                raise ValueError()
             result = json.loads(line)
             if not isinstance(result, dict):
                 raise ValueError()

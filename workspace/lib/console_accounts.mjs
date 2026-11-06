@@ -85,12 +85,14 @@ export function createControlTransport(GatewayClient, { token, port = '18789' })
 // persisted login's presence and phone identity; never return credential content.
 export async function readAccountIdentity(config, id) {
   const state = process.env.OPENCLAW_STATE_DIR || path.join(os.homedir(), '.openclaw');
-  let directory = config.channels?.whatsapp?.accounts?.[id]?.authDir;
+  const oauth = process.env.OPENCLAW_OAUTH_DIR?.trim() || path.join(state, 'credentials');
+  const credentials = oauth.startsWith('~/') ? path.join(os.homedir(), oauth.slice(2)) : oauth;
+  let directory = config.channels?.whatsapp?.accounts?.[id]?.authDir ?? config.channels?.whatsapp?.authDir;
   if (directory?.startsWith('~/')) directory = path.join(os.homedir(), directory.slice(2));
-  directory ||= path.join(state, 'credentials', 'whatsapp', id);
+  directory ||= path.join(credentials, 'whatsapp', id);
   const candidates = [path.join(directory, 'creds.json')];
-  if (id === 'default' && !config.channels?.whatsapp?.accounts?.[id]?.authDir) {
-    candidates.push(path.join(state, 'credentials', 'creds.json'));
+  if (id === 'default' && !config.channels?.whatsapp?.accounts?.[id]?.authDir && !config.channels?.whatsapp?.authDir) {
+    candidates.push(path.join(credentials, 'creds.json'));
   }
   for (const filename of candidates) {
     try {
@@ -113,10 +115,13 @@ export function createAccountController(gateway, { now = Date.now, killSwitch = 
     return value;
   }
   function accountIds(config) {
-    return [...new Set(['default', ...Object.keys(config.channels?.whatsapp?.accounts ?? {})])];
+    const channel = config.channels?.whatsapp;
+    const ids = Object.keys(channel?.accounts ?? {});
+    if (ids.length === 0 || typeof channel?.authDir === 'string' && channel.authDir.trim()) ids.push('default');
+    return [...new Set(ids)];
   }
   function requireAccount(config, accountId) {
-    if (!ACCOUNT_ID.test(accountId ?? '')) throw new ControlError(400, 'Use an account ID of 1–64 lowercase letters, digits, underscores or hyphens.');
+    if (typeof accountId !== 'string' || !ACCOUNT_ID.test(accountId)) throw new ControlError(400, 'Use an account ID of 1–64 lowercase letters, digits, underscores or hyphens.');
     if (!accountIds(config).includes(accountId)) throw new ControlError(404, 'Account does not exist.');
   }
   function checkStart(config, accountId) {
@@ -136,7 +141,7 @@ export function createAccountController(gateway, { now = Date.now, killSwitch = 
     config.channels.whatsapp ??= {};
     config.channels.whatsapp.accounts ??= {};
     const accounts = config.channels.whatsapp.accounts;
-    if (!create && accounts[accountId]?.enabled === enabled && snap.configRevisionHash === snap.appliedConfigHash) return;
+    if (!create && accounts[accountId]?.enabled === enabled && isApplied(snap)) return;
     accounts[accountId] = { ...accounts[accountId], enabled,
       ...(create ? { dmPolicy: 'disabled', groupPolicy: 'disabled' } : {}) };
     await gateway.request('config.set', { baseHash: snap.hash, raw: JSON.stringify(config) });
@@ -144,13 +149,23 @@ export function createAccountController(gateway, { now = Date.now, killSwitch = 
     for (let attempt = 0; attempt < 30; attempt++) {
       const applied = await snapshot();
       if (applied.config.channels?.whatsapp?.accounts?.[accountId]?.enabled === enabled &&
-          applied.configRevisionHash === applied.appliedConfigHash) return;
+          isApplied(applied)) return;
       await delay(200);
     }
     throw new ControlError(409, 'Account setting is saved; gateway configuration is still being applied. Refresh status before retrying.');
   }
+  function isApplied(snap) {
+    return typeof snap.configRevisionHash === 'string' && snap.configRevisionHash.length > 0 &&
+      snap.configRevisionHash === snap.appliedConfigHash;
+  }
   async function status() {
-    const [snap, live] = await Promise.all([snapshot(), gateway.request('channels.status', { channel: 'whatsapp', probe: false })]);
+    const snap = await snapshot();
+    if (!isApplied(snap)) throw new ControlError(503, 'Gateway configuration is still being applied. Refresh account status shortly.');
+    const live = await gateway.request('channels.status', { channel: 'whatsapp', probe: false });
+    const after = await snapshot();
+    if (!isApplied(after) || snap.hash !== after.hash) {
+      throw new ControlError(503, 'Gateway configuration changed during the status read. Refresh account status shortly.');
+    }
     if (live.partial || !Array.isArray(live.channelAccounts?.whatsapp)) {
       throw new ControlError(503, 'Gateway account status is incomplete. Refresh after its configuration reload finishes.');
     }
@@ -198,7 +213,7 @@ export function createAccountController(gateway, { now = Date.now, killSwitch = 
     await gateway.request('channels.start', params(session.accountId));
     const current = await status();
     const account = current.accounts.find((a) => a.id === session.accountId);
-    if (!account?.linked || !account.running) throw new ControlError(502, 'Linked, but activation is not confirmed yet. Refresh account status.');
+    if (!account?.enabled || !account.linked || !account.running) throw new ControlError(502, 'Linked, but activation is not confirmed yet. Refresh account status.');
     session.state = 'connected'; session.qrDataUrl = null;
   }
   return {
@@ -222,7 +237,7 @@ export function createAccountController(gateway, { now = Date.now, killSwitch = 
         }
         return publicSession(session);
       }
-      if (!ACCOUNT_ID.test(accountId ?? '')) throw new ControlError(400, 'Use an account ID of 1–64 lowercase letters, digits, underscores or hyphens.');
+      if (typeof accountId !== 'string' || !ACCOUNT_ID.test(accountId)) throw new ControlError(400, 'Use an account ID of 1–64 lowercase letters, digits, underscores or hyphens.');
       if (!['link', 'unlink', 'pause', 'start'].includes(action)) throw new ControlError(400, 'Unsupported account action.');
       const pending = activeSession(accountId);
       if (pending) {
@@ -232,9 +247,9 @@ export function createAccountController(gateway, { now = Date.now, killSwitch = 
       const snap = await snapshot();
       if (action === 'link') {
         checkStart(snap.config, accountId);
+        if (sessions.size >= 32) throw new ControlError(409, 'Too many pairing sessions. Wait for older sessions to expire.');
         if (input.create) await setEnabled(accountId, false, { create: true });
         else requireAccount(snap.config, accountId);
-        if (sessions.size >= 32) throw new ControlError(409, 'Too many pairing sessions. Wait for older sessions to expire.');
         const session = { id: randomUUID(), accountId, state: 'waiting', qrDataUrl: null, expiresAt: now() + 180_000 };
         sessions.set(session.id, session);
         try {
@@ -246,6 +261,7 @@ export function createAccountController(gateway, { now = Date.now, killSwitch = 
         } catch (error) { session.state = 'failed'; throw error; }
       }
       requireAccount(snap.config, accountId);
+      if (action === 'start') checkStart(snap.config, accountId);
       // The gateway owns QR sockets, so they can survive this API process.
       // Probe its existing login before changing state; never initiate a new one.
       const login = await gateway.request('web.login.wait', { ...params(accountId), timeoutMs: 1000 });
@@ -270,7 +286,9 @@ export function createAccountController(gateway, { now = Date.now, killSwitch = 
       }
       const current = await status();
       const account = current.accounts.find((a) => a.id === accountId);
-      if ((action !== 'start' && account?.running !== false) || (action === 'unlink' && account?.linked !== false)) {
+      if ((action === 'start' && (!account?.enabled || account.running !== true || account.linked !== true)) ||
+          (action !== 'start' && (account?.enabled !== false || account?.running !== false)) ||
+          (action === 'unlink' && account?.linked !== false)) {
         throw new ControlError(502, 'Account operation is not confirmed yet. Refresh status before retrying.');
       }
       return current;

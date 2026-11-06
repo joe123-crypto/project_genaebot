@@ -123,6 +123,8 @@ class ConsoleApiTests(unittest.TestCase):
             self.assertEqual(post("/accounts/ads/pause", b"{broken"), 400)
             self.assertEqual(post("/accounts/ads/pause", b'{"force":true}'), 404)
             self.assertEqual(post("/accounts/ads/remove", b"{}"), 404)
+            self.assertEqual(post("/accounts", b'{"id":123}'), 400)
+            self.assertEqual(post("/accounts", b'{"id":["sales"]}'), 400)
             self.assertFalse(run.called)
             self.assertEqual(post("/accounts", b'{"id":"sales"}'), 200)
             self.assertEqual(run.call_args.args, ({"action": "link", "accountId": "sales", "create": True},))

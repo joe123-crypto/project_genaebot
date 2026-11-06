@@ -963,7 +963,11 @@ presence/phone identity; no credentials or raw configuration are returned.
 `workspace/lib/console_accounts.mjs` bridge. It uses the pinned gateway SDK and
 RPCs, with conflict-checked `config.set` writes and no requested gateway restart.
 A configuration still waiting to apply is reported rather than treated as active.
-Unknown write outcomes are never replayed. QR sessions expire after three minutes;
+Unknown write outcomes are never replayed. Status is refused while a saved
+configuration is not applied or its revision changes during a read; action
+acknowledgements are checked against the final enabled and running state.
+The bridge enforces its response deadline even after partial output, with a
+1 MiB response limit. QR sessions expire after three minutes;
 closing a console dialog stops polling, and Link resumes an active attempt.
 Native pairing is checked before conflicting controls, including after API restart.
 
@@ -977,8 +981,10 @@ Controls require the live API beside a running OpenClaw **2026.9.9** gateway and
 its existing `GATEWAY_AUTH_TOKEN`. Local checkout-only reads cannot manage accounts.
 During overnight standby operations report unavailable; they do not wake the gateway.
 For a checkout server, `OPENCLAW_STATE_DIR` must point at the gateway state whose
-`workspace/lib/console_accounts.mjs` contains this version. No tests scan a real
-WhatsApp QR code or mutate a production account.
+`workspace/lib/console_accounts.mjs` contains this version. The installed-runtime CI runs the complete lifecycle against the pinned SDK
+and tests redaction, conflict detection and hot configuration publication against
+an isolated real gateway. No tests scan a real WhatsApp QR code or mutate a
+production account.
 
 Run it against this checkout the same way production does:
 

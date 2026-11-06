@@ -255,7 +255,8 @@ class Handler(BaseHTTPRequestHandler):
                 elif (len(parts) == 3 and parts[0] == "accounts"
                       and parts[2] in {"link", "unlink", "pause", "start"} and not payload):
                     request = {"action": parts[2], "accountId": parts[1]}
-                if request and not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", str(request["accountId"])):
+                if request and (not isinstance(request["accountId"], str) or
+                                not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", request["accountId"])):
                     raise ValueError()
             except (ValueError, TypeError, UnicodeError):
                 self.send_any(400, b'{"error":"Invalid account request."}', True)

@@ -17,7 +17,7 @@ function fixture(options = {}) {
   const gateway = {
     async request(method, params) {
       calls.push({ method, params });
-      if (method === 'config.get') return { valid: true, hash: String(revision), parsed: structuredClone(config), config: structuredClone(config), configRevisionHash: 'applied', appliedConfigHash: 'applied' };
+      if (method === 'config.get') return { valid: true, hash: String(revision), parsed: structuredClone(config), config: structuredClone(config), configRevisionHash: 'applied', appliedConfigHash: options.unapplied ? 'previous' : 'applied' };
       if (method === 'config.set') {
         if (options.conflict) throw new ControlError(409, 'Configuration changed. Refresh status before retrying.');
         assert.equal(params.baseHash, String(revision));
@@ -110,6 +110,7 @@ test('kill switch blocks Start and Link for default without changing configurati
   const f = fixture({ killSwitch: true });
   for (const action of ['start', 'link']) await assert.rejects(f.controller.dispatch({ action, accountId: 'default' }), /REPLIES_DISABLED/);
   assert.equal(f.calls.some((c) => c.method === 'config.set'), false);
+  assert.equal(f.calls.some((c) => c.method === 'web.login.wait'), false, 'kill switch checked before probing a native login that could start the channel');
 });
 
 test('configuration conflicts never proceed to runtime stop or retry a write', async () => {
@@ -146,4 +147,66 @@ test('native pairing blocks conflicting controls after API session loss', async 
     await assert.rejects(f.controller.dispatch({ action, accountId: 'ads' }), /pairing is still active/);
   }
   assert.equal(f.calls.some((c) => c.method === 'config.set'), false);
+});
+
+
+test('saved config waiting to apply never reports a paused account as current', async () => {
+  const f = fixture({ unapplied: true });
+  await assert.rejects(f.controller.dispatch({ action: 'list' }), /still being applied/);
+});
+
+test('a config write during status collection invalidates the observation', async () => {
+  const f = fixture();
+  const original = f.gateway.request;
+  f.gateway.request = async (method, params) => {
+    const response = await original(method, params);
+    if (method === 'channels.status') {
+      const snapshot = await original('config.get');
+      snapshot.parsed.channels.whatsapp.accounts.ads.enabled = false;
+      await original('config.set', { baseHash: snapshot.hash, raw: JSON.stringify(snapshot.parsed) });
+    }
+    return response;
+  };
+  await assert.rejects(f.controller.dispatch({ action: 'list' }), /changed during the status read/);
+});
+
+test('does not invent a default account when only named accounts exist', async () => {
+  const f = fixture();
+  delete f.config().channels.whatsapp.accounts.default;
+  assert.deepEqual((await f.controller.dispatch({ action: 'list' })).accounts.map((a) => a.id), ['ads']);
+  await assert.rejects(f.controller.dispatch({ action: 'unlink', accountId: 'default' }), /does not exist/);
+});
+
+test('shared authDir phone identity matches the configured gateway storage', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'console-shared-identity-'));
+  try {
+    await writeFile(path.join(directory, 'creds.json'), JSON.stringify({ me: { id: '263123456789:1@s.whatsapp.net' } }));
+    const config = { channels: { whatsapp: { authDir: directory, accounts: { ads: { enabled: false } } } } };
+    assert.deepEqual(await readAccountIdentity(config, 'ads'), { linked: true, number: '+263123456789' });
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+
+test('invalid JSON account IDs are refused before a configuration write', async () => {
+  const f = fixture();
+  for (const accountId of [123, ['sales'], null]) {
+    await assert.rejects(f.controller.dispatch({ action: 'link', accountId, create: true }), /account ID/);
+  }
+  assert.equal(f.calls.some((c) => c.method === 'config.set'), false);
+});
+
+test('external edits after runtime acknowledgement do not falsely confirm Start or Pause', async () => {
+  for (const action of ['start', 'pause']) {
+    const f = fixture();
+    const original = f.gateway.request;
+    f.gateway.request = async (method, params) => {
+      const result = await original(method, params);
+      if (method === (action === 'start' ? 'channels.start' : 'channels.stop')) {
+        f.config().channels.whatsapp.accounts.ads.enabled = action !== 'start';
+        if (action === 'start') f.states.ads.running = false;
+      }
+      return result;
+    };
+    await assert.rejects(f.controller.dispatch({ action, accountId: 'ads' }), /operation is not confirmed/);
+  }
 });

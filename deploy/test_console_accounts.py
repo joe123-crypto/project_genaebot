@@ -2,6 +2,7 @@
 import importlib.util
 from pathlib import Path
 import tempfile
+import time
 import unittest
 
 SPEC = importlib.util.spec_from_file_location("account_controls", Path(__file__).parent / "railway/console_accounts.py")
@@ -35,6 +36,29 @@ for await (const line of createInterface({input:process.stdin})) {
             script = Path(directory) / "bridge.mjs"
             script.write_text("process.stdin.once('data',()=>process.stdout.write('private invalid output\\n'))")
             bridge = MODULE.AccountControls(str(script))
+            self.addCleanup(bridge.close)
+            status, body = bridge.run({"action": "list"})
+            self.assertEqual(status, 503)
+            self.assertNotIn(b"private", body)
+            self.assertIsNone(bridge.process)
+
+    def test_partial_response_cannot_bypass_the_deadline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            script = Path(directory) / "bridge.mjs"
+            script.write_text("process.stdin.once('data',()=>{process.stdout.write('{');setInterval(()=>{},1000)})")
+            bridge = MODULE.AccountControls(str(script), response_timeout=0.4)
+            self.addCleanup(bridge.close)
+            started = time.monotonic()
+            status, _ = bridge.run({"action": "list"})
+            self.assertEqual(status, 503)
+            self.assertLess(time.monotonic() - started, 3)
+            self.assertIsNone(bridge.process)
+
+    def test_oversized_response_is_refused_without_forwarding_private_content(self):
+        with tempfile.TemporaryDirectory() as directory:
+            script = Path(directory) / "bridge.mjs"
+            script.write_text("process.stdin.once('data',()=>process.stdout.write('private'.repeat(180000)+'\\n'))")
+            bridge = MODULE.AccountControls(str(script), response_timeout=2)
             self.addCleanup(bridge.close)
             status, body = bridge.run({"action": "list"})
             self.assertEqual(status, 503)

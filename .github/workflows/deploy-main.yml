@@ -117,6 +117,7 @@ jobs:
                 deploy/railway/whatsapp-dm-policy.integration.test.mjs \
                 deploy/railway/whatsapp-cache-cleanup.test.mjs \
                 deploy/railway/campaign-sdk.integration.test.mjs \
+                deploy/railway/console-accounts.integration.test.mjs \
                 deploy/railway/worker-idle.integration.test.mjs \
                 deploy/railway/history-idle.integration.test.mjs \
                 deploy/railway/catalog-recovery.integration.test.mjs
