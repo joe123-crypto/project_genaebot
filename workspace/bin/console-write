@@ -1,0 +1,141 @@
+#!/usr/bin/env python3
+"""Apply one operator-config change to Firestore, validated by the bot's rules.
+
+The write counterpart of ``console-read``, and the console's only way to change
+anything. It is a separate process for the same reason the read bridge is: it
+imports the bot's own ``promo_membership`` and ``operator_config`` from the
+volume, so the console cannot drift from what a campaign run will actually do,
+and a fault in here cannot touch the gateway.
+
+One change per run, read from stdin as JSON::
+
+    {"collection": "groups",
+     "id": "263786627810-1599925488@g.us",
+     "fields": {"status": "on-hold", "note": "paused by request 2026-11-06"},
+     "actor": "joe",
+     "dryRun": false}
+
+and one JSON object on stdout. On success::
+
+    {"ok": true, "collection": ..., "id": ..., "change": "updated",
+     "fields": [names that changed], "before": {...}, "after": {...},
+     "warnings": [...], "audit": "<audit document id>"}
+
+and on refusal ``{"ok": false, "status": 400, "error": ..., "problems": [...]}``,
+where ``status`` is what the caller should answer with. See
+``workspace/lib/operator_writer.py`` for what is checked and why.
+
+The write key is its own variable, ``GCP_SERVICE_ACCOUNT_WRITE_B64``, and the
+only thing that reads it is this script. The runtime key the cron runs carry is
+Cloud Datastore Viewer and stays that way, so no campaign run can rewrite the
+config it is about to act on.
+
+Exit status: 0 applied (or a dry run that would apply), 1 refused or failed.
+The payload says which; a caller reads ``status``, not the exit code.
+
+Std-lib only.
+"""
+
+import json
+import os
+import sys
+from pathlib import Path
+
+WORKSPACE = Path(__file__).resolve().parents[1]
+LIB_DIR = str(WORKSPACE / "lib")
+if LIB_DIR not in sys.path:
+    sys.path.insert(0, LIB_DIR)
+
+import operator_config  # noqa: E402
+import operator_writer  # noqa: E402
+
+WRITE_KEY_VAR = "GCP_SERVICE_ACCOUNT_WRITE_B64"
+# A request is one small object; anything larger is a mistake or an attack.
+MAX_REQUEST_BYTES = 64 * 1024
+REQUIRED = ("collection", "id", "fields")
+OPTIONAL = ("actor", "dryRun")
+
+
+def write_env(env=None):
+    """The environment the write runs under: the write key in place of the
+    runtime one, and its own token cache.
+
+    The cache is separate because ``access_token`` keys its cache by
+    ``client_email``: sharing one file with the read path would make each side
+    evict the other's token and mint a fresh one every time. It holds no
+    snapshot, so nothing a campaign run depends on lives here."""
+    env = os.environ if env is None else env
+    key = (env.get(WRITE_KEY_VAR) or "").strip()
+    if not key:
+        raise operator_writer.WriteRefused(
+            "%s is not set; this gateway cannot write operator config" % WRITE_KEY_VAR,
+            status=503)
+    out = dict(env)
+    out["GCP_SERVICE_ACCOUNT_B64"] = key
+    # Never let a file key shadow the write key we just chose.
+    out.pop("GCP_SERVICE_ACCOUNT_FILE", None)
+    out["GENAIE_FIRESTORE_DIR"] = os.path.join(
+        operator_config.state_dir(env), "writer")
+    return out
+
+
+def parse_request(raw):
+    """The request as a dict, or :class:`operator_writer.WriteRefused`."""
+    if len(raw) > MAX_REQUEST_BYTES:
+        raise operator_writer.WriteRefused("request is too large")
+    try:
+        request = json.loads(raw or b"{}")
+    except ValueError as ex:
+        raise operator_writer.WriteRefused("request is not valid JSON: %s" % ex)
+    if not isinstance(request, dict):
+        raise operator_writer.WriteRefused("request must be a JSON object")
+    missing = [name for name in REQUIRED if name not in request]
+    if missing:
+        raise operator_writer.WriteRefused("request is missing %s" % ", ".join(missing))
+    unknown = sorted(set(request) - set(REQUIRED) - set(OPTIONAL))
+    if unknown:
+        raise operator_writer.WriteRefused("request has unexpected key(s): %s"
+                                           % ", ".join(unknown))
+    for name in ("collection", "id"):
+        if not isinstance(request[name], str) or not request[name].strip():
+            raise operator_writer.WriteRefused("%s must be a non-empty string" % name)
+    if not isinstance(request["fields"], dict):
+        raise operator_writer.WriteRefused("fields must be an object")
+    actor = request.get("actor")
+    if actor is not None and not isinstance(actor, str):
+        raise operator_writer.WriteRefused("actor must be a string")
+    if not isinstance(request.get("dryRun", False), bool):
+        raise operator_writer.WriteRefused("dryRun must be true or false")
+    return request
+
+
+def main(argv, stdin=None, stdout=None, env=None):
+    stdin = stdin or sys.stdin.buffer
+    stdout = stdout or sys.stdout
+    try:
+        request = parse_request(stdin.read(MAX_REQUEST_BYTES + 1))
+        result = operator_writer.write(
+            request["collection"], request["id"].strip(), request["fields"],
+            request.get("actor"), env=write_env(env),
+            dry_run=bool(request.get("dryRun")))
+    except operator_writer.WriteRefused as ex:
+        payload = {"ok": False, "status": ex.status, "error": str(ex),
+                   "problems": ex.problems}
+    except operator_config.ConfigUnavailable as ex:
+        # A write must never be applied to a guess at the current state.
+        payload = {"ok": False, "status": 503,
+                   "error": "cannot read the current config, so nothing was "
+                            "changed: %s" % ex, "problems": []}
+    except operator_config.ConfigInvalid as ex:
+        payload = {"ok": False, "status": 409,
+                   "error": "the stored config is not readable: %s" % ex,
+                   "problems": []}
+    else:
+        payload = dict(result, ok=True, status=200)
+    json.dump(payload, stdout, ensure_ascii=False)
+    stdout.write("\n")
+    return 0 if payload["ok"] else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

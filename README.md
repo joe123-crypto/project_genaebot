@@ -902,7 +902,9 @@ HTTP beside the gateway. Campaign and membership responses come from
 the ad-reply counters the caps derive from, and each campaign's own module. It
 never writes, never contacts the gateway, and never records a cap snapshot, so
 reading it cannot move the rotation on. Separate account endpoints contact the
-running gateway for live status and account controls.
+running gateway for live status and account controls, and one write route
+changes operator config in Firestore (*Changing operator config from the
+console*, below).
 
 Read routes, GET or HEAD, under `/internal/console/`:
 
@@ -917,6 +919,68 @@ Read routes, GET or HEAD, under `/internal/console/`:
 Each data route takes an optional `?date=YYYY-MM-DD`. Anything else is refused:
 an unknown path or an unusable slug is 404, an unparseable date or an unexpected
 query parameter is 400. These read routes reject write methods and request bodies.
+
+### Changing operator config from the console
+
+One write route, so the console can pause a group or switch a campaign off
+without a deploy:
+
+```
+POST /internal/console/config/<collection>/<id>
+     {"fields": {"status": "on-hold"}, "actor": "joe", "dryRun": false}
+```
+
+`<collection>` is `groups`, `lines`, `campaigns` or `settings`; `<id>` is
+percent-encoded, because a group JID carries an `@`. It writes **Firestore**, so
+it only does anything after the cutover (see *Moving membership to Firestore*).
+
+Every change goes through `workspace/bin/console-write`, which is to writes what
+`console-read` is to reads: a separate process importing the bot's own modules
+from the volume. The sequence, in `workspace/lib/operator_writer.py`, is the
+point of the whole design:
+
+1. read every collection live, exactly as a campaign run does;
+2. apply the patch to **one** document, field by field, names checked against an
+   allowlist per collection;
+3. re-assemble the whole config and run it through `operator_config.quarantine`,
+   which is `promo_membership.validate` -- the same code that decides whether a
+   run may post to a group;
+4. refuse if the edited document would be quarantined; otherwise commit it.
+
+Step 3 is why there is no second validator to drift. It also catches what a
+per-field check cannot: pointing a group at a line that does not exist, or
+clearing the `contact_account` every campaign's caption needs. A refusal says
+what would have broken and changes nothing.
+
+What this deliberately will not do: edit `rank` (that is send order, so
+reordering is its own operation -- a new group is appended last), write more than
+one document per request, delete anything (a group leaves the rotation by its
+`status`, which keeps its `promos` list), or create a line or a campaign (a new
+line needs a WhatsApp login, a new campaign needs code, copy, a cron and an
+installer run).
+
+Each change is committed **together with its audit document** in one Firestore
+commit -- `audit/<timestamp>-<random>`, carrying who, what, before and after.
+Firestore keeps no history of a write and the Firebase Console bypasses this
+path entirely, so that trail is the only one there is. The `audit` collection is
+not one of the four a reader lists, so it costs a campaign run nothing.
+
+Writes are serialised. `operator_writer` reads the config, applies a patch and
+writes the whole document back, so two at once could each miss the other; one at
+a time removes that for anything coming through the API. It cannot remove it for
+a Firebase Console edit made at the same moment -- Firestore has no transaction
+here -- which is the other reason the audit trail matters. A write also clears
+the read cache, including when it fails, because an uncertain write may still
+have landed.
+
+**It ships inert.** Writes need `GCP_SERVICE_ACCOUNT_WRITE_B64`, a key with
+Cloud Datastore User, and answer 503 without it. That key is deliberately *not*
+in the entrypoint's `SECRET_KEYS`: that list is exported into the shell that
+execs the gateway, so everything on it reaches every cron run, and a campaign run
+must not be able to rewrite the config it is about to act on. The entrypoint
+captures it, unsets it, and hands it to the console API process alone
+(`deploy/test_console_write_deploy.py` pins that). The runtime key the cron runs
+carry stays Cloud Datastore Viewer.
 
 Because `console-read` imports the bot's own `promo_membership`, `promo_caps`
 and `promo_broadcast` rather than reimplementing them, a preview is the same
