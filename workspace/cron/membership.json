@@ -935,14 +935,15 @@
     "120363412512900877@g.us": {
       "name": "BULAWAYO ADVERTISEMENT",
       "source": "operator",
-      "status": "active",
+      "status": "admin-only",
       "account": "default",
       "daily_cap": null,
       "promos": [
         "industrial-lighting",
         "genaie-advertisers",
         "borehole-drilling"
-      ]
+      ],
+      "note": "every send from the default line has returned 'forbidden' since at least 2026-10-31 (no delivery in the gateway logs since then): only admins can post, or the default line is not a member. Promos kept so resuming is a status flip once an admin allows posting -- or move it to the line that is actually a member."
     },
     "263713611554-1588562864@g.us": {
       "name": "Bulawayo business group",

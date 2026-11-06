@@ -301,8 +301,9 @@ updates it; run one only when its schedule or command changes. All times are
   with tracking prefix `GA`.
 
 These campaigns use the per-group accounts in their generated target files:
-CHIREDZI BUSINESS FORUM and CHIREDZI MARKETPLACE use the **ads** account, while
-BULAWAYO ADVERTISEMENT uses the **default** account. Existing campaign groups
+CHIREDZI BUSINESS FORUM and CHIREDZI MARKETPLACE use the **ads** account.
+BULAWAYO ADVERTISEMENT (default account) is admin-only: every send has been
+'forbidden' since at least 2026-10-31. Existing campaign groups
 remain on the ads account. The shared advertised contact is the ads number.
 Their slots allow preceding campaigns on both accounts to finish before sending.
 

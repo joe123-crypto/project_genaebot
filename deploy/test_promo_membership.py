@@ -39,11 +39,14 @@ MEMBERSHIP = CRON / "membership.json"
 # building-materials, fruit-trees and genaie-advertisers on the ads account.
 # Both groups are active again after the stability trial, restoring two daily
 # targets to each of those three campaigns.
+# BULAWAYO ADVERTISEMENT went admin-only on 2026-11-06 (every send 'forbidden'
+# since at least 2026-10-31): industrial-lighting 11 -> 10, genaie-advertisers
+# 12 -> 11, borehole-drilling 42 -> 41.
 EXPECTED_DAILY = {
     "appliance-repairs": 6,
-    "industrial-lighting": 11,
-    "genaie-advertisers": 12,
-    "borehole-drilling": 42,
+    "industrial-lighting": 10,
+    "genaie-advertisers": 11,
+    "borehole-drilling": 41,
     "building-materials": 12,
     # skylight-solar launched (2026-10-19) targeting the Bulawayo/BYO groups plus
     # Kwekwe, Gweru, both lowveld/Chiredzi groups, Mutare, Magwegwe, Lobengula West
