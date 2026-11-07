@@ -1027,6 +1027,38 @@
         "genaie-advertisers"
       ],
       "name": "BULAWAYO ADVERTS"
+    },
+    "120363423783708384@g.us": {
+      "name": "Zim Market Hub",
+      "source": "operator",
+      "status": "active",
+      "account": "ads",
+      "daily_cap": null,
+      "promos": [
+        "appliance-repairs",
+        "industrial-lighting",
+        "building-materials"
+      ]
+    },
+    "120363305467568735@g.us": {
+      "name": "MAGWEGWE DEALS buy&sell group 1",
+      "source": "operator",
+      "status": "active",
+      "account": "ads",
+      "daily_cap": null,
+      "promos": []
+    },
+    "263719120490-1620678009@g.us": {
+      "name": "ZiMarket Grp41",
+      "source": "operator",
+      "status": "active",
+      "account": "ads",
+      "daily_cap": null,
+      "promos": [
+        "appliance-repairs",
+        "industrial-lighting",
+        "building-materials"
+      ]
     }
   }
 }

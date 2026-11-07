@@ -39,12 +39,14 @@ MEMBERSHIP = CRON / "membership.json"
 # building-materials, fruit-trees and genaie-advertisers on the ads account.
 # Both groups are active again after the stability trial, restoring two daily
 # targets to each of those three campaigns.
+# Zim Market Hub and ZiMarket Grp41 each gained appliance-repairs,
+# industrial-lighting and building-materials on the ads account on 2026-11-07.
 EXPECTED_DAILY = {
-    "appliance-repairs": 6,
-    "industrial-lighting": 11,
+    "appliance-repairs": 8,
+    "industrial-lighting": 13,
     "genaie-advertisers": 12,
     "borehole-drilling": 42,
-    "building-materials": 12,
+    "building-materials": 14,
     # skylight-solar launched (2026-10-19) targeting the Bulawayo/BYO groups plus
     # Kwekwe, Gweru, both lowveld/Chiredzi groups, Mutare, Magwegwe, Lobengula West
     # and Chikombedzi: 23 groups, no weekly cadence.
