@@ -541,6 +541,7 @@ class PromoWiringTests(unittest.TestCase):
             "263776554037-1383758077@g.us": "ads",
             "120363046894354726@g.us": "ads",
             "120363433121439254@g.us": "ads",
+            "120363305467568735@g.us": "ads",
         }
         sent = []
         saved = pb.send_ad

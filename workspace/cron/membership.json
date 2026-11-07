@@ -1046,7 +1046,12 @@
       "status": "active",
       "account": "ads",
       "daily_cap": null,
-      "promos": []
+      "promos": [
+        "borehole-drilling",
+        "building-materials",
+        "genaie-advertisers",
+        "industrial-lighting"
+      ]
     },
     "263719120490-1620678009@g.us": {
       "name": "ZiMarket Grp41",

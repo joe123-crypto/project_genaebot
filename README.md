@@ -279,7 +279,7 @@ updates it; run one only when its schedule or command changes. All times are
   reusing the same shared `promo_broadcast` delivery engine
 - **`borehole-drilling-promo`** (`install-borehole-drilling-promo.sh`, 07:15)
   posts a general drilling and solar borehole installation advert with four
-  rotating photos to 43 active groups. It consolidates Same Age Projects,
+  rotating photos to 44 active groups. It consolidates Same Age Projects,
   Big Player and Baltic Sea Drilling's previous campaign groups. Packages and
   prices live in the private provider catalog rather than the captions.
   MUTANDIRI VILLAGE RESIDENTS remains Mon/Wed/Fri only. The installer verifies
@@ -632,11 +632,12 @@ after changing contact routing.
 
 ### Advertising stability trial
 
-The ads line has **14 groups configured for advertising and 41 campaign/group combinations**.
+The ads line has **15 groups configured for advertising and 45 campaign/group combinations**.
 `let's build bindura` and `BULAWAYO ADVERTS` are active again for fruit trees,
 building materials and Genaie advertisers. Zim Market Hub and ZiMarket Grp41
 each receive appliance repairs, industrial lighting and building materials.
-MAGWEGWE DEALS buy&sell group 1 is recorded without campaigns assigned.
+MAGWEGWE DEALS buy&sell group 1 receives borehole drilling, building materials,
+Genaie advertisers and industrial lighting.
 These are configured eligibility counts, before caps and weekly rules,
 not confirmed deliveries.
 
