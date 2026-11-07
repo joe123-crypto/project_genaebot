@@ -14,6 +14,7 @@
     "120363046894354726@g.us",
     "120363433121439254@g.us",
     "120363423783708384@g.us",
+    "120363305467568735@g.us",
     "263719120490-1620678009@g.us"
   ],
   "_weekly_comment": "Groups posted to only on specific weekdays instead of daily (the cron still runs every day; these are skipped on other days). Weekdays may be names (mon, tue, wed, thu, fri, sat, sun) or ints (Mon=0 .. Sun=6). Set per group under 'weekly' in membership.json.",
@@ -24,6 +25,7 @@
     "120363046894354726@g.us": "ads",
     "120363433121439254@g.us": "ads",
     "120363423783708384@g.us": "ads",
+    "120363305467568735@g.us": "ads",
     "263719120490-1620678009@g.us": "ads"
   },
   "account_numbers": {

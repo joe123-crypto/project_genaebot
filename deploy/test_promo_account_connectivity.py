@@ -21,8 +21,8 @@ class ConnectivityTests(unittest.TestCase):
         active = {jid: g for jid, g in membership["groups"].items()
                   if g.get("account", "default") == "ads" and g["status"] == "active"}
         self.assertEqual(len(active), 15)
-        self.assertEqual(sum(bool(g["promos"]) for g in active.values()), 14)
-        self.assertEqual(sum(len(g["promos"]) for g in active.values()), 41)
+        self.assertEqual(sum(bool(g["promos"]) for g in active.values()), 15)
+        self.assertEqual(sum(len(g["promos"]) for g in active.values()), 45)
         for jid in ("120363046894354726@g.us", "120363433121439254@g.us"):
             self.assertIn(jid, active)
             promos = {"fruit-trees", "building-materials", "genaie-advertisers"}

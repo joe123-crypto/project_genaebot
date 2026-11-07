@@ -41,12 +41,15 @@ MEMBERSHIP = CRON / "membership.json"
 # targets to each of those three campaigns.
 # Zim Market Hub and ZiMarket Grp41 each gained appliance-repairs,
 # industrial-lighting and building-materials on the ads account on 2026-11-07.
+# MAGWEGWE DEALS buy&sell group 1 gained borehole-drilling,
+# building-materials, genaie-advertisers and industrial-lighting on the ads
+# account on 2026-11-07.
 EXPECTED_DAILY = {
     "appliance-repairs": 8,
-    "industrial-lighting": 13,
-    "genaie-advertisers": 12,
-    "borehole-drilling": 42,
-    "building-materials": 14,
+    "industrial-lighting": 14,
+    "genaie-advertisers": 13,
+    "borehole-drilling": 43,
+    "building-materials": 15,
     # skylight-solar launched (2026-10-19) targeting the Bulawayo/BYO groups plus
     # Kwekwe, Gweru, both lowveld/Chiredzi groups, Mutare, Magwegwe, Lobengula West
     # and Chikombedzi: 23 groups, no weekly cadence.
