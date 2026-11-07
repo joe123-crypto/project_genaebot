@@ -44,12 +44,14 @@ MEMBERSHIP = CRON / "membership.json"
 # MAGWEGWE DEALS buy&sell group 1 gained borehole-drilling,
 # building-materials, genaie-advertisers and industrial-lighting on the ads
 # account on 2026-11-07.
+# BYO HUSTLERS.COM gained building-materials on 2026-11-07; it already
+# receives genaie-advertisers on the ads account.
 EXPECTED_DAILY = {
     "appliance-repairs": 8,
     "industrial-lighting": 14,
     "genaie-advertisers": 13,
     "borehole-drilling": 43,
-    "building-materials": 15,
+    "building-materials": 16,
     # skylight-solar launched (2026-10-19) targeting the Bulawayo/BYO groups plus
     # Kwekwe, Gweru, both lowveld/Chiredzi groups, Mutare, Magwegwe, Lobengula West
     # and Chikombedzi: 23 groups, no weekly cadence.
