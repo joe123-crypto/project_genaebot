@@ -16,12 +16,13 @@ class ConnectivityTests(unittest.TestCase):
     def setUp(self):
         self.naps = []
 
-    def test_ads_groups_restored_to_twelve_groups_and_35_combinations(self):
+    def test_ads_group_campaign_coverage(self):
         membership = json.loads((ROOT / "workspace/cron/membership.json").read_text())
         active = {jid: g for jid, g in membership["groups"].items()
                   if g.get("account", "default") == "ads" and g["status"] == "active"}
-        self.assertEqual(len(active), 12)
-        self.assertEqual(sum(len(g["promos"]) for g in active.values()), 35)
+        self.assertEqual(len(active), 15)
+        self.assertEqual(sum(bool(g["promos"]) for g in active.values()), 14)
+        self.assertEqual(sum(len(g["promos"]) for g in active.values()), 41)
         for jid in ("120363046894354726@g.us", "120363433121439254@g.us"):
             self.assertIn(jid, active)
             promos = {"fruit-trees", "building-materials", "genaie-advertisers"}

@@ -632,10 +632,13 @@ after changing contact routing.
 
 ### Advertising stability trial
 
-The ads line has **12 active groups and 35 campaign/group combinations**.
+The ads line has **14 groups configured for advertising and 41 campaign/group combinations**.
 `let's build bindura` and `BULAWAYO ADVERTS` are active again for fruit trees,
-building materials and Genaie advertisers. These are configured eligibility
-counts, before caps and weekly rules, not confirmed deliveries.
+building materials and Genaie advertisers. Zim Market Hub and ZiMarket Grp41
+each receive appliance repairs, industrial lighting and building materials.
+MAGWEGWE DEALS buy&sell group 1 is recorded without campaigns assigned.
+These are configured eligibility counts, before caps and weekly rules,
+not confirmed deliveries.
 
 The next round is **ads group advertising without automated DM replies**.
 The tracked account override `channels.whatsapp.accounts.ads.dmPolicy: "disabled"`
