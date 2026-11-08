@@ -1065,6 +1065,17 @@
         "industrial-lighting",
         "building-materials"
       ]
+    },
+    "120363407345824911@g.us": {
+      "name": "The Advertisement Hub (Buy & Sell)",
+      "source": "operator",
+      "status": "active",
+      "account": "ads",
+      "daily_cap": null,
+      "promos": [
+        "building-materials",
+        "genaie-advertisers"
+      ]
     }
   }
 }
