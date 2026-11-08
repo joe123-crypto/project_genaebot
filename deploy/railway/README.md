@@ -851,6 +851,97 @@ the newest result is in `runtime/firestore/shadow.json`. Check by hand:
 railway ssh -- runuser -u joseph -- python3 /home/joseph/.openclaw/workspace/lib/config_shadow.py
 ```
 
+## Ad images: R2 and the cutover
+
+Off unless explicitly enabled. What each mode means, why the run downloads
+rather than handing openclaw a URL, and how failure is handled, is in the
+repository README:
+[Moving the ad images to Cloudflare R2](../../README.md#moving-the-ad-images-to-cloudflare-r2).
+
+```sh
+railway variables \
+  --set GENAIE_AD_ASSETS_BASE_URL=https://pub-63be390258b5461e931301ca810b7a86.r2.dev \
+  --set GENAIE_AD_ASSETS_SOURCE=shadow && railway redeploy      # shadow on
+railway variables --set GENAIE_AD_ASSETS_SOURCE=r2 && railway redeploy   # cut over
+railway variables --set GENAIE_AD_ASSETS_SOURCE=shadow && railway redeploy  # roll back
+railway variables --unset GENAIE_AD_ASSETS_SOURCE && railway redeploy   # off
+```
+
+The bucket is `r2.dev`-public and read anonymously, so the base URL is not a
+secret; it is a variable rather than a constant so a custom domain can replace it
+without a code change. Confirm it answers before the first flip -- a missing
+object must come back `404`, not a redirect or a sign-in page:
+
+```sh
+curl -sS -o /dev/null -w '%{http_code}\n' \
+  https://pub-63be390258b5461e931301ca810b7a86.r2.dev/ads/cv/does-not-exist.png
+```
+
+Neither variable is in the entrypoint's `SECRET_KEYS`, and neither needs to be:
+Railway service variables are already in the gateway's environment and cron
+scripts inherit it, which is how `GENAIE_CONFIG_SOURCE` works today. `SECRET_KEYS`
+exists for values openclaw's own config interpolates. Neither is release-managed
+in `deploy/railway-release.py`, so a deploy neither sets nor clears them.
+
+The index read uses the same read-only `GCP_SERVICE_ACCOUNT_B64` runtime key; the
+`assets` collection is deliberately **not** in `operator_config.COLLECTIONS`, so
+`seed-firestore.py --write --prune` cannot see the index as strays and delete it,
+and a malformed asset document cannot raise `ConfigInvalid` across all ten
+campaigns.
+
+**Before the first flip, probe the media root.** openclaw reads outbound local
+media only from an allowlist. In `openclaw@2026.9.9` -- the version this image
+pins, checked against that release's own `buildMediaLocalRoots` -- the list is the
+temp dir, `<config>/media`, `<state>/media`, the delivery queue's media dir,
+`<state>/canvas`, `<state>/workspace` and `<state>/sandboxes`. So `<state>/media`
+is allowed and `<state>/runtime` is not, which is why the cache sits where it
+does. That is a static read, though, and it cannot see a `tools.fs` setting on the
+live config, so confirm it with one real send. Put any JPEG at the cache location
+and send it to the bot's own number:
+
+```sh
+railway ssh -- runuser -u joseph -- mkdir -p /home/joseph/.openclaw/media/ad-assets
+# upload or copy a probe.jpg there, then:
+railway ssh -- runuser -u joseph -- openclaw message send --channel whatsapp \
+  --target '<the bot's own JID>' --media /home/joseph/.openclaw/media/ad-assets/probe.jpg --json
+```
+
+A `messageId` in the reply is the gate. If it is refused as a local media read
+outside the allowed roots, nothing downstream will work and the cache location
+has to change before `r2` is flipped on.
+
+Then, in this order:
+
+1. Put the upload credentials in `~/.config/genaie/r2-upload.env` at mode 600 --
+   `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` from
+   an R2 API token scoped to the one bucket with Object Read & Write, plus
+   `GCP_SERVICE_ACCOUNT_FILE` pointing at a Firestore key with Cloud Datastore
+   User. Never in the checkout: `deploy/**` is un-ignored, so a file there gets
+   committed. None of these ever becomes a Railway variable.
+2. `deploy/upload-ad-image.py --seed-from-repo --write` and `--verify` exits 0,
+   from your own machine; the runtime key cannot write.
+3. Shadow mode has reported `status: "exact"` for every campaign across several
+   consecutive days, and `du -sh /home/joseph/.openclaw/media/ad-assets` is about
+   11 MB -- the cache is fully warm, so the flip is not a cold start.
+4. The window has no promo run due (see *Deploy preflight* above). The flip needs
+   a redeploy.
+
+After it, on the next run: `[ad-assets] cached ...` lines on the run's stderr, no
+`using the baked image` line, and a delivery count matching the previous day's for
+that campaign. `./workspace/bin/console-read overview` reports `adAssets.mode` as
+`r2`.
+
+Rolling back is one variable and no code deploy, as long as the images are still
+in the repo. That stops being true once they are deleted, so keep them until
+`r2` has run for a week and a deliberate swap has been seen to work.
+
+In shadow mode each campaign run logs `[ad-assets]` lines to its stderr, and the
+newest result is in `runtime/firestore/ad-assets-shadow.json`. Check by hand:
+
+```sh
+railway ssh -- runuser -u joseph -- python3 /home/joseph/.openclaw/workspace/lib/ad_assets.py
+```
+
 ## Retired daily job feeds: 2026-10-28
 
 Vacancy Lamp and Hustlers Marketplace job posting and the shared scraping/cache

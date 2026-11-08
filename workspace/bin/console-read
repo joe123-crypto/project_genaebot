@@ -40,6 +40,7 @@ if LIB_DIR not in sys.path:
 import promo_membership  # noqa: E402
 import promo_caps  # noqa: E402
 import promo_broadcast  # noqa: E402
+import ad_assets  # noqa: E402
 import config_shadow  # noqa: E402
 import promo_config  # noqa: E402
 import operator_config  # noqa: E402
@@ -453,6 +454,17 @@ def config_shadow_status():
     return {"mode": current, "warning": warning, "lastCheck": config_shadow.read_result()}
 
 
+def ad_assets_status():
+    """Where the ad images come from, and what the newest asset check found.
+
+    ``lastCheck`` is the single newest check across all campaigns, not one per
+    campaign: each run overwrites it, so the console shows whichever campaign
+    ran last. Its ``campaign`` field says which, and ``checkedAt`` tells a
+    current result from one left over after the mode was switched back."""
+    current, warning = ad_assets.mode()
+    return {"mode": current, "warning": warning, "lastCheck": ad_assets.read_result()}
+
+
 def overview(day):
     m = membership()
     groups = promo_membership.groups(m)
@@ -476,6 +488,7 @@ def overview(day):
         "capsEnabled": bool((m.get("defaults") or {}).get("caps_enabled")),
         "configSource": config_source_status(),
         "configShadow": config_shadow_status(),
+        "adAssets": ad_assets_status(),
         "campaigns": campaigns,
     }
 
