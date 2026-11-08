@@ -129,12 +129,24 @@ test('invalid metadata, damaged inventory and unwritable storage never reject in
   await assert.doesNotReject(other.scan()); assert.ok(f.warnings.length >= 2);
 });
 
-test('opt-out and invalid account IDs do not query WhatsApp or create an inventory', async t => {
+test('opt-out and invalid account IDs do not query WhatsApp, warn, or create an inventory', async t => {
   const f = fixture(t);
   for (const options of [{ environment: { GENAIE_GROUP_DISCOVERY: '0' } }, { accountId: '../escape' }]) {
     const d = f.create(options);
     d.start({ groupFetchAllParticipating: () => assert.fail('must not query') }); await d.scan();
   }
+  assert.equal(fs.existsSync(path.join(f.root, 'runtime/whatsapp-groups')), false);
+  assert.deepEqual(f.warnings, []);
+});
+
+// A lifecycle anchor break is reported by the loader; a socket whose group
+// lookup is gone passes the anchors and would otherwise fail silently.
+test('a socket without the group lookup reports discovery as inactive', async t => {
+  const f = fixture(t), d = f.create();
+  d.start({});
+  await d.scan();
+  assert.match(f.warnings.join('\n'), /ads: account socket has no group lookup; discovery inactive/);
+  assert.equal(f.timers.length, 0);
   assert.equal(fs.existsSync(path.join(f.root, 'runtime/whatsapp-groups')), false);
 });
 

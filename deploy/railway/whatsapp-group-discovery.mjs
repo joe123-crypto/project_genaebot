@@ -139,7 +139,13 @@ export function createWhatsAppGroupDiscovery({ accountId,
 
   function start(sock) {
     stop();
-    if (!enabled || typeof sock?.groupFetchAllParticipating !== 'function') return;
+    if (!enabled) return;
+    if (typeof sock?.groupFetchAllParticipating !== 'function') {
+      // The load-time patch guards the lifecycle anchors, not the socket shape.
+      // Say so rather than going quiet, so an adapter change is diagnosable.
+      warn(`[whatsapp-groups] ${accountId}: account socket has no group lookup; discovery inactive`);
+      return;
+    }
     socket = sock;
     owners.set(filename, owner);
     void scan();

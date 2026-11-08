@@ -21,7 +21,9 @@ test('actual pinned WhatsApp lifecycle and socket contracts accept every compose
   const original = monitors[0].source;
   assert.match(original, /getCurrentSock\(\)/, 'adapter exposes the existing account socket');
   assert.match(original, /groupFetchAllParticipating\(\)/, 'adapter uses the unbounded group lookup');
-  const patched = patchWhatsAppGroupDiscovery(patchWhatsAppCacheCleanup(patchWhatsAppHealthAudit(patchWhatsAppMonitor(original))));
+  // Compose in the order whatsapp-lid-loader.mjs applies at load time, so an
+  // anchor one patch moves under another is caught here and not in production.
+  const patched = patchWhatsAppCacheCleanup(patchWhatsAppGroupDiscovery(patchWhatsAppHealthAudit(patchWhatsAppMonitor(original))));
   assert.equal(patchWhatsAppGroupDiscovery(patched), patched);
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'discovery-adapter-'));
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
