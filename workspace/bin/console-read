@@ -43,6 +43,7 @@ import promo_broadcast  # noqa: E402
 import config_shadow  # noqa: E402
 import promo_config  # noqa: E402
 import operator_config  # noqa: E402
+import group_discovery  # noqa: E402
 
 MEMBERSHIP = promo_membership.default_path(str(WORKSPACE))
 
@@ -491,7 +492,8 @@ def main(argv):
             # daily cap held back.
             payload = {"date": day.isoformat(),
                        "disabledPromos": sorted(disabled_promos(manifest())),
-                       "groups": group_rows(day)}
+                       "groups": group_rows(day),
+                       **group_discovery.read(membership())}
         elif command == "campaigns":
             payload = {"date": day.isoformat(), "campaigns": campaign_records(day)}
         elif command == "preview":

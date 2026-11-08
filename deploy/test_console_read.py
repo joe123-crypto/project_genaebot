@@ -75,7 +75,7 @@ class ConsoleReadTests(unittest.TestCase):
 
     def test_groups_describes_every_known_group_the_same_way(self):
         payload = self.ok("groups", "--date", DAY)
-        self.assertEqual(set(payload), {"date", "disabledPromos", "groups"})
+        self.assertEqual(set(payload), {"date", "disabledPromos", "groups", "discoveredGroups", "groupDiscovery"})
         self.assertEqual(payload["date"], DAY)
         self.assertTrue(payload["groups"])
         for row in payload["groups"]:

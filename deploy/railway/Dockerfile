@@ -104,6 +104,7 @@ COPY deploy/promo-crons.json /usr/local/lib/genaie/promo-crons.json
 RUN python3 -c 'from zoneinfo import ZoneInfo; ZoneInfo("Africa/Algiers")'
 COPY deploy/railway/wait-gateway-lease.py /usr/local/bin/wait-gateway-lease.py
 COPY deploy/railway/whatsapp-lid-loader.mjs deploy/railway/whatsapp-lid-recovery.mjs deploy/railway/whatsapp-cache-cleanup.mjs deploy/railway/whatsapp-health-audit.mjs /usr/local/lib/genaie/
+COPY deploy/railway/whatsapp-group-discovery.mjs /usr/local/lib/genaie/
 RUN chmod 0755 /usr/local/bin/entrypoint.sh /usr/local/bin/sync-public-prompt.py \
     /usr/local/bin/sync-reply-gates.py /usr/local/bin/sync-runtime-plugins.py \
     /usr/local/bin/wait-gateway-lease.py

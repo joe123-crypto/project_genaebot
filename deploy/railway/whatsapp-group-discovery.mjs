@@ -1,0 +1,150 @@
+// Metadata inventory only. Never opens a connection or changes ad targeting.
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+
+export const DISCOVERY_INTERVAL_MS = 60 * 60 * 1000;
+export const DISCOVERY_TIMEOUT_MS = 45_000;
+const ACCOUNT = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+const GROUP = /^\d+(?:-\d+)?@g\.us$/;
+// A reconnect may replace the monitor before its old request finishes.
+const owners = new Map();
+const writes = new Map();
+
+async function serialWrite(key, task) {
+  const pending = (writes.get(key) ?? Promise.resolve()).catch(() => {}).then(task);
+  writes.set(key, pending);
+  try { return await pending; }
+  finally { if (writes.get(key) === pending) writes.delete(key); }
+}
+
+async function readInventory(filename, accountId) {
+  try {
+    const value = JSON.parse(await fs.readFile(filename, 'utf8'));
+    if (value?.version !== 1 || value.accountId !== accountId || !value.groups ||
+        typeof value.groups !== 'object' || Array.isArray(value.groups)) throw new Error('Invalid inventory');
+    for (const [jid, group] of Object.entries(value.groups)) {
+      if (!GROUP.test(jid) || !group ||
+          !(group.name === null || typeof group.name === 'string') ||
+          typeof group.firstSeenAt !== 'string' || typeof group.lastSeenAt !== 'string' ||
+          !Number.isFinite(Date.parse(group.firstSeenAt)) ||
+          !Number.isFinite(Date.parse(group.lastSeenAt))) throw new Error('Invalid inventory group');
+    }
+    return value;
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    return { version: 1, accountId, lastAttemptAt: null, lastSuccessAt: null, lastError: null, groups: {} };
+  }
+}
+
+async function atomicSave(filename, value, current) {
+  const directory = path.dirname(filename);
+  await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+  const temporary = `${filename}.${randomUUID()}.tmp`;
+  let handle;
+  try {
+    handle = await fs.open(temporary, 'wx', 0o600);
+    await handle.writeFile(JSON.stringify(value) + '\n');
+    await handle.sync();
+    await handle.close();
+    handle = null;
+    if (current()) await fs.rename(temporary, filename);
+  } finally {
+    await handle?.close();
+    await fs.rm(temporary, { force: true });
+  }
+}
+
+export function createWhatsAppGroupDiscovery({ accountId,
+  root = process.env.OPENCLAW_STATE_DIR || path.join(os.homedir(), '.openclaw'),
+  environment = process.env, now = () => new Date(), warn = console.warn,
+  intervalMs = DISCOVERY_INTERVAL_MS, timeoutMs = DISCOVERY_TIMEOUT_MS,
+  setIntervalFn = setInterval, clearIntervalFn = clearInterval,
+} = {}) {
+  const enabled = environment.GENAIE_GROUP_DISCOVERY !== '0' && ACCOUNT.test(accountId ?? '') &&
+    !['__proto__', 'constructor', 'prototype'].includes(accountId);
+  const filename = path.join(root, 'runtime', 'whatsapp-groups', `${accountId}.json`);
+  const owner = {};
+  let socket, timer, generation = 0, inFlight;
+
+  function stop() {
+    generation++;
+    socket = null;
+    inFlight = null;
+    if (timer !== undefined) clearIntervalFn(timer);
+    timer = undefined;
+    if (owners.get(filename) === owner) owners.delete(filename);
+  }
+
+  function scan() {
+    if (!enabled || !socket || owners.get(filename) !== owner) return Promise.resolve();
+    if (inFlight) return inFlight.done;
+    const epoch = generation, sock = socket;
+    const current = () => generation === epoch && owners.get(filename) === owner && socket === sock;
+    const attempt = { settled: false, finished: false, done: null };
+    inFlight = attempt;
+    const release = () => {
+      if (attempt.settled && attempt.finished && inFlight === attempt) inFlight = null;
+    };
+    const fetch = Promise.resolve().then(() => sock.groupFetchAllParticipating());
+    // A timed-out query may still be pending on Baileys. Do not pile another
+    // request onto that socket until it settles (or the connection is replaced).
+    fetch.then(() => { attempt.settled = true; release(); }, () => { attempt.settled = true; release(); });
+    attempt.done = (async () => {
+      let deadline;
+      let groups, failure = null;
+      try {
+        groups = await Promise.race([fetch, new Promise((_, reject) => {
+          deadline = setTimeout(() => reject(Object.assign(new Error(), { discoveryTimeout: true })), timeoutMs);
+          deadline.unref?.();
+        })]);
+        if (!groups || typeof groups !== 'object' || Array.isArray(groups)) failure = 'invalid_metadata';
+      } catch (error) {
+        failure = error?.discoveryTimeout ? 'lookup_timeout' : 'lookup_failed';
+      } finally { clearTimeout(deadline); }
+      if (!current()) return;
+      const stamp = now().toISOString();
+      try {
+        await serialWrite(filename, async () => {
+          if (!current()) return;
+          const inventory = await readInventory(filename, accountId);
+          if (!current()) return;
+          inventory.lastAttemptAt = stamp;
+          inventory.lastError = failure;
+          if (!failure) {
+            inventory.lastSuccessAt = stamp;
+            for (const [jid, metadata] of Object.entries(groups)) {
+              if (!GROUP.test(jid) || jid.length > 128) continue;
+              const previous = inventory.groups[jid];
+              const name = typeof metadata?.subject === 'string'
+                ? Array.from(metadata.subject.trim().toWellFormed()).slice(0, 512).join('') : '';
+              inventory.groups[jid] = { name: name || previous?.name || null,
+                firstSeenAt: previous?.firstSeenAt ?? stamp, lastSeenAt: stamp };
+            }
+          }
+          await atomicSave(filename, inventory, current);
+        });
+        if (failure && current()) warn(`[whatsapp-groups] ${accountId}: ${failure}; previous observations retained`);
+      } catch {
+        if (current()) warn(`[whatsapp-groups] ${accountId}: inventory unavailable; targeting unchanged`);
+      }
+    })().catch(() => {
+      // Discovery must never reject into the channel's lifecycle or log raw
+      // provider errors (which may include private transport details).
+      if (current()) warn(`[whatsapp-groups] ${accountId}: discovery unavailable`);
+    }).finally(() => { attempt.finished = true; release(); });
+    return attempt.done;
+  }
+
+  function start(sock) {
+    stop();
+    if (!enabled || typeof sock?.groupFetchAllParticipating !== 'function') return;
+    socket = sock;
+    owners.set(filename, owner);
+    void scan();
+    timer = setIntervalFn(() => { void scan(); }, intervalMs);
+    timer?.unref?.();
+  }
+  return { start, stop, scan };
+}
