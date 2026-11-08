@@ -72,11 +72,13 @@ def rows(m, day, want_caps, disabled=None):
     out = []
     for jid, entry in promo_membership.groups(m).items():
         weekly = entry.get("weekly") or {}
+        paused = promo_membership.paused_of(entry)
         labels = []
         for promo in entry.get("promos") or []:
             days = weekly.get(promo)
-            labels.append("%s (%s only)" % (promo, ", ".join(str(d) for d in days))
-                          if days else promo)
+            label = ("%s (%s only)" % (promo, ", ".join(str(d) for d in days))
+                     if days else promo)
+            labels.append(label + " [paused]" if promo in paused else label)
         info = decisions.get(jid) or {}
         out.append({
             "jid": jid,

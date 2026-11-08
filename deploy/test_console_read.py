@@ -30,17 +30,17 @@ DAY = "2026-11-04"
 
 GROUP_KEYS = {
     "jid", "name", "source", "status", "activity", "account", "dailyCapOverride",
-    "promos", "weekly", "note", "cap", "replyScore", "allowedToday",
+    "promos", "pausedPromos", "weekly", "note", "cap", "replyScore", "allowedToday",
 }
 PREVIEW_KEYS = {
     "jid", "name", "account", "contactNumber", "ref", "variant", "caption",
-    "cap", "sendsToday", "allowedToday", "weekly",
+    "cap", "paused", "sendsToday", "allowedToday", "weekly",
 }
 CAMPAIGN_KEYS = {
     "slug", "name", "cron", "hour", "minute", "timezone", "installer", "script",
     "failureAlertTo", "legacyNames", "timeoutSeconds", "captions", "tracking",
     "images", "targetCount", "weeklyCount", "accounts", "source", "error",
-    "enabled",
+    "enabled", "storeEnabled", "cronEnabled",
 }
 
 
@@ -318,6 +318,126 @@ class ConsoleReadTests(unittest.TestCase):
             self.assertFalse(history.exists(), "the bridge recorded a cap snapshot")
             self.assertFalse(refs.exists())
             self.assertEqual(sorted(os.listdir(directory)), [])
+
+    # -- what a console may edit -----------------------------------------
+
+    def overview_writes(self, **environment):
+        done = self.run_bridge("overview", "--date", DAY, **environment)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return json.loads(done.stdout)["writes"]
+
+    def test_writes_are_reported_off_without_the_write_key(self):
+        # Blank is how the gateway looks before a key is installed.
+        self.assertIs(self.overview_writes(**{WRITE_KEY: ""})["enabled"], False)
+        self.assertIs(self.overview_writes(**{WRITE_KEY: "   "})["enabled"], False)
+
+    def test_the_editable_fields_are_the_writers_own(self):
+        # The console gates every control on this, so it must be exactly what the
+        # writer will accept -- not a copy that can drift from it.
+        import operator_writer
+        writes = self.ok("overview", "--date", DAY)["writes"]
+        self.assertEqual(writes["fields"], dict((c, list(f)) for c, f
+                                                in operator_writer.EDITABLE.items()))
+        self.assertEqual(writes["delete"], ["groups"])
+        self.assertIn("paused_promos", writes["fields"]["groups"])
+
+    def test_the_write_key_is_reported_by_presence_never_by_value(self):
+        # A canary rather than anything key-shaped: the bridge checks presence
+        # only, so the value never needs to decode, just to be findable.
+        secret = "WRITE-KEY-CANARY-must-never-be-printed"
+        done = self.run_bridge("overview", "--date", DAY, **{WRITE_KEY: secret})
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIs(json.loads(done.stdout)["writes"]["enabled"], True)
+        self.assertNotIn(secret, done.stdout + done.stderr)
+
+    def test_writes_say_whether_a_saved_change_reaches_the_campaigns(self):
+        # Before the cutover a write lands in Firestore while runs still act on
+        # membership.json; a console has to be able to say so.
+        for mode in ("file", "shadow"):
+            with self.subTest(mode=mode):
+                writes = self.overview_writes(GENAIE_CONFIG_SOURCE=mode)
+                self.assertIs(writes["affectsProduction"], False)
+
+    def test_after_the_cutover_a_saved_change_reaches_the_campaigns(self):
+        # Checked in-process: a firestore-mode overview would need a live
+        # Firestore, but this answer depends only on the mode.
+        from unittest import mock
+        console = load_console_read()
+        with mock.patch.dict(os.environ, {"GENAIE_CONFIG_SOURCE": "firestore"}):
+            self.assertIs(console.write_capabilities()["affectsProduction"], True)
+
+    def test_cap_settings_come_in_the_shape_a_form_edits(self):
+        m = promo_membership.load(promo_membership.default_path(str(ROOT / "workspace")))
+        settings = self.ok("overview", "--date", DAY)["capSettings"]
+        self.assertEqual(set(settings), {"enabled", "defaultActivity", "bands"})
+        self.assertIs(settings["enabled"], promo_membership.caps_enabled(m))
+        self.assertEqual(settings["bands"], dict(
+            (tier, [low, high]) for tier, (low, high) in promo_membership.bands(m).items()))
+
+    def test_a_campaign_reports_both_switches(self):
+        # cv has no cron registered (manifest enabled: false), so it cannot post
+        # whatever its store switch says; the console must not offer a toggle as
+        # if it could.
+        campaigns = dict((row["slug"], row) for row
+                         in self.ok("campaigns", "--date", DAY)["campaigns"])
+        self.assertIs(campaigns["cv"]["cronEnabled"], False)
+        self.assertIs(campaigns["cv"]["enabled"], False)
+        self.assertIs(campaigns["genaie"]["cronEnabled"], True)
+        self.assertIs(campaigns["genaie"]["storeEnabled"], True)
+        for row in campaigns.values():
+            self.assertIs(row["enabled"], row["storeEnabled"] and row["cronEnabled"],
+                          row["slug"])
+
+
+WRITE_KEY = "GCP_SERVICE_ACCOUNT_WRITE_B64"
+
+
+def load_console_read():
+    """console-read has no extension, so it loads by path -- the same way the
+    review regression tests reach its internals."""
+    import importlib.machinery
+    import importlib.util
+    loader = importlib.machinery.SourceFileLoader("console_read_inproc", str(BRIDGE))
+    spec = importlib.util.spec_from_loader("console_read_inproc", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+class PausedAssignmentTests(unittest.TestCase):
+    """A paused assignment has to stay visible: the campaign page's list of where
+    it goes is the only place it can be resumed from."""
+
+    def setUp(self):
+        import copy
+        from datetime import date
+        self.console = load_console_read()
+        self.day = date(2026, 11, 4)
+        base = promo_membership.load(self.console.MEMBERSHIP)
+        self.m = copy.deepcopy(base)
+        self.jid = next(jid for jid, entry in self.m["groups"].items()
+                        if promo_membership.is_active(entry)
+                        and "genaie" in (entry.get("promos") or []))
+        self.m["groups"][self.jid]["paused_promos"] = ["genaie"]
+        self.console._RESOLVED["config"] = {
+            "mode": "file", "source": "file", "membership": self.m, "doc": {},
+            "switches": {}, "storeSwitches": {}, "cronSwitches": {},
+            "report": {"quarantined": {}, "warnings": [], "campaigns": {}}, "notes": []}
+
+    def test_a_paused_group_stays_in_the_campaigns_list_marked_paused(self):
+        rows = dict((row["jid"], row) for row
+                    in self.console.preview("genaie", self.day)["groups"])
+        self.assertIn(self.jid, rows)
+        self.assertIs(rows[self.jid]["paused"], True)
+        self.assertIs(rows[self.jid]["sendsToday"], False)
+        self.assertTrue(any(not row["paused"] for row in rows.values()))
+
+    def test_the_group_row_lists_the_pause_and_plans_no_send_for_it(self):
+        row = next(row for row in self.console.group_rows(self.day)
+                   if row["jid"] == self.jid)
+        self.assertEqual(row["pausedPromos"], ["genaie"])
+        self.assertIn("genaie", row["promos"])
+        self.assertNotIn("genaie", row["allowedToday"])
 
 
 if __name__ == "__main__":

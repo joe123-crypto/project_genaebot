@@ -275,6 +275,30 @@ class QuarantineTest(Harness):
         self.assertEqual(result["report"]["quarantined"], {})
         self.assertTrue(any("dropped campaign(s) cv" in w for w in result["report"]["warnings"]))
 
+    def test_deleting_a_campaign_drops_its_pauses_too(self):
+        # A pause names a campaign the group is in, so a stale one left behind
+        # would fail "paused but not in promos" and quarantine the whole group --
+        # stopping its OTHER campaigns over a campaign that no longer exists.
+        self.firestore.store["groups"][JID_B]["paused_promos"] = oc.encode_value(["cv"])
+        del self.firestore.store["campaigns"]["cv"]
+        result = self.load()
+        bravo = result["membership"]["groups"][JID_B]
+        self.assertEqual(bravo["paused_promos"], [])
+        self.assertEqual(bravo["promos"], ["genaie"])
+        self.assertEqual(result["report"]["quarantined"], {})
+
+    def test_a_pause_for_a_campaign_the_group_is_not_in_is_quarantined(self):
+        # Unlike a deleted campaign, this is a live mistake about a live group:
+        # cv exists, but Alpha is only in genaie.
+        self.firestore.store["groups"][JID_A]["paused_promos"] = oc.encode_value(["cv"])
+        self.assertIn(JID_A, self.load()["report"]["quarantined"])
+
+    def test_pausing_a_campaign_the_group_is_in_is_accepted(self):
+        self.firestore.store["groups"][JID_A]["paused_promos"] = oc.encode_value(["genaie"])
+        result = self.load()
+        self.assertEqual(result["report"]["quarantined"], {})
+        self.assertEqual(result["membership"]["groups"][JID_A]["paused_promos"], ["genaie"])
+
     def test_duplicate_names_are_a_warning_not_a_quarantine(self):
         self.firestore.store["groups"][JID_A]["name"] = {"stringValue": "Bravo"}
         result = self.load()

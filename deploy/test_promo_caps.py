@@ -303,6 +303,50 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(kept, [])
 
 
+class PausedCampaignTests(unittest.TestCase):
+    """The per-group counterpart of a disabled campaign: a group paused for one
+    campaign must not spend a daily turn on it, or pausing one campaign quietly
+    starves the group's others -- the same leak DisabledCampaignTests guards
+    against, at the scale of a single group."""
+
+    def setUp(self):
+        self.m = membership({
+            "1@g.us": {"promos": ["a", "b", "c", "d"], "activity": "quiet",
+                       "paused_promos": ["a"]},
+            "2@g.us": {"promos": ["a", "b", "c", "d"], "activity": "quiet"},
+        }, bands={"busy": [6, 10], "normal": [4, 6], "quiet": [2, 2]})
+
+    def test_a_paused_campaign_never_wins_a_turn_on_that_group(self):
+        for offset in range(8):
+            info = pc.plan(self.m, ["1@g.us"], day=DAY + timedelta(days=offset),
+                           refs={}, disabled=set())["1@g.us"]
+            self.assertNotIn("a", info["promos"])
+            self.assertNotIn("a", info["allowed"])
+            self.assertEqual(len(info["allowed"]), 2)
+
+    def test_the_groups_other_campaigns_share_its_whole_cycle(self):
+        turns = Counter()
+        for offset in range(3):
+            info = pc.plan(self.m, ["1@g.us"], day=DAY + timedelta(days=offset),
+                           refs={}, disabled=set())["1@g.us"]
+            turns.update(info["allowed"])
+        self.assertEqual(turns, Counter({"b": 2, "c": 2, "d": 2}))
+
+    def test_the_pause_is_this_groups_alone(self):
+        # Another group in the same campaign still gives it turns.
+        seen = set()
+        for offset in range(4):
+            info = pc.plan(self.m, ["2@g.us"], day=DAY + timedelta(days=offset),
+                           refs={}, disabled=set())["2@g.us"]
+            seen.update(info["allowed"])
+        self.assertIn("a", seen)
+
+    def test_filtering_for_the_paused_campaign_drops_the_group(self):
+        kept, _ = pc.filter_for_promo(self.m, "a", ["1@g.us", "2@g.us"], day=DAY,
+                                      refs={}, disabled=set())
+        self.assertNotIn("1@g.us", kept)
+
+
 class DisabledCampaignTests(unittest.TestCase):
     """A campaign the cron manifest switches off never posts, so it must not
     take a group's daily turn (the CV pause of 2026-11-04 cost ~20 slots/day)."""

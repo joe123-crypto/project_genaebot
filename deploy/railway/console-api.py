@@ -36,7 +36,8 @@ gateway's durable state. Request bodies are bounded to 2048 bytes.
 
 Operator-config writes (bearer, no cache):
   POST /internal/console/config/<collection>/<id>
-       {"fields": {...}, "actor": "...", "dryRun": false}
+       {"fields": {...}, "actor": "...", "dryRun": false}      change fields
+       {"delete": true, "reason": "...", "actor": "..."}      delete (groups only)
 
 <collection> is groups, lines, campaigns or settings, and <id> is
 percent-encoded because a group JID carries an "@". Every change goes through
@@ -416,16 +417,23 @@ class Handler(BaseHTTPRequestHandler):
             payload = json.loads(self.rfile.read(size))
             if not isinstance(payload, dict):
                 raise ValueError()
-            if set(payload) - {"fields", "actor", "dryRun"}:
+            if set(payload) - {"fields", "delete", "reason", "actor", "dryRun"}:
                 raise ValueError()
-            if not isinstance(payload.get("fields"), dict):
+            # Exactly one operation: change named fields, or delete the document.
+            # Which collections may be deleted, and what a legal reason is, is
+            # console-write's call; this only refuses a request with no clear verb.
+            if ("fields" in payload) == ("delete" in payload):
+                raise ValueError()
+            if "fields" in payload and not isinstance(payload["fields"], dict):
+                raise ValueError()
+            if "delete" in payload and payload["delete"] is not True:
                 raise ValueError()
         except (ValueError, TypeError, UnicodeError):
             self.send_any(400, b'{"error":"Invalid config change."}', True)
             return
 
-        request = {"collection": parts[1], "id": doc_id, "fields": payload["fields"]}
-        for name in ("actor", "dryRun"):
+        request = {"collection": parts[1], "id": doc_id}
+        for name in ("fields", "delete", "reason", "actor", "dryRun"):
             if name in payload:
                 request[name] = payload[name]
 

@@ -79,6 +79,33 @@ class RequestParsing(unittest.TestCase):
         self.assertIn("dryRun", self.refuse(dict(REQUEST, dryRun="yes")))
         self.assertIn("non-empty", self.refuse(dict(REQUEST, id="   ")))
 
+    def test_a_delete_request_is_accepted(self):
+        parsed = CW.parse_request(json.dumps(
+            {"collection": "groups", "id": "x@g.us", "delete": True,
+             "reason": "bot removed", "actor": "joe"}).encode())
+        self.assertIs(parsed["delete"], True)
+        self.assertEqual(parsed["reason"], "bot removed")
+
+    def test_a_request_names_exactly_one_operation(self):
+        # Edit and delete at once would make the audit trail contradict itself.
+        both = dict(REQUEST, delete=True)
+        self.assertIn("exactly one", self.refuse(both))
+        neither = {"collection": "groups", "id": "x@g.us"}
+        self.assertIn("neither", self.refuse(neither))
+
+    def test_delete_must_be_literally_true(self):
+        for value in (False, "true", 1):
+            with self.subTest(value=value):
+                self.assertIn("delete must be true", self.refuse(
+                    {"collection": "groups", "id": "x@g.us", "delete": value}))
+
+    def test_a_reason_belongs_to_a_delete(self):
+        self.assertIn("only accepted with delete", self.refuse(dict(REQUEST, reason="x")))
+
+    def test_a_reason_is_bounded(self):
+        self.assertIn("at most 500", self.refuse(
+            {"collection": "groups", "id": "x@g.us", "delete": True, "reason": "x" * 501}))
+
     def test_an_oversized_request_is_refused_without_parsing(self):
         self.assertIn("too large", self.refuse(b"x" * (CW.MAX_REQUEST_BYTES + 1)))
 
@@ -178,6 +205,26 @@ class Payload(unittest.TestCase):
                 code, payload = self.run_main(**kwargs)
                 self.assertIs(payload["ok"], payload["status"] == 200)
                 self.assertEqual(code, 0 if payload["ok"] else 1)
+
+    def test_a_delete_goes_to_the_delete_path_with_its_reason(self):
+        deleted = {"collection": "groups", "id": "x@g.us", "change": "deleted",
+                   "fields": ["name"], "before": {"name": "X"}, "after": None,
+                   "warnings": [], "audit": "20261108T000000Z-abcd"}
+        raw = json.dumps({"collection": "groups", "id": "x@g.us", "delete": True,
+                          "reason": "bot removed", "actor": "joe"}).encode()
+        out = io.StringIO()
+        with unittest.mock.patch.object(operator_writer, "delete",
+                                        return_value=deleted) as delete, \
+                unittest.mock.patch.object(operator_writer, "write") as write:
+            code = CW.main([], stdin=io.BytesIO(raw), stdout=out,
+                           env={CW.WRITE_KEY_VAR: KEY})
+        self.assertEqual(code, 0)
+        self.assertFalse(write.called)
+        args, kwargs = delete.call_args
+        self.assertEqual(args, ("groups", "x@g.us", "joe"))
+        self.assertEqual(kwargs["reason"], "bot removed")
+        payload = json.loads(out.getvalue())
+        self.assertEqual((payload["status"], payload["change"]), (200, "deleted"))
 
     def test_a_bad_request_never_reaches_the_writer(self):
         with unittest.mock.patch.object(operator_writer, "write") as write:

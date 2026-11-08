@@ -37,6 +37,7 @@ Schema (``version: 1``)::
           "account": "default" | "ads",   # which WhatsApp line posts here
           "daily_cap": null | int,
           "promos": ["cv", "genaie", ...],
+          "paused_promos": ["cv"],        # optional; each must be in promos
           "weekly": {"cv": ["mon", "thu"]},
           "note": "free-text, optional"
         }
@@ -53,7 +54,9 @@ groups.
 ``status`` is what gates generation: only ``active`` groups reach a targets
 file. ``promos`` is the *intent* and is kept even while a group is paused, so
 flipping ``status`` back to ``active`` restores it without rediscovering which
-campaigns it belonged to.
+campaigns it belonged to. ``paused_promos`` does the same for one campaign at a
+time: a group stays assigned to a campaign it is paused for, takes no ad from it,
+and gives it none of its daily cap turns.
 
 Std-lib only (plus the sibling :mod:`promo_broadcast` for weekday parsing), so
 it stays importable from the OpenClaw ``--command`` cron scripts.
@@ -194,26 +197,48 @@ def account_of(entry):
     return str((entry or {}).get("account") or DEFAULT_ACCOUNT)
 
 
+def paused_of(entry):
+    """The campaigns this group is paused for, while staying assigned to them.
+
+    The per-campaign counterpart of ``status``: a group ``on-hold`` is out of
+    every campaign, a campaign listed here is out of just that one. Either way the
+    assignment in ``promos`` is kept, so resuming is a flip rather than a
+    rediscovery of which campaigns the group belonged to."""
+    if not isinstance(entry, dict):
+        return frozenset()
+    return frozenset(str(p) for p in (entry.get("paused_promos") or []))
+
+
 def promos_for_group(m, jid):
     """Promo keys targeting ``jid``, in the order listed on the group. Empty for
     a group whose status is not ``active`` -- a paused group is in no campaign
-    today even though its ``promos`` intent is preserved."""
+    today even though its ``promos`` intent is preserved. A campaign the group is
+    paused for is left out too, which is what stops it taking one of the group's
+    daily cap turns while it cannot post."""
     entry = groups(m).get(jid)
     if not entry or not is_active(entry):
         return []
-    return [str(p) for p in (entry.get("promos") or [])]
+    paused = paused_of(entry)
+    return [str(p) for p in (entry.get("promos") or []) if str(p) not in paused]
 
 
-def groups_for_promo(m, promo):
+def groups_for_promo(m, promo, include_paused=False):
     """``(jids, weekly)`` for ``promo`` in the exact shape targets.json uses:
     ``jids`` is the daily list in membership order, and ``weekly`` is
     ``{jid: [weekday tokens]}`` for groups this promo posts to only on certain
     weekdays. A weekly-limited group is NOT repeated in ``jids`` (the engine
-    folds the two together itself)."""
+    folds the two together itself).
+
+    A group paused for ``promo`` is left out: it is still assigned, but nothing is
+    sent to it. ``include_paused`` keeps it, for a screen that lists a campaign's
+    assignments -- where a paused one has to appear, or it cannot be resumed.
+    Anything that decides where ads go must leave it False."""
     jids = []
     weekly = {}
     for jid, entry in groups(m).items():
         if not is_active(entry) or promo not in (entry.get("promos") or []):
+            continue
+        if not include_paused and promo in paused_of(entry):
             continue
         days = (entry.get("weekly") or {}).get(promo)
         if days:
@@ -357,6 +382,19 @@ def validate(m):
         for promo in promos or []:
             if promo not in declared:
                 errors.append("%s: unknown promo %r" % (where, promo))
+        paused = entry.get("paused_promos")
+        if paused is not None:
+            if not isinstance(paused, list) or any(not isinstance(p, str) for p in paused):
+                errors.append("%s: paused_promos must be a list of campaign names" % where)
+            else:
+                if len(set(paused)) != len(paused):
+                    errors.append("%s: paused_promos has duplicates: %r" % (where, paused))
+                # Pausing is for a campaign the group is in. One it is not in has
+                # nothing to pause, and is almost always a typo for one it is.
+                for promo in paused:
+                    if promo not in (promos or []):
+                        errors.append("%s: paused_promos names promo %r which is not "
+                                      "in its promos" % (where, promo))
         weekly = entry.get("weekly") or {}
         if not isinstance(weekly, dict):
             errors.append("%s: weekly must be an object" % where)

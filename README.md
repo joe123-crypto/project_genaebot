@@ -592,12 +592,18 @@ Shadow mode checks the copy against real runs before anything acts on it. Off by
 default; two Railway variables turn it on, and a third value cuts over:
 
 ```sh
-railway variables --set GCP_SERVICE_ACCOUNT_B64="$(base64 -w0 runtime-key.json)" \
-  --set GENAIE_CONFIG_SOURCE=shadow && railway redeploy        # shadow on
-railway variables --set GENAIE_CONFIG_SOURCE=firestore && railway redeploy  # cut over
-railway variables --set GENAIE_CONFIG_SOURCE=shadow && railway redeploy     # roll back
-railway variables --unset GENAIE_CONFIG_SOURCE && railway redeploy   # shadow off
+base64 -w0 runtime-key.json | railway variable set GCP_SERVICE_ACCOUNT_B64 --stdin --skip-deploys
+railway variable set GENAIE_CONFIG_SOURCE=shadow --skip-deploys && railway redeploy --yes     # shadow on
+railway variable set GENAIE_CONFIG_SOURCE=firestore --skip-deploys && railway redeploy --yes  # cut over
+railway variable set GENAIE_CONFIG_SOURCE=shadow --skip-deploys && railway redeploy --yes     # roll back
+railway variable set GENAIE_CONFIG_SOURCE=file --skip-deploys && railway redeploy --yes       # shadow off
 ```
+
+Why this form, and why there is no `--unset`, is in
+[Changing a Railway variable](deploy/railway/README.md#changing-a-railway-variable).
+**Run `deploy/seed-firestore.py --export` before rolling back**: once the console
+edits Firestore, the file falls behind, and a rollback to it would undo every one of
+those edits.
 
 **Do not cut over without checking parity first.** The gate is
 `deploy/seed-firestore.py --key seed-key.json --verify` (exit 0) plus several
@@ -653,11 +659,11 @@ config. **One variable decides where a run's pictures come from**, and
 | `r2` | **the cached copy of what the index names** | falls back to the baked image while one exists |
 
 ```bash
-railway variables \
-  --set GENAIE_AD_ASSETS_BASE_URL=https://pub-63be390258b5461e931301ca810b7a86.r2.dev \
-  --set GENAIE_AD_ASSETS_SOURCE=shadow && railway redeploy    # shadow on
-railway variables --set GENAIE_AD_ASSETS_SOURCE=r2 && railway redeploy    # cut over
-railway variables --set GENAIE_AD_ASSETS_SOURCE=shadow && railway redeploy  # roll back
+railway variable set \
+  GENAIE_AD_ASSETS_BASE_URL=https://pub-63be390258b5461e931301ca810b7a86.r2.dev \
+  GENAIE_AD_ASSETS_SOURCE=shadow --skip-deploys && railway redeploy --yes   # shadow on
+railway variable set GENAIE_AD_ASSETS_SOURCE=r2 --skip-deploys && railway redeploy --yes      # cut over
+railway variable set GENAIE_AD_ASSETS_SOURCE=shadow --skip-deploys && railway redeploy --yes  # roll back
 ```
 
 One hard-won detail about that endpoint: **`r2.dev` answers `403` to a request
@@ -1161,11 +1167,15 @@ without a deploy:
 ```
 POST /internal/console/config/<collection>/<id>
      {"fields": {"status": "on-hold"}, "actor": "joe", "dryRun": false}
+     {"delete": true, "reason": "bot was removed", "actor": "joe"}   # groups only
 ```
 
 `<collection>` is `groups`, `lines`, `campaigns` or `settings`; `<id>` is
-percent-encoded, because a group JID carries an `@`. It writes **Firestore**, so
-it only does anything after the cutover (see *Moving membership to Firestore*).
+percent-encoded, because a group JID carries an `@`. It writes **Firestore**,
+which production has read since the cutover (*Moving membership to Firestore*);
+`overview.writes.affectsProduction` says whether that is the case. A change takes
+effect from each campaign's **next run** -- a run already sending keeps the
+config it resolved when it started.
 
 Every change goes through `workspace/bin/console-write`, which is to writes what
 `console-read` is to reads: a separate process importing the bot's own modules
@@ -1185,12 +1195,44 @@ per-field check cannot: pointing a group at a line that does not exist, or
 clearing the `contact_account` every campaign's caption needs. A refusal says
 what would have broken and changes nothing.
 
+Step 3 has one blind spot, closed before it runs: values the reader is
+**deliberately forgiving** about, and so never complains of. `caps_enabled` is read
+with `bool()`, so the string `"false"` switches caps *on*; a malformed band quietly
+falls back to the default band; a campaign switch that is not a boolean reads as
+*off*. Forgiving is right when reading -- a capacity setting must never be why a
+day's ads do not go out -- and wrong when writing, where it lets a save succeed and
+then be ignored. The writer refuses those values, judging only the fields a change
+names, so something already typed into the Firebase Console cannot block an
+unrelated edit.
+
+**Pausing one campaign for one group** is `paused_promos: [slug]` on the group. The
+assignment in `promos` stays, so resuming is a flip; a paused campaign neither posts
+to the group nor takes one of its daily cap turns (both go through
+`promo_membership.groups_for_promo` / `promos_for_group`). Each paused slug must be
+in `promos`. That makes **removing** an assignment a three-field write: the campaign
+has to leave `promos`, `paused_promos` and `weekly` together, because any one left
+behind names a campaign the group is no longer in, and the writer refuses it.
+
+**Deleting** is for groups only. A line still named by groups would quarantine them
+all, a campaign is code, copy, a cron and an installer run, and `settings` is what
+every group is judged against. The whole deleted record goes into its audit document
+in the same commit, so a group can be gone from the config but never from the trail.
+Recreating one is a manual re-create from that record. While the bot is still in the
+WhatsApp group, discovery lists it again under `discoveredGroups`. The ordinary way
+out of the rotation is still `status` or a pause, which keep the assignments.
+
 What this deliberately will not do: edit `rank` (that is send order, so
 reordering is its own operation -- a new group is appended last), write more than
-one document per request, delete anything (a group leaves the rotation by its
-`status`, which keeps its `promos` list), or create a line or a campaign (a new
-line needs a WhatsApp login, a new campaign needs code, copy, a cron and an
-installer run).
+one document per request, or create a line or a campaign (a new line needs a
+WhatsApp login, a new campaign needs code, copy, a cron and an installer run).
+
+**What a console may offer** comes from the writer itself. `overview.writes` is
+`{enabled, affectsProduction, fields, delete}`: whether the console API holds the
+write key (checked by presence, never read), whether a saved change reaches the
+campaigns, and `operator_writer.EDITABLE` / `DELETABLE` verbatim. A console gates
+every control on that, so it cannot present an edit the bot will refuse.
+`overview.capSettings` is `{enabled, defaultActivity, bands}`, the cap settings in
+the shape a form edits them.
 
 Each change is committed **together with its audit document** in one Firestore
 commit -- `audit/<timestamp>-<random>`, carrying who, what, before and after.
@@ -1227,7 +1269,13 @@ groups configured for it, but installs no cron and therefore never posts. Every
 payload says so rather than leaving the console to guess: `campaigns` and
 `preview/<slug>` carry `enabled`, `groups` carries a `disabledPromos` list so a
 screen can tell "campaign is off" from "held back by today's cap", and neither
-`allowedToday` nor `overview`'s `plannedSendsToday` counts a send for one. An
+`allowedToday` nor `overview`'s `plannedSendsToday` counts a send for one.
+Since the cutover there are two switches, and `campaigns` reports both beside the
+effective `enabled`: `storeEnabled`, the operator's own switch in Firestore and
+the one a console toggle edits, and `cronEnabled`, whether the manifest registers a
+cron at all. A toggle cannot fix the second, so a console must not pretend it can.
+`preview/<slug>` lists paused assignments too, marked `paused` with `sendsToday`
+false -- it is the list a pause is resumed from. An
 absent `enabled` key means enabled, matching `install-promo.sh`,
 `railway-release.py` and `report-release-ready.py`; a non-boolean one is a
 manifest error and the bridge refuses rather than treat it as truthy.
