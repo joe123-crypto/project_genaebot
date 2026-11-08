@@ -8,15 +8,15 @@ seven ``workspace/cron/*-promo/targets.json`` files are GENERATED from it by
 regenerate -- never hand-edit a targets file except to unblock production, and
 fold the change back afterwards.
 
-This replaces ``workspace/cron/group-names.json``: the gateway only learns a
-group's name from WhatsApp itself and shows most of these groups blank, and
-names must NOT be written into the gateway's session database (doing so took the
-bot down on 2026-10-14).
-
-Membership cannot be listed via the gateway, so new groups are still discovered
-by hand from the WhatsApp sender-key store
-(``credentials/whatsapp/default/sender-key-<jid>...``); what changes is that the
-find is recorded in ONE place.
+This replaces ``workspace/cron/group-names.json``. Automatic discovery saves
+group IDs and names in runtime/whatsapp-groups for the console's Unassigned
+section, independently of campaign targeting. For a manual probe, use the
+running gateway's ``conversations.list`` RPC with
+``agentId="main"`` and ``channel="whatsapp"``; see README's "Discovering
+WhatsApp group IDs and names live" for the tested command and limitations.
+Sender-key files alone can miss new joins and do not contain group names.
+Never hand-edit names into the gateway's session database (doing so took the
+bot down on 2026-10-14). Record the advertising roster in ONE place here.
 
 Schema (``version: 1``)::
 

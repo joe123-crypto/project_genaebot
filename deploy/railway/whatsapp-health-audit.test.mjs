@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { createWhatsAppHealthAudit } from './whatsapp-health-audit.mjs';
-import { patchWhatsAppHealthAudit } from './whatsapp-lid-loader.mjs';
+import { patchWhatsAppHealthAudit, patchWhatsAppGroupDiscovery } from './whatsapp-lid-loader.mjs';
 
 const upstream = fs.readFileSync(new URL('./fixtures/whatsapp-lifecycle-2026.9.9.js', import.meta.url), 'utf8');
 
@@ -61,7 +61,7 @@ test('opt-out creates no files and storage failure does not affect callers', (t)
 
 // Execute the unmodified upstream monitor body plus our instrumentation with
 // controlled transport dependencies. No real socket, login, or credentials.
-async function monitor({ setup = false, planned = false, watchdog = false } = {}) {
+async function monitor({ setup = false, planned = false, watchdog = false, discovery = false } = {}) {
   const records = [], actions = [];
   const signal = { aborted: false };
   const logger = { info() {}, warn() {}, raw() {} };
@@ -80,6 +80,7 @@ async function monitor({ setup = false, planned = false, watchdog = false } = {}
     resolveCloseDecision() { return { normalized: { statusCode: 440, statusLabel: '440' },
       healthState: 'conflict', reconnectAttempts: 0, action: 'stop' }; }
     getReconnectAttempts() { return 0; }
+    getCurrentSock() { return 'fixture-existing-socket'; }
     setUnhandledRejectionCleanup() {}
     async closeCurrentConnection() { actions.push(['close']); }
     async shutdown() { actions.push(['shutdown']); }
@@ -95,6 +96,10 @@ async function monitor({ setup = false, planned = false, watchdog = false } = {}
     WhatsAppConnectionController: Controller,
     createWebChannelStatusController: () => new Proxy({}, { get: () => () => {} }),
     genaieCreateWhatsAppHealthAudit: ({ accountId, runId }) => (data) => records.push({ accountId, runId, ...data }),
+    genaieCreateWhatsAppGroupDiscovery: ({ accountId }) => ({
+      start: socket => actions.push(['discovery-start', accountId, socket]),
+      stop: () => actions.push(['discovery-stop']),
+    }),
     registerChannelRuntimeContext: () => ({ dispose() {} }),
     CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY: 'fixture',
     registerUnhandledRejectionHandler: () => () => {}, readWebSelfId: () => ({}),
@@ -105,7 +110,8 @@ async function monitor({ setup = false, planned = false, watchdog = false } = {}
     whatsappHeartbeatLog: logger, formatCliCommand: (x) => x, formatError: (e) => String(e),
     setInterval: () => 1, clearInterval() {},
   };
-  const source = patchWhatsAppHealthAudit(upstream).split('\n').filter(l => !l.startsWith('import ')).join('\n');
+  const patched = patchWhatsAppHealthAudit(upstream);
+  const source = (discovery ? patchWhatsAppGroupDiscovery(patched) : patched).split('\n').filter(l => !l.startsWith('import ')).join('\n');
   const proxy = new Proxy(scope, { has: () => true, get: (o, k) => k in o ? o[k] : globalThis[k] });
   const run = new Function('scope', `with (scope) { ${source}; return monitorWebChannel; }`)(proxy);
   await run(false, undefined, true, () => {}, undefined, signal);
@@ -138,4 +144,16 @@ test('audit patch is idempotent and rejects an incompatible upstream monitor', (
   const patched = patchWhatsAppHealthAudit(upstream);
   assert.equal(patchWhatsAppHealthAudit(patched), patched);
   assert.throws(() => patchWhatsAppHealthAudit(upstream.replace('statusController.noteConnected();', 'changed();')), /contract changed/);
+});
+
+test('actual monitor starts discovery on its existing socket and stops it on disconnect and shutdown', async () => {
+  const { actions } = await monitor({ discovery: true });
+  assert.deepEqual(actions.filter(a => a[0] === 'discovery-start'), [['discovery-start', 'ads', 'fixture-existing-socket']]);
+  assert.equal(actions.filter(a => a[0] === 'discovery-stop').length, 2);
+  assert.ok(actions.findIndex(a => a[0] === 'discovery-stop') < actions.findIndex(a => a[0] === 'shutdown'));
+  const failed = await monitor({ discovery: true, setup: true });
+  assert.equal(failed.actions.some(a => a[0] === 'discovery-start'), false);
+  assert.equal(failed.actions.at(-2)[0], 'discovery-stop');
+  const aborted = await monitor({ discovery: true, planned: true });
+  assert.equal(aborted.actions.filter(a => a[0] === 'discovery-stop').length, 2);
 });

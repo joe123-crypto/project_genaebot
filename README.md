@@ -389,17 +389,125 @@ This replaces the old `group-names.json` and the prose exclusion lists that each
 `active` groups reach a targets file, so an `admin-only` (sends return
 `forbidden`), `not-a-member` (`item-not-found`) or `on-hold` group is excluded by
 its record while **keeping** its `promos` list, which is what makes resuming one
-a status flip rather than a rediscovery. Group names still live in the repo
-because the gateway only learns a name from WhatsApp itself and shows most of
-these groups blank -- and names must NOT be written into the gateway's session
-database (doing so took the bot down on 2026-10-14).
+a status flip rather than a rediscovery. Keep the chosen group names in the
+repo. **Never hand-edit the gateway's session database to add names** (doing so
+took the bot down on 2026-10-14). The supported gateway discovery API below
+handles its own conversation records.
 
-Membership still cannot be listed via the gateway, so newly-joined groups are
-discovered by hand from the WhatsApp sender-key store
-(`credentials/whatsapp/default/sender-key-<jid>...`) and recorded in
-membership.json. `workspace/bin/list-groups` prints the whole picture
-(`--caps` adds today's allowance, `--json` one object per group); it is
-read-only and never contacts the gateway.
+`workspace/bin/list-groups` prints the configured advertising roster
+(`--caps` adds today's allowance, `--json` one object per group); it never
+contacts WhatsApp and cannot discover newly joined groups.
+
+### Automatic group discovery
+
+The WhatsApp gateway saves group metadata automatically after each account
+connects and hourly while connected. It uses the existing account socket's
+`groupFetchAllParticipating()` call, so it opens no competing login and has no
+100-result limit. Discovery is deterministic: it runs no agent and sends no
+messages or notifications. Reconnection triggers a new scan; shutdown and
+overnight standby stop the timers.
+
+Each account keeps a private, atomically replaced inventory at
+`$OPENCLAW_STATE_DIR/runtime/whatsapp-groups/<accountId>.json` (the state root
+defaults to `/home/joseph/.openclaw`). This is outside the boot-synced workspace,
+so observations survive redeploys. Only IDs, names, first/last-seen times and
+scan health are saved, never participants, messages or credentials. Names
+refresh when WhatsApp returns a nonblank subject; missing names retain the last
+known name. Lookup failures retain previous observations. A 45-second timeout
+reports failure without piling requests onto a still-pending lookup; replacing
+the connection permits a fresh scan. Old connections cannot overwrite newer
+observations. A damaged or unwritable inventory reports a warning without
+interrupting the account.
+
+The Groups API adds `discoveredGroups` and `groupDiscovery`. The console shows
+an **Unassigned** section with each new group's full JID, name, observed accounts
+and last-seen time. A JID observed by both lines appears once with both accounts.
+Groups already present in the effective advertising configuration are excluded,
+including on-hold, admin-only, not-a-member and deliberately cleared records.
+Configured groups, campaign reach and overview totals keep their existing
+meaning. Observations older than two hours are shown as stale; saved history is
+not proof of current membership. Failed scans and disabled discovery remain
+visible beside the retained observations.
+
+**Discovery never assigns campaigns or writes membership.json, generated targets
+or Firestore.** It works in file, shadow and Firestore modes without a write key
+or a configuration cutover. Choose campaigns separately through the operator
+workflow. `GENAIE_GROUP_DISCOVERY=0` disables scanning while retaining saved data.
+The console can also run against an older bot that omits the new fields.
+
+The scanner is integrated through the existing version-checked WhatsApp loader.
+The compatibility suite checks its hooks against the actual pinned adapter,
+executes the upstream lifecycle fixture, and tests discovery and persistence
+offline. A changed discovery hook disables only discovery with a warning; it
+does not prevent a healthy account from connecting.
+
+### Discovering WhatsApp group IDs and names live
+
+For a manual probe, verified on 2026-11-08 with OpenClaw 2026.9.9, use **`conversations.list` through
+the running gateway**. With `channel: "whatsapp"`, this handler calls the
+WhatsApp plugin's live directory lookup through the gateway's existing account
+connections. WhatsApp's group metadata supplies both the JID and the subject
+(group name), even when no sender-key file exists for the new group yet.
+
+From this Railway-linked checkout:
+
+```sh
+source ./deploy/gateway-exec.sh
+
+# Account health only; this does not list groups.
+"${GATEWAY_OPENCLAW[@]}" channels status --probe --json
+
+# Live discovery plus previously registered conversations.
+"${GATEWAY_OPENCLAW[@]}" gateway call conversations.list \
+  --params '{"agentId":"main","channel":"whatsapp","limit":100}' \
+  --json --timeout 45000
+```
+
+The helper supplies gateway authentication and removes the conflicting
+`OPENCLAW_HOME` override. Use `agentId: "main"` because the configured group
+routes belong to that agent. The result's `conversations` array includes:
+
+- `accountId`: the joined line, such as `ads` or `default`.
+- `kind`: select `group`, excluding direct conversations.
+- `target`: the WhatsApp group JID to record in membership.json.
+- `label`: the group name returned from WhatsApp metadata when available.
+
+Filter the result to the intended account and compare its group JIDs with the
+**local** `membership.json`. There is no account selector in this RPC request;
+discovery runs across the configured accounts. `limit` must be at most **100**.
+If needed, add a `query` string to narrow discovery and results, for example:
+
+```sh
+"${GATEWAY_OPENCLAW[@]}" gateway call conversations.list \
+  --params '{"agentId":"main","channel":"whatsapp","query":"Advertisement Hub","limit":100}' \
+  --json --timeout 45000
+```
+
+The response combines live discovery with persisted conversation records. Old
+rows alone do not prove current membership, and a live-directory failure can
+fall back to configured entries (check gateway warnings). A missing result,
+especially at the 100-row limit, does not prove the account has not joined.
+This lookup may register discovered addresses in the gateway's conversation
+registry; it does not send messages or change campaign targeting.
+
+The successful discovery on 2026-11-08 returned `accountId: "ads"`,
+`target: "120363407345824911@g.us"` and
+`label: "The Advertisement Hub (Buy & Sell)"`. That JID was missing from the
+local advertising roster and the ads line's sender-key files.
+
+Earlier approaches missed this:
+
+- Sender-key filenames expose IDs but no group names, and a newly joined group
+  may not have a sender-key file yet. They are only a fallback clue.
+- `openclaw directory groups list --channel whatsapp --account ads --json`
+  runs in a separate process and can fail with **"WhatsApp live groups are
+  unavailable because the account is owned by another process."** This is an
+  ownership limitation, not evidence that the group is absent. Use the gateway
+  RPC above; do not bypass the ownership guard or restart the account to list it.
+
+After identifying a group, get the intended campaigns from the operator, edit
+the local roster and regenerate targets. Discovery itself does not authorize
+adding campaigns, committing, pushing, merging or deploying.
 
 ### Moving membership to Firestore
 
@@ -923,6 +1031,13 @@ Read routes, GET or HEAD, under `/internal/console/`:
 Each data route takes an optional `?date=YYYY-MM-DD`. Anything else is refused:
 an unknown path or an unusable slug is 404, an unparseable date or an unexpected
 query parameter is 400. These read routes reject write methods and request bodies.
+
+The `groups` payload also includes `discoveredGroups` (unconfigured metadata
+observations, deduplicated by JID, with per-account observation times) and
+`groupDiscovery` (`enabled` plus per-account scan status, last attempt, last
+success and a sanitized error code). These are separate from `groups`: they
+are not targets, do not affect caps or counts, and cannot resume a paused group.
+Reading the API only reads saved observations; it never triggers a WhatsApp scan.
 
 ### Changing operator config from the console
 

@@ -26,6 +26,35 @@ applications) is no longer a service: do not offer it or answer as if it runs.
 Query the gateway for actual state rather than trusting this file: `openclaw cron
 list --all --json`.
 
+## Discovering WhatsApp Groups — Verified 2026-11-08
+
+- Automatic discovery saves IDs, names, joined accounts and first/last-seen
+  times after each account connects and hourly while connected, using its
+  existing socket. Its durable inventory is `runtime/whatsapp-groups/<accountId>.json`,
+  outside the synced workspace. `GENAIE_GROUP_DISCOVERY=0` disables scans.
+  The console's Unassigned section shows discoveries absent from the effective
+  roster. Observation alone never adds campaigns or changes configured status;
+  stale/failed scans retain history. No Firestore write key is needed.
+
+- For both group IDs and names, query the running gateway:
+  `openclaw gateway call conversations.list --params '{"agentId":"main","channel":"whatsapp","limit":100}' --json --timeout 45000`.
+  From the repository, source `deploy/gateway-exec.sh` and use
+  `"${GATEWAY_OPENCLAW[@]}"` in place of `openclaw` for Railway access and auth.
+- Select `kind: "group"` and the intended `accountId` in `conversations`.
+  `target` is the JID; `label` is the name. The gateway queries WhatsApp through
+  its existing connection. Results also include persisted conversations and
+  may fall back to configured entries on lookup failure; absence is not proof
+  of non-membership. The maximum limit is 100; use `query` to narrow results.
+- This found **The Advertisement Hub (Buy & Sell)** on `ads`, JID
+  `120363407345824911@g.us`, before it appeared in sender-key files. Those files
+  alone miss some new joins and do not expose names.
+- The separate `directory groups list` CLI can fail because the gateway owns
+  the account connection. Use the gateway RPC; do not bypass that guard,
+  restart an account, or manually edit the session database to discover names.
+- Full procedure and limitations: repository README, "Discovering WhatsApp
+  group IDs and names live". Ask which campaigns the group should receive.
+  Discovery does not authorize changes to campaign targeting or deployment.
+
 ## Public Service Desk (Genaie Service Desk) — Created 2026-05-31
 
 ### Overview

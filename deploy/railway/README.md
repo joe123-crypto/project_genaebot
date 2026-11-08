@@ -796,6 +796,28 @@ does not stage `deploy/`, so the Dockerfile bakes `deploy/promo-crons.json` to
 `/usr/local/lib/genaie/promo-crons.json`. A 502 reading `no cron manifest at`
 means that copy is missing from the image.
 
+## Automatic WhatsApp group inventory
+
+The runtime image includes the group-discovery helper loaded by the existing
+WhatsApp loader. It is enabled by default, uses each connected account's own
+socket after connect and hourly, and needs no cron installation or Firestore
+write credentials. Its timers stop with the gateway during overnight standby.
+
+Inventory files live at `/home/joseph/.openclaw/runtime/whatsapp-groups/<accountId>.json`
+on the volume, outside the image's workspace overlay. Keep these during runtime
+cleanup. They are private metadata (IDs, group names and observation times),
+not source files. Do not commit them or use them as advertising configuration.
+
+The console Groups endpoint reports unassigned discoveries and scan health.
+Entries older than two hours are stale; an offline account or overnight standby
+can cause that normally. Failed lookups retain the last good observations and
+emit sanitized `[whatsapp-groups]` warnings; they never restart a channel or
+change campaign targeting. Set `GENAIE_GROUP_DISCOVERY=0` to disable scans while
+retaining the inventory. Build/runtime compatibility checks fetch the exact
+WhatsApp 2026.9.9 package before exercising its contracts in the networkless
+test container. See the repository README's *Automatic group discovery* section
+for behavior and the separate manual probe.
+
 ## Firestore: shadow mode and the cutover
 
 Off unless explicitly enabled. What each mode means, what shadow mode compares,

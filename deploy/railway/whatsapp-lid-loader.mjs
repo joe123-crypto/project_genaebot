@@ -8,12 +8,33 @@ const checkedPackages = new Set();
 const HELPER = new URL('./whatsapp-lid-recovery.mjs', import.meta.url).href;
 const CACHE_HELPER = new URL('./whatsapp-cache-cleanup.mjs', import.meta.url).href;
 const HEALTH_HELPER = new URL('./whatsapp-health-audit.mjs', import.meta.url).href;
+const DISCOVERY_HELPER = new URL('./whatsapp-group-discovery.mjs', import.meta.url).href;
 const CACHE_MARKER = '// GENAIE_WHATSAPP_EXPIRED_CACHE_CLEANUP_V1';
 const CACHE_START = '\t\tif (started || closed) return;\n\t\tstarted = true;\n\t\tconst listen = (event, listener) => {';
 const FROM = 'const from = group ? remoteJid : await socketSession.resolveInboundJid(remoteJid);';
 const SENDER = 'const senderE164 = group ? participantJid ? await socketSession.resolveInboundJid(participantJid) : null : from;';
 const PHONE_NORMALIZER = 'function normalizeWhatsAppIngressPhone(value) {\n\tconst trimmed = value.trim();\n\tif (!trimmed) return null;\n\treturn normalizeE164(trimmed);\n}';
 const MARKER = '// GENAIE_WHATSAPP_LID_RECOVERY_V1';
+
+export function patchWhatsAppGroupDiscovery(source) {
+  const marker = '// GENAIE_WHATSAPP_GROUP_DISCOVERY_V1';
+  if (source.includes(marker)) return source;
+  const changes = [
+    ['\tconst controller = new WhatsAppConnectionController({',
+      '\tconst genaieGroupDiscovery = genaieCreateWhatsAppGroupDiscovery({ accountId: account.accountId });\n', false],
+    ['\t\t\tstatusController.noteConnected();',
+      '\n\t\t\tgenaieGroupDiscovery.start(controller.getCurrentSock());', true],
+    ['\t\t\tconst reason = await controller.waitForClose().finally(() => {',
+      '\n\t\t\t\tgenaieGroupDiscovery.stop();', true],
+    ['\t\tstatusController.markStopped();',
+      '\t\tgenaieGroupDiscovery.stop();\n', false],
+  ];
+  for (const [anchor] of changes) {
+    if (source.split(anchor).length !== 2) throw new Error('WhatsApp group discovery contract changed; review adapter before upgrading');
+  }
+  for (const [anchor, addition, after] of changes) source = source.replace(anchor, after ? anchor + addition : addition + anchor);
+  return `${marker}\nimport { createWhatsAppGroupDiscovery as genaieCreateWhatsAppGroupDiscovery } from ${JSON.stringify(DISCOVERY_HELPER)};\n` + source;
+}
 
 export function patchWhatsAppHealthAudit(source) {
   const marker = '// GENAIE_WHATSAPP_HEALTH_AUDIT_V1';
@@ -110,6 +131,10 @@ registerHooks({
     const source = typeof result.source === 'string' ? result.source : new TextDecoder().decode(result.source);
     let patched = patch(source);
     if (patch === patchWhatsAppMonitor) patched = patchWhatsAppHealthAudit(patched);
+    if (patch === patchWhatsAppMonitor && process.env.GENAIE_GROUP_DISCOVERY !== '0') {
+      try { patched = patchWhatsAppGroupDiscovery(patched); }
+      catch { console.warn('[whatsapp-groups] discovery integration unavailable; review adapter compatibility'); }
+    }
     if (patch === patchWhatsAppMonitor && process.env.GENAIE_WHATSAPP_CACHE_CLEANUP === '1') patched = patchWhatsAppCacheCleanup(patched);
     return { ...result, source: patched };
   },

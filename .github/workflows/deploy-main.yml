@@ -98,14 +98,27 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Build the pinned production runtime
         run: docker build --build-arg SOURCE_COMMIT="$GITHUB_SHA" -f deploy/railway/Dockerfile -t genaebot:ci .
+      - name: Fetch the pinned WhatsApp adapter for offline compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/whatsapp-adapter"
+          docker run --rm --entrypoint /bin/bash \
+            -v "$RUNNER_TEMP/whatsapp-adapter:/adapter" genaebot:ci -lc '
+              set -euo pipefail
+              npm pack @openclaw/whatsapp@2026.9.9 --ignore-scripts --fetch-retries=1 --fetch-timeout=30000 --pack-destination /adapter
+              tar -xzf /adapter/openclaw-whatsapp-2026.9.9.tgz -C /adapter
+            '
       - name: Exercise the installed SDK, real catalog workers and SQLite
         shell: bash
         run: |
           set -euo pipefail
           docker run --rm --network none --entrypoint /bin/bash \
             -v "$PWD:/repo:ro" -w /repo \
+            -v "$RUNNER_TEMP/whatsapp-adapter/package:/whatsapp-adapter:ro" \
             -e GENAIE_REQUIRE_INTEGRATION=1 \
             -e GENAIE_OPENCLAW_ROOT=/usr/local/lib/node_modules/openclaw \
+            -e GENAIE_WHATSAPP_ROOT=/whatsapp-adapter \
             genaebot:ci -lc '
               set -euo pipefail
               node -e '\''if(process.versions.node !== "26.12.1") process.exit(1); const {DatabaseSync}=require("node:sqlite");const d=new DatabaseSync(":memory:");d.prepare("select 1").get();d.close();'\''
@@ -114,6 +127,8 @@ jobs:
               python3 deploy/test_gateway_standby_runtime.py
               node --test --test-reporter=tap deploy/railway/whatsapp-lid-recovery.test.mjs \
                 deploy/railway/whatsapp-health-audit.test.mjs \
+                deploy/railway/whatsapp-group-discovery.test.mjs \
+                deploy/railway/whatsapp-group-discovery.integration.test.mjs \
                 deploy/railway/whatsapp-dm-policy.integration.test.mjs \
                 deploy/railway/whatsapp-cache-cleanup.test.mjs \
                 deploy/railway/campaign-sdk.integration.test.mjs \
