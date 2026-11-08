@@ -80,13 +80,20 @@ class ShapeTest(unittest.TestCase):
                 values = [e[field] for e in entries]
                 self.assertEqual(len(set(values)), len(values), (slug, field))
 
-    def test_ids_are_the_house_slug_and_the_rotation_slot(self):
+    def test_ids_are_the_house_slug_and_a_number(self):
+        # Deliberately NOT asserted against rank: an id is an identity and a
+        # rank is a position in the rotation, and deriving one from the other is
+        # what let rank 10 and rank 15 collide on a single document. Either may
+        # change without the other.
         for item in ENTRIES:
-            self.assertEqual(item["id"], "%s-%d"
-                             % (item["campaign"], item["rank"] // 10))
+            self.assertRegex(item["id"], r"^%s-[1-9][0-9]*$" % item["campaign"])
             # The house slug, which membership.json and promo_config.promo_key
             # both use: "cv", never "cv-promo".
             self.assertFalse(item["campaign"].endswith("-promo"))
+
+    def test_ranks_are_positive_multiples_of_the_step(self):
+        for item in ENTRIES:
+            self.assertGreater(item["rank"], 0, item["id"])
 
     def test_every_entry_is_enabled(self):
         # Nothing has been retired yet; a disabled entry arriving without a

@@ -195,6 +195,26 @@ class IndexTest(Harness):
         self.assertEqual([e["filename"] for e in found["campaigns"]["cv"]],
                          ["cv-ad.png", "cv-ad-2.png"])
 
+    def test_rank_decides_the_order_even_when_it_contradicts_the_document_ids(self):
+        # The regression that passed every earlier test: rows arrive with
+        # Firestore's typed values, so ranking before decoding sorts by id and
+        # ignores the operator's rotation order entirely. Ids ascending, ranks
+        # descending -- only a real decode tells them apart.
+        self.store(entry("cv", "cv-ad.png", PNG, rank=30, id="cv-1"),
+                   entry("cv", "cv-ad-2.png", PNG2, rank=20, id="cv-2"),
+                   entry("cv", "cv-ad-3.jpg", JPG, rank=10, id="cv-3"))
+        self.assertEqual(
+            [e["filename"] for e in self.index()["campaigns"]["cv"]],
+            ["cv-ad-3.jpg", "cv-ad-2.png", "cv-ad.png"])
+
+    def test_ten_images_do_not_sort_cv_10_before_cv_2(self):
+        bodies = [b"\x89PNG\r\n\x1a\n" + bytes([i]) * 8 for i in range(10)]
+        self.store(*[entry("cv", "cv-%d.png" % (i + 1), body, rank=(i + 1) * 10,
+                           id="cv-%d" % (i + 1))
+                     for i, body in enumerate(bodies)])
+        self.assertEqual([e["filename"] for e in self.index()["campaigns"]["cv"]],
+                         ["cv-%d.png" % (i + 1) for i in range(10)])
+
     def test_an_undecodable_document_quarantines_only_itself(self):
         good = entry("cv", "cv-ad.png", PNG, rank=10)
         self.store(good, entry("cv", "cv-ad-2.png", PNG2, rank=20, sha256="nope"))

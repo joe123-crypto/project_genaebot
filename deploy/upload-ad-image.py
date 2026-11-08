@@ -116,7 +116,43 @@ def read_mirror():
     return data
 
 
-def describe(slug, path, rank):
+def allocate_id(slug, taken):
+    """The lowest free ``<slug>-<n>``.
+
+    Ids are allocated independently of ``rank`` on purpose. Deriving one from
+    the other (``rank // RANK_STEP``) made two different rotation slots share a
+    document -- rank 10 and rank 15 both gave ``cv-1`` -- so one silently
+    overwrote the other; and it meant re-ranking a picture renamed its document,
+    orphaning the old one. A rank is a position in the rotation and an id is an
+    identity; keeping them apart lets either change without disturbing the
+    other."""
+    for number in range(1, len(taken) + 2):
+        candidate = "%s-%d" % (slug, number)
+        if candidate not in taken:
+            return candidate
+    raise UploadError("could not allocate a document id for %s" % slug)
+
+
+def validate_campaign(slug, entries):
+    """Refuse an index this tool should never produce, before anything is written.
+
+    Firestore writes are keyed by document id, so two entries sharing one would
+    collapse into a single write and lose a picture while the mirror kept both.
+    Duplicate ranks and filenames are refused for the same reason the mirror test
+    in CI refuses them: the rotation order and the shadow comparison both key on
+    them."""
+    for field in ("id", "rank", "filename"):
+        seen = {}
+        for entry in entries:
+            value = entry.get(field)
+            if value in seen:
+                raise UploadError("%s would have two images with %s %r: %s and %s"
+                                  % (slug, field, value, seen[value],
+                                     entry["filename"]))
+            seen[value] = entry["filename"]
+
+
+def describe(slug, path, rank, doc_id):
     """One index entry for the file at ``path``, digest and all."""
     try:
         body = Path(path).read_bytes()
@@ -137,7 +173,7 @@ def describe(slug, path, rank):
     if not ad_assets.FILENAME_RE.match(filename):
         raise UploadError("%s is not a plain image name (letters, digits, dot, "
                           "dash, underscore)" % filename)
-    entry = {"id": "%s-%d" % (slug, max(1, rank // RANK_STEP)),
+    entry = {"id": doc_id,
              "campaign": slug, "filename": filename,
              "key": "ads/%s/%s%s" % (slug, digest, extension),
              "sha256": digest, "bytes": len(body), "content_type": content_type,
@@ -183,19 +219,26 @@ def from_repo(dirs):
         # so it must not be ranked ahead of one that is -- but it is still an
         # asset the campaign ships, so it is indexed after them.
         order += sorted(n for n in present if n not in order)
-        entries = []
+        entries, taken = [], set()
         for position, name in enumerate(order, start=1):
-            entry, _body = describe(slug, present[name], position * RANK_STEP)
+            doc_id = allocate_id(slug, taken)
+            taken.add(doc_id)
+            entry, _body = describe(slug, present[name], position * RANK_STEP,
+                                    doc_id)
             entries.append(entry)
         if entries:
+            validate_campaign(slug, entries)
             campaigns[slug] = entries
     return campaigns
 
 
-def with_files(mirror, slug, paths, rank=None, replace=None, disable=None,
+def with_files(campaigns, slug, paths, rank=None, replace=None, disable=None,
                comment=None):
-    """``mirror`` with ``paths`` added to ``slug``, as a new campaigns map."""
-    campaigns = dict((k, list(v)) for k, v in (mirror.get("campaigns") or {}).items())
+    """``campaigns`` with ``paths`` added to ``slug``, as a new campaigns map.
+
+    Takes and returns the same shape -- the ``{slug: [entry]}`` map, not the
+    whole mirror document -- so calls compose. The argument is never mutated."""
+    campaigns = dict((k, [dict(e) for e in v]) for k, v in campaigns.items())
     entries = campaigns.get(slug, [])
     for name in disable or []:
         found = [e for e in entries if e.get("filename") == name]
@@ -203,24 +246,37 @@ def with_files(mirror, slug, paths, rank=None, replace=None, disable=None,
             raise UploadError("%s has no indexed image called %s" % (slug, name))
         for entry in found:
             entry["enabled"] = False
+    taken = set(e["id"] for e in entries)
     for position, path in enumerate(paths):
+        filename = os.path.basename(path)
+        existing = next((e for e in entries if e.get("filename") == filename), None)
         if replace:
-            target = [e for e in entries if e.get("filename") == replace]
-            if not target:
+            target = next((e for e in entries if e.get("filename") == replace), None)
+            if target is None:
                 raise UploadError("%s has no indexed image called %s" % (slug, replace))
-            slot = target[0]["rank"] or RANK_STEP
-            entries = [e for e in entries if e is not target[0]]
-        elif rank is not None:
-            slot = rank + position * RANK_STEP
-            entries = [e for e in entries if (e.get("rank") or 0) != slot]
+            doc_id, slot = target["id"], target.get("rank") or RANK_STEP
+            entries = [e for e in entries if e is not target]
+        elif existing is not None:
+            # A new version of a picture already in the rotation. Keep its
+            # identity and its slot: giving it a fresh id would leave the old
+            # document in Firestore, still enabled, and production would rotate
+            # the obsolete artwork alongside the replacement until someone
+            # noticed --verify reporting drift.
+            doc_id, slot = existing["id"], existing.get("rank") or RANK_STEP
+            entries = [e for e in entries if e is not existing]
         else:
-            used = [e.get("rank") or 0 for e in entries]
-            slot = (max(used) if used else 0) + RANK_STEP
-        entry, _body = describe(slug, path, slot)
+            doc_id = allocate_id(slug, taken)
+            slot = max([e.get("rank") or 0 for e in entries] or [0]) + RANK_STEP
+        if rank is not None:
+            slot = rank + position * RANK_STEP
+        taken.add(doc_id)
+        entry, _body = describe(slug, path, slot, doc_id)
         if comment:
             entry["comment"] = comment
         entries = [e for e in entries if e["filename"] != entry["filename"]] + [entry]
-    campaigns[slug] = sorted(entries, key=lambda e: (e.get("rank") or 0, e["filename"]))
+    entries = sorted(entries, key=lambda e: (e.get("rank") or 0, e["filename"]))
+    validate_campaign(slug, entries)
+    campaigns[slug] = entries
     return campaigns
 
 
@@ -456,12 +512,15 @@ def main(argv):
                                      ", ".join(sorted(dirs))))
             if not args.files and not args.disable:
                 raise UploadError("name at least one image file, or use --disable")
-            campaigns = with_files(mirror, args.campaign, args.files, rank=args.rank,
+            campaigns = with_files(mirror.get("campaigns") or {}, args.campaign,
+                                   args.files, rank=args.rank,
                                    replace=args.replace, disable=args.disable,
                                    comment=args.comment)
         else:
             campaigns = mirror.get("campaigns") or {}
 
+        for slug, entries in sorted(campaigns.items()):
+            validate_campaign(slug, entries)
         creds = firestore_credentials(args.key)
         with tempfile.TemporaryDirectory() as cache:
             token = token_for(creds, cache)

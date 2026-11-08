@@ -288,9 +288,21 @@ def _assemble(rows):
     to; here a bad row is one picture, and the other nine campaigns have no
     business failing over it."""
     campaigns, quarantined = {}, {}
-    for doc_id, fields in operator_config._ranked(rows):
+    decoded = []
+    for doc_id, fields in rows:
         try:
-            entry = _entry(doc_id, operator_config.decode_fields(fields))
+            decoded.append((doc_id, operator_config.decode_fields(fields)))
+        except ValueError as ex:
+            quarantined[doc_id] = str(ex)
+    # Decode BEFORE ranking, the order operator_config.assemble uses. ``rows``
+    # carry Firestore's typed values, so a rank arrives as
+    # ``{"integerValue": "20"}``; ``_ranked`` only recognizes a decoded int and
+    # would quietly fall back to sorting every document by its id. That reads
+    # correctly for ids cv-1..cv-3 and lies as soon as an operator re-ranks, or
+    # a campaign reaches ten images and cv-10 sorts before cv-2.
+    for doc_id, fields in operator_config._ranked(decoded):
+        try:
+            entry = _entry(doc_id, fields)
         except ValueError as ex:
             quarantined[doc_id] = str(ex)
             continue
