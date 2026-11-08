@@ -671,12 +671,35 @@ release returns to pinned Node 26 with retirement disabled; use its deployment
 artifact to identify the start of the baseline. No extra promotional test
 messages were sent.
 
+## Changing a Railway variable
+
+Every toggle below follows one pattern, because of three facts about the Railway
+CLI this repo uses (5.71):
+
+- **`railway variable set` deploys by itself.** Following it with `railway
+  redeploy`, as these instructions used to, asks for a second deployment of the
+  same change. Pass `--skip-deploys`, then run exactly one `railway redeploy --yes`.
+  That also lets you choose when the gateway restarts -- inside a quiet window --
+  rather than at the moment the value is typed.
+- **`railway variables --unset` does not exist.** It fails with `unexpected
+  argument '--unset'`. Switch a flag off by setting its off value (each block
+  names it); remove a credential with `railway variable delete`.
+- **`railway variable delete` has no `--skip-deploys`.** Check `railway deployment
+  list` before redeploying after a delete, so you don't request a second
+  restart on top of the one it may already have started.
+
+`--yes` is required for `redeploy` outside a terminal, and it redeploys the image
+already running rather than rebuilding.
+
 ## Turning replies off
 
 ```sh
-railway variables --set REPLIES_DISABLED=1 && railway redeploy   # replies off
-railway variables --unset REPLIES_DISABLED && railway redeploy   # replies back on
+railway variable set REPLIES_DISABLED=1 --skip-deploys && railway redeploy --yes   # replies off
+railway variable set REPLIES_DISABLED=0 --skip-deploys && railway redeploy --yes   # replies back on
 ```
+
+Only `1`, `true`, `yes` and `on` count as set (`sync-reply-gates.py` `truthy`), so
+`0` is "replies on".
 
 Both states are enforced on every boot, so this is the supported way to stop the
 bot replying. Do not hand-edit `openclaw.json` on the volume: the next deploy
@@ -705,11 +728,13 @@ Off unless explicitly enabled. What it serves and what it refuses is in the
 repository README: [Operator Console API](../../README.md#operator-console-api).
 
 ```sh
-railway variables --set GENAIE_CONSOLE_API=1 \
-  --set CONSOLE_API_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')" \
-  && railway redeploy                                              # console api on
-railway variables --unset GENAIE_CONSOLE_API && railway redeploy    # console api off
+railway variable set GENAIE_CONSOLE_API=1 \
+  CONSOLE_API_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')" \
+  --skip-deploys && railway redeploy --yes                          # console api on
+railway variable set GENAIE_CONSOLE_API=0 --skip-deploys && railway redeploy --yes   # off
 ```
+
+The entrypoint starts the API only when the value is exactly `1`.
 
 `CONSOLE_API_TOKEN` is in the entrypoint's `SECRET_KEYS`, so it lands in the
 volume `.env` at 0600 owner joseph and is never baked into the image. The server
@@ -722,10 +747,11 @@ entrypoint reassigns `PORT` to the gateway's port before any child starts, so a
 process that read `$PORT` here would collide with the gateway; this is why the
 console API names its own variable instead.
 
-Confirm it is up from inside the container, which needs no public domain:
+Confirm it is up from inside the container, which needs no public domain. The image
+has no `curl`, so the probes use the container's Python:
 
 ```sh
-railway ssh -- curl -fsS http://127.0.0.1:18790/internal/console/health
+railway ssh -- python3 -c 'import urllib.request as u; print(u.urlopen("http://127.0.0.1:18790/internal/console/health").read().decode())'
 ```
 
 Reaching it from outside needs a Railway domain whose target port is
@@ -738,10 +764,17 @@ What the write route does and refuses is in the repository README:
 [Changing operator config from the console](../../README.md#changing-operator-config-from-the-console).
 
 ```sh
-railway variables --set GCP_SERVICE_ACCOUNT_WRITE_B64="$(base64 -w0 write-key.json)" \
-  && railway redeploy                                                  # writes on
-railway variables --unset GCP_SERVICE_ACCOUNT_WRITE_B64 && railway redeploy  # writes off
+base64 -w0 write-key.json | railway variable set GCP_SERVICE_ACCOUNT_WRITE_B64 --stdin \
+  --skip-deploys && railway redeploy --yes                             # writes on
+railway variable delete GCP_SERVICE_ACCOUNT_WRITE_B64                  # writes off
 ```
+
+`--stdin` keeps the key out of `railway`'s argv, where any local user could read it
+from `ps` -- the same reason `gcp_token.mjs` takes its key on stdin.
+
+Writes off removes the credential rather than blanking it. `delete` takes no
+`--skip-deploys`, so check `railway deployment list` and redeploy only if it did
+not already start one.
 
 The key needs **Cloud Datastore User**, and it must be its own key: do not reuse
 the seed key from your laptop, and do not widen the runtime key
@@ -760,15 +793,21 @@ console api enabled on port 18790 (read-only: no write key)
 ```
 
 It is not release-managed, so a deploy neither sets nor clears it. Confirm the
-surface from inside the container -- 503 means the API is up and writes are off,
-which is the state it ships in:
+state from inside the container with a read -- no write is needed to find out
+whether writes would be accepted, because the overview reports it:
 
 ```sh
-railway ssh -- curl -s -o /dev/null -w '%{http_code}\n' -X POST \
-  -H "Authorization: Bearer $CONSOLE_API_TOKEN" -H 'Content-Type: application/json' \
-  -d '{"fields":{"note":"probe"},"dryRun":true}' \
-  "http://127.0.0.1:18790/internal/console/config/settings/defaults"
+railway ssh -- python3 -c '
+import json, os, urllib.request as u
+r = u.Request("http://127.0.0.1:18790/internal/console/overview",
+    headers={"Authorization": "Bearer " + os.environ["CONSOLE_API_TOKEN"]})
+print(json.dumps(json.load(u.urlopen(r))["writes"], indent=1))'
 ```
+
+`"enabled": true` means the console API holds the key, and `"affectsProduction":
+true` means a saved change reaches the campaigns (`GENAIE_CONFIG_SOURCE=firestore`).
+`fields` and `delete` are exactly what the writer accepts; the console gates its
+controls on them.
 
 A `dryRun` change is validated and reported without being written, which is the
 safe way to check a key works. Remember that writes land in Firestore, so until
@@ -825,12 +864,25 @@ and why a shadow run cannot affect a send, is in the repository README:
 [Moving membership to Firestore](../../README.md#moving-membership-to-firestore).
 
 ```sh
-railway variables --set GCP_SERVICE_ACCOUNT_B64="$(base64 -w0 runtime-key.json)" \
-  --set GENAIE_CONFIG_SOURCE=shadow && railway redeploy        # shadow on
-railway variables --set GENAIE_CONFIG_SOURCE=firestore && railway redeploy  # cut over
-railway variables --set GENAIE_CONFIG_SOURCE=shadow && railway redeploy     # roll back
-railway variables --unset GENAIE_CONFIG_SOURCE && railway redeploy   # shadow off
+base64 -w0 runtime-key.json | railway variable set GCP_SERVICE_ACCOUNT_B64 --stdin --skip-deploys
+railway variable set GENAIE_CONFIG_SOURCE=shadow --skip-deploys && railway redeploy --yes     # shadow on
+railway variable set GENAIE_CONFIG_SOURCE=firestore --skip-deploys && railway redeploy --yes  # cut over
+railway variable set GENAIE_CONFIG_SOURCE=shadow --skip-deploys && railway redeploy --yes     # roll back
+railway variable set GENAIE_CONFIG_SOURCE=file --skip-deploys && railway redeploy --yes       # shadow off
 ```
+
+**Before rolling back, export.** Once the console is editing Firestore, the file
+falls behind with every edit, and rolling back to it silently undoes all of them --
+including bringing deleted groups back into the rotation. Mirror the store into
+the file first, from a snapshot of the deployed commit, then commit and deploy it:
+
+```sh
+deploy/seed-firestore.py --key seed-key.json --export
+./workspace/bin/make-promo-targets --write
+```
+
+The export names any campaign switched off in Firestore but on in
+`promo-crons.json`: a rollback cannot carry that, so fix the manifest to match.
 
 Before the cutover, in this order:
 
@@ -881,13 +933,15 @@ repository README:
 [Moving the ad images to Cloudflare R2](../../README.md#moving-the-ad-images-to-cloudflare-r2).
 
 ```sh
-railway variables \
-  --set GENAIE_AD_ASSETS_BASE_URL=https://pub-63be390258b5461e931301ca810b7a86.r2.dev \
-  --set GENAIE_AD_ASSETS_SOURCE=shadow && railway redeploy      # shadow on
-railway variables --set GENAIE_AD_ASSETS_SOURCE=r2 && railway redeploy   # cut over
-railway variables --set GENAIE_AD_ASSETS_SOURCE=shadow && railway redeploy  # roll back
-railway variables --unset GENAIE_AD_ASSETS_SOURCE && railway redeploy   # off
+railway variable set \
+  GENAIE_AD_ASSETS_BASE_URL=https://pub-63be390258b5461e931301ca810b7a86.r2.dev \
+  GENAIE_AD_ASSETS_SOURCE=shadow --skip-deploys && railway redeploy --yes   # shadow on
+railway variable set GENAIE_AD_ASSETS_SOURCE=r2 --skip-deploys && railway redeploy --yes      # cut over
+railway variable set GENAIE_AD_ASSETS_SOURCE=shadow --skip-deploys && railway redeploy --yes  # roll back
+railway variable set GENAIE_AD_ASSETS_SOURCE=repo --skip-deploys && railway redeploy --yes    # off
 ```
+
+`repo` is the baked images, the same as unset (`ad_assets.mode`).
 
 The bucket is `r2.dev`-public and read anonymously, so the base URL is not a
 secret; it is a variable rather than a constant so a custom domain can replace it

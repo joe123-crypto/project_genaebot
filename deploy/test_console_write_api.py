@@ -153,6 +153,30 @@ class WriteRouteTests(Harness):
                             {"fields": {"note": "x"}, "dryRun": True})
         self.assertIs(json.loads(body)["echo"]["dryRun"], True)
 
+    def test_a_delete_reaches_the_bridge_with_its_reason(self):
+        base = self.serve()
+        status, body = self.post(base, self.route(),
+                                 {"delete": True, "reason": "bot removed", "actor": "joe"})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["echo"],
+                         {"collection": "groups", "id": JID, "delete": True,
+                          "reason": "bot removed", "actor": "joe"})
+
+    def test_a_request_with_both_or_neither_verb_is_refused(self):
+        # Whether the request edits or deletes has to be unambiguous before it
+        # is forwarded; which collections allow delete is the bridge's call.
+        base = self.serve()
+        for payload in ({"fields": {"note": "x"}, "delete": True}, {"actor": "joe"}):
+            with self.subTest(payload=payload):
+                self.assertEqual(self.post(base, self.route(), payload)[0], 400)
+        self.assertEqual(self.server.console["writes"].runs, 0)
+
+    def test_delete_must_be_true(self):
+        base = self.serve()
+        for value in (False, "true", 1):
+            with self.subTest(value=value):
+                self.assertEqual(self.post(base, self.route(), {"delete": value})[0], 400)
+
     def test_every_editable_collection_is_routable(self):
         base = self.serve()
         for collection in API.CONFIG_COLLECTIONS:

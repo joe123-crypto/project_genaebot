@@ -143,6 +143,25 @@ class AppliedChanges(Harness):
                     "promos": [], "daily_cap": None})
         self.assertEqual(self.stored("groups", new)["rank"], int(max(ranks)) + ow.RANK_STEP)
 
+    def test_a_group_can_be_paused_for_one_campaign(self):
+        # Bravo is in genaie and cv; pausing cv keeps both assignments.
+        result = self.write("groups", JID_B, {"paused_promos": ["cv"]})
+        self.assertEqual(result["fields"], ["paused_promos"])
+        stored = self.stored("groups", JID_B)
+        self.assertEqual(stored["paused_promos"], ["cv"])
+        self.assertEqual(stored["promos"], ["genaie", "cv"])
+
+    def test_removing_an_assignment_clears_its_pause_and_cadence_in_one_write(self):
+        # Bravo is in cv on a weekly cadence. Removing cv has to take every
+        # reference to it out together -- promos, paused_promos and weekly --
+        # because any one left behind names a campaign the group is not in.
+        self.write("groups", JID_B, {"paused_promos": ["cv"]})
+        self.write("groups", JID_B,
+                   {"promos": ["genaie"], "paused_promos": [], "weekly": {}})
+        stored = self.stored("groups", JID_B)
+        self.assertEqual((stored["promos"], stored["paused_promos"], stored["weekly"]),
+                         (["genaie"], [], {}))
+
     def test_a_campaign_can_be_switched_off(self):
         self.write("campaigns", "cv", {"enabled": False})
         self.assertIs(self.stored("campaigns", "cv")["enabled"], False)
@@ -180,6 +199,70 @@ class Refusals(Harness):
     def test_a_status_the_bot_does_not_know_is_refused(self):
         ex = self.refuse("groups", JID_A, {"status": "paused"})
         self.assertTrue(ex.problems)
+
+    def test_pausing_a_campaign_the_group_is_not_in_is_refused(self):
+        # Alpha is only in genaie. A pause for cv would quarantine the group.
+        ex = self.refuse("groups", JID_A, {"paused_promos": ["cv"]})
+        self.assertTrue(any("paused_promos" in p for p in ex.problems))
+
+    def test_removing_an_assignment_but_leaving_it_paused_is_refused(self):
+        # The console must unpause in the same write; the bot will not guess.
+        self.write("groups", JID_B, {"paused_promos": ["cv"]})
+        self.firestore.commits.clear()
+        self.refuse("groups", JID_B, {"promos": ["genaie"], "weekly": {}})
+
+    def test_removing_an_assignment_but_leaving_its_cadence_is_refused(self):
+        # Bravo's cv runs weekly; the cadence has to go with the assignment.
+        self.refuse("groups", JID_B, {"promos": ["genaie"]})
+
+    def test_a_caps_switch_that_is_not_a_boolean_is_refused(self):
+        # bool("false") is True: the reader would switch caps ON.
+        ex = self.refuse("settings", "defaults", {"caps_enabled": "false"})
+        self.assertIn("caps_enabled must be true or false", ex.problems[0])
+
+    def test_a_band_the_reader_would_ignore_is_refused(self):
+        # A malformed band silently falls back to the default when read.
+        for bands in ({"busy": [10, 6]}, {"busy": [6]}, {"busy": [6.5, 10]},
+                      {"busy": [-1, 3]}, {}):
+            with self.subTest(bands=bands):
+                self.refuse("settings", "defaults", {"bands": bands})
+
+    def test_a_default_tier_without_a_band_is_refused(self):
+        self.refuse("settings", "defaults", {"activity": "frantic"})
+
+    def test_a_built_in_tier_is_a_valid_default_when_bands_hold_only_overrides(self):
+        # Stored bands are overrides: the reader fills in the built-in tiers, and
+        # the console offers them, so choosing one must be accepted.
+        self.firestore.store["settings"]["defaults"]["bands"] = oc.encode_value({"busy": [6, 10]})
+        self.write("settings", "defaults", {"activity": "quiet"})
+        self.assertEqual(self.stored("settings", "defaults")["activity"], "quiet")
+        self.firestore.commits.clear()
+        self.refuse("settings", "defaults", {"activity": "frantic"})
+
+    def test_a_tier_added_in_the_same_change_is_a_valid_default(self):
+        self.write("settings", "defaults", {"bands": {"busy": [6, 10], "normal": [4, 6],
+                                                      "quiet": [1, 3], "dormant": [0, 1]},
+                                            "activity": "dormant"})
+        self.assertEqual(self.stored("settings", "defaults")["activity"], "dormant")
+
+    def test_a_campaign_switch_that_is_not_a_boolean_is_refused(self):
+        # A non-boolean reads as OFF: saving "true" would stop the campaign.
+        ex = self.refuse("campaigns", "cv", {"enabled": "true"})
+        self.assertIn("enabled must be true or false", ex.problems[0])
+
+    def test_valid_cap_settings_are_written(self):
+        result = self.write("settings", "defaults",
+                            {"caps_enabled": False, "activity": "quiet",
+                             "bands": {"busy": [5, 9], "normal": [3, 5], "quiet": [1, 2]}})
+        self.assertEqual(sorted(result["fields"]), ["activity", "bands", "caps_enabled"])
+        self.assertIs(self.stored("settings", "defaults")["caps_enabled"], False)
+
+    def test_a_bad_value_already_stored_does_not_block_an_unrelated_edit(self):
+        # Only the fields a change names are judged: garbage typed into the
+        # Firebase Console earlier must not make every later edit fail.
+        self.firestore.store["settings"]["defaults"]["caps_enabled"] = oc.encode_value("yes")
+        self.write("settings", "defaults", {"activity": "quiet"})
+        self.assertEqual(self.stored("settings", "defaults")["activity"], "quiet")
 
     def test_an_unknown_field_is_refused_by_name(self):
         ex = self.refuse("groups", JID_A, {"stattus": "on-hold"})
@@ -275,6 +358,82 @@ class Audit(Harness):
                          now=lambda: self.clock[0], sleep=lambda s: None,
                          log=lambda m: None)
         self.assertEqual(loaded["source"], "firestore")
+
+
+class Deletion(Harness):
+    def delete(self, collection, doc_id, **kw):
+        kw.setdefault("actor", "joe")
+        actor = kw.pop("actor")
+        return ow.delete(collection, doc_id, actor, self.env, opener=self.firestore,
+                         signer=lambda header, claims, key: "jwt",
+                         now=lambda: self.clock[0], sleep=lambda s: None, **kw)
+
+    def test_a_group_and_its_record_leave_in_one_commit(self):
+        # The delete and the trail that would let it be recreated land together
+        # or not at all; there is no moment where the group is gone unrecorded.
+        result = self.delete("groups", JID_A, reason="bot was removed")
+        self.assertEqual(len(self.firestore.commits), 1)
+        ops = self.firestore.commits[0]["writes"]
+        self.assertEqual(sorted(next(iter(op)) for op in ops), ["delete", "update"])
+        self.assertNotIn(JID_A, self.firestore.store["groups"])
+        self.assertIn(result["audit"], self.firestore.store[ow.AUDIT_COLLECTION])
+
+    def test_the_record_holds_everything_needed_to_recreate_the_group(self):
+        before = self.stored("groups", JID_A)
+        result = self.delete("groups", JID_A, reason="bot was removed")
+        entry = self.stored(ow.AUDIT_COLLECTION, result["audit"])
+        self.assertEqual(entry["change"], "deleted")
+        self.assertEqual(entry["before"], before)
+        self.assertEqual(entry["after"], {})
+        self.assertEqual(entry["reason"], "bot was removed")
+        self.assertEqual(entry["actor"], "joe")
+
+    def test_a_reason_is_optional(self):
+        result = self.delete("groups", JID_A)
+        self.assertNotIn("reason", self.stored(ow.AUDIT_COLLECTION, result["audit"]))
+
+    def test_only_groups_can_be_deleted(self):
+        # A line named by groups would quarantine them all; a campaign is code;
+        # settings is what every group is judged against.
+        for collection, doc_id in (("lines", "default"), ("campaigns", "cv"),
+                                   ("settings", "defaults")):
+            with self.subTest(collection=collection):
+                with self.assertRaises(ow.WriteRefused) as caught:
+                    self.delete(collection, doc_id)
+                self.assertEqual(caught.exception.status, 400)
+        self.assertEqual(self.firestore.commits, [])
+
+    def test_deleting_a_group_that_is_not_there_is_a_404(self):
+        with self.assertRaises(ow.WriteRefused) as caught:
+            self.delete("groups", "263700000000-1600000000@g.us")
+        self.assertEqual(caught.exception.status, 404)
+        self.assertEqual(self.firestore.commits, [])
+
+    def test_a_group_that_cannot_be_read_cannot_be_deleted_blind(self):
+        # Its record could not go into the audit trail, which is the only thing
+        # that makes a delete recoverable.
+        self.firestore.store["groups"][JID_A]["name"] = {
+            "timestampValue": "2026-11-04T00:00:00Z"}
+        with self.assertRaises(ow.WriteRefused) as caught:
+            self.delete("groups", JID_A)
+        self.assertEqual(caught.exception.status, 409)
+        self.assertEqual(self.firestore.commits, [])
+
+    def test_a_dry_run_reports_and_deletes_nothing(self):
+        result = self.delete("groups", JID_A, dry_run=True)
+        self.assertEqual(result["change"], "deleted")
+        self.assertIsNone(result["audit"])
+        self.assertEqual(self.firestore.commits, [])
+        self.assertIn(JID_A, self.firestore.store["groups"])
+
+    def test_a_deleted_group_is_no_longer_targeted(self):
+        self.delete("groups", JID_A)
+        loaded = oc.load(self.env, opener=self.firestore,
+                         signer=lambda header, claims, key: "jwt",
+                         now=lambda: self.clock[0], sleep=lambda s: None,
+                         log=lambda m: None)
+        self.assertNotIn(JID_A, loaded["membership"]["groups"])
+        self.assertEqual(loaded["report"]["quarantined"], {})
 
 
 class SharedWithTheSeed(Harness):

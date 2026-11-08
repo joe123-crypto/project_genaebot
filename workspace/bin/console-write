@@ -15,6 +15,12 @@ One change per run, read from stdin as JSON::
      "actor": "joe",
      "dryRun": false}
 
+or, to remove a group outright (groups only; the whole record goes into the
+audit document in the same commit)::
+
+    {"collection": "groups", "id": "...", "delete": true,
+     "reason": "the bot was removed from the group", "actor": "joe"}
+
 and one JSON object on stdout. On success::
 
     {"ok": true, "collection": ..., "id": ..., "change": "updated",
@@ -52,8 +58,12 @@ import operator_writer  # noqa: E402
 WRITE_KEY_VAR = "GCP_SERVICE_ACCOUNT_WRITE_B64"
 # A request is one small object; anything larger is a mistake or an attack.
 MAX_REQUEST_BYTES = 64 * 1024
-REQUIRED = ("collection", "id", "fields")
-OPTIONAL = ("actor", "dryRun")
+REQUIRED = ("collection", "id")
+# Exactly one of these says what the request does: change named fields, or
+# delete the document. Never both -- a request that both edited and deleted would
+# leave the audit trail saying two contradictory things about one moment.
+OPERATIONS = ("fields", "delete")
+OPTIONAL = ("actor", "dryRun", "reason")
 
 
 def write_env(env=None):
@@ -92,15 +102,31 @@ def parse_request(raw):
     missing = [name for name in REQUIRED if name not in request]
     if missing:
         raise operator_writer.WriteRefused("request is missing %s" % ", ".join(missing))
-    unknown = sorted(set(request) - set(REQUIRED) - set(OPTIONAL))
+    unknown = sorted(set(request) - set(REQUIRED) - set(OPERATIONS) - set(OPTIONAL))
     if unknown:
         raise operator_writer.WriteRefused("request has unexpected key(s): %s"
                                            % ", ".join(unknown))
+    named = [name for name in OPERATIONS if name in request]
+    if len(named) != 1:
+        raise operator_writer.WriteRefused(
+            "request must name exactly one of fields or delete, got %s"
+            % (", ".join(named) or "neither"))
     for name in ("collection", "id"):
         if not isinstance(request[name], str) or not request[name].strip():
             raise operator_writer.WriteRefused("%s must be a non-empty string" % name)
-    if not isinstance(request["fields"], dict):
-        raise operator_writer.WriteRefused("fields must be an object")
+    if "fields" in request:
+        if not isinstance(request["fields"], dict):
+            raise operator_writer.WriteRefused("fields must be an object")
+        if "reason" in request:
+            # A reason belongs on the act that removes a record; on an edit the
+            # before/after already says what happened.
+            raise operator_writer.WriteRefused("reason is only accepted with delete")
+    elif request["delete"] is not True:
+        raise operator_writer.WriteRefused("delete must be true")
+    reason = request.get("reason")
+    if reason is not None and (not isinstance(reason, str) or len(reason) > 500):
+        raise operator_writer.WriteRefused("reason must be a string of at most 500 "
+                                           "characters")
     actor = request.get("actor")
     if actor is not None and not isinstance(actor, str):
         raise operator_writer.WriteRefused("actor must be a string")
@@ -114,10 +140,16 @@ def main(argv, stdin=None, stdout=None, env=None):
     stdout = stdout or sys.stdout
     try:
         request = parse_request(stdin.read(MAX_REQUEST_BYTES + 1))
-        result = operator_writer.write(
-            request["collection"], request["id"].strip(), request["fields"],
-            request.get("actor"), env=write_env(env),
-            dry_run=bool(request.get("dryRun")))
+        if "delete" in request:
+            result = operator_writer.delete(
+                request["collection"], request["id"].strip(), request.get("actor"),
+                env=write_env(env), reason=request.get("reason"),
+                dry_run=bool(request.get("dryRun")))
+        else:
+            result = operator_writer.write(
+                request["collection"], request["id"].strip(), request["fields"],
+                request.get("actor"), env=write_env(env),
+                dry_run=bool(request.get("dryRun")))
     except operator_writer.WriteRefused as ex:
         payload = {"ok": False, "status": ex.status, "error": str(ex),
                    "problems": ex.problems}

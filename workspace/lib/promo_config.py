@@ -150,6 +150,8 @@ def resolve(promo, targets_file=None, membership_path=None, env=None, err=None,
          "doc": <targets.json-shaped dict>,
          "membership": <membership-shaped dict> | None,
          "switches": {slug: bool},         # on only if BOTH switches are on
+         "storeSwitches": {slug: bool},    # the operator's switch alone (Firestore)
+         "cronSwitches": {slug: bool},     # the manifest alone: is a cron registered
          "enabled": True | False | None,   # this promo's own switch in the store
                                            # (what gates the run); None = unknown
          "report": {...},                  # quarantine/warnings, firestore only
@@ -194,6 +196,7 @@ def resolve(promo, targets_file=None, membership_path=None, env=None, err=None,
                       % (PREFIX, loaded.get("fetchedAt"), loaded["degraded"]))
         return {"source": loaded["source"], "mode": current, "doc": doc,
                 "membership": membership, "switches": switches,
+                "storeSwitches": dict(loaded["enabled"]), "cronSwitches": declared,
                 "enabled": loaded["enabled"].get(slug), "report": loaded["report"],
                 "notes": notes}
 
@@ -209,7 +212,9 @@ def resolve(promo, targets_file=None, membership_path=None, env=None, err=None,
         notes.append(warning)
         err.write(warning + "\n")
     switches = manifest_switches(env)
+    # In file mode the manifest is the only switch, so it is both of them.
     return {"source": FILE, "mode": current, "doc": doc, "membership": membership,
-            "switches": switches, "enabled": switches.get(slug),
+            "switches": switches, "storeSwitches": dict(switches),
+            "cronSwitches": dict(switches), "enabled": switches.get(slug),
             "report": {"quarantined": {}, "warnings": [], "campaigns": {}},
             "notes": notes}

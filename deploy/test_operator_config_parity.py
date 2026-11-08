@@ -146,6 +146,117 @@ class SeedPlanTest(unittest.TestCase):
             seed.documents(membership, dict(switches, ghost=True))
 
 
+def wire_unordered(docs):
+    """As ``wire``, but with every document's fields in alphabetical order --
+    which is how real Firestore hands them back. Exporting from this proves the
+    file's own key order is kept on purpose, not by the fake's insertion order."""
+    def sort_fields(encoded):
+        return dict(sorted(encoded.items()))
+    return dict((collection, dict((doc_id, sort_fields(operator_config.encode_fields(fields)))
+                                  for doc_id, fields in rows))
+                for collection, rows in docs.items())
+
+
+class ExportTest(unittest.TestCase):
+    """seed-firestore.py --export: Firestore back into membership.json, so the file
+    stays a truthful rollback once the console is editing the store."""
+
+    def setUp(self):
+        from unittest import mock
+        self.membership, self.switches = seed.load_sources()
+        self.real = seed.MEMBERSHIP.read_text(encoding="utf-8")
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        # Never the repo's own file: every export here writes a temp copy.
+        self.target = self.dir / "membership.json"
+        self.target.write_text(self.real, encoding="utf-8")
+        patcher = mock.patch.object(seed, "MEMBERSHIP", self.target)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        key = self.dir / "key.json"
+        import base64
+        key.write_text(base64.b64decode(creds_b64()).decode(), encoding="utf-8")
+        self.key = str(key)
+        self.store = wire_unordered(seed.documents(self.membership, self.switches))
+
+    def export(self):
+        import contextlib
+        import io
+        out = io.StringIO()
+        firestore = FakeFirestore(self.store, page_size=37)
+        with contextlib.redirect_stdout(out):
+            code = seed.export(self.key, opener=firestore,
+                               signer=lambda header, claims, key: "jwt",
+                               now=lambda: 1_800_000_000.0, sleep=lambda s: None)
+        return code, out.getvalue()
+
+    def test_an_unchanged_store_reproduces_the_committed_file_byte_for_byte(self):
+        code, out = self.export()
+        self.assertEqual(code, 0, out)
+        self.assertIn("already matches", out)
+        self.assertEqual(self.target.read_text(encoding="utf-8"), self.real)
+
+    def test_a_store_edit_changes_only_its_own_lines(self):
+        import difflib
+        jid = next(j for j, e in self.membership["groups"].items()
+                   if promo_membership.is_active(e) and e.get("promos"))
+        promo = self.membership["groups"][jid]["promos"][0]
+        self.store["groups"][jid]["paused_promos"] = operator_config.encode_value([promo])
+        code, out = self.export()
+        self.assertEqual(code, 0, out)
+        written = self.target.read_text(encoding="utf-8")
+        changed = [line for line in difflib.unified_diff(
+            self.real.splitlines(), written.splitlines(), lineterm="", n=0)
+            if line[:1] in "+-" and line[:3] not in ("+++", "---")]
+        self.assertTrue(changed)
+        self.assertTrue(all("paused_promos" in line or line.strip(" +-\",[]") in
+                            ("", promo) for line in changed), changed)
+        # And the new file is an exact mirror of the store.
+        firestore = FakeFirestore(self.store, page_size=37)
+        _, raw = operator_config.fetch(
+            {"GCP_SERVICE_ACCOUNT_B64": creds_b64(),
+             "GENAIE_FIRESTORE_DIR": str(self.dir / "fs")},
+            opener=firestore, signer=lambda h, c, k: "jwt",
+            now=lambda: 1_800_000_000.0, sleep=lambda s: None)
+        got, got_switches, _ = operator_config.assemble(raw)
+        self.assertEqual(operator_config.parity_diff(
+            json.loads(written), self.switches, got, got_switches), [])
+
+    def test_a_store_that_would_quarantine_a_group_is_not_exported(self):
+        jid = next(iter(self.membership["groups"]))
+        self.store["groups"][jid]["status"] = operator_config.encode_value("banana")
+        code, out = self.export()
+        self.assertEqual(code, 1)
+        self.assertIn("CANNOT EXPORT", out)
+        self.assertEqual(self.target.read_text(encoding="utf-8"), self.real)
+
+    def test_a_reference_the_reader_forgives_but_the_file_would_not_is_not_exported(self):
+        # Deleting a campaign document leaves groups naming it. The reader drops
+        # those references with a warning; membership.json would refuse to load.
+        promo = next(p for e in self.membership["groups"].values() for p in e.get("promos") or [])
+        del self.store["campaigns"][promo]
+        code, out = self.export()
+        self.assertEqual(code, 1, out)
+        self.assertIn("CANNOT EXPORT  the file would not validate", out)
+        self.assertEqual(self.target.read_text(encoding="utf-8"), self.real)
+
+    def test_a_switch_that_a_rollback_would_undo_is_named(self):
+        self.store["campaigns"]["genaie"]["enabled"] = operator_config.encode_value(False)
+        code, out = self.export()
+        self.assertEqual(code, 0, out)
+        self.assertIn("NOTE  genaie is OFF in Firestore but ON in promo-crons.json", out)
+
+    def test_a_missing_file_is_recreated_from_the_store(self):
+        # After phase 5 deletes the file, an export is how it comes back.
+        self.target.unlink()
+        code, out = self.export()
+        self.assertEqual(code, 0, out)
+        self.assertIn("(created)", out)
+        recreated = json.loads(self.target.read_text(encoding="utf-8"))
+        self.assertEqual(recreated, json.loads(self.real))
+        self.assertEqual(promo_membership.validate(recreated), [])
+
+
 @unittest.skipUnless(os.environ.get("GENAIE_FIRESTORE_INTEGRATION") == "1",
                      "set GENAIE_FIRESTORE_INTEGRATION=1 and GCP_SERVICE_ACCOUNT_FILE "
                      "to verify against the real project")

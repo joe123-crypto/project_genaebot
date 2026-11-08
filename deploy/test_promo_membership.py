@@ -215,6 +215,29 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual(pm.groups_for_promo(m, "cv"), ([], {}))
         self.assertEqual(pm.promos_for_group(m, "1@g.us"), [])
 
+    def test_a_paused_campaign_skips_the_group_and_only_that_campaign(self):
+        m = minimal(**{"1@g.us": {"promos": ["cv", "genaie"], "paused_promos": ["cv"]}})
+        self.assertEqual(pm.groups_for_promo(m, "cv"), ([], {}))
+        self.assertEqual(pm.groups_for_promo(m, "genaie"), (["1@g.us"], {}))
+
+    def test_a_paused_campaign_takes_none_of_the_groups_cap_turns(self):
+        # promos_for_group is what promo_caps rotates the daily allowance over,
+        # so a campaign that cannot post must not be handed a turn.
+        m = minimal(**{"1@g.us": {"promos": ["cv", "genaie"], "paused_promos": ["cv"]}})
+        self.assertEqual(pm.promos_for_group(m, "1@g.us"), ["genaie"])
+
+    def test_a_paused_weekly_campaign_is_out_of_the_weekly_list_too(self):
+        m = minimal(**{"1@g.us": {"promos": ["cv"], "weekly": {"cv": ["mon"]},
+                                  "paused_promos": ["cv"]}})
+        self.assertEqual(pm.groups_for_promo(m, "cv"), ([], {}))
+
+    def test_pausing_keeps_the_assignment(self):
+        # Resuming is a flip, not a rediscovery: the campaign stays in promos.
+        m = minimal(**{"1@g.us": {"promos": ["cv"], "paused_promos": ["cv"]}})
+        self.assertEqual(m["groups"]["1@g.us"]["promos"], ["cv"])
+        del m["groups"]["1@g.us"]["paused_promos"]
+        self.assertEqual(pm.groups_for_promo(m, "cv"), (["1@g.us"], {}))
+
     def test_targets_payload_omits_weekly_keys_when_there_are_none(self):
         m = minimal(**{"1@g.us": {"promos": ["cv"]}})
         m["promos"]["cv"] = {"comment": "c", "weekly_comment": "w"}
@@ -283,6 +306,24 @@ class ValidationTests(unittest.TestCase):
     def test_duplicate_promo_entries(self):
         self.assertComplains(minimal(**{"1@g.us": {"promos": ["cv", "cv"]}}),
                              "duplicates")
+
+    def test_pausing_a_campaign_the_group_is_not_in(self):
+        m = minimal(**{"1@g.us": {"promos": ["cv"], "paused_promos": ["genaie"]}})
+        self.assertComplains(m, "paused_promos names promo 'genaie'")
+
+    def test_paused_promos_must_be_a_list_of_names(self):
+        self.assertComplains(minimal(**{"1@g.us": {"promos": ["cv"], "paused_promos": "cv"}}),
+                             "paused_promos must be a list")
+        self.assertComplains(minimal(**{"1@g.us": {"promos": ["cv"], "paused_promos": [1]}}),
+                             "paused_promos must be a list")
+
+    def test_duplicate_paused_entries(self):
+        m = minimal(**{"1@g.us": {"promos": ["cv"], "paused_promos": ["cv", "cv"]}})
+        self.assertComplains(m, "paused_promos has duplicates")
+
+    def test_a_valid_pause_is_accepted(self):
+        m = minimal(**{"1@g.us": {"promos": ["cv"], "paused_promos": ["cv"]}})
+        self.assertEqual(pm.validate(m), [])
 
     def test_negative_daily_cap(self):
         self.assertComplains(minimal(**{"1@g.us": {"daily_cap": -1}}), "daily_cap")

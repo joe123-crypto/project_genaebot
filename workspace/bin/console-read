@@ -44,6 +44,7 @@ import ad_assets  # noqa: E402
 import config_shadow  # noqa: E402
 import promo_config  # noqa: E402
 import operator_config  # noqa: E402
+import operator_writer  # noqa: E402
 import group_discovery  # noqa: E402
 
 MEMBERSHIP = promo_membership.default_path(str(WORKSPACE))
@@ -178,6 +179,20 @@ def effective_enabled(entry):
     return switch is not False
 
 
+def store_enabled(entry):
+    """The operator's own switch for a campaign -- the one a console toggle edits.
+
+    Reported beside the effective value because the two can differ for a reason
+    the operator cannot fix from a toggle: a campaign switched on in the store
+    still never posts if the manifest registers no cron for it. A missing switch
+    reads as on, matching how a run treats it."""
+    config = resolved()
+    switches = config.get("storeSwitches")
+    if switches is None:
+        switches = config.get("switches") or {}
+    return switches.get(entry["slug"]) is not False
+
+
 def disabled_promos(declared):
     """Slugs that are switched off, by either switch. They stay configured on
     their groups and their copy is still worth previewing, but nothing here may
@@ -209,8 +224,10 @@ def group_rows(day):
         # ``allowed`` is None for a group with no cap decision, which means every
         # targeted promo may post. Either way a switched-off campaign is dropped:
         # it installs no cron, so counting it would promise a send that cannot
-        # happen.
-        today = sorted(allowed) if allowed is not None else list(entry.get("promos") or [])
+        # happen. The fallback goes through promos_for_group for the same reason:
+        # a campaign the group is paused for cannot post to it today.
+        today = (sorted(allowed) if allowed is not None
+                 else promo_membership.promos_for_group(m, jid))
         rows.append(
             {
                 "jid": jid,
@@ -221,6 +238,10 @@ def group_rows(day):
                 "account": promo_membership.account_of(entry),
                 "dailyCapOverride": entry.get("daily_cap"),
                 "promos": list(entry.get("promos") or []),
+                # The assignments still stand (``promos``); these are the ones on
+                # hold for this group. Shipped as its own list so a screen can
+                # show "paused" without recomputing it.
+                "pausedPromos": list(entry.get("paused_promos") or []),
                 "weekly": {key: [str(token) for token in value] for key, value in weekly.items()},
                 "note": entry.get("note"),
                 "cap": decision.get("cap"),
@@ -328,6 +349,10 @@ def campaign_records(day):
                 # cron, so the console must not present it as something that
                 # posts on its schedule.
                 "enabled": effective_enabled(entry),
+                # The two halves of ``enabled``: what the operator switched, and
+                # whether a cron exists to fire at all. Only the first is editable.
+                "storeEnabled": store_enabled(entry),
+                "cronEnabled": promo_enabled(entry),
                 "cron": entry.get("cron"),
                 "hour": hour,
                 "minute": minute,
@@ -373,7 +398,11 @@ def preview(slug, day):
     captions = [str(text) for text in as_list(getattr(module, "POST_TEXTS", None))]
     tracking = dict(getattr(module, "TRACKING", {}) or {})
 
-    daily_jids, weekly_jids = promo_membership.groups_for_promo(m, slug)
+    # Every assignment, paused ones included: this is the campaign's "where it
+    # goes" list, and a paused group missing from it could never be resumed.
+    # Each row says whether it is paused; sendsToday is what actually happens.
+    daily_jids, weekly_jids = promo_membership.groups_for_promo(
+        m, slug, include_paused=True)
     all_jids = list(daily_jids) + list(weekly_jids)
     decisions = promo_caps.plan(m, list(promo_membership.groups(m)), day=day, record=False,
                                 disabled=disabled_promos(declared))
@@ -408,6 +437,7 @@ def preview(slug, day):
                 tracking=tracking, bot_number=bot_number,
             )
 
+        paused = slug in promo_membership.paused_of(group)
         rows.append(
             {
                 "jid": jid,
@@ -418,7 +448,9 @@ def preview(slug, day):
                 "variant": variant,
                 "caption": rendered,
                 "cap": decision.get("cap"),
-                "sendsToday": enabled and (allowed is None or slug in allowed),
+                "paused": paused,
+                "sendsToday": (enabled and not paused
+                               and (allowed is None or slug in allowed)),
                 "allowedToday": sorted(allowed) if allowed is not None else [],
                 "weekly": [str(token) for token in (weekly_jids.get(jid) or [])],
             }
@@ -466,6 +498,39 @@ def ad_assets_status():
     return {"mode": current, "warning": warning, "lastCheck": ad_assets.read_result()}
 
 
+def write_capabilities():
+    """What a console may offer to change, straight from the writer that will
+    judge it, so no screen can present an edit the bot is going to refuse.
+
+    ``enabled`` is whether this process holds the write key. The console API is
+    the only process the entrypoint hands it to, and this runs as its child, so
+    that is exactly whether a write would be accepted; only the variable's
+    presence is checked, never its value. ``affectsProduction`` says whether a
+    saved change reaches the campaigns: before the cutover a write lands in
+    Firestore while runs still act on membership.json."""
+    current, _ = promo_config.mode()
+    return {
+        "enabled": bool((os.environ.get("GCP_SERVICE_ACCOUNT_WRITE_B64") or "").strip()),
+        "affectsProduction": current == promo_config.FIRESTORE,
+        "fields": dict((collection, list(names))
+                       for collection, names in operator_writer.EDITABLE.items()),
+        "delete": list(operator_writer.DELETABLE),
+    }
+
+
+def cap_settings(m):
+    """The settings every group's daily allowance is derived from, in the shape a
+    form edits them: the switch, the tier a group without one falls into, and each
+    tier's band as ``[low, high]``."""
+    defaults = (m or {}).get("defaults") or {}
+    return {
+        "enabled": promo_membership.caps_enabled(m),
+        "defaultActivity": defaults.get("activity") or promo_membership.DEFAULT_ACTIVITY,
+        "bands": dict((tier, [low, high]) for tier, (low, high)
+                      in sorted(promo_membership.bands(m).items())),
+    }
+
+
 def overview(day):
     m = membership()
     groups = promo_membership.groups(m)
@@ -487,6 +552,8 @@ def overview(day):
         "plannedSendsToday": planned,
         "accounts": accounts(m),
         "capsEnabled": bool((m.get("defaults") or {}).get("caps_enabled")),
+        "capSettings": cap_settings(m),
+        "writes": write_capabilities(),
         "configSource": config_source_status(),
         "configShadow": config_shadow_status(),
         "adAssets": ad_assets_status(),

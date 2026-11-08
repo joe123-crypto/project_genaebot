@@ -28,9 +28,11 @@ What this cannot do, on purpose:
   new document is appended after the current last.
 * **No bulk writes.** One document per request, so a refusal names one thing
   and a partial apply cannot happen.
-* **Nothing is deleted.** A group leaves the rotation by its ``status``, which
-  keeps its ``promos`` list and makes resuming it a status flip rather than a
-  rediscovery. Pruning strays stays with the seed script.
+* **Only a group can be deleted, and only on purpose** (:func:`delete`). The
+  ordinary way out of the rotation is still ``status`` or ``paused_promos``, which
+  keep the assignments and make resuming a flip. A delete removes the record, so
+  the whole record goes into its audit document in the same commit: it is gone
+  from the config, never from the trail. Pruning strays stays with the seed script.
 
 Every change is committed **together with its audit document**, in one
 Firestore commit, so a change can never land without the record of who made it.
@@ -66,11 +68,13 @@ AUDIT_COLLECTION = "audit"
 # than written and found later by a quarantine report.
 EDITABLE = {
     "groups": ("name", "source", "status", "activity", "account", "daily_cap",
-               "promos", "weekly", "note"),
+               "promos", "paused_promos", "weekly", "note"),
     "lines": ("number",),
     "campaigns": ("enabled", "comment", "weekly_comment", "dir"),
     "settings": ("activity", "caps_enabled", "contact_account", "bands"),
 }
+# What may be deleted outright. See prepare_delete for why nothing else is.
+DELETABLE = ("groups",)
 # A patch value has to survive a Firestore round trip and be something
 # promo_membership.validate expects. Timestamps, bytes and references do not
 # belong in this config; operator_config.decode_value refuses them on the way
@@ -203,6 +207,55 @@ def apply_fields(collection, current, patch):
     return dict(current, **patch)
 
 
+def reinterpreted(collection, patch, fields):
+    """Problems with values the reader would quietly read as something else.
+
+    The whole-config check below catches anything that would quarantine a group.
+    It cannot catch these, because the reader is deliberately forgiving about
+    them and never complains: ``caps_enabled`` is read with ``bool()``, so the
+    string "false" switches caps ON; a malformed band silently falls back to the
+    default band; a campaign switch that is not a boolean reads as OFF. Forgiving
+    is right when reading -- a capacity setting must never be why a day's ads do
+    not go out -- and wrong when writing, where it would let a save succeed and
+    then be ignored.
+
+    Only the fields this change names are judged, so a bad value someone typed
+    into the Firebase Console earlier cannot block an unrelated edit."""
+    problems = []
+    if collection == "campaigns" and "enabled" in patch:
+        if not isinstance(patch["enabled"], bool):
+            problems.append("enabled must be true or false, got %r" % (patch["enabled"],))
+    if collection != "settings":
+        return problems
+    if "caps_enabled" in patch and not isinstance(patch["caps_enabled"], bool):
+        problems.append("caps_enabled must be true or false, got %r"
+                        % (patch["caps_enabled"],))
+    if "bands" in patch:
+        bands = patch["bands"]
+        if not isinstance(bands, dict) or not bands:
+            problems.append("bands must map each tier to [low, high]")
+        else:
+            for tier, pair in sorted(bands.items()):
+                if (not isinstance(pair, list) or len(pair) != 2
+                        or any(not isinstance(v, int) or isinstance(v, bool) for v in pair)):
+                    problems.append("bands.%s must be [low, high] whole numbers, got %r"
+                                    % (tier, pair))
+                elif pair[0] < 0 or pair[0] > pair[1]:
+                    problems.append("bands.%s must have 0 <= low <= high, got %r"
+                                    % (tier, pair))
+    if "activity" in patch:
+        import promo_membership  # deferred, as in operator_config.quarantine
+        tier = patch["activity"]
+        # The tiers the reader will actually have: stored bands are overrides on
+        # top of the built-in ones, so a store holding only {"busy": ...} still
+        # has normal and quiet.
+        known = set(promo_membership.bands({"defaults": {"bands": fields.get("bands")}}))
+        if not isinstance(tier, str) or tier not in known:
+            problems.append("activity must name a tier that has a band (%s), got %r"
+                            % (", ".join(sorted(known)), tier))
+    return problems
+
+
 def next_rank(decoded):
     """Where a new document goes: after the current last. Order is send order, so
     appending is the one position that cannot change who an existing short run
@@ -254,6 +307,10 @@ def prepare(raw, collection, doc_id, patch):
     if before is None:
         current[operator_config.RANK] = next_rank(_decoded(raw, collection))
     fields = apply_fields(collection, current, patch)
+    problems = reinterpreted(collection, patch, fields)
+    if problems:
+        raise WriteRefused("this change would be read differently from how it was "
+                           "written", problems=problems)
 
     # The prospective WHOLE config, assembled and judged exactly as a run would.
     after = dict(raw)
@@ -287,25 +344,35 @@ def prepare(raw, collection, doc_id, patch):
 # The audit trail
 
 
-def audit_document(actor, collection, doc_id, before, after, now=None):
+def audit_document(actor, collection, doc_id, before, after, now=None, reason=None):
     """``(doc_id, fields)`` recording one change.
 
     It is committed with the change itself, so there is no window in which a
-    write has landed and the record of it has not."""
+    write has landed and the record of it has not. ``before=None`` records a
+    creation and ``after=None`` a deletion; a deletion's ``before`` is the whole
+    record, which is what makes a delete recoverable at all."""
     now = now or time.time
     at = datetime.datetime.fromtimestamp(now(), datetime.timezone.utc)
     stamp = at.strftime("%Y-%m-%dT%H:%M:%SZ")
     changed = sorted(name for name in set(before or {}) | set(after or {})
                      if name != operator_config.RANK
                      and (before or {}).get(name) != (after or {}).get(name))
+    if before is None:
+        change = "created"
+    elif after is None:
+        change = "deleted"
+    else:
+        change = "updated"
     # Sortable, and unique even for two changes in the same second.
     entry_id = "%s-%s" % (at.strftime("%Y%m%dT%H%M%SZ"), secrets.token_hex(4))
-    return entry_id, {"at": stamp, "actor": actor or "unknown",
-                      "collection": collection, "id": doc_id,
-                      "change": "created" if before is None else "updated",
-                      "fields": changed,
-                      "before": before if before is not None else {},
-                      "after": after}
+    entry = {"at": stamp, "actor": actor or "unknown",
+             "collection": collection, "id": doc_id, "change": change,
+             "fields": changed,
+             "before": before if before is not None else {},
+             "after": after if after is not None else {}}
+    if reason:
+        entry["reason"] = reason
+    return entry_id, entry
 
 
 # --------------------------------------------------------------------------
@@ -352,5 +419,76 @@ def write(collection, doc_id, patch, actor, env=None, *, opener=None, signer=Non
            [(collection, doc_id, fields, before is not None),
             (AUDIT_COLLECTION, entry_id, entry, False)],
            [], opener=opener, sleep=sleep)
+    result["audit"] = entry_id
+    return result
+
+
+def prepare_delete(raw, collection, doc_id):
+    """``(before, report)`` for a deletion that is safe to commit, or
+    :class:`WriteRefused`.
+
+    Only groups can go. A line still named by groups would quarantine every one of
+    them; a campaign is code, copy, a cron and an installer run, not a record; and
+    the settings document is the one every group is judged against."""
+    if collection not in DELETABLE:
+        raise WriteRefused("%s documents cannot be deleted here; only %s can"
+                           % (collection, ", ".join(DELETABLE)), status=400)
+    rows = dict(_decoded(raw, collection))
+    if doc_id not in rows:
+        raise WriteRefused("%s/%s does not exist" % (collection, doc_id), status=404)
+    before = rows[doc_id]
+    if before is None:
+        # The audit document is what makes a delete recoverable; with a record we
+        # cannot read, there would be nothing to recover it from.
+        raise WriteRefused("%s/%s cannot be read, so it could not be recorded "
+                           "before deleting; fix or remove it in the Firebase "
+                           "Console" % (collection, doc_id), status=409)
+    # Judged as the whole prospective config, exactly as an edit is. Removing a
+    # group cannot quarantine another, but the same gate keeps the two paths from
+    # drifting apart.
+    after = dict(raw)
+    after[collection] = [(other, body) for other, body in (raw.get(collection) or [])
+                         if other != doc_id]
+    try:
+        membership, _, undecodable = operator_config.assemble(after)
+        _, report = operator_config.quarantine(membership, undecodable)
+    except operator_config.ConfigInvalid as ex:
+        raise WriteRefused("this change would make the config unreadable: %s" % ex)
+    return before, report
+
+
+def delete(collection, doc_id, actor, env=None, *, reason=None, opener=None,
+           signer=None, now=None, sleep=None, dry_run=False):
+    """Delete one document, recording the whole of it first. Returns::
+
+        {"collection", "id", "change": "deleted", "fields": [names],
+         "before": {...}, "after": None, "warnings": [...],
+         "audit": <audit doc id> | None}
+
+    The deletion and its audit document -- which carries the complete record and
+    the optional ``reason`` -- go in ONE commit, so a group can never vanish
+    without the trail that would let it be recreated. Raises the same way
+    :func:`write` does."""
+    env = os.environ if env is None else env
+    now = now or time.time
+    project, raw = operator_config.fetch(env, opener=opener, signer=signer,
+                                         now=now, sleep=sleep)
+    before, report = prepare_delete(raw, collection, doc_id)
+    entry_id, entry = audit_document(actor, collection, doc_id, before, None,
+                                     now=now, reason=reason)
+    result = {"collection": collection, "id": doc_id, "change": "deleted",
+              "fields": entry["fields"], "before": before, "after": None,
+              "warnings": list(report.get("warnings") or []), "audit": None}
+    if dry_run:
+        return result
+
+    token = operator_config.access_token(
+        operator_config.credentials(env),
+        operator_config.token_cache_path(operator_config.state_dir(env)),
+        opener=opener or urllib.request.urlopen,
+        signer=signer or operator_config.node_signer,
+        now=now, sleep=sleep or time.sleep)
+    commit(project, token, [(AUDIT_COLLECTION, entry_id, entry, False)],
+           [(collection, doc_id)], opener=opener, sleep=sleep)
     result["audit"] = entry_id
     return result

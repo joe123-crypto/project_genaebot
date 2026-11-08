@@ -467,11 +467,17 @@ def _drop_unknown_promos(entry, declared):
         return entry, []
     promos = entry.get("promos")
     weekly = entry.get("weekly")
+    paused = entry.get("paused_promos")
     gone = []
     if isinstance(promos, list):
         gone = [p for p in promos if isinstance(p, str) and p not in declared]
     if isinstance(weekly, dict):
         gone += [p for p in weekly if p not in declared and p not in gone]
+    # A pause names a campaign the group is in, so a stale one rides along with
+    # the stale assignment; left behind it would fail "paused but not in promos".
+    if isinstance(paused, list):
+        gone += [p for p in paused if isinstance(p, str) and p not in declared
+                 and p not in gone]
     if not gone:
         return entry, []
     entry = dict(entry)
@@ -479,6 +485,8 @@ def _drop_unknown_promos(entry, declared):
         entry["promos"] = [p for p in promos if p not in gone]
     if isinstance(weekly, dict):
         entry["weekly"] = dict((p, days) for p, days in weekly.items() if p not in gone)
+    if isinstance(paused, list):
+        entry["paused_promos"] = [p for p in paused if p not in gone]
     return entry, gone
 
 
