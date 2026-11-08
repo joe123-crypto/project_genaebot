@@ -160,7 +160,14 @@ def export_problems(membership, undecodable):
         return problems + [str(ex)]
     problems += ["quarantined %s: %s" % (jid, "; ".join(found))
                  for jid, found in sorted(report["quarantined"].items())]
-    return problems
+    if problems:
+        return problems
+    # The reader forgives some things the file does not: it drops a group's
+    # reference to a deleted campaign, with only a warning. The export writes the
+    # store as it is, so what decides is whether THAT text would load in file
+    # mode -- a rollback file make-promo-targets refuses is no rollback.
+    return ["the file would not validate: %s" % error
+            for error in promo_membership.validate(membership)]
 
 
 def switch_mismatches(store, manifest):

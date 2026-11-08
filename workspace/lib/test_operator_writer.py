@@ -230,6 +230,21 @@ class Refusals(Harness):
     def test_a_default_tier_without_a_band_is_refused(self):
         self.refuse("settings", "defaults", {"activity": "frantic"})
 
+    def test_a_built_in_tier_is_a_valid_default_when_bands_hold_only_overrides(self):
+        # Stored bands are overrides: the reader fills in the built-in tiers, and
+        # the console offers them, so choosing one must be accepted.
+        self.firestore.store["settings"]["defaults"]["bands"] = oc.encode_value({"busy": [6, 10]})
+        self.write("settings", "defaults", {"activity": "quiet"})
+        self.assertEqual(self.stored("settings", "defaults")["activity"], "quiet")
+        self.firestore.commits.clear()
+        self.refuse("settings", "defaults", {"activity": "frantic"})
+
+    def test_a_tier_added_in_the_same_change_is_a_valid_default(self):
+        self.write("settings", "defaults", {"bands": {"busy": [6, 10], "normal": [4, 6],
+                                                      "quiet": [1, 3], "dormant": [0, 1]},
+                                            "activity": "dormant"})
+        self.assertEqual(self.stored("settings", "defaults")["activity"], "dormant")
+
     def test_a_campaign_switch_that_is_not_a_boolean_is_refused(self):
         # A non-boolean reads as OFF: saving "true" would stop the campaign.
         ex = self.refuse("campaigns", "cv", {"enabled": "true"})

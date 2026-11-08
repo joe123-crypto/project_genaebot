@@ -244,12 +244,15 @@ def reinterpreted(collection, patch, fields):
                     problems.append("bands.%s must have 0 <= low <= high, got %r"
                                     % (tier, pair))
     if "activity" in patch:
+        import promo_membership  # deferred, as in operator_config.quarantine
         tier = patch["activity"]
-        bands = fields.get("bands")
-        known = set(bands) if isinstance(bands, dict) else set()
-        if not isinstance(tier, str) or (known and tier not in known):
+        # The tiers the reader will actually have: stored bands are overrides on
+        # top of the built-in ones, so a store holding only {"busy": ...} still
+        # has normal and quiet.
+        known = set(promo_membership.bands({"defaults": {"bands": fields.get("bands")}}))
+        if not isinstance(tier, str) or tier not in known:
             problems.append("activity must name a tier that has a band (%s), got %r"
-                            % (", ".join(sorted(known)) or "none defined", tier))
+                            % (", ".join(sorted(known)), tier))
     return problems
 
 

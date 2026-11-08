@@ -230,6 +230,16 @@ class ExportTest(unittest.TestCase):
         self.assertIn("CANNOT EXPORT", out)
         self.assertEqual(self.target.read_text(encoding="utf-8"), self.real)
 
+    def test_a_reference_the_reader_forgives_but_the_file_would_not_is_not_exported(self):
+        # Deleting a campaign document leaves groups naming it. The reader drops
+        # those references with a warning; membership.json would refuse to load.
+        promo = next(p for e in self.membership["groups"].values() for p in e.get("promos") or [])
+        del self.store["campaigns"][promo]
+        code, out = self.export()
+        self.assertEqual(code, 1, out)
+        self.assertIn("CANNOT EXPORT  the file would not validate", out)
+        self.assertEqual(self.target.read_text(encoding="utf-8"), self.real)
+
     def test_a_switch_that_a_rollback_would_undo_is_named(self):
         self.store["campaigns"]["genaie"]["enabled"] = operator_config.encode_value(False)
         code, out = self.export()
