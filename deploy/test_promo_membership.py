@@ -46,12 +46,14 @@ MEMBERSHIP = CRON / "membership.json"
 # account on 2026-11-07.
 # BYO HUSTLERS.COM gained building-materials on 2026-11-07; it already
 # receives genaie-advertisers on the ads account.
+# The Advertisement Hub (Buy & Sell) gained building-materials and
+# genaie-advertisers on the ads account on 2026-11-08.
 EXPECTED_DAILY = {
     "appliance-repairs": 8,
     "industrial-lighting": 14,
-    "genaie-advertisers": 13,
+    "genaie-advertisers": 14,
     "borehole-drilling": 43,
-    "building-materials": 16,
+    "building-materials": 17,
     # skylight-solar launched (2026-10-19) targeting the Bulawayo/BYO groups plus
     # Kwekwe, Gweru, both lowveld/Chiredzi groups, Mutare, Magwegwe, Lobengula West
     # and Chikombedzi: 23 groups, no weekly cadence.

@@ -20,12 +20,16 @@ class ConnectivityTests(unittest.TestCase):
         membership = json.loads((ROOT / "workspace/cron/membership.json").read_text())
         active = {jid: g for jid, g in membership["groups"].items()
                   if g.get("account", "default") == "ads" and g["status"] == "active"}
-        self.assertEqual(len(active), 15)
-        self.assertEqual(sum(bool(g["promos"]) for g in active.values()), 15)
-        self.assertEqual(sum(len(g["promos"]) for g in active.values()), 46)
-        for jid in ("120363046894354726@g.us", "120363433121439254@g.us"):
+        self.assertEqual(len(active), 16)
+        self.assertEqual(sum(bool(g["promos"]) for g in active.values()), 16)
+        self.assertEqual(sum(len(g["promos"]) for g in active.values()), 48)
+        expected = {
+            "120363046894354726@g.us": {"fruit-trees", "building-materials", "genaie-advertisers"},
+            "120363433121439254@g.us": {"fruit-trees", "building-materials", "genaie-advertisers"},
+            "120363407345824911@g.us": {"building-materials", "genaie-advertisers"},
+        }
+        for jid, promos in expected.items():
             self.assertIn(jid, active)
-            promos = {"fruit-trees", "building-materials", "genaie-advertisers"}
             self.assertEqual(set(active[jid]["promos"]), promos)
             for targets in (ROOT / "workspace/cron").glob("*-promo/targets.json"):
                 payload = json.loads(targets.read_text())
