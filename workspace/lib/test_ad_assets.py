@@ -314,6 +314,18 @@ class IndexTest(Harness):
                          ["cv-ad.png"])
 
 
+# ------------------------------------------------------------------- store ----
+class CollectionTest(unittest.TestCase):
+    def test_the_index_is_not_a_collection_the_seed_prunes(self):
+        # seed-firestore.py --write --prune deletes every document in
+        # operator_config.COLLECTIONS that membership.json does not declare,
+        # and membership.json declares no images. Listing the index there
+        # would hand all of it to the next re-seed, which is why it is its
+        # own collection -- the same reason operator_writer keeps the audit
+        # trail out of COLLECTIONS.
+        self.assertNotIn(aa.COLLECTION, oc.COLLECTIONS)
+
+
 # ------------------------------------------------------------------- bytes ----
 class CacheTest(Harness):
     def test_cache_path_carries_the_filename_after_the_digest(self):
