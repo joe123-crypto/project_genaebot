@@ -634,6 +634,120 @@ deploy neither sets nor clears them. For a one-off check from a shell on the
 gateway: `runuser -u joseph -- python3 workspace/lib/config_shadow.py` (exit 1 on any
 difference; as joseph, so the files it writes stay writable by the cron runs).
 
+### Moving the ad images to Cloudflare R2
+
+The images the campaigns post used to be the one thing in `workspace/` that only
+a deploy could change: 17 files, 11 MB, baked into the Docker image and rsynced
+onto the volume on every boot. Swapping a picture cost a commit, a PR, CI, a
+build and a gateway restart -- the riskiest routine operation this bot has.
+
+The bytes now live in a Cloudflare R2 bucket, read over plain public HTTPS, and
+the index of them lives in a Firestore `assets` collection beside the operator
+config. **One variable decides where a run's pictures come from**, and
+`workspace/lib/ad_assets.py` is the only thing that reads it:
+
+| `GENAIE_AD_ASSETS_SOURCE` | A campaign run attaches | Also |
+|---|---|---|
+| unset or `repo` | the images baked into the container | no network at all |
+| `shadow` | the same | compares the index with the baked images, and warms the cache |
+| `r2` | **the cached copy of what the index names** | falls back to the baked image while one exists |
+
+```bash
+railway variables \
+  --set GENAIE_AD_ASSETS_BASE_URL=https://pub-63be390258b5461e931301ca810b7a86.r2.dev \
+  --set GENAIE_AD_ASSETS_SOURCE=shadow && railway redeploy    # shadow on
+railway variables --set GENAIE_AD_ASSETS_SOURCE=r2 && railway redeploy    # cut over
+railway variables --set GENAIE_AD_ASSETS_SOURCE=shadow && railway redeploy  # roll back
+```
+
+One hard-won detail about that endpoint: **`r2.dev` answers `403` to a request
+whose `User-Agent` is urllib's default `Python-urllib/3.x`**, and `200` to any
+other value, an empty one included. Measured against the live bucket: `curl`, a
+named agent and no agent at all all succeed; `Python-urllib/3.13` does not. So
+`ad_assets` sends `User-Agent: genaebot-ad-assets/1`. Without it every fetch
+fails, every campaign falls back to its baked image, and the only trace is
+`[ad-assets] dropping ... 403` in a run log -- the quietest possible way for this
+module to do nothing at all. A test pins the header.
+
+That base URL is the bucket's `r2.dev` public development URL. Cloudflare
+rate-limits those and says they are not for production traffic, which is
+survivable here only because of the cache: the 17 objects are fetched once each
+and then served off the volume for the life of that volume, so a normal week
+makes no requests at all. If the cache is ever being refilled often -- or a
+second bucket's worth of images arrives -- put a custom domain in front of the
+bucket and change the one variable. Nothing else moves, because the URL is read
+from the environment and never from the index.
+
+`ad_assets.resolve` is called once per run, immediately before the daily
+rotation, and hands back **local paths** either way -- so the rotation, the
+pre-flight existence check, the caption machinery and `send_ad` are all
+unchanged. A single baked path becomes the campaign's whole rotation list in
+`r2` mode, which is what makes *adding* a picture an index edit rather than a
+change to a post script.
+
+`openclaw message send` would accept an `https://` URL for `--media` and fetch
+it itself. It is deliberately not used that way. `send_ad` runs **once per
+group**, so a URL would refetch the same two megabytes for every group in the
+run and give every group its own chance to fail -- mid-run, where the engine
+marks a group sent rather than retry an uncertain send. Downloading once and
+verifying the digest proves the bytes *before the first send*.
+
+The cache is at `media/ad-assets/<slug>/<sha256>-<filename>` on the volume, and
+that location is load-bearing twice over: openclaw reads outbound local media
+only from an allowlist of roots that includes `<state>/media` and does **not**
+include `<state>/runtime`, and `media/` is outside the `workspace/` tree the
+entrypoint wipes on every boot. So the cache survives deploys, and it is cold
+only once.
+
+Object keys are content-addressed -- `ads/<slug>/<sha256>.<ext>` -- so an object
+is immutable, no edge cache can serve stale bytes, and a cached file's name
+proves its contents. The digest is re-checked on every run; a few milliseconds
+against broadcasting a corrupt image to thirty groups.
+
+Failure is fail-open to the cache, not fail-closed, because the fallback only
+engages when the targeting is good and R2 is not -- and posting a valid cached
+ad beats posting nothing. Firestore unreachable serves the last-known-good
+index snapshot, bounded at 48 h like `operator_config`'s own. One dead object
+drops one picture from the rotation and the others still go out. Only when
+*nothing* can be served does the run exit non-zero with nothing sent, naming the
+missing picture so the cron's failure alert is useful.
+
+To put a new picture live, from a checkout, with R2 credentials in the
+environment and a Firestore key with Cloud Datastore User:
+
+```bash
+deploy/upload-ad-image.py cv ~/new-cv-ad.png --replace cv-ad.png   # dry run
+deploy/upload-ad-image.py cv ~/new-cv-ad.png --replace cv-ad.png --write
+deploy/upload-ad-image.py --verify                        # store vs the mirror
+```
+
+Credentials come from `~/.config/genaie/r2-upload.env` (`--env-file` points
+elsewhere, `--no-env-file` uses the environment only); anything already exported
+wins. That path is outside every checkout on purpose. This repository is
+default-deny **except `deploy/**`, which is un-ignored wholesale**, so a file like
+`deploy/r2.env` would be staged by `git add -A` -- and `deploy/ci/check.py` only
+refuses tracked names *beginning* with `.env`, so it would not catch that one.
+The file must be mode 600; the script refuses to read one other accounts can see,
+and parses it as plain `KEY=VALUE` rather than sourcing it, so a credentials file
+can never run anything.
+
+It validates the file (JPEG or PNG by magic bytes, inside the gateway's 6 MB
+image limit), uploads it, writes the index document, and rewrites
+`deploy/ad-assets.json` -- a generated mirror that is the seed input, the record
+of which picture went live when, and what `--verify` checks the store against.
+Commit it; CI asserts every entry's digest and size against the baked file while
+those still exist. The R2 **write** credentials never enter the container and are
+not Railway service variables: only the operator's machine signs anything, and
+the gateway only ever makes unauthenticated GETs.
+
+In `shadow` mode each run compares the index with its baked images in a
+background thread, logs `[ad-assets] ...` lines, and leaves the result in
+`runtime/firestore/ad-assets-shadow.json`, reported by `console-read overview`
+as `adAssets`. A hang, an outage or a bug in the check changes nothing about the
+run; a check still in flight when the run ends is abandoned after 20 s. For a
+one-off check of every campaign from a shell on the gateway:
+`runuser -u joseph -- python3 workspace/lib/ad_assets.py` (exit 1 on any drift).
+
 ### Per-group daily ad caps
 
 How many ads a group got used to be an accident of how many promos listed it: a

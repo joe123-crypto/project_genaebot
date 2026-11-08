@@ -49,6 +49,8 @@ Std-lib only (plus the sibling :mod:`json_store` helper), so it stays importable
 from the OpenClaw ``--command`` cron scripts, which are std-lib only by contract.
 Set ``GENAIE_CAMPAIGN_TRANSPORT=rpc`` to use one lazy Node SDK client per campaign;
 the image defaults to the transient CLI while net billing savings are unproven.
+Set ``GENAIE_AD_ASSETS_SOURCE=r2`` to take the ad images from R2 instead of the
+ones baked into the container (see :mod:`ad_assets`).
 """
 
 import os
@@ -64,6 +66,7 @@ from datetime import date
 
 import json_store
 from gateway_campaign import active_client, campaign_transport
+import ad_assets
 import config_shadow
 import operator_config
 import promo_config
@@ -1023,6 +1026,7 @@ def apply_caps(promo_name, jids, day, caps=_PROBE_CAPS, membership_path=None,
 
 @campaign_transport
 @config_shadow.alongside
+@ad_assets.alongside
 def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=None,
               tracking=None, promo_name=None, variant_images=None,
               send_delay_min=None, send_delay_max=None, rng=None, sleep=None,
@@ -1060,7 +1064,10 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
 
     Where the targeting comes from is :func:`promo_config.resolve`'s decision --
     the generated targets file, or Firestore. It is resolved once per run, and
-    ``resolve_config`` injects an alternative resolver for tests.
+    ``resolve_config`` injects an alternative resolver for tests. Where the
+    PICTURES come from is :func:`ad_assets.resolve`'s decision -- the assets
+    baked into this image, or the ones indexed in Firestore with their bytes in
+    R2 -- and it hands back local paths either way.
 
     ``rng`` (anything with a ``uniform`` method, default the ``random`` module),
     ``sleep`` (default ``time.sleep``), ``cron_timeout`` (default: ask the
@@ -1077,11 +1084,18 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
     if not promo_name:
         promo_name = os.path.basename(os.path.dirname(os.path.abspath(targets_file)))
 
+    # Which pictures this campaign actually has: the ones baked into the image,
+    # or the ones the operator indexed in Firestore and R2 holds the bytes for
+    # (see :mod:`ad_assets`). Either way what comes back is local paths, so the
+    # rotation below, the existence check and ``send_ad`` are unchanged -- and
+    # that existence check is what turns "no asset could be fetched" into a
+    # failed run with nothing sent, before a single group is posted to.
+    image = ad_assets.resolve(promo_name, image)
     image_path, rotating = _resolve_image(image)
     if not image_path or not os.path.exists(image_path):
         sys.stderr.write("ERROR: promo image missing: %s\n" % image_path)
         return 1
-    variant_images = dict(variant_images or {})
+    variant_images = ad_assets.resolve(promo_name, dict(variant_images or {}))
     for k, path in variant_images.items():
         if not 0 <= k < len(variants):
             raise ValueError("variant_images index out of range: %r" % k)
