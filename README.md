@@ -1310,19 +1310,70 @@ behind names a campaign the group is no longer in, and the writer refuses it.
 all, a campaign is code, copy, a cron and an installer run, and `settings` is what
 every group is judged against. The whole deleted record goes into its audit document
 in the same commit, so a group can be gone from the config but never from the trail.
-Recreating one is a manual re-create from that record. While the bot is still in the
-WhatsApp group, discovery lists it again under `discoveredGroups`. The ordinary way
-out of the rotation is still `status` or a pause, which keep the assignments.
+Recreating one is a manual re-create from that record. The ordinary way out of the
+rotation is still `status` or a pause, which keep the assignments.
+
+A delete on its own leaves the bot in the WhatsApp group, so discovery lists it
+again under `discoveredGroups`. The two things that finish the job are separate,
+optional, and described under *Group actions* below.
 
 What this deliberately will not do: edit `rank` (that is send order, so
 reordering is its own operation -- a new group is appended last), write more than
 one document per request, or create a line or a campaign (a new line needs a
 WhatsApp login, a new campaign needs code, copy, a cron and an installer run).
 
+### Group actions
+
+Deleting a group's record says nothing about the WhatsApp group itself or about
+what the bot stored while advertising to it. Two actions cover that, each asked
+for on its own:
+
+* **leave** -- take the account's number out of the WhatsApp group. Nothing in
+  the console API or the cron tooling can do this: the gateway exposes no RPC for
+  it, and a second process cannot borrow an account's socket. So the request is
+  queued on the volume at
+  `runtime/whatsapp-group-actions/<accountId>/requests/<uuid>.json`, and
+  `whatsapp-group-actions.mjs` -- injected into the channel monitor beside the
+  group inventory, holding the live socket -- performs it and writes the answer
+  to `results/<uuid>.json`. A successful leave also prunes the group from that
+  account's discovery inventory, because an inventory that still lists it would
+  put the group straight back under `discoveredGroups`. A scan never removes a
+  group that has gone -- it only merges what the lookup returned -- so a lookup
+  that resolved before the leave would restore the entry for good; the prune is
+  timestamped and the merge drops observations older than it. A group the
+  account is not in reports as already done, not as a failure.
+* **clearRecords** -- remove the group from every campaign's state in
+  `runtime/cron-state/<name>/state.json`: its `sent` receipt, and any `resolved`
+  invite-link cache entry that points at it (`resolved` is keyed by the link,
+  with the jid as the value, so it is matched by value, not by key). The sweep
+  reads and writes under the state file's lock, which `promo_broadcast` also
+  takes when it saves, so a send committed while the sweep is waiting cannot be
+  overwritten -- losing a receipt would let the next run post the same advert
+  again. Locking fails open: a lock that cannot be taken never stops a send.
+  This deliberately
+  does **not** touch `ad-refs.json` or `ad-ref-history.json`: those are keyed by
+  a ref code derived from the jid, are written live by the public-service-gate
+  plugin, and are evidence somebody replied to an advert. Stale entries there are
+  inert, because scoring only ever looks up the groups it is given.
+
+Both go through `workspace/bin/console-group-action`, which holds no Firestore
+credential of any kind, behind
+`POST /internal/console/groups/<jid>/actions`. A leave whose answer has not
+arrived within the bridge's wait is reported as **unconfirmed** rather than
+failed -- the request is still queued and the account may already be out, and
+telling an operator it failed would have them retry something that happened.
+`GENAIE_GROUP_ACTIONS=0` switches the whole surface off: the route answers 503
+and the monitor's helper stays inactive.
+
 **What a console may offer** comes from the writer itself. `overview.writes` is
 `{enabled, affectsProduction, fields, delete}`: whether the console API holds the
 write key (checked by presence, never read), whether a saved change reaches the
-campaigns, and `operator_writer.EDITABLE` / `DELETABLE` verbatim. A console gates
+campaigns, and `operator_writer.EDITABLE` / `DELETABLE` verbatim. Group actions
+are reported separately, as `overview.actions`
+(`{leaveGroup, clearRecords}`), because neither writes Firestore and gating them
+on the write key would hide a working control behind a credential it does not
+use. A console reading an older bot finds `actions` absent and must take that as
+"cannot". A console gates
 every control on that, so it cannot present an edit the bot will refuse.
 `overview.capSettings` is `{enabled, defaultActivity, bands}`, the cap settings in
 the shape a form edits them.

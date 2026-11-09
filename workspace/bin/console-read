@@ -598,6 +598,28 @@ def write_capabilities():
     }
 
 
+def action_capabilities():
+    """What the console may offer to DO to a group, as opposed to change about
+    it: take the account's number out of the WhatsApp group, and forget what the
+    bot stored about it.
+
+    Reported apart from ``writes`` on purpose. ``writes.enabled`` means exactly
+    "this process holds the Firestore write key", and neither of these touches
+    Firestore -- gating them on that key would hide a working control behind a
+    credential it does not use. What gates them is this bot knowing how: the
+    bridge that performs them has to be on the volume, and leaving also needs
+    the monitor's helper, which GENAIE_GROUP_ACTIONS=0 switches off.
+
+    A console reading an older bot finds this absent, and must take that as
+    "cannot", never as "everything is available"."""
+    switched_off = (os.environ.get("GENAIE_GROUP_ACTIONS") or "").strip() == "0"
+    present = os.path.isfile(str(Path(__file__).resolve().parent / "console-group-action"))
+    return {
+        "leaveGroup": bool(present and not switched_off),
+        "clearRecords": bool(present and not switched_off),
+    }
+
+
 def cap_settings(m):
     """The settings every group's daily allowance is derived from, in the shape a
     form edits them: the switch, the tier a group without one falls into, and each
@@ -634,6 +656,7 @@ def overview(day):
         "capsEnabled": bool((m.get("defaults") or {}).get("caps_enabled")),
         "capSettings": cap_settings(m),
         "writes": write_capabilities(),
+        "actions": action_capabilities(),
         "configSource": config_source_status(),
         "configShadow": config_shadow_status(),
         "adAssets": ad_assets_status(),

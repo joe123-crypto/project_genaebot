@@ -908,6 +908,44 @@ Release this bot support before the paired console UI. Existing consoles ignore
 the added fields; the new console displays `—` with an older bot. No historical
 backfill, advertising tier changes or cap changes are involved.
 
+## Operator-requested group actions
+
+The same loader that injects the group inventory also injects
+`whatsapp-group-actions.mjs`, which holds each connected account's socket so the
+console can ask for two things a config delete cannot do for itself: leave a
+WhatsApp group, and forget the per-campaign send history for one. Both are
+reached at `POST /internal/console/groups/<jid>/actions`, run through
+`workspace/bin/console-group-action`, and need **no Firestore write
+credentials** -- unlike the config route, which is gated on
+`GCP_SERVICE_ACCOUNT_WRITE_B64`.
+
+A leave is queued as a file under
+`/home/joseph/.openclaw/runtime/whatsapp-group-actions/<accountId>/`, in
+`requests/` and answered in `results/`, both named by the request's UUID -- a
+group JID never becomes a path. Keep this directory during runtime cleanup while
+the gateway is running; abandoned results are swept after ten minutes. A request
+the monitor has not answered within the bridge's 25-second wait is reported as
+unconfirmed and left queued, so a reconnecting account still performs it.
+
+A successful leave prunes the group from that account's inventory file, because
+the inventory is merge-only and would otherwise keep listing a membership that
+no longer exists. The prune is timestamped in memory and a scan drops any group
+whose lookup began before it, so a lookup still in flight at the moment of the
+leave cannot write the departed group back -- nothing would ever remove it
+again.
+
+Clearing a group's records touches `runtime/cron-state/<name>/state.json` under
+a `state.json.lock` file beside it, which `promo_broadcast` also takes when it
+saves. Keep those lock files during runtime cleanup, or just let them be
+recreated; they hold no state. Failures are reported in fixed words (`leave_failed`,
+`leave_timeout`, `not_authorized`); provider errors are never forwarded.
+
+`GENAIE_GROUP_ACTIONS=0` switches the surface off at both ends: the route answers
+503 and the monitor's helper stays inactive. The injection is version-pinned like
+the others and degrades to a `[whatsapp-group-actions]` warning rather than
+blocking connect if the adapter's anchors move. `CONSOLE_GROUP_ACTION_BIN`
+overrides the bridge path, as `CONSOLE_WRITE_BIN` does for writes.
+
 ## Firestore: shadow mode and the cutover
 
 Off unless explicitly enabled. What each mode means, what shadow mode compares,

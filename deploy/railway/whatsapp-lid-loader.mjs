@@ -10,6 +10,7 @@ const CACHE_HELPER = new URL('./whatsapp-cache-cleanup.mjs', import.meta.url).hr
 const HEALTH_HELPER = new URL('./whatsapp-health-audit.mjs', import.meta.url).href;
 const DISCOVERY_HELPER = new URL('./whatsapp-group-discovery.mjs', import.meta.url).href;
 const ACTIVITY_HELPER = new URL('./whatsapp-group-activity.mjs', import.meta.url).href;
+const ACTIONS_HELPER = new URL('./whatsapp-group-actions.mjs', import.meta.url).href;
 const CACHE_MARKER = '// GENAIE_WHATSAPP_EXPIRED_CACHE_CLEANUP_V1';
 const CACHE_START = '\t\tif (started || closed) return;\n\t\tstarted = true;\n\t\tconst listen = (event, listener) => {';
 const FROM = 'const from = group ? remoteJid : await socketSession.resolveInboundJid(remoteJid);';
@@ -54,6 +55,26 @@ export function patchWhatsAppGroupActivity(source) {
   }
   for (const [anchor, addition, after] of changes) source = source.replace(anchor, after ? anchor + addition : addition + anchor);
   return `${marker}\nimport { createWhatsAppGroupActivity as genaieCreateWhatsAppGroupActivity } from ${JSON.stringify(ACTIVITY_HELPER)};\n` + source;
+}
+
+export function patchWhatsAppGroupActions(source) {
+  const marker = '// GENAIE_WHATSAPP_GROUP_ACTIONS_V1';
+  if (source.includes(marker)) return source;
+  const changes = [
+    ['\tconst controller = new WhatsAppConnectionController({',
+      '\tconst genaieGroupActions = genaieCreateWhatsAppGroupActions({ accountId: account.accountId });\n', false],
+    ['\t\t\tstatusController.noteConnected();',
+      '\n\t\t\tgenaieGroupActions.start(controller.getCurrentSock());', true],
+    ['\t\t\tconst reason = await controller.waitForClose().finally(() => {',
+      '\n\t\t\t\tgenaieGroupActions.stop();', true],
+    ['\t\tstatusController.markStopped();',
+      '\t\tgenaieGroupActions.stop();\n', false],
+  ];
+  for (const [anchor] of changes) {
+    if (source.split(anchor).length !== 2) throw new Error('WhatsApp group actions contract changed; review adapter before upgrading');
+  }
+  for (const [anchor, addition, after] of changes) source = source.replace(anchor, after ? anchor + addition : addition + anchor);
+  return `${marker}\nimport { createWhatsAppGroupActions as genaieCreateWhatsAppGroupActions } from ${JSON.stringify(ACTIONS_HELPER)};\n` + source;
 }
 
 export function patchWhatsAppHealthAudit(source) {
@@ -158,6 +179,10 @@ registerHooks({
     if (patch === patchWhatsAppMonitor && process.env.GENAIE_GROUP_DISCOVERY !== '0') {
       try { patched = patchWhatsAppGroupDiscovery(patched); }
       catch { console.warn('[whatsapp-groups] discovery integration unavailable; review adapter compatibility'); }
+    }
+    if (patch === patchWhatsAppMonitor && process.env.GENAIE_GROUP_ACTIONS !== '0') {
+      try { patched = patchWhatsAppGroupActions(patched); }
+      catch { console.warn('[whatsapp-group-actions] group actions unavailable; review adapter compatibility'); }
     }
     if (patch === patchWhatsAppMonitor && process.env.GENAIE_WHATSAPP_CACHE_CLEANUP === '1') patched = patchWhatsAppCacheCleanup(patched);
     return { ...result, source: patched };

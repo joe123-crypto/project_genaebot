@@ -399,6 +399,26 @@ class ConsoleReadTests(unittest.TestCase):
         self.assertEqual(writes["delete"], ["groups"])
         self.assertIn("paused_promos", writes["fields"]["groups"])
 
+    def test_group_actions_are_reported_apart_from_the_write_key(self):
+        # Leaving a WhatsApp group and forgetting a group's local records write
+        # no Firestore document, so they must not disappear when the write key
+        # is absent -- a console would then hide a working control.
+        payload = self.ok("overview", "--date", DAY)
+        self.assertEqual(set(payload["actions"]), {"leaveGroup", "clearRecords"})
+        without = json.loads(
+            self.run_bridge("overview", "--date", DAY, **{WRITE_KEY: ""}).stdout)
+        self.assertIs(without["writes"]["enabled"], False)
+        self.assertIs(without["actions"]["leaveGroup"], True)
+
+    def test_the_group_actions_switch_is_reported(self):
+        # GENAIE_GROUP_ACTIONS=0 is the gateway's way of turning the surface
+        # off; the console shows the controls disabled rather than failing.
+        done = self.run_bridge("overview", "--date", DAY, GENAIE_GROUP_ACTIONS="0")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        actions = json.loads(done.stdout)["actions"]
+        self.assertIs(actions["leaveGroup"], False)
+        self.assertIs(actions["clearRecords"], False)
+
     def test_the_write_key_is_reported_by_presence_never_by_value(self):
         # A canary rather than anything key-shaped: the bridge checks presence
         # only, so the value never needs to decode, just to be findable.

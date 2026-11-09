@@ -389,7 +389,12 @@ def load_state(state_file):
 
 
 def save_state(state_file, st):
-    json_store.write_json_atomic(state_file, st)
+    # Under the state file's lock, so an operator clearing a deleted group's
+    # records cannot read this file between two sends and write back a copy
+    # without the receipt committed in between -- which would let the next run
+    # post the same advert to that group again. Locking fails open: a lock that
+    # cannot be taken never stops a send.
+    json_store.locked_write_json_atomic(state_file, st)
 
 
 # --------------------------------------------------------------------- send ----
