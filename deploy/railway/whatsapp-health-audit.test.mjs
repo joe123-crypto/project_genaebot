@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { createWhatsAppHealthAudit } from './whatsapp-health-audit.mjs';
-import { patchWhatsAppHealthAudit, patchWhatsAppGroupDiscovery } from './whatsapp-lid-loader.mjs';
+import { patchWhatsAppHealthAudit, patchWhatsAppGroupDiscovery, patchWhatsAppGroupActivity } from './whatsapp-lid-loader.mjs';
 
 const upstream = fs.readFileSync(new URL('./fixtures/whatsapp-lifecycle-2026.9.9.js', import.meta.url), 'utf8');
 
@@ -61,7 +61,7 @@ test('opt-out creates no files and storage failure does not affect callers', (t)
 
 // Execute the unmodified upstream monitor body plus our instrumentation with
 // controlled transport dependencies. No real socket, login, or credentials.
-async function monitor({ setup = false, planned = false, watchdog = false, discovery = false } = {}) {
+async function monitor({ setup = false, planned = false, watchdog = false, discovery = false, activity = false } = {}) {
   const records = [], actions = [];
   const signal = { aborted: false };
   const logger = { info() {}, warn() {}, raw() {} };
@@ -70,6 +70,7 @@ async function monitor({ setup = false, planned = false, watchdog = false, disco
     async openConnection(options) {
       actions.push(['open']);
       if (setup) throw new Error('fixture authentication failure');
+      if (activity) await options.createListener({ sock: 'fixture-existing-socket', connection: {} });
       if (watchdog) options.onWatchdogTimeout({ connectionId: 'connection-1',
         startedAt: Date.now(), lastTransportActivityAt: Date.now(), handledMessages: 0 });
       return { connectionId: 'connection-1' };
@@ -81,12 +82,14 @@ async function monitor({ setup = false, planned = false, watchdog = false, disco
       healthState: 'conflict', reconnectAttempts: 0, action: 'stop' }; }
     getReconnectAttempts() { return 0; }
     getCurrentSock() { return 'fixture-existing-socket'; }
+    getDisconnectRetryAbortSignal() { return undefined; }
     setUnhandledRejectionCleanup() {}
     async closeCurrentConnection() { actions.push(['close']); }
     async shutdown() { actions.push(['shutdown']); }
   }
   const scope = {
-    attachWebInboxToSocket() {}, defaultRuntime: { error() {}, log() {} },
+    attachWebInboxToSocket() { actions.push(['inbox-start']); }, defaultRuntime: { error() {}, log() {} },
+    createWebOnMessageHandler: () => () => {},
     newConnectionId: () => 'connection-1', getChildLogger$1: () => logger,
     resolveWebMonitorConfigSnapshot: () => ({ cfg: {}, account: { accountId: 'ads', authDir: '/fixture' } }),
     getRuntimeConfig$1: () => ({}), resolveWhatsAppMediaMaxBytes: () => 1,
@@ -100,6 +103,10 @@ async function monitor({ setup = false, planned = false, watchdog = false, disco
       start: socket => actions.push(['discovery-start', accountId, socket]),
       stop: () => actions.push(['discovery-stop']),
     }),
+    genaieCreateWhatsAppGroupActivity: ({ accountId }) => ({
+      start: socket => actions.push(['activity-start', accountId, socket]),
+      stop: () => actions.push(['activity-stop']),
+    }),
     registerChannelRuntimeContext: () => ({ dispose() {} }),
     CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY: 'fixture',
     registerUnhandledRejectionHandler: () => () => {}, readWebSelfId: () => ({}),
@@ -110,8 +117,10 @@ async function monitor({ setup = false, planned = false, watchdog = false, disco
     whatsappHeartbeatLog: logger, formatCliCommand: (x) => x, formatError: (e) => String(e),
     setInterval: () => 1, clearInterval() {},
   };
-  const patched = patchWhatsAppHealthAudit(upstream);
-  const source = (discovery ? patchWhatsAppGroupDiscovery(patched) : patched).split('\n').filter(l => !l.startsWith('import ')).join('\n');
+  let patched = patchWhatsAppHealthAudit(upstream);
+  if (activity) patched = patchWhatsAppGroupActivity(patched);
+  if (discovery) patched = patchWhatsAppGroupDiscovery(patched);
+  const source = patched.split('\n').filter(l => !l.startsWith('import ')).join('\n');
   const proxy = new Proxy(scope, { has: () => true, get: (o, k) => k in o ? o[k] : globalThis[k] });
   const run = new Function('scope', `with (scope) { ${source}; return monitorWebChannel; }`)(proxy);
   await run(false, undefined, true, () => {}, undefined, signal);
@@ -124,6 +133,14 @@ test('real monitor journals setup authentication rejection without retrying', as
   assert.equal(records[1].statusCode, 401);
   assert.equal(records[1].reason, 'logged-out');
   assert.equal(actions.filter(a => a[0] === 'open').length, 1);
+});
+
+test('actual monitor attaches activity to the existing socket before admission and detaches before shutdown', async () => {
+  const { actions } = await monitor({ activity: true, discovery: true });
+  assert.deepEqual(actions.filter(a => a[0] === 'activity-start'), [['activity-start', 'ads', 'fixture-existing-socket']]);
+  assert.ok(actions.findIndex(a => a[0] === 'activity-start') < actions.findIndex(a => a[0] === 'inbox-start'));
+  assert.equal(actions.filter(a => a[0] === 'activity-stop').length, 2);
+  assert.ok(actions.findIndex(a => a[0] === 'activity-stop') < actions.findIndex(a => a[0] === 'shutdown'));
 });
 
 test('real monitor distinguishes watchdog, session conflict, and planned stop', async () => {

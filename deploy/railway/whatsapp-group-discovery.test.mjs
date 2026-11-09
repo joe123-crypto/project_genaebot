@@ -36,10 +36,24 @@ test('initial scan persists all groups, names and timestamps, without participan
   assert.equal(Object.keys(saved.groups).length, 150);
   assert.equal(saved.groups['1@g.us'].name, 'Group 0');
   assert.equal(saved.groups['1@g.us'].firstSeenAt, saved.lastSuccessAt);
+  assert.equal(saved.groups['1@g.us'].memberCount, 1);
+  assert.equal(saved.groups['1@g.us'].memberCountObservedAt, saved.lastSuccessAt);
   assert.doesNotMatch(JSON.stringify(saved), /private|participants|promos/);
   assert.equal(fs.statSync(path.join(f.root, 'runtime/whatsapp-groups/ads.json')).mode & 0o777, 0o600);
   assert.deepEqual(fs.readdirSync(path.join(f.root, 'runtime/whatsapp-groups')), ['ads.json']);
   assert.equal(f.timers[0].ms, DISCOVERY_INTERVAL_MS);
+});
+
+test('member totals preserve their observation time when a later scan lacks participant information', async t => {
+  const f = fixture(t), d = f.create(); let metadata = { subject: 'Group', participants: [1, 2, 3] };
+  d.start({ groupFetchAllParticipating: async () => ({ '1@g.us': metadata }) }); await d.scan();
+  const first = f.read().groups['1@g.us'].memberCountObservedAt;
+  f.tick(); metadata = { subject: 'Renamed' }; await d.scan();
+  assert.equal(f.read().groups['1@g.us'].memberCount, 3);
+  assert.equal(f.read().groups['1@g.us'].memberCountObservedAt, first);
+  f.tick(); metadata = { size: 0 }; await d.scan();
+  assert.equal(f.read().groups['1@g.us'].memberCount, 0);
+  assert.notEqual(f.read().groups['1@g.us'].memberCountObservedAt, first);
 });
 
 test('hourly refresh updates names, preserves first-seen and missing groups; restart retains history', async t => {

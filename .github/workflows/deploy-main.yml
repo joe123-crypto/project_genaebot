@@ -128,6 +128,7 @@ jobs:
               node --test --test-reporter=tap deploy/railway/whatsapp-lid-recovery.test.mjs \
                 deploy/railway/whatsapp-health-audit.test.mjs \
                 deploy/railway/whatsapp-group-discovery.test.mjs \
+                deploy/railway/whatsapp-group-activity.test.mjs \
                 deploy/railway/whatsapp-group-discovery.integration.test.mjs \
                 deploy/railway/whatsapp-dm-policy.integration.test.mjs \
                 deploy/railway/whatsapp-cache-cleanup.test.mjs \
