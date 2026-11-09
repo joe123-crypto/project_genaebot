@@ -483,6 +483,54 @@ class CatalogueTest(Harness):
         self.catalogue()
         self.assertFalse(os.path.exists(aa.failure_path(self.env)))
 
+    def test_a_failed_read_over_a_snapshot_still_opens_the_retry_window(self):
+        # The branch that always exists in production: a container that has
+        # read Firestore once has a snapshot, so a later failure answers out of
+        # it instead of raising. That is still a failed read -- without it the
+        # backoff would do nothing on any deployed container.
+        self.mirror(entry("cv", "old-ad.png", PNG))
+        self.store(entry("cv", "cv-ad.png", PNG))
+        self.catalogue()                                    # writes the snapshot
+        self.clock[0] += aa.CATALOGUE_MAX_AGE_SECONDS + 1
+        self.world.firestore.down = True
+        self.assertEqual(self.catalogue()["source"], "snapshot")
+        self.assertTrue(os.path.exists(aa.failure_path(self.env)))
+        before = len(self.world.firestore.requests)
+        found = self.catalogue()
+        self.assertEqual(len(self.world.firestore.requests), before)
+        # And the window keeps the snapshot: suppressing the read must not cost
+        # the fresher answer that read would have fallen back to.
+        self.assertEqual(found["source"], "snapshot")
+        self.assertEqual([e["filename"] for e in found["campaigns"]["cv"]], ["cv-ad.png"])
+        self.assertTrue(found["note"])
+
+    def test_the_window_over_a_snapshot_expires_like_any_other(self):
+        self.store(entry("cv", "cv-ad.png", PNG))
+        self.catalogue()
+        self.clock[0] += aa.CATALOGUE_MAX_AGE_SECONDS + 1
+        self.world.firestore.down = True
+        self.catalogue()
+        self.world.firestore.down = False
+        self.store(entry("cv", "cv-ad-2.png", PNG2))
+        self.clock[0] += aa.RETRY_AFTER_SECONDS + 1
+        found = self.catalogue()
+        self.assertEqual(found["source"], "firestore")
+        self.assertEqual([e["filename"] for e in found["campaigns"]["cv"]], ["cv-ad-2.png"])
+        self.assertFalse(os.path.exists(aa.failure_path(self.env)))
+
+    def test_inside_the_window_a_snapshot_past_the_limit_drops_to_the_mirror(self):
+        self.mirror(entry("cv", "old-ad.png", PNG))
+        self.store(entry("cv", "cv-ad.png", PNG2))
+        self.catalogue()
+        self.clock[0] += aa.INDEX_MAX_AGE_SECONDS + 1       # snapshot now too old to act on
+        self.world.firestore.down = True
+        self.assertEqual(self.catalogue()["source"], "mirror")
+        before = len(self.world.firestore.requests)
+        found = self.catalogue()
+        self.assertEqual(len(self.world.firestore.requests), before)
+        self.assertEqual(found["source"], "mirror")
+        self.assertEqual([e["filename"] for e in found["campaigns"]["cv"]], ["old-ad.png"])
+
     def test_the_repo_mirror_this_branch_ships_parses_through_the_validator(self):
         # deploy/ad-assets.json is what a container actually falls back to, so
         # a row this module would quarantine must be caught here, not in

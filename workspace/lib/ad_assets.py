@@ -528,6 +528,21 @@ def _recent_snapshot(env, max_age, now):
     return dict(result, degraded=None)
 
 
+def _stale_snapshot(env, why, now):
+    """The last-known-good index with no age limit but
+    :data:`INDEX_MAX_AGE_SECONDS`, for a window in which no live read is
+    attempted. ``None`` when no snapshot is usable, which hands the answer to
+    the mirror.
+
+    This is the other half of :data:`RETRY_AFTER_SECONDS`: suppressing the read
+    must not also throw away the snapshot that read would have fallen back to,
+    or the backoff would cost the fresher answer it is trying to protect."""
+    try:
+        return _from_snapshot(env, why, now=now)
+    except AssetsUnavailable:
+        return None
+
+
 def _fallback(env, why):
     """The committed mirror, marked as standing in for a read that did not
     happen. ``None`` when there is no mirror either, which is the one case with
@@ -574,10 +589,22 @@ def catalogue(env=None, *, max_age=CATALOGUE_MAX_AGE_SECONDS, now=None, log=None
         if why is None:
             try:
                 current = index(env, now=now, log=log, **inject)
-                _clear_failure(env)
             except AssetsUnavailable as ex:
                 why = str(ex)
+            else:
+                # A live read that failed over a snapshot still inside the 48 h
+                # limit comes back as an answer rather than an exception, with
+                # ``degraded`` naming the failure. It is still a failed read, so
+                # the window has to start here too -- otherwise the one case
+                # that always has a snapshot, every deployed container, never
+                # backs off at all.
+                why = current.get("degraded")
+            if why is None:
+                _clear_failure(env)
+            else:
                 _note_failure(env, why, now, log)
+        else:
+            current = _stale_snapshot(env, why, now)
         if current is None:
             current = _fallback(env, why)
         if current is None:
