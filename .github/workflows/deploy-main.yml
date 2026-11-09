@@ -166,7 +166,21 @@ jobs:
         with:
           node-version: "26.12.1"
       - name: Install pinned Railway CLI
-        run: npm install --global @railway/cli@5.71.0
+        shell: bash
+        timeout-minutes: 5
+        run: |
+          for attempt in 1 2 3; do
+            if npm install --global @railway/cli@5.71.0 && railway --version; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Railway CLI installation failed after 3 attempts"
+              exit 1
+            fi
+            delay=$((attempt * 10))
+            echo "::warning::Railway CLI installation failed; retrying in ${delay}s"
+            sleep "$delay"
+          done
       - name: Release or restore the exact previous image
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
