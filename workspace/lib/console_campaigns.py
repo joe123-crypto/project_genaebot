@@ -347,9 +347,12 @@ def _reconcile_one(slug, store, call):
 
 def mark_status(slug, store, status):
     # A field mask avoids overwriting caption/switch edits during reconciliation.
-    store.request(":commit", {"writes": [{"update": {"name": "%s/campaigns/%s" % (store.base, slug),
-                   "fields": config.encode_fields({"scheduleStatus": status})}, "updateMask": {"fieldPaths": ["scheduleStatus"]},
-                   "currentDocument": {"exists": True}}]})
+    import console_config
+    # Invalidate only when reconciliation actually writes, not every minute.
+    with console_config.mutation():
+        store.request(":commit", {"writes": [{"update": {"name": "%s/campaigns/%s" % (store.base, slug),
+                       "fields": config.encode_fields({"scheduleStatus": status})}, "updateMask": {"fieldPaths": ["scheduleStatus"]},
+                       "currentDocument": {"exists": True}}]})
 
 
 def reconcile_all(store):

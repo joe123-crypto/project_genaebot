@@ -341,6 +341,50 @@ class ConsoleApiTests(unittest.TestCase):
 
     # -- unit level -------------------------------------------------------
 
+    def test_fresh_query_bypasses_response_cache_every_time(self):
+        base = self.serve()
+        self.fetch(base + "/groups")
+        for _ in range(2):
+            status, body, _ = self.fetch(base + "/groups?date=2026-11-09&fresh=1")
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(body)["args"], ["groups", "--date", "2026-11-09", "--fresh-config"])
+        self.assertEqual(self.server.console["bridge"].runs, 3)
+        self.fetch(base + "/groups")
+        self.assertEqual(self.server.console["bridge"].runs, 3)
+        for query in ("fresh=0", "fresh=", "fresh=1&fresh=1"):
+            self.assertEqual(self.fetch(base + "/groups?" + query)[0], 400)
+
+    def test_an_older_inflight_read_cannot_repopulate_invalidated_response_cache(self):
+        bridge = API.Bridge(self.echo)
+        started, finish = threading.Event(), threading.Event()
+        def run(*args, **kw):
+            started.set()
+            self.assertTrue(finish.wait(5))
+            return type("Result", (), {"returncode": 0, "stdout": b"old"})()
+        with unittest.mock.patch.object(API.subprocess, "run", run):
+            reader = threading.Thread(target=bridge.run, args=(["groups"],))
+            reader.start()
+            self.assertTrue(started.wait(5))
+            bridge.invalidate()
+            finish.set()
+            reader.join(5)
+        self.assertEqual(bridge.cache, {})
+
+    def test_response_only_invalidation_preserves_config_generation(self):
+        bridge = API.Bridge(self.echo)
+        generation = bridge.config_generation
+        bridge.invalidate(config=False)
+        self.assertEqual(bridge.config_generation, generation)
+        bridge.invalidate()
+        self.assertNotEqual(bridge.config_generation, generation)
+
+    def test_structured_config_error_survives_the_bridge(self):
+        source = 'import json,sys\njson.dump({"error":"config unavailable","code":"config_rate_limited","upstreamStatus":429,"quota":"daily"},sys.stdout)\nsys.exit(1)'
+        base = self.serve(bridge=self.write("limited.py", source))
+        status, body, _ = self.fetch(base + "/groups?fresh=1")
+        self.assertEqual(status, 502)
+        self.assertEqual(json.loads(body)["code"], "config_rate_limited")
+
     def test_curated_only_accepts_a_lone_string_error(self):
         self.assertTrue(API.curated(b'{"error": "nope"}'))
         for payload in (b"", b"not json", b"[]", b'{"error": 1}',

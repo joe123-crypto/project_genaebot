@@ -843,6 +843,33 @@ new `workspace/lib/console_accounts.mjs`. Deploy the backend before enabling the
 console controls. The gateway token stays inside the container; the local console
 uses only `BOT_API_BASE_URL` and the matching `BOT_API_TOKEN`.
 
+Firestore configuration inside those responses has a separate five-minute,
+process-shared display cache at `$GENAIE_FIRESTORE_DIR/console-config.json`
+(default `$OPENCLAW_STATE_DIR/runtime/firestore`). Private cache and lock files
+live on the volume; credential/project hashes and invalidation generations prevent
+reuse across contexts. Background failures have a five-minute cooldown and use
+the validated snapshot with its original timestamp and 48-hour age limit. Metrics
+and discovery remain on their existing schedules. The one-minute reconciler
+clears response caches without discarding config on every unchanged pass.
+
+`GET /internal/console/groups?fresh=1` (also supported by overview, campaigns and
+preview, alongside `date`) forwards `--fresh-config`, bypasses both display
+caches and refuses unavailable live config. Deploy this backend before the console
+uses fresh reads for save validation. A Firestore 429 carries optional curated
+`code: config_rate_limited`, `upstreamStatus: 429`, `quota` and
+`retryAfterSeconds`; write refusals remain HTTP 503. Attempted writes invalidate
+both caches even when an acknowledgement is lost. Fresh reads never fall back to
+cached config to authorize a save, and the console never automatically resubmits
+a config write.
+
+Validate with `python3 workspace/lib/test_console_config.py`, the operator config,
+writer, read bridge and API suites, then `./deploy/ci-check.sh`. After backend and
+console rollout, verify an intended tier edit appears immediately and compare
+Firestore read usage across several page refreshes: the config cache's `checkedAt`
+should advance at most once per five minutes without writes or fresh reads. If
+quota is already exhausted, verify after recovery; this change does not raise
+quota or enable billing.
+
 Pause and Unlink persist disabled state on the volume. Startup preserves this
 state for default as well as ads. `REPLIES_DISABLED=1` still overrides Start;
 after removing it, use Start explicitly. Existing reply policies remain intact.

@@ -303,6 +303,16 @@ class Refusals(Harness):
             self.write("groups", JID_A, {"status": "on-hold"})
         self.assertEqual(self.firestore.commits, [])
 
+    def test_a_config_read_429_writes_neither_the_group_nor_an_audit(self):
+        self.write("groups", JID_A, {"status": "on-hold"}, dry_run=True)
+        before = self.stored("groups", JID_A)
+        self.firestore.fail_next = [429, 429]
+        with self.assertRaises(oc.ConfigUnavailable) as caught:
+            self.write("groups", JID_A, {"activity": "busy"})
+        self.assertEqual(caught.exception.metadata["code"], "config_rate_limited")
+        self.assertEqual(self.stored("groups", JID_A), before)
+        self.assertEqual(self.firestore.commits, [])
+
     def test_a_read_only_key_fails_at_the_commit_without_half_applying(self):
         self.firestore.commit_status = 403
         with self.assertRaises(oc.ConfigUnavailable) as caught:

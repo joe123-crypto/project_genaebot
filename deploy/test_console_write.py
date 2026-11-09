@@ -20,6 +20,7 @@ import io
 import json
 import os
 import sys
+import tempfile
 import unittest
 import unittest.mock
 from pathlib import Path
@@ -153,12 +154,17 @@ class WriteEnvironment(unittest.TestCase):
 
 
 class Payload(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.state_dir = directory.name
+
     def run_main(self, raw=None, env=None, **patch):
         out = io.StringIO()
         with unittest.mock.patch.object(operator_writer, "write", **patch):
             code = CW.main([], stdin=io.BytesIO(
                 raw if raw is not None else json.dumps(REQUEST).encode()),
-                stdout=out, env=env or {CW.WRITE_KEY_VAR: KEY})
+                stdout=out, env={"GENAIE_FIRESTORE_DIR": self.state_dir, **(env or {CW.WRITE_KEY_VAR: KEY})})
         return code, json.loads(out.getvalue())
 
     def test_an_applied_change_is_reported_with_a_status_the_api_accepts(self):
@@ -193,6 +199,38 @@ class Payload(unittest.TestCase):
             side_effect=operator_config.ConfigInvalid("settings/defaults is missing"))
         self.assertEqual(code, 1)
         self.assertEqual(payload["status"], 409)
+
+    def test_rate_limit_metadata_and_cache_invalidation_survive_a_refusal(self):
+        code, payload = self.run_main(side_effect=operator_config.ConfigUnavailable(
+            "firestore.googleapis.com answered HTTP 429", upstreamStatus=429,
+            code="config_rate_limited", quota="daily", retryAfterSeconds=300))
+        self.assertEqual((code, payload["status"]), (1, 503))
+        self.assertEqual(payload["code"], "config_rate_limited")
+        self.assertEqual(payload["upstreamStatus"], 429)
+        self.assertEqual(payload["quota"], "daily")
+        self.assertEqual(payload["retryAfterSeconds"], 300)
+        self.assertTrue(os.path.exists(os.path.join(self.state_dir, "console-config-epoch.json")))
+
+    def test_a_tier_save_is_visible_immediately_despite_a_warm_display_cache(self):
+        import console_config
+        from test_operator_writer import WritableFirestore
+        from test_operator_config import JID_A
+        fake = WritableFirestore(page_size=300)
+        env = {"GENAIE_FIRESTORE_DIR": self.state_dir, "GCP_SERVICE_ACCOUNT_B64": creds_b64(),
+               CW.WRITE_KEY_VAR: KEY}
+        with unittest.mock.patch.object(operator_config.urllib.request, "urlopen", fake), \
+                unittest.mock.patch.object(operator_config, "node_signer", return_value="jwt"):
+            before = console_config.load(env)
+            tier = before["membership"]["groups"][JID_A].get("activity", "normal")
+            next_tier = "busy" if tier != "busy" else "quiet"
+            out = io.StringIO()
+            request = {"collection": "groups", "id": JID_A, "fields": {"activity": next_tier}}
+            code = CW.main([], stdin=io.BytesIO(json.dumps(request).encode()), stdout=out, env=env)
+            self.assertEqual(code, 0, out.getvalue())
+            after = console_config.load(env)
+        self.assertEqual(after["membership"]["groups"][JID_A]["activity"], next_tier)
+        self.assertEqual(len(fake.commits), 1)
+        self.assertEqual(len(fake.commits[0]["writes"]), 2)  # group and audit
 
     def test_every_answer_carries_ok_and_status_that_agree(self):
         # The API refuses to pass on an answer whose ok and status disagree.

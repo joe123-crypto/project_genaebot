@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 import console_campaigns as campaigns
 import operator_config
 import operator_writer
+import console_config
 
 
 def main():
@@ -26,11 +27,13 @@ def main():
             campaigns.reconcile_all(store)
             result = {}
         else:
-            result = campaigns.create(data, store)
+            with console_config.mutation():
+                result = campaigns.create(data, store)
         print(json.dumps({"ok": True, "status": 200, **result}))
         return 0
     except (operator_writer.WriteRefused, operator_config.ConfigUnavailable, ValueError) as ex:
-        print(json.dumps({"ok": False, "status": getattr(ex, "status", 503), "error": str(ex), "problems": []}))
+        print(json.dumps({"ok": False, "status": getattr(ex, "status", 503), "error": str(ex),
+                          "problems": [], **getattr(ex, "metadata", {})}))
         return 1
 
 

@@ -1270,6 +1270,29 @@ which production has read since the cutover (*Moving membership to Firestore*);
 effect from each campaign's **next run** -- a run already sending keeps the
 config it resolved when it started.
 
+Console displays use `workspace/lib/console_config.py` to share a five-minute
+config cache between read bridge processes. A volume lock shares each refresh;
+cached data is scoped to the credential/project context and API generation.
+After a failed refresh, background display reads wait five minutes before trying
+again. The existing validated fallback snapshot retains its original timestamp,
+failure reason and 48-hour limit. Metrics and discovery keep their current cadence.
+
+An authenticated read with `fresh=1`, or `console-read --fresh-config`, bypasses
+both the API response cache and config display cache and requires a live read.
+Save preflights use this path; writers and campaign sends retain their live
+checks. Config changes and campaign creation invalidate the display cache before
+and after the attempt, including failures and unknown outcomes. Generation checks
+prevent older in-flight responses from restoring an invalidated cache. Schedule
+reconciliation invalidates config only when it actually writes schedule status.
+
+Firestore errors expose optional curated `code`, `upstreamStatus`, `quota`
+(`daily`, `rate`, or `unknown`) and `retryAfterSeconds` fields. A config read 429
+has `code: config_rate_limited`; a refused write retains HTTP 503 and `ok: false`.
+Only numeric delays and quota classifications are copied from Google's response,
+never its arbitrary message or credential details. Identified daily quota failures
+are not immediately retried. Deploy this backend before the console's fresh-read
+save preflights; no quota or billing settings change.
+
 Every change goes through `workspace/bin/console-write`, which is to writes what
 `console-read` is to reads: a separate process importing the bot's own modules
 from the volume. The sequence, in `workspace/lib/operator_writer.py`, is the
