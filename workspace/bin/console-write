@@ -101,6 +101,12 @@ def parse_request(raw):
         raise operator_writer.WriteRefused("request is not valid JSON: %s" % ex)
     if not isinstance(request, dict):
         raise operator_writer.WriteRefused("request must be a JSON object")
+    if "changes" in request:
+        if (set(request) - {"collection", "changes", "actor", "dryRun"}
+                or request.get("collection") != "groups"
+                or not isinstance(request.get("dryRun", False), bool)):
+            raise operator_writer.WriteRefused("invalid group batch request")
+        return request
     missing = [name for name in REQUIRED if name not in request]
     if missing:
         raise operator_writer.WriteRefused("request is missing %s" % ", ".join(missing))
@@ -144,7 +150,10 @@ def main(argv, stdin=None, stdout=None, env=None):
         request = parse_request(stdin.read(MAX_REQUEST_BYTES + 1))
         guard = contextlib.nullcontext() if request.get("dryRun") else console_config.mutation(env)
         with guard:
-            if "delete" in request:
+            if "changes" in request:
+                result = operator_writer.write_group_batch(request["changes"], request.get("actor"),
+                    env=write_env(env), dry_run=bool(request.get("dryRun")))
+            elif "delete" in request:
                 result = operator_writer.delete(
                     request["collection"], request["id"].strip(), request.get("actor"),
                     env=write_env(env), reason=request.get("reason"),

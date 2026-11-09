@@ -64,7 +64,7 @@ MANIFEST_CANDIDATES = (
     "/usr/local/lib/genaie/promo-crons.json",
 )
 
-COMMANDS = ("overview", "groups", "campaigns", "preview")
+COMMANDS = ("overview", "groups", "campaigns", "preview", "captions", "campaign", "campaign-state", "campaign-groups", "capabilities", "settings", "navigation", "group", "groups-by-id")
 
 
 # Exit codes, so a caller can tell "you asked for something that is not here"
@@ -111,8 +111,8 @@ def parse_args(args):
             raise BridgeError("unexpected argument %r" % token)
     if command not in COMMANDS:
         raise BridgeError("command must be one of %s" % ", ".join(COMMANDS))
-    if command == "preview" and not slug:
-        raise BridgeError("preview needs a campaign slug")
+    if command in ("preview", "captions", "campaign", "campaign-state", "campaign-groups", "group", "groups-by-id") and not slug:
+        raise BridgeError("%s needs a campaign slug" % command)
     return command, slug, day
 
 
@@ -127,6 +127,10 @@ def parse_day(raw):
 
 _RESOLVED = {}
 _FRESH_CONFIG = False
+_CAMPAIGN_SCOPE = None
+_INCLUDE_GROUPS = True
+_INCLUDE_CAMPAIGNS = True
+_GROUP_IDS = None
 
 
 def resolved():
@@ -142,7 +146,9 @@ def resolved():
         try:
             _RESOLVED["config"] = promo_config.resolve(None, membership_path=MEMBERSHIP,
                                                        err=notes, config_loader=partial(
-                                                       console_config.load, fresh=_FRESH_CONFIG))
+                                                       console_config.load, fresh=_FRESH_CONFIG,
+                                                       campaign=_CAMPAIGN_SCOPE, group_ids=_GROUP_IDS,
+                                                       include_groups=_INCLUDE_GROUPS, include_campaigns=_INCLUDE_CAMPAIGNS))
         except (operator_config.ConfigUnavailable, operator_config.ConfigInvalid) as exc:
             raise ConfigReadError("no operator config to read: %s" % exc,
                                   getattr(exc, "metadata", {})) from exc
@@ -350,7 +356,10 @@ def asset_catalogue():
     if "value" not in _CATALOGUE:
         notes = io.StringIO()
         try:
-            _CATALOGUE["value"] = ad_assets.catalogue(log=lambda m: notes.write(m))
+            env = dict(os.environ)
+            if _CAMPAIGN_SCOPE:
+                env["GENAIE_AD_ASSETS_SCOPE"] = _CAMPAIGN_SCOPE
+            _CATALOGUE["value"] = ad_assets.catalogue(env, log=lambda m: notes.write(m))
         except Exception as exc:  # the campaigns screen outranks its pictures
             _CATALOGUE["value"] = {"campaigns": {}, "source": None,
                                    "fetchedAt": None,
@@ -375,13 +384,15 @@ def asset_entries(slug):
             for entry in asset_catalogue()["campaigns"].get(slug, [])]
 
 
-def campaign_records(day):
+def campaign_records(day, only_slug=None, include_assets=True):
     m = membership()
     declared = manifest()
 
     records = []
     for entry in declared.get("promos", []):
         slug = entry["slug"]
+        if only_slug is not None and slug != only_slug:
+            continue
         script = script_path(entry["script"])
         captions = []
         tracking = {}
@@ -432,7 +443,7 @@ def campaign_records(day):
                 "captions": captions,
                 "tracking": tracking,
                 "images": images,
-                "assets": asset_entries(slug),
+                "assets": asset_entries(slug) if include_assets else [],
                 "targetCount": len(all_jids),
                 "weeklyCount": len(weekly_jids),
                 "accounts": per_account,
@@ -440,7 +451,7 @@ def campaign_records(day):
                 "error": error,
             }
         )
-    records.extend(console_campaigns.records(m, day, resolved().get("storeSwitches")))
+    records.extend(console_campaigns.records(m, day, resolved().get("storeSwitches"), only_slug=only_slug))
     records.sort(key=lambda row: (row["hour"] if row["hour"] is not None else 99, row["minute"] or 0))
     return records
 
@@ -658,7 +669,7 @@ def overview(day):
         status = entry.get("status", "active")
         by_status[status] = by_status.get(status, 0) + 1
 
-    campaigns = campaign_records(day)
+    campaigns = campaign_records(day, include_assets=False)
     rows = group_rows(day)
     planned = sum(len(row["allowedToday"]) for row in rows if row["status"] == "active")
 
@@ -675,30 +686,130 @@ def overview(day):
         "actions": action_capabilities(),
         "configSource": config_source_status(),
         "configShadow": config_shadow_status(),
-        "adAssets": ad_assets_status(),
         "campaigns": campaigns,
     }
 
 
+def campaign_edit_state(slug, captions_only=False):
+    """Save-time checks need one campaign document, no targeting or cap data."""
+    declared = next((row for row in manifest().get("promos", []) if row["slug"] == slug), None)
+    doc = None
+    if promo_config.mode()[0] == promo_config.FIRESTORE:
+        import urllib.request
+        import time
+        try:
+            creds = operator_config.credentials()
+            if creds is None:
+                raise operator_config.ConfigUnavailable("no service account configured")
+            token = operator_config.access_token(creds,
+                operator_config.token_cache_path(operator_config.state_dir()),
+                opener=urllib.request.urlopen, signer=operator_config.node_signer,
+                now=time.time, sleep=time.sleep)
+            doc = operator_config.get_document(creds["project_id"], "campaigns", slug, token,
+                opener=urllib.request.urlopen, sleep=time.sleep)
+        except operator_config.ConfigUnavailable as exc:
+            raise ConfigReadError("campaign config unavailable: %s" % exc, exc.metadata) from exc
+        except ValueError as exc:
+            raise BridgeError("campaign config cannot be decoded") from exc
+        switch = (doc or {}).get("enabled", True)
+        store_on = switch if isinstance(switch, bool) else False
+    else:
+        store_on = store_enabled(declared) if declared else False
+    if declared is None and (not doc or doc.get("kind") != "console"):
+        if captions_only:
+            raise NotFound("unknown campaign %r" % slug)
+        return {"campaign": None}
+    cron_on = promo_enabled(declared) if declared else doc.get("scheduleStatus") == "ready"
+    enabled = store_on and cron_on
+    if not captions_only:
+        return {"campaign": {"slug": slug, "enabled": enabled, "storeEnabled": store_on, "cronEnabled": cron_on}}
+    try:
+        if doc is not None and "captions" in doc:
+            captions = operator_config.validate_captions(doc["captions"])
+        elif declared:
+            module = import_campaign(script_path(declared["script"]))
+            captions = [str(text) for text in as_list(getattr(module, "POST_TEXTS", None))]
+        else:
+            raise BridgeError("campaign has no caption variants")
+    except operator_config.ConfigInvalid as exc:
+        raise BridgeError(str(exc)) from exc
+    return {"slug": slug, "enabled": enabled, "captions": captions, "tracking": {}, "groups": []}
+
+
+def navigation():
+    """Sidebar counts do not need group records, previews, captions or assets."""
+    def read():
+        if promo_config.mode()[0] != promo_config.FIRESTORE:
+            m = membership()
+            review = sum(1 for row in m["groups"].values() if promo_membership.status_of(row) != "active")
+            total = len(manifest().get("promos", [])) + len(console_campaigns.definitions(m))
+        else:
+            import urllib.request
+            import time
+            creds = operator_config.credentials()
+            if creds is None:
+                raise operator_config.ConfigUnavailable("no service account configured")
+            token = operator_config.access_token(creds,
+                operator_config.token_cache_path(operator_config.state_dir()),
+                opener=urllib.request.urlopen, signer=operator_config.node_signer,
+                now=time.time, sleep=time.sleep)
+            def count(collection, field, value):
+                return operator_config.count_documents(creds["project_id"], collection, token,
+                    where={"fieldFilter": {"field": {"fieldPath": field}, "op": "IN" if isinstance(value, list) else "EQUAL",
+                                           "value": operator_config.encode_value(value)}},
+                    opener=urllib.request.urlopen, sleep=time.sleep)
+            review = count("groups", "status", ["on-hold", "admin-only", "not-a-member"])
+            total = len(manifest().get("promos", [])) + count("campaigns", "kind", "console")
+        return {"campaignTotal": total, "groupsNeedingReview": review}
+    try:
+        return console_config.cached_summary("navigation", read)
+    except operator_config.ConfigUnavailable as exc:
+        raise ConfigReadError("sidebar counts unavailable: %s" % exc, exc.metadata) from exc
+
+
 def main(argv):
-    global _FRESH_CONFIG
+    global _FRESH_CONFIG, _CAMPAIGN_SCOPE, _INCLUDE_GROUPS, _GROUP_IDS, _INCLUDE_CAMPAIGNS
     _FRESH_CONFIG = "--fresh-config" in argv
     try:
         command, slug, raw_day = parse_args(argv)
+        _CAMPAIGN_SCOPE = slug if command in ("preview", "campaign", "campaign-groups") else None
+        _INCLUDE_GROUPS = command not in ("settings", "captions")
+        _INCLUDE_CAMPAIGNS = command != "settings"
+        _GROUP_IDS = [slug] if command == "group" else slug.split(",") if command == "groups-by-id" else None
         day = parse_day(raw_day)
-        if command == "groups":
+        if command == "capabilities":
+            payload = {"writes": write_capabilities()}
+        elif command == "settings":
+            payload = {"capSettings": cap_settings(membership()), "writes": write_capabilities(),
+                       "accounts": accounts(membership())}
+        elif command == "navigation":
+            payload = navigation()
+        elif command == "campaign-state":
+            payload = campaign_edit_state(slug)
+        elif command == "captions":
+            payload = campaign_edit_state(slug, captions_only=True)
+        elif command in ("groups", "campaign-groups", "group", "groups-by-id"):
             # A group keeps a switched-off campaign in its configured promos, so
             # the screen needs the off list to say WHY one is not posting today.
             # Without it a disabled campaign is indistinguishable from one the
             # daily cap held back.
             payload = {"date": day.isoformat(),
                        "disabledPromos": sorted(disabled_promos(manifest(), day)),
-                       "groups": group_rows(day),
-                       **group_discovery.read(membership())}
+                       "groups": [row for row in group_rows(day)
+                                  if (_GROUP_IDS is None or row["jid"] in _GROUP_IDS)
+                                  and (_CAMPAIGN_SCOPE is None or _CAMPAIGN_SCOPE in row["promos"]
+                                       or _CAMPAIGN_SCOPE in row["weekly"])],
+                       **(group_discovery.read(membership()) if command in ("groups", "group") else {})}
+            if command == "group":
+                payload["discoveredGroups"] = [row for row in payload.get("discoveredGroups", []) if row["jid"] == slug]
             group_metrics.attach(payload, membership())
         elif command == "campaigns":
             payload = {"date": day.isoformat(), "adAssets": ad_assets_status(),
                        "campaigns": campaign_records(day)}
+        elif command == "campaign":
+            records = campaign_records(day, only_slug=slug)
+            payload = {"date": day.isoformat(), "adAssets": ad_assets_status(),
+                       "campaign": records[0] if records else None}
         elif command == "preview":
             payload = preview(slug, day)
         else:

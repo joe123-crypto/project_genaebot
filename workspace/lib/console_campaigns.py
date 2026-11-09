@@ -172,7 +172,13 @@ class Store:
         row = self.request("/%s/%s%s" % (collection, urllib.parse.quote(doc_id, safe=""), self.query()), missing=True)
         return config.decode_fields(row.get("fields", {})) if row else None
 
-    def list(self, collection):
+    def list(self, collection, where=None):
+        if where is not None:
+            body = {"structuredQuery": {"from": [{"collectionId": collection}], "where": where}}
+            if self.transaction:
+                body["transaction"] = self.transaction
+            return [(config.doc_id_of(row["document"]["name"]), row["document"].get("fields") or {})
+                    for row in self.request(":runQuery", body) if "document" in row]
         page, rows = None, []
         while True:
             query = {"pageSize": 1000}
@@ -225,7 +231,16 @@ def create(data, store, env=None, verify=verify_image, reconcile=None):
             need(operation.get("digest") == digest, "creation request has changed")
             store.rollback()
             return finish(slug, store, reconcile)
-        raw = {collection: store.list(collection) for collection in config.COLLECTIONS}
+        settings = store.get("settings", config.SETTINGS_DOC)
+        raw = {"settings": [] if settings is None else [(config.SETTINGS_DOC, config.encode_fields(settings))],
+               "lines": store.list("lines"), "campaigns": store.list("campaigns"), "groups": []}
+        for selection in data["groups"]:
+            try:
+                group = store.get("groups", selection["jid"])
+            except ValueError as exc:
+                raise writer.WriteRefused("a selected group cannot be read", status=409) from exc
+            if group is not None:
+                raw["groups"].append((selection["jid"], config.encode_fields(group)))
         need(slug not in dict(raw["campaigns"]), "a campaign with this ID already exists; choose a different name")
         declared = promo_config.read_manifest(env) or {}
         need(not any(row.get("slug") == slug for row in declared.get("promos", [])), "campaign ID is already declared in the bot")
@@ -348,21 +363,29 @@ def _reconcile_one(slug, store, call):
 def mark_status(slug, store, status):
     # A field mask avoids overwriting caption/switch edits during reconciliation.
     import console_config
+    current = store.get("campaigns", slug)
+    if not current or current.get("scheduleStatus") == status:
+        return False
     # Invalidate only when reconciliation actually writes, not every minute.
     with console_config.mutation():
         store.request(":commit", {"writes": [{"update": {"name": "%s/campaigns/%s" % (store.base, slug),
                        "fields": config.encode_fields({"scheduleStatus": status})}, "updateMask": {"fieldPaths": ["scheduleStatus"]},
                        "currentDocument": {"exists": True}}]})
+    return True
 
 
 def reconcile_all(store):
-    for slug, fields in store.list("campaigns"):
+    failures = 0
+    for slug, fields in store.list("campaigns", where={"fieldFilter": {
+            "field": {"fieldPath": "kind"}, "op": "EQUAL", "value": {"stringValue": "console"}}}):
         if config.decode_fields(fields).get("kind") == "console":
             try:
                 reconcile_one(slug, store)
             except Exception as ex:
+                failures += 1
                 mark_status(slug, store, "pending")
                 sys.stderr.write("[console-campaign] schedule pending for %s: %s\n" % (slug, type(ex).__name__))
+    return failures
 
 
 def schedule_occurrence(campaign, day):
@@ -390,9 +413,11 @@ def definitions(membership):
     return {slug: data for slug, data in (membership.get("promos") or {}).items() if data.get("kind") == "console"}
 
 
-def records(membership, day, switches=None):
+def records(membership, day, switches=None, only_slug=None):
     result = []
     for slug, campaign in definitions(membership).items():
+        if only_slug is not None and slug != only_slug:
+            continue
         daily, weekly = promo_membership.groups_for_promo(membership, slug)
         accounts = {}
         for jid in list(daily) + list(weekly):

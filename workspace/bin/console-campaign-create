@@ -24,8 +24,7 @@ def main():
         loader.exec_module(bridge)
         store = campaigns.Store(bridge.write_env())
         if data == {"reconcile": True}:
-            campaigns.reconcile_all(store)
-            result = {}
+            result = {"pending": campaigns.reconcile_all(store)}
         else:
             with console_config.mutation():
                 result = campaigns.create(data, store)
