@@ -11,7 +11,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import console_campaigns as cc
 import operator_config as config
@@ -247,6 +247,45 @@ class Creation(unittest.TestCase):
         self.assertIn("account ads", output.getvalue())
         self.assertIn("DM-", output.getvalue())
         send.assert_not_called()
+
+    def test_runner_preserves_promo_suffix_in_campaign_switch_and_targets(self):
+        import promo_membership
+        for other_enabled in (None, False, True):
+            with self.subTest(other_enabled=other_enabled):
+                self.store = MemoryStore()
+                self.data = payload()
+                self.data.update(slug="summer-promo", enabled=True, groups=[{"jid": JID_A}])
+                self.data["images"][0]["key"] = "ads/summer-promo/%s.png" % SHA
+                self.create()
+                self.store.docs["campaigns"]["summer-promo"].update(config.encode_fields({"scheduleStatus": "ready"}))
+                if other_enabled is not None:
+                    self.data.update(slug="summer", enabled=other_enabled, groups=[{"jid": JID_B}],
+                                     requestId="abcdefab-1234-1234-1234-123456789abc")
+                    self.data["images"][0]["key"] = "ads/summer/%s.png" % SHA
+                    self.create()
+                    self.store.docs["campaigns"]["summer"].update(config.encode_fields({"scheduleStatus": "ready"}))
+                membership, enabled, _ = config.assemble({name: self.store.list(name) for name in config.COLLECTIONS})
+                loaded = {"membership": membership, "enabled": enabled, "source": "firestore",
+                          "report": {}, "degraded": False}
+                engine = Mock(return_value=0)
+                # Exercise the real resolver: a stub returning a fixed source
+                # would miss its single '-promo' normalization step.
+                with patch.object(config, "load", return_value=loaded):
+                    result = cc.run_campaign("summer-promo", now=dt.datetime(2026, 11, 9, 9, tzinfo=dt.timezone.utc),
+                                             broadcast=engine, ensure=lambda _: "one.png")
+                    self.assertEqual(result, 0)
+                    engine.assert_called_once()
+                    source = engine.call_args.kwargs["resolve_config"]()
+                    self.assertTrue(source["enabled"])
+                    self.assertEqual(source["doc"], promo_membership.targets_payload(membership, "summer-promo"))
+                    self.assertNotEqual(source["doc"], promo_membership.targets_payload(membership, "summer"))
+                    self.assertEqual(engine.call_args.kwargs["promo_name"], "summer-promo-promo")
+                    enabled["summer-promo"] = False
+                    if other_enabled is not None:
+                        enabled["summer"] = True
+                    engine.reset_mock()
+                    self.assertEqual(cc.run_campaign("summer-promo", broadcast=engine, ensure=lambda _: "one.png"), 0)
+                    engine.assert_not_called()
 
 
 def promo_membership_payload(m):

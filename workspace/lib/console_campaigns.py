@@ -417,7 +417,9 @@ def run_campaign(slug, argv=None, now=None, resolve=None, broadcast=None, ensure
     import fcntl
     import promo_broadcast
     need(isinstance(slug, str) and SLUG.fullmatch(slug), "invalid campaign ID")
-    source = (resolve or promo_config.resolve)(slug)
+    # The resolver removes one job-name suffix. Supply it explicitly so an ID
+    # that itself ends in '-promo' keeps its literal identity and targeting.
+    source = (resolve or promo_config.resolve)(slug + "-promo")
     campaign = definitions(source.get("membership") or {}).get(slug)
     need(source.get("mode") == "firestore" and campaign is not None, "console campaign requires Firestore configuration")
     dry = "--dry-run" in (argv or []) or "--refs" in (argv or [])

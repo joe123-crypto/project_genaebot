@@ -17,6 +17,9 @@ which JSON keys the gateway reports those under, and gating on a guessed path wo
 report false drift on all the promos, which is worse than today's silence. The first
 live --check reveals the real shape; promoting them to the gate is then a one-liner.
 
+Console-owned jobs are identified by both their name and shared-runner command,
+then reported separately: their schedules belong to the Firestore reconciler.
+
 Exit codes: 0 in sync, 1 drift/missing/legacy/undeclared, 2 bad input or manifest.
 """
 
@@ -31,6 +34,19 @@ import sys
 CWD_KEYS = ("cwd", "workdir", "workingDirectory", "commandCwd", "command_cwd")
 
 PROMO_ARGV_RE = re.compile(r"(?:^|/)cron/([a-z0-9-]+-promo)/")
+CONSOLE_JOB_RE = re.compile(r"console-([a-z0-9][a-z0-9-]{0,63})-promo")
+
+
+def console_owned(manifest, name, argv):
+    """Recognize the reconciler's namespace AND its exact shared-runner command.
+
+    A name prefix alone must not exempt a leftover manifest script from checks.
+    The console reconciler owns these schedules; the static manifest does not.
+    """
+    match = CONSOLE_JOB_RE.fullmatch(name)
+    cwd = manifest.get("commandCwd")
+    return bool(match and cwd and argv == [
+        "python3", os.path.join(cwd, "bin", "run-console-campaign"), match.group(1)])
 
 
 def redact(number):
@@ -110,7 +126,7 @@ def classify(manifest, jobs, only=None):
     timeout = manifest["timeoutSeconds"]
     by_name = {job.get("name"): job for job in jobs if job.get("name")}
 
-    report = {"ok": [], "drifted": [], "missing": [], "undeclared": [], "legacy": [],
+    report = {"ok": [], "drifted": [], "missing": [], "undeclared": [], "legacy": [], "consoleOwned": [],
               "informational": {}}
     for promo in promos:
         job = by_name.get(promo["name"])
@@ -141,14 +157,18 @@ def classify(manifest, jobs, only=None):
         match = PROMO_ARGV_RE.search(" ".join(str(a) for a in argv))
         if not (name.endswith("-promo") or match):
             continue  # an unrelated gateway job is none of our business
-        if only and not ((match and match.group(1) in selected_dirs) or legacy_owner.get(name) in selected_dirs):
-            continue
         row = {"name": name, "id": job.get("id"),
                "expr": (job.get("schedule") or {}).get("expr"),
                "tz": (job.get("schedule") or {}).get("tz"),
                "enabled": job.get("enabled"),
                "argv": argv,
                "shadows": match.group(1) if match else None}
+        if name not in legacy_owner and console_owned(manifest, name, argv):
+            if not only:
+                report["consoleOwned"].append(row)
+            continue
+        if only and not ((match and match.group(1) in selected_dirs) or legacy_owner.get(name) in selected_dirs):
+            continue
         if name in legacy_owner:
             row["replacedBy"] = legacy_owner[name]
             report["legacy"].append(row)
@@ -187,6 +207,9 @@ def render(report, manifest, stream):
         for field in entry["fields"]:
             write("  %-24s declared %-28r live %r\n"
                   % (field["field"], field["declared"], field["live"]))
+    for row in report["consoleOwned"]:
+        write("\nCONSOLE-OWNED %s (id %s): managed by the console campaign reconciler\n"
+              % (row["name"], row["id"]))
     for row in report["legacy"] + report["undeclared"]:
         kind = "LEGACY" if "replacedBy" in row else "UNDECLARED"
         write("\n%s %s (id %s)  %r %s, enabled=%s\n"
@@ -202,9 +225,9 @@ def render(report, manifest, stream):
           % (", ".join(sorted(keys)) or "not reported",
              "reported" if any(v["failureAlert"] for v in info.values()) else "not reported"))
 
-    write("\n%d declared: %d ok, %d drifted, %d missing, %d undeclared, %d legacy\n"
+    write("\n%d declared: %d ok, %d drifted, %d missing, %d undeclared, %d legacy; %d console-owned\n"
           % (len(manifest["promos"]), len(report["ok"]), len(report["drifted"]),
-             len(report["missing"]), len(report["undeclared"]), len(report["legacy"])))
+             len(report["missing"]), len(report["undeclared"]), len(report["legacy"]), len(report["consoleOwned"])))
 
 
 def main(argv):
@@ -246,7 +269,8 @@ def main(argv):
                    "drifted": [{"name": e["name"], "fields": e["fields"]}
                                for e in report["drifted"]],
                    "missing": report["missing"], "undeclared": report["undeclared"],
-                   "legacy": report["legacy"], "informational": report["informational"]},
+                   "legacy": report["legacy"], "consoleOwned": report["consoleOwned"],
+                   "informational": report["informational"]},
                   sys.stdout, indent=2, sort_keys=True)
         sys.stdout.write("\n")
     else:

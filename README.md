@@ -320,6 +320,11 @@ all agree. Run `--check` first and remove anything it reports as undeclared befo
 reinstalling, or that campaign posts twice a day. Full procedure, including when in
 the day it is safe to run, is in `deploy/railway/README.md`.
 
+Verified `console-<campaign-id>-promo` jobs invoking the matching shared
+`bin/run-console-campaign` runner are reported separately as `CONSOLE-OWNED`
+(`consoleOwned` in JSON). They do not fail the manifest check or need removal;
+the console campaign reconciler manages their schedules from Firestore.
+
 The nine existing promo crons rotate between caption variants (the original
 operator copy plus rewordings with identical facts; three each). Advertiser recruitment keeps one fixed caption. All ten
 carry a per-group tracking link. See *Promo caption rotation and ad ref tracking*

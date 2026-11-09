@@ -119,7 +119,14 @@ it to the gateway and applies it:
 nothing. It exits 0 when the gateway matches the manifest, 1 on drift, 2 when the
 manifest or the live payload is unreadable, and 75 when the gateway is
 unreachable and nothing was inspected. Drift is reported per field, along with
-any job the manifest does not declare.
+any unrecognized promo-shaped job the manifest does not declare.
+
+Console-created schedules are a separate owner: `console-<campaign-id>-promo`
+jobs with the exact `python3 <commandCwd>/bin/run-console-campaign <campaign-id>`
+command are reported as `CONSOLE-OWNED` (`consoleOwned` in JSON), do not fail
+this check, and must be kept. Their schedules are reconciled from Firestore by
+the console campaign reconciler. A console-looking name with another script or
+a mismatched campaign argument remains undeclared.
 
 **Run `--check` first and delete anything it reports as undeclared before
 reinstalling, or the ad goes out twice.** `register_promo_cron` matches on the

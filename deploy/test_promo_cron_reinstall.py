@@ -301,6 +301,45 @@ class DriftComparatorTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertNotIn("unrelated-maintenance", out)
 
+    def test_console_owned_jobs_are_reported_separately_and_do_not_fail_manifest_check(self):
+        for slug, enabled in (("summer", True), ("summer-promo", False), ("a" * 64, True)):
+            with self.subTest(slug=slug, enabled=enabled):
+                job = {"id": "console1", "name": "console-%s-promo" % slug, "enabled": enabled,
+                       "schedule": {"expr": "0 9 * * 1,3,5", "tz": "Africa/Harare"},
+                       "payload": {"argv": ["python3", MANIFEST["commandCwd"] + "/bin/run-console-campaign", slug]}}
+                code, out, _ = run_comparator(live_jobs(extra=[job]))
+                self.assertEqual(code, 0)
+                self.assertIn("CONSOLE-OWNED " + job["name"], out)
+                self.assertNotIn("openclaw cron rm console1", out)
+                code, out, _ = run_comparator(live_jobs(extra=[job]), "--json")
+                report = json.loads(out)
+                self.assertEqual(code, 0)
+                self.assertEqual([row["name"] for row in report["consoleOwned"]], [job["name"]])
+                self.assertEqual(report["undeclared"], [])
+                code, out, _ = run_comparator(live_jobs(extra=[job]), "--only", "cv")
+                self.assertEqual(code, 0)
+                self.assertNotIn(job["name"], out)
+
+    def test_console_namespace_does_not_hide_unowned_or_mismatched_commands(self):
+        runner = MANIFEST["commandCwd"] + "/bin/run-console-campaign"
+        cases = [
+            ("console-summer-promo", ["python3", runner, "other"]),
+            ("console-summer-promo", ["python3", "/elsewhere/bin/run-console-campaign", "summer"]),
+            ("console-summer-promo", ["python3", runner, "summer", "--dry-run"]),
+            ("console-summer-promo", ["python3", MANIFEST["promos"][0]["script"]]),
+            ("console-summer-promo", []),
+            ("console-" + "a" * 65 + "-promo", ["python3", runner, "a" * 65]),
+            ("summer-promo", ["python3", runner, "summer"]),
+        ]
+        for name, argv in cases:
+            with self.subTest(name=name, argv=argv):
+                job = {"id": "unowned", "name": name, "payload": {"argv": argv}}
+                code, out, _ = run_comparator(live_jobs(extra=[job]), "--json")
+                self.assertEqual(code, 1)
+                report = json.loads(out)
+                self.assertEqual([row["name"] for row in report["undeclared"]], [name])
+                self.assertEqual(report["consoleOwned"], [])
+
     def test_failure_alert_and_cwd_are_reported_but_do_not_fail_the_check(self):
         code, out, _ = run_comparator(live_jobs(patch={"cv-promo": {"payload.cwd": "/elsewhere"}}))
         self.assertEqual(code, 0, "cwd must not be gated while its JSON key is unverified")
@@ -354,7 +393,7 @@ class DriftComparatorTests(unittest.TestCase):
             live_jobs(patch={"cv-promo": {"payload.timeoutSeconds": 600}}), "--json")
         self.assertEqual(code, 1)
         report = json.loads(out)
-        for key in ("ok", "drifted", "missing", "undeclared", "legacy", "informational"):
+        for key in ("ok", "drifted", "missing", "undeclared", "legacy", "consoleOwned", "informational"):
             self.assertIn(key, report)
         self.assertEqual(report["drifted"][0]["name"], "cv-promo")
         self.assertEqual([f["field"] for f in report["drifted"][0]["fields"]],
