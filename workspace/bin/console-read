@@ -43,6 +43,7 @@ import promo_broadcast  # noqa: E402
 import ad_assets  # noqa: E402
 import config_shadow  # noqa: E402
 import promo_config  # noqa: E402
+import console_campaigns
 import operator_config  # noqa: E402
 import operator_writer  # noqa: E402
 import group_discovery  # noqa: E402
@@ -194,12 +195,17 @@ def store_enabled(entry):
     return switches.get(entry["slug"]) is not False
 
 
-def disabled_promos(declared):
+def disabled_promos(declared, day=None):
     """Slugs that are switched off, by either switch. They stay configured on
     their groups and their copy is still worth previewing, but nothing here may
     predict a send for one."""
-    return set(entry["slug"] for entry in declared.get("promos", [])
-               if not effective_enabled(entry))
+    disabled = set(entry["slug"] for entry in declared.get("promos", []) if not effective_enabled(entry))
+    for slug, campaign in console_campaigns.definitions(membership()).items():
+        if (not resolved().get("storeSwitches", resolved()["switches"]).get(slug, False)
+                or campaign.get("scheduleStatus") != "ready"
+                or (day and console_campaigns.schedule_minutes(campaign, day) is None)):
+            disabled.add(slug)
+    return disabled
 
 
 # ---------------------------------------------------------------------------
@@ -213,7 +219,7 @@ def group_rows(day):
     cap snapshot."""
     m = membership()
     groups = promo_membership.groups(m)
-    disabled = disabled_promos(manifest())
+    disabled = disabled_promos(manifest(), day)
     decisions = promo_caps.plan(m, list(groups), day=day, record=False,
                                 disabled=disabled)
 
@@ -367,7 +373,7 @@ def campaign_records(day):
         error = None
         try:
             module = import_campaign(script)
-            captions = [str(text) for text in as_list(getattr(module, "POST_TEXTS", None))]
+            captions = operator_config.campaign_captions(resolved(), slug, [str(text) for text in as_list(getattr(module, "POST_TEXTS", None))])
             tracking = dict(getattr(module, "TRACKING", {}) or {})
             raw_images = getattr(module, "IMAGE", None)
             if raw_images is None:
@@ -418,6 +424,7 @@ def campaign_records(day):
                 "error": error,
             }
         )
+    records.extend(console_campaigns.records(m, day, resolved().get("storeSwitches")))
     records.sort(key=lambda row: (row["hour"] if row["hour"] is not None else 99, row["minute"] or 0))
     return records
 
@@ -436,13 +443,21 @@ def preview(slug, day):
     declared = manifest()
 
     entry = next((row for row in declared.get("promos", []) if row["slug"] == slug), None)
-    if entry is None:
-        raise NotFound("unknown campaign %r" % slug)
+    custom = console_campaigns.definitions(m).get(slug)
+    if custom is not None:
+        enabled = resolved().get("storeSwitches", resolved()["switches"]).get(slug, False) and custom.get("scheduleStatus") == "ready"
+        captions = custom["captions"]
+        tracking = custom.get("tracking", {})
+    else:
+        if entry is None:
+            raise NotFound("unknown campaign %r" % slug)
+        enabled = effective_enabled(entry)
+        module = import_campaign(script_path(entry["script"]))
+        captions = operator_config.campaign_captions(resolved(), slug, [str(text) for text in as_list(getattr(module, "POST_TEXTS", None))])
+        tracking = dict(getattr(module, "TRACKING", {}) or {})
 
-    enabled = effective_enabled(entry)
-    module = import_campaign(script_path(entry["script"]))
-    captions = [str(text) for text in as_list(getattr(module, "POST_TEXTS", None))]
-    tracking = dict(getattr(module, "TRACKING", {}) or {})
+    occurrence = console_campaigns.schedule_occurrence(custom, day) if custom else None
+    caption_day = occurrence[0] if occurrence else day
 
     # Every assignment, paused ones included: this is the campaign's "where it
     # goes" list, and a paused group missing from it could never be resumed.
@@ -451,7 +466,7 @@ def preview(slug, day):
         m, slug, include_paused=True)
     all_jids = list(daily_jids) + list(weekly_jids)
     decisions = promo_caps.plan(m, list(promo_membership.groups(m)), day=day, record=False,
-                                disabled=disabled_promos(declared))
+                                disabled=disabled_promos(declared, day))
     numbers = promo_membership.account_numbers(m) or {}
     contact_account = (m.get("defaults") or {}).get("contact_account")
     entries = promo_membership.groups(m)
@@ -465,7 +480,7 @@ def preview(slug, day):
         # The advertised number is the configured contact line when one is set,
         # otherwise whichever line actually posts to this group.
         bot_number = numbers.get(contact_account) if contact_account else None
-        bot_number = bot_number or numbers.get(account)
+        bot_number = tracking.get("number") or bot_number or numbers.get(account)
 
         # caption_for's ``allowed`` is the group's posting WEEKDAYS, so a weekly
         # group's variants still step by one per actual post. It is not the caps
@@ -479,7 +494,7 @@ def preview(slug, day):
         variant, rendered, ref = None, None, None
         if captions:
             variant, rendered, ref = promo_broadcast.caption_for(
-                jid, captions, day=day, allowed=weekdays,
+                jid, captions, day=caption_day, allowed=weekdays,
                 tracking=tracking, bot_number=bot_number,
             )
 
@@ -496,6 +511,8 @@ def preview(slug, day):
                 "cap": decision.get("cap"),
                 "paused": paused,
                 "sendsToday": (enabled and not paused
+                               and (not custom or occurrence is not None)
+                               and (not weekdays or caption_day.weekday() in weekdays)
                                and (allowed is None or slug in allowed)),
                 "allowedToday": sorted(allowed) if allowed is not None else [],
                 "weekly": [str(token) for token in (weekly_jids.get(jid) or [])],
@@ -575,6 +592,9 @@ def write_capabilities():
         "fields": dict((collection, list(names))
                        for collection, names in operator_writer.EDITABLE.items()),
         "delete": list(operator_writer.DELETABLE),
+        "campaignCreation": {"create": current == promo_config.FIRESTORE,
+                             "images": ad_assets.mode()[0] == "r2" and bool(ad_assets.base_url()),
+                             "scheduling": True},
     }
 
 
@@ -631,7 +651,7 @@ def main(argv):
             # Without it a disabled campaign is indistinguishable from one the
             # daily cap held back.
             payload = {"date": day.isoformat(),
-                       "disabledPromos": sorted(disabled_promos(manifest())),
+                       "disabledPromos": sorted(disabled_promos(manifest(), day)),
                        "groups": group_rows(day),
                        **group_discovery.read(membership())}
             group_metrics.attach(payload, membership())

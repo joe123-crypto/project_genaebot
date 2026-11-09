@@ -1,0 +1,38 @@
+#!/usr/bin/env python3
+"""One bounded JSON creation request; write credentials never reach runners."""
+import importlib.machinery
+import importlib.util
+import json
+import os
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+import console_campaigns as campaigns
+import operator_config
+import operator_writer
+
+
+def main():
+    try:
+        raw = sys.stdin.buffer.read(campaigns.MAX_REQUEST + 1)
+        campaigns.need(len(raw) <= campaigns.MAX_REQUEST, "request is too large")
+        data = json.loads(raw)
+        loader = importlib.machinery.SourceFileLoader("campaign_write_env", str(Path(__file__).with_name("console-write")))
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        bridge = importlib.util.module_from_spec(spec)
+        loader.exec_module(bridge)
+        store = campaigns.Store(bridge.write_env())
+        if data == {"reconcile": True}:
+            campaigns.reconcile_all(store)
+            result = {}
+        else:
+            result = campaigns.create(data, store)
+        print(json.dumps({"ok": True, "status": 200, **result}))
+        return 0
+    except (operator_writer.WriteRefused, operator_config.ConfigUnavailable, ValueError) as ex:
+        print(json.dumps({"ok": False, "status": getattr(ex, "status", 503), "error": str(ex), "problems": []}))
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

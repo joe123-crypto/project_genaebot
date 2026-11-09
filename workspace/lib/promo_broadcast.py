@@ -476,7 +476,7 @@ def send_ad(target, text, image_path, account=None):
 
 
 # --------------------------------------------------------------------- run ----
-def _resolve_image(image):
+def _resolve_image(image, day=None):
     """``image`` is either a single path (fixed) or a list of paths that rotate
     daily by date ordinal so a group never sees the same image two days running.
     Returns (path_or_None, rotating)."""
@@ -484,7 +484,7 @@ def _resolve_image(image):
         assets = [a for a in image if a]
         if not assets:
             return (None, True)
-        return (assets[date.today().toordinal() % len(assets)], True)
+        return (assets[(day or date.today()).toordinal() % len(assets)], True)
     return (image, False)
 
 
@@ -1032,7 +1032,7 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
               send_delay_min=None, send_delay_max=None, rng=None, sleep=None,
               cron_timeout=_PROBE_CRON_TIMEOUT, start_jitter=None,
               caps=_PROBE_CAPS, membership_path=None, account_status=None,
-              resolve_config=None):
+              resolve_config=None, run_day=None, cap_day=None):
     """Resolve targets, skip groups already sent today (and weekly-limited groups
     off their configured weekday), then send the advert to each pending group,
     committing state per group so a crash or retry never double-posts. Returns a
@@ -1076,7 +1076,7 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
     args = sys.argv[1:] if argv is None else argv
     show_refs = "--refs" in args
     dry = "--dry-run" in args or show_refs
-    day = date.today()
+    day = run_day or date.today()
     today = day.isoformat()
     variants = _variants(text)
     if tracking and not tracking.get("prefix"):
@@ -1091,7 +1091,7 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
     # that existence check is what turns "no asset could be fetched" into a
     # failed run with nothing sent, before a single group is posted to.
     image = ad_assets.resolve(promo_name, image)
-    image_path, rotating = _resolve_image(image)
+    image_path, rotating = _resolve_image(image, day)
     if not image_path or not os.path.exists(image_path):
         sys.stderr.write("ERROR: promo image missing: %s\n" % image_path)
         return 1
@@ -1131,6 +1131,9 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
                              "sending nothing.\n" % promo_name)
             print("NO_REPLY")
             return 0
+
+    variants = operator_config.campaign_captions(source, promo_config.promo_key(promo_name), variants)
+    variant_images = {index: path for index, path in variant_images.items() if index < len(variants)}
 
     targets = source["doc"]
     entries = load_targets(targets)
@@ -1187,7 +1190,7 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
         print("NO_REPLY")
         return 0
 
-    weekday = date.today().weekday()
+    weekday = day.weekday()
 
     def eligible_today(jid):
         """A weekly-limited group is only eligible on its configured weekdays;
@@ -1199,7 +1202,7 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
     # Per-group daily cap: a group in six campaigns does not have to take six
     # ads a day. Rotation decides which campaigns use today's allowance, so this
     # promo may be asked to stand down for a group it still targets.
-    eligible, cap_decisions = apply_caps(promo_name, eligible, day, caps=caps,
+    eligible, cap_decisions = apply_caps(promo_name, eligible, cap_day or day, caps=caps,
                                          membership_path=membership_path,
                                          record=not dry,
                                          membership=source["membership"],

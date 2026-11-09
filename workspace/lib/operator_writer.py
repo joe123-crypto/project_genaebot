@@ -70,7 +70,7 @@ EDITABLE = {
     "groups": ("name", "source", "status", "activity", "account", "daily_cap",
                "promos", "paused_promos", "weekly", "note"),
     "lines": ("number",),
-    "campaigns": ("enabled", "comment", "weekly_comment", "dir"),
+    "campaigns": ("enabled", "comment", "weekly_comment", "dir", "captions"),
     "settings": ("activity", "caps_enabled", "contact_account", "bands"),
 }
 # What may be deleted outright. See prepare_delete for why nothing else is.
@@ -392,6 +392,13 @@ def write(collection, doc_id, patch, actor, env=None, *, opener=None, signer=Non
     read at all -- a write must never be applied to a guess at the current state.
     """
     env = os.environ if env is None else env
+    if collection == "campaigns" and "captions" in patch:
+        if (env.get("GENAIE_CONFIG_SOURCE") or "").strip().lower() != "firestore":
+            raise WriteRefused("caption editing requires Firestore", status=409)
+        try:
+            operator_config.validate_captions(patch["captions"])
+        except operator_config.ConfigInvalid as ex:
+            raise WriteRefused(str(ex)) from ex
     now = now or time.time
     project, raw = operator_config.fetch(env, opener=opener, signer=signer,
                                          now=now, sleep=sleep)

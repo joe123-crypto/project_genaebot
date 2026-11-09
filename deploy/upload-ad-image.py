@@ -527,6 +527,15 @@ def main(argv):
             rows = operator_config.list_documents(
                 creds["project_id"], ad_assets.COLLECTION, token,
                 opener=urllib.request.urlopen, sleep=time.sleep)
+            # Console-created campaigns are canonical in Firestore, not mirrored
+            # in this repo. Never flag or prune their assets as repo drift.
+            campaigns_raw = operator_config.list_documents(
+                creds["project_id"], "campaigns", token,
+                opener=urllib.request.urlopen, sleep=time.sleep)
+            console_slugs = {slug for slug, fields in campaigns_raw
+                             if operator_config.decode_fields(fields).get("kind") == "console"}
+            rows = [(doc_id, fields) for doc_id, fields in rows
+                    if operator_config.decode_fields(fields).get("campaign") not in console_slugs]
             indexed, quarantined = ad_assets._assemble(rows)
 
             if args.verify:

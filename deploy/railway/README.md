@@ -119,7 +119,14 @@ it to the gateway and applies it:
 nothing. It exits 0 when the gateway matches the manifest, 1 on drift, 2 when the
 manifest or the live payload is unreadable, and 75 when the gateway is
 unreachable and nothing was inspected. Drift is reported per field, along with
-any job the manifest does not declare.
+any unrecognized promo-shaped job the manifest does not declare.
+
+Console-created schedules are a separate owner: `console-<campaign-id>-promo`
+jobs with the exact `python3 <commandCwd>/bin/run-console-campaign <campaign-id>`
+command are reported as `CONSOLE-OWNED` (`consoleOwned` in JSON), do not fail
+this check, and must be kept. Their schedules are reconciled from Firestore by
+the console campaign reconciler. A console-looking name with another script or
+a mismatched campaign argument remains undeclared.
 
 **Run `--check` first and delete anything it reports as undeclared before
 reinstalling, or the ad goes out twice.** `register_promo_cron` matches on the
@@ -1125,3 +1132,31 @@ cron drift checks compare it, and releases require only enabled campaigns.
 Customer CV requests remain available during normal gateway hours. Correct the
 CV artwork contact before setting `enabled: true` and running the CV installer.
 A deployment does not register or re-enable cron jobs.
+
+
+### Console-created campaigns
+
+The console API accepts authenticated `POST /internal/console/campaigns/create`
+requests when its existing write key is installed. This requires
+`GENAIE_CONFIG_SOURCE=firestore` and `GENAIE_AD_ASSETS_SOURCE=r2`, with
+`GENAIE_AD_ASSETS_BASE_URL` configured. Campaigns, group assignments, image index,
+audit and idempotency receipt save in one Firestore transaction. Existing
+manifest campaigns retain their installers and scripts.
+
+The console signs direct, immutable R2 picture uploads using its own bucket-scoped
+write token. The gateway needs no R2 write credentials. `console-campaign-create`
+checks uploaded bytes before saving; `run-console-campaign` uses the shared
+broadcast engine and the runtime read key. Caption overrides are also supported.
+
+Desired schedules reconcile when the console API starts and every minute.
+Stable `console-<slug>-promo` names and a volume lock recover uncertain gateway
+acknowledgements without duplicate jobs. Read-back verifies the job; pending
+campaigns cannot post or consume caps. Creation never triggers an immediate send.
+Failure alerts are off unless explicitly configured. New scripts are included by
+the existing workspace bin/lib staging rules.
+
+Run `python3 workspace/lib/test_console_campaigns.py` and
+`python3 deploy/test_console_campaign_api.py`, then the existing operator config,
+writer, broadcast, read bridge and console API test suites before deploying.
+Deploy bot support before enabling the console creation controls. Keep
+`GCP_SERVICE_ACCOUNT_WRITE_B64` isolated to the console API as before.
