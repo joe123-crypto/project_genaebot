@@ -685,6 +685,14 @@ second bucket's worth of images arrives -- put a custom domain in front of the
 bucket and change the one variable. Nothing else moves, because the URL is read
 from the environment and never from the index.
 
+The operator console reads this index too, through `ad_assets.catalogue` -- a
+read that describes the pictures instead of fetching them, never raises, and
+prefers a recent snapshot so the console cannot put a Firestore round trip
+behind every page refresh. It is the only other caller, and the URL it hands out
+is built by `ad_assets.public_url`, the same function `ensure` fetches with, so
+a console cannot show one object while a run sends another. See *Operator
+Console API*.
+
 `ad_assets.resolve` is called once per run, immediately before the daily
 rotation, and hands back **local paths** either way -- so the rotation, the
 pre-flight existence check, the caption machinery and `send_ad` are all
@@ -1133,8 +1141,10 @@ The template remains the tracked source of truth for what the config *should* be
 HTTP beside the gateway. Campaign and membership responses come from
 `workspace/bin/console-read`, which reads `workspace/cron/membership.json`,
 the ad-reply counters the caps derive from, and each campaign's own module. It
-never writes, never contacts the gateway, and never records a cap snapshot, so
-reading it cannot move the rotation on. Separate account endpoints contact the
+never writes to the repository, never contacts the gateway, and never records a
+cap snapshot, so reading it cannot move the rotation on. The one thing a read
+does leave behind is the last-known-good Firestore snapshot on the state volume,
+refreshed exactly as a campaign run refreshes it. Separate account endpoints contact the
 running gateway for live status and account controls, and one write route
 changes operator config in Firestore (*Changing operator config from the
 console*, below).
@@ -1152,6 +1162,42 @@ Read routes, GET or HEAD, under `/internal/console/`:
 Each data route takes an optional `?date=YYYY-MM-DD`. Anything else is refused:
 an unknown path or an unusable slug is 404, an unparseable date or an unexpected
 query parameter is 400. These read routes reject write methods and request bodies.
+
+The `campaigns` payload also carries **what each campaign's pictures are and
+where their bytes are**, so the console can show them rather than name them:
+
+```json
+{"date": "...", "adAssets": {"mode": "repo", "source": "firestore",
+                             "fetchedAt": "...Z", "note": null, ...},
+ "campaigns": [{"slug": "borehole-drilling",
+                "images": ["borehole-1.jpg", "..."],
+                "assets": [{"filename": "borehole-1.jpg",
+                            "url": "https://pub-....r2.dev/ads/borehole-drilling/8afa....jpg",
+                            "sha256": "8afa...", "bytes": 243016,
+                            "contentType": "image/jpeg", "rank": 10}]}]}
+```
+
+`images` is what the campaign's own `post_ad.py` declares; `assets` is what the
+Firestore index says, in rotation order, joined by `filename`. They are reported
+separately rather than merged because they are two different claims, and the day
+they disagree is worth seeing. `url` is `null` when `GENAIE_AD_ASSETS_BASE_URL`
+is unset, which is not the same as having no pictures.
+
+The index is read **whatever `GENAIE_AD_ASSETS_SOURCE` says** -- it is accurate
+before the cutover as well as after, and a console that showed nothing until
+`r2` was switched on would be hiding the thing the cutover is about. `adAssets`
+reports `mode` beside the index so a screen can say plainly that a run still
+attaches the baked copy. An index that cannot be read costs the pictures and
+nothing else: `assets` is `[]`, `adAssets.note` says why, and the campaigns
+payload is otherwise complete.
+
+Reading it is snapshot-first (`ad_assets.catalogue`, bounded by
+`CATALOGUE_MAX_AGE_SECONDS`, 5 minutes). A console tab refreshes every 60
+seconds and the bridge is a fresh process each time, so without that bound every
+refresh would be a token fetch and a `list_documents` on a project already
+answering 429 for the config read. A live read rewrites the snapshot, so the
+window keeps refilling itself -- and in `repo` mode, where no run ever touches
+the index, a console read is the only thing that creates that snapshot at all.
 
 The `groups` payload also includes `discoveredGroups` (unconfigured metadata
 observations, deduplicated by JID, with per-account observation times) and

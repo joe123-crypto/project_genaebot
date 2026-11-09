@@ -39,9 +39,11 @@ PREVIEW_KEYS = {
 CAMPAIGN_KEYS = {
     "slug", "name", "cron", "hour", "minute", "timezone", "installer", "script",
     "failureAlertTo", "legacyNames", "timeoutSeconds", "captions", "tracking",
-    "images", "targetCount", "weeklyCount", "accounts", "source", "error",
-    "enabled", "storeEnabled", "cronEnabled",
+    "images", "assets", "targetCount", "weeklyCount", "accounts", "source",
+    "error", "enabled", "storeEnabled", "cronEnabled",
 }
+AD_ASSET_KEYS = {"mode", "warning", "lastCheck", "source", "fetchedAt", "note"}
+ASSET_KEYS = {"filename", "url", "sha256", "bytes", "contentType", "rank"}
 
 
 class ConsoleReadTests(unittest.TestCase):
@@ -62,6 +64,13 @@ class ConsoleReadTests(unittest.TestCase):
         done = self.run_bridge(*args)
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(done.stderr, "")
+        return json.loads(done.stdout)
+
+    def ok_with(self, args, **environment):
+        """``ok``, but with the bridge's environment changed -- for the paths
+        that depend on what is configured rather than on what is declared."""
+        done = self.run_bridge(*args, **environment)
+        self.assertEqual(done.returncode, 0, done.stderr)
         return json.loads(done.stdout)
 
     def refused(self, *args, **environment):
@@ -103,7 +112,8 @@ class ConsoleReadTests(unittest.TestCase):
 
     def test_campaigns_describes_every_declared_promo_in_slot_order(self):
         payload = self.ok("campaigns", "--date", DAY)
-        self.assertEqual(set(payload), {"date", "campaigns"})
+        self.assertEqual(set(payload), {"date", "adAssets", "campaigns"})
+        self.assertEqual(set(payload["adAssets"]), AD_ASSET_KEYS)
         records = payload["campaigns"]
         self.assertTrue(records)
         for record in records:
@@ -112,8 +122,28 @@ class ConsoleReadTests(unittest.TestCase):
             self.assertIsNone(record["error"], record["slug"])
             self.assertTrue(record["captions"], record["slug"])
             self.assertTrue(record["script"].endswith(".py"))
+            self.assertIsInstance(record["assets"], list)
+            for asset in record["assets"]:
+                self.assertEqual(set(asset), ASSET_KEYS, record["slug"])
         slots = [(r["hour"], r["minute"]) for r in records]
         self.assertEqual(slots, sorted(slots))
+
+    def test_an_unreadable_asset_index_costs_the_pictures_and_nothing_else(self):
+        """The whole point of the bridge's catalogue being failure-tolerant. With
+        no credentials and no snapshot there is no index, and the campaigns
+        screen must still load in full and say why its tiles are empty rather
+        than implying the campaigns have no pictures."""
+        with tempfile.TemporaryDirectory() as empty:
+            payload = self.ok_with(("campaigns", "--date", DAY),
+                                   GENAIE_FIRESTORE_DIR=empty,
+                                   GENAIE_AD_ASSETS_BASE_URL="")
+        self.assertTrue(payload["campaigns"])
+        for record in payload["campaigns"]:
+            self.assertEqual(set(record), CAMPAIGN_KEYS, record.get("slug"))
+            self.assertEqual(record["assets"], [])
+            self.assertTrue(record["captions"], record["slug"])
+        self.assertIsNone(payload["adAssets"]["source"])
+        self.assertTrue(payload["adAssets"]["note"])
 
     def test_preview_renders_the_caption_the_cron_would_send(self):
         payload = self.ok("preview", "borehole-drilling", "--date", DAY)
@@ -408,6 +438,49 @@ def load_console_read():
     module = importlib.util.module_from_spec(spec)
     loader.exec_module(module)
     return module
+
+
+class AssetEntryTests(unittest.TestCase):
+    """The join itself, offline. The subprocess tests above run without
+    credentials, so they prove the empty case; this proves the full one without
+    asking CI for a network."""
+
+    def setUp(self):
+        self.console = load_console_read()
+        self.console._CATALOGUE["value"] = {
+            "source": "firestore", "fetchedAt": "2026-11-09T02:53:12Z", "note": None,
+            "campaigns": {"borehole-drilling": [
+                {"id": "borehole-drilling-1", "campaign": "borehole-drilling",
+                 "filename": "borehole-1.jpg", "key": "ads/borehole-drilling/aa.jpg",
+                 "url": "https://ads.example.test/ads/borehole-drilling/aa.jpg",
+                 "sha256": "a" * 64, "bytes": 243016, "content_type": "image/jpeg",
+                 "rank": 10, "enabled": True, "comment": None},
+                {"id": "borehole-drilling-2", "campaign": "borehole-drilling",
+                 "filename": "borehole-2.jpg", "key": "ads/borehole-drilling/bb.jpg",
+                 "url": "https://ads.example.test/ads/borehole-drilling/bb.jpg",
+                 "sha256": "b" * 64, "bytes": 11918, "content_type": "image/jpeg",
+                 "rank": 20, "enabled": True, "comment": None}]}}
+
+    def test_a_campaigns_pictures_carry_the_address_of_their_bytes(self):
+        entries = self.console.asset_entries("borehole-drilling")
+        self.assertEqual([e["filename"] for e in entries],
+                         ["borehole-1.jpg", "borehole-2.jpg"])
+        self.assertEqual(entries[0]["url"],
+                         "https://ads.example.test/ads/borehole-drilling/aa.jpg")
+        self.assertEqual(entries[0]["contentType"], "image/jpeg")
+        self.assertEqual(entries[0]["rank"], 10)
+
+    def test_the_index_order_is_kept_because_it_is_the_rotation_order(self):
+        entries = self.console.asset_entries("borehole-drilling")
+        self.assertEqual([e["rank"] for e in entries], [10, 20])
+
+    def test_a_campaign_the_index_does_not_mention_has_no_pictures_not_an_error(self):
+        self.assertEqual(self.console.asset_entries("fruit-trees"), [])
+
+    def test_the_key_never_reaches_the_console_because_the_url_already_has_it(self):
+        for entry in self.console.asset_entries("borehole-drilling"):
+            self.assertNotIn("key", entry)
+            self.assertNotIn("enabled", entry)
 
 
 class PausedAssignmentTests(unittest.TestCase):

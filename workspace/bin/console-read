@@ -309,6 +309,50 @@ def cron_time(expression):
         return None, None
 
 
+_CATALOGUE = {}
+
+
+def asset_catalogue():
+    """The asset index, read once per bridge run and then remembered.
+
+    ``overview`` and ``campaigns`` both describe every campaign's pictures, and
+    a bridge run must not read Firestore twice to say the same thing. The read
+    itself is already snapshot-first (see ``ad_assets.catalogue``); this is
+    about one process, that one about one console.
+
+    Its notes go to a sink rather than stderr, for the reason ``resolved`` gives:
+    stdout is the JSON document and callers parse it, so anything worth saying
+    about the index travels in the payload's ``note`` where a screen can show
+    it. ``ad_assets`` logs a fallback to the snapshot, which is a normal event
+    here and must not look like a bridge that failed."""
+    if "value" not in _CATALOGUE:
+        notes = io.StringIO()
+        try:
+            _CATALOGUE["value"] = ad_assets.catalogue(log=lambda m: notes.write(m))
+        except Exception as exc:  # the campaigns screen outranks its pictures
+            _CATALOGUE["value"] = {"campaigns": {}, "source": None,
+                                   "fetchedAt": None,
+                                   "note": "%s: %s" % (type(exc).__name__, exc)}
+    return _CATALOGUE["value"]
+
+
+def asset_entries(slug):
+    """A campaign's pictures as the console displays them: the index's own
+    rotation order, each with the address its bytes are served from.
+
+    Separate from ``images`` rather than replacing it. ``images`` is what the
+    campaign's own ``post_ad.py`` declares and, until the R2 cutover, still what
+    a run attaches; this is what the index says. They agree today, and the
+    console is the right place to notice the day they stop."""
+    return [{"filename": entry["filename"],
+             "url": entry.get("url"),
+             "sha256": entry["sha256"],
+             "bytes": entry["bytes"],
+             "contentType": entry["content_type"],
+             "rank": entry["rank"]}
+            for entry in asset_catalogue()["campaigns"].get(slug, [])]
+
+
 def campaign_records(day):
     m = membership()
     declared = manifest()
@@ -366,6 +410,7 @@ def campaign_records(day):
                 "captions": captions,
                 "tracking": tracking,
                 "images": images,
+                "assets": asset_entries(slug),
                 "targetCount": len(all_jids),
                 "weeklyCount": len(weekly_jids),
                 "accounts": per_account,
@@ -489,14 +534,28 @@ def config_shadow_status():
 
 
 def ad_assets_status():
-    """Where the ad images come from, and what the newest asset check found.
+    """Where the ad images come from, what the newest asset check found, and
+    what the index the console displays from says right now.
 
     ``lastCheck`` is the single newest check across all campaigns, not one per
     campaign: each run overwrites it, so the console shows whichever campaign
     ran last. Its ``campaign`` field says which, and ``checkedAt`` tells a
-    current result from one left over after the mode was switched back."""
+    current result from one left over after the mode was switched back.
+
+    ``mode`` is what a RUN attaches; ``source``, ``fetchedAt`` and ``note``
+    describe the index, which is read whatever the mode is. The two are
+    deliberately not tied together: the index is accurate before the cutover as
+    well as after, and a console that showed no pictures until ``r2`` was
+    switched on would be hiding exactly the thing the cutover is about. ``note``
+    is the one place an index that could not be read is explained, so a screen
+    can say why rather than imply a campaign has no picture."""
     current, warning = ad_assets.mode()
-    return {"mode": current, "warning": warning, "lastCheck": ad_assets.read_result()}
+    catalogue = asset_catalogue()
+    return {"mode": current, "warning": warning,
+            "lastCheck": ad_assets.read_result(),
+            "source": catalogue["source"],
+            "fetchedAt": catalogue["fetchedAt"],
+            "note": catalogue["note"]}
 
 
 def write_capabilities():
@@ -577,7 +636,8 @@ def main(argv):
                        **group_discovery.read(membership())}
             group_metrics.attach(payload, membership())
         elif command == "campaigns":
-            payload = {"date": day.isoformat(), "campaigns": campaign_records(day)}
+            payload = {"date": day.isoformat(), "adAssets": ad_assets_status(),
+                       "campaigns": campaign_records(day)}
         elif command == "preview":
             payload = preview(slug, day)
         else:
