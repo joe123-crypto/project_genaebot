@@ -314,6 +314,102 @@ class IndexTest(Harness):
                          ["cv-ad.png"])
 
 
+# --------------------------------------------------------------- catalogue ----
+class CatalogueTest(Harness):
+    """``catalogue`` is what the operator console reads: it describes the index
+    rather than fetching it, must never raise, and must not put a Firestore read
+    behind every page load."""
+
+    def catalogue(self, **kwargs):
+        inject = self.inject()
+        inject.pop("sleep")
+        return aa.catalogue(self.env, sleep=lambda _s: None, **inject, **kwargs)
+
+    def test_every_entry_carries_the_address_its_bytes_are_served_from(self):
+        self.store(entry("cv", "cv-ad.png", PNG, rank=10),
+                   entry("cv", "cv-ad-2.png", PNG2, rank=20))
+        found = self.catalogue()
+        self.assertEqual(found["source"], "firestore")
+        self.assertIsNone(found["note"])
+        self.assertEqual([e["url"] for e in found["campaigns"]["cv"]],
+                         ["%s/ads/cv/%s.png" % (BASE, digest(PNG)),
+                          "%s/ads/cv/%s.png" % (BASE, digest(PNG2))])
+
+    def test_public_url_is_the_url_ensure_would_fetch(self):
+        one = entry("cv", "cv-ad.png", PNG)
+        self.assertEqual(aa.public_url(one, self.env), "%s/%s" % (BASE, one["key"]))
+        self.assertIsNone(aa.public_url(one, {}))
+
+    def test_a_fresh_snapshot_is_reused_instead_of_reading_firestore(self):
+        self.store(entry("cv", "cv-ad.png", PNG))
+        self.catalogue()
+        before = len(self.world.firestore.requests)
+        self.clock[0] += aa.CATALOGUE_MAX_AGE_SECONDS - 1
+        found = self.catalogue()
+        self.assertEqual(found["source"], "snapshot")
+        self.assertIsNone(found["note"])          # reuse is normal, not degraded
+        self.assertEqual([e["filename"] for e in found["campaigns"]["cv"]],
+                         ["cv-ad.png"])
+        self.assertEqual(len(self.world.firestore.requests), before)
+
+    def test_a_stale_snapshot_falls_through_to_a_live_read(self):
+        self.store(entry("cv", "cv-ad.png", PNG))
+        self.catalogue()
+        self.clock[0] += aa.CATALOGUE_MAX_AGE_SECONDS + 1
+        self.store(entry("cv", "cv-ad.png", PNG), entry("cv", "cv-ad-2.png", PNG2,
+                                                        rank=20))
+        found = self.catalogue()
+        self.assertEqual(found["source"], "firestore")
+        self.assertEqual(len(found["campaigns"]["cv"]), 2)
+
+    def test_an_unreadable_index_is_a_note_rather_than_an_exception(self):
+        self.env.pop("GCP_SERVICE_ACCOUNT_B64")
+        found = self.catalogue()
+        self.assertEqual(found["campaigns"], {})
+        self.assertIsNone(found["source"])
+        self.assertIn("no service account", found["note"])
+
+    def test_firestore_down_falls_back_to_the_snapshot_and_says_so(self):
+        self.store(entry("cv", "cv-ad.png", PNG))
+        self.catalogue()
+        self.clock[0] += aa.CATALOGUE_MAX_AGE_SECONDS + 1
+        self.world.firestore.down = True
+        found = self.catalogue()
+        self.assertEqual(found["source"], "snapshot")
+        self.assertEqual(len(found["campaigns"]["cv"]), 1)
+        self.assertTrue(found["note"])
+
+    def test_no_base_url_names_the_pictures_without_an_address(self):
+        self.env.pop("GENAIE_AD_ASSETS_BASE_URL")
+        self.store(entry("cv", "cv-ad.png", PNG))
+        found = self.catalogue()
+        self.assertEqual([e["filename"] for e in found["campaigns"]["cv"]],
+                         ["cv-ad.png"])
+        self.assertEqual([e["url"] for e in found["campaigns"]["cv"]], [None])
+        self.assertIn("GENAIE_AD_ASSETS_BASE_URL", found["note"])
+
+    def test_a_base_url_that_is_not_https_is_a_note_not_a_crash(self):
+        self.env["GENAIE_AD_ASSETS_BASE_URL"] = "http://ads.example.test"
+        self.store(entry("cv", "cv-ad.png", PNG))
+        found = self.catalogue()
+        self.assertEqual([e["url"] for e in found["campaigns"]["cv"]], [None])
+        self.assertIn("https://", found["note"])
+
+    def test_the_mode_does_not_decide_what_the_console_may_show(self):
+        # The index is accurate before the cutover as well as after, so repo
+        # mode must still describe the pictures -- hiding them until r2 is
+        # switched on would hide the thing the cutover is about.
+        self.env["GENAIE_AD_ASSETS_SOURCE"] = "repo"
+        self.store(entry("cv", "cv-ad.png", PNG))
+        self.assertEqual(len(self.catalogue()["campaigns"]["cv"]), 1)
+
+    def test_it_describes_pictures_without_fetching_a_single_byte(self):
+        self.store(entry("cv", "cv-ad.png", PNG))
+        self.hold(PNG)
+        self.catalogue()
+        self.assertEqual(self.world.gets, [])
+
+
 # ------------------------------------------------------------------- store ----
 class CollectionTest(unittest.TestCase):
     def test_the_index_is_not_a_collection_the_seed_prunes(self):

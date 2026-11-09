@@ -119,6 +119,15 @@ SOURCE_IMAGE_RE = re.compile(r"\"([A-Za-z0-9][A-Za-z0-9._-]*\.(?:jpg|jpeg|png))\
 # since changed.
 INDEX_MAX_AGE_SECONDS = operator_config.SNAPSHOT_MAX_AGE_SECONDS
 
+# How long :func:`catalogue` will describe the index from the snapshot before
+# reading Firestore again. It exists for the operator console, which asks on
+# every page load and again every 60 seconds per open tab; without a window
+# every one of those would be a token fetch and a ``list_documents``, against a
+# project already answering 429 on the operator-config path. A picture that
+# changed five minutes ago showing five minutes late costs nothing; a console
+# that rate-limits the thing it is monitoring costs the monitoring.
+CATALOGUE_MAX_AGE_SECONDS = 300
+
 # Cloudflare's r2.dev public endpoint answers 403 to a request whose User-Agent
 # is urllib's default "Python-urllib/3.x" -- and 200 to any other value, an empty
 # one included. Measured against the live bucket on 2026-11-08: curl, a named
@@ -188,6 +197,18 @@ def base_url(env=None):
         raise AssetsUnavailable("%s must start with https:// (got %r)"
                                 % (BASE_VAR, env.get(BASE_VAR)))
     return raw
+
+
+def public_url(entry, env=None):
+    """Where ``entry``'s bytes are served from, or ``None`` when :data:`BASE_VAR`
+    is not set.
+
+    One place builds this string. :func:`ensure` fetches it and the operator
+    console displays it, and the two must not be able to disagree about where a
+    picture lives -- a console showing one object while a run sends another is
+    worse than a console showing nothing."""
+    root = base_url(env)
+    return None if root is None else "%s/%s" % (root, entry["key"])
 
 
 def index_path(env=None):
@@ -392,6 +413,85 @@ def _from_snapshot(env, why, now=None):
             "quarantined": quarantined}
 
 
+def _recent_snapshot(env, max_age, now):
+    """The last-known-good index when it is younger than ``max_age``, else
+    ``None``.
+
+    Unlike :func:`_from_snapshot` this is not a fallback for a read that failed
+    -- it is what stops the read happening at all -- so an absent, unreadable or
+    stale snapshot is simply "no", never an error, and the result is not marked
+    degraded: reusing a fresh snapshot is the normal path, not a lesser one."""
+    if not max_age:
+        return None
+    try:
+        result = _from_snapshot(env, "not read: the snapshot is still fresh", now=now)
+    except AssetsUnavailable:
+        return None
+    age = operator_config._snapshot_age_seconds(
+        {"fetchedAt": result.get("fetchedAt")}, now)
+    if age is None or age > max_age:
+        return None
+    return dict(result, degraded=None)
+
+
+def catalogue(env=None, *, max_age=CATALOGUE_MAX_AGE_SECONDS, now=None, log=None,
+              **inject):
+    """What the index says, for a caller that wants to DESCRIBE a campaign's
+    pictures rather than send them::
+
+        {"campaigns": {slug: [entry + {"url": ...}]},  # enabled, rotation order
+         "source": "firestore" | "snapshot" | None,
+         "fetchedAt": ISO-8601 UTC | None,
+         "note": None | why there is nothing to show}
+
+    Two things separate it from :func:`index`:
+
+    * **It never raises.** Its caller is the console read bridge, where a
+      campaign's pictures are one card on one page. An unreadable index must
+      cost the pictures and nothing else, so every failure arrives as ``note``
+      beside an empty ``campaigns`` -- never as a campaigns screen that will not
+      load.
+    * **It prefers a recent snapshot to a live read**, see
+      :data:`CATALOGUE_MAX_AGE_SECONDS`. :func:`index` writes that snapshot as a
+      side effect, so the window keeps refilling itself; in ``repo`` mode, where
+      no run ever touches the index, the first console read is what creates it.
+
+    ``url`` is ``None`` on every entry when :data:`BASE_VAR` is unset, which is
+    a different thing from having no pictures -- the index still names them --
+    and ``note`` says so."""
+    env = os.environ if env is None else env
+    now = now or time.time
+    log = log or (lambda message: _log(message))
+
+    current = _recent_snapshot(env, max_age, now)
+    if current is None:
+        try:
+            current = index(env, now=now, log=log, **inject)
+        except AssetsUnavailable as ex:
+            return {"campaigns": {}, "source": None, "fetchedAt": None,
+                    "note": str(ex)}
+
+    # Resolved once, outside the loop: a bad setting is one answer about the
+    # whole index, not the same complaint repeated per picture.
+    try:
+        root = base_url(env)
+    except AssetsUnavailable as ex:
+        root, setting = None, str(ex)
+    else:
+        setting = None if root is not None else (
+            "%s is not set, so the index names each campaign's pictures but no "
+            "address to fetch them from" % BASE_VAR)
+
+    campaigns = dict(
+        (slug, [dict(entry, url=None if root is None else public_url(entry, env))
+                for entry in entries])
+        for slug, entries in current["campaigns"].items())
+    reasons = [why for why in (current.get("degraded"), setting) if why]
+    return {"campaigns": campaigns, "source": current.get("source"),
+            "fetchedAt": current.get("fetchedAt"),
+            "note": "; ".join(reasons) or None}
+
+
 # ------------------------------------------------------------------- bytes ----
 def cache_path(entry, env=None):
     """``<cache>/<campaign>/<sha256>-<filename>``.
@@ -486,12 +586,11 @@ def ensure(entry, env=None, *, opener=None, sleep=None, log=None):
             log("cached %s does not match its digest; fetching it again" % path)
         except OSError as ex:
             log("cached %s unreadable (%s); fetching it again" % (path, ex))
-    root = base_url(env)
-    if not root:
+    url = public_url(entry, env)
+    if url is None:
         raise AssetUnusable("%s is not set, so %s cannot be fetched"
                             % (BASE_VAR, entry["key"]))
-    body, content_type = _download("%s/%s" % (root, entry["key"]),
-                                   opener=opener, sleep=sleep)
+    body, content_type = _download(url, opener=opener, sleep=sleep)
     if len(body) > MAX_BYTES:
         raise AssetUnusable("%s is larger than the %d byte limit"
                             % (entry["key"], MAX_BYTES))
