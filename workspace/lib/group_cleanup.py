@@ -33,8 +33,13 @@ import os
 import json_store
 
 DEFAULT_STATE_DIR = "/home/joseph/.openclaw"
-# The two maps in a campaign's state file that are keyed by group jid.
-GROUP_KEYED = ("sent", "resolved")
+# `sent` is keyed by group jid: {"<jid>": "2026-08-20"}.
+SENT = "sent"
+# `resolved` is NOT. It caches invite-link lookups the other way round --
+# {"https://chat.whatsapp.com/<code>": "<jid>"} (promo_broadcast.resolve_targets)
+# -- so a group is found there by VALUE. Left behind, the cache would hand a
+# later run the jid of a group the bot has been told to forget.
+RESOLVED = "resolved"
 
 
 def cron_state_dir(env=None):
@@ -69,20 +74,31 @@ def clear_group(jid, env=None):
         if not os.path.isfile(path):
             continue
         checked += 1
-        state = json_store.load_json(path, None)
-        if not isinstance(state, dict):
-            continue
         removed = []
-        for key in GROUP_KEYED:
-            value = state.get(key)
-            if isinstance(value, dict) and jid in value:
-                del value[jid]
-                removed.append(key)
-        if not removed:
-            continue
+
+        def forget(state, removed=removed):
+            """Applied to the state as it is INSIDE the lock, so a send
+            committed since this sweep began is still here to be kept."""
+            if not isinstance(state, dict):
+                return False
+            sent = state.get(SENT)
+            if isinstance(sent, dict) and jid in sent:
+                del sent[jid]
+                removed.append(SENT)
+            resolved = state.get(RESOLVED)
+            if isinstance(resolved, dict):
+                invites = [invite for invite, target in resolved.items()
+                           if target == jid]
+                for invite in invites:
+                    del resolved[invite]
+                if invites:
+                    removed.append(RESOLVED)
+            return bool(removed)
+
         try:
-            json_store.write_json_atomic(path, state)
+            changed = json_store.locked_update_json(path, forget)
         except OSError:
             continue
-        cleared[name] = removed
+        if changed:
+            cleared[name] = removed
     return {"campaigns": cleared, "checked": checked}

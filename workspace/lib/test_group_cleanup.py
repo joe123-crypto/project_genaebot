@@ -14,6 +14,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -22,9 +23,14 @@ if LIB not in sys.path:
     sys.path.insert(0, LIB)
 
 import group_cleanup  # noqa: E402
+import json_store  # noqa: E402
 
 JID = "263786627810-1599925488@g.us"
 OTHER = "120363414718035443@g.us"
+# `resolved` caches invite-link lookups keyed by the LINK, with the jid as the
+# value -- the opposite way round from `sent`.
+INVITE = "https://chat.whatsapp.com/AbCdEf123456"
+OTHER_INVITE = "https://chat.whatsapp.com/ZyXwVu987654"
 
 
 class GroupCleanupTest(unittest.TestCase):
@@ -48,7 +54,7 @@ class GroupCleanupTest(unittest.TestCase):
         self.campaign("cv-promo", {"sent": {JID: "2026-08-20", OTHER: "2026-08-21"},
                                    "resolved": {}})
         self.campaign("genaie-promo", {"sent": {JID: "2026-09-01"},
-                                       "resolved": {JID: "x", OTHER: "y"}})
+                                       "resolved": {INVITE: JID, OTHER_INVITE: OTHER}})
 
         result = group_cleanup.clear_group(JID, env=self.env)
 
@@ -56,7 +62,28 @@ class GroupCleanupTest(unittest.TestCase):
                          {"cv-promo": ["sent"], "genaie-promo": ["sent", "resolved"]})
         self.assertEqual(result["checked"], 2)
         self.assertEqual(self.read("cv-promo")["sent"], {OTHER: "2026-08-21"})
-        self.assertEqual(self.read("genaie-promo"), {"sent": {}, "resolved": {OTHER: "y"}})
+        self.assertEqual(self.read("genaie-promo"),
+                         {"sent": {}, "resolved": {OTHER_INVITE: OTHER}})
+
+    def test_an_invite_cache_is_cleared_by_the_jid_it_resolves_to(self):
+        # `resolved` is keyed by the invite link, not the jid. Looking the jid up
+        # as a KEY finds nothing, so the cache would survive and hand a later run
+        # the group the operator asked to forget.
+        self.campaign("cv-promo", {"sent": {}, "resolved": {INVITE: JID}})
+
+        result = group_cleanup.clear_group(JID, env=self.env)
+
+        self.assertEqual(result["campaigns"], {"cv-promo": ["resolved"]})
+        self.assertEqual(self.read("cv-promo")["resolved"], {})
+
+    def test_every_invite_that_resolves_to_the_group_goes(self):
+        # One group can be reached by more than one link.
+        self.campaign("cv-promo", {"sent": {},
+                                   "resolved": {INVITE: JID, OTHER_INVITE: JID}})
+
+        group_cleanup.clear_group(JID, env=self.env)
+
+        self.assertEqual(self.read("cv-promo")["resolved"], {})
 
     def test_a_campaign_that_never_posted_to_it_is_left_untouched(self):
         path = self.campaign("cv-promo", {"sent": {OTHER: "2026-08-21"}, "resolved": {}})
@@ -111,6 +138,52 @@ class GroupCleanupTest(unittest.TestCase):
         (self.states / "half-made").mkdir(parents=True)
         self.assertEqual(group_cleanup.clear_group(JID, env=self.env),
                          {"campaigns": {}, "checked": 0})
+
+    def test_a_send_committed_while_the_sweep_waits_is_not_lost(self):
+        """The failure this guards: a duplicate advert.
+
+        ``promo_broadcast`` saves the whole state file after every send. If this
+        sweep read the file, a send committed, and then the sweep wrote back
+        what it had read, that send's receipt would vanish and the next run
+        would post the same advert to that group again. Both sides take the
+        file's lock, and the sweep reads INSIDE it, so the receipt survives.
+        """
+        path = self.campaign("cv-promo", {"sent": {JID: "2026-08-20"}, "resolved": {}})
+        done = threading.Event()
+
+        with json_store.file_lock(str(path)) as locked:
+            self.assertTrue(locked, "this platform must support the lock")
+
+            def sweep():
+                group_cleanup.clear_group(JID, env=self.env)
+                done.set()
+
+            worker = threading.Thread(target=sweep)
+            worker.start()
+            # The sweep is now blocked on the lock. Commit a send for another
+            # group, exactly as a broadcast run would.
+            self.assertFalse(done.wait(0.3), "the sweep ran without the lock")
+            json_store.write_json_atomic(str(path),
+                {"sent": {JID: "2026-08-20", OTHER: "2026-11-09"}, "resolved": {}})
+
+        worker.join(5)
+        self.assertTrue(done.is_set())
+        after = self.read("cv-promo")
+        self.assertEqual(after["sent"], {OTHER: "2026-11-09"},
+                         "the concurrent send receipt was overwritten")
+
+    def test_a_lock_that_cannot_be_taken_never_stops_the_work(self):
+        # Failing open matters most on the other side of this lock: a send must
+        # never fail because a lock was unavailable.
+        self.campaign("cv-promo", {"sent": {JID: "2026-08-20"}, "resolved": {}})
+        original = json_store.fcntl
+        json_store.fcntl = None
+        try:
+            result = group_cleanup.clear_group(JID, env=self.env)
+        finally:
+            json_store.fcntl = original
+        self.assertEqual(result["campaigns"], {"cv-promo": ["sent"]})
+        self.assertEqual(self.read("cv-promo")["sent"], {})
 
     def test_the_jid_has_to_be_one(self):
         with self.assertRaises(ValueError):

@@ -198,6 +198,37 @@ test('pruneGroupFromInventory removes one group and leaves the rest', async t =>
   assert.equal(await pruneGroupFromInventory(file, 'ads', '1@g.us'), false);
 });
 
+test('a lookup that began before a leave cannot put the group back', async t => {
+  // The failure this guards: scan() only ever merges what the lookup returned
+  // and never removes a group that has gone, so a stale observation written
+  // after the prune would stay in the inventory for good -- and the group would
+  // keep showing as discovered, which is the whole thing leaving exists to stop.
+  const f = fixture(t), d = f.create();
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  d.start({ groupFetchAllParticipating: async () => {
+    await gate;
+    return { '1@g.us': { subject: 'Departed' }, '2@g.us': { subject: 'Still in' } };
+  } });
+
+  const scanning = d.scan();                       // lookup starts at 06:00:00
+  // The leave happens while that lookup is in flight.
+  await pruneGroupFromInventory(inventoryPath(f.root, 'ads'), 'ads', '1@g.us',
+    () => Date.parse('2026-11-08T06:00:30Z'));
+  release();                                       // lookup resolves, stale
+  await scanning;
+
+  assert.deepEqual(Object.keys(f.read().groups), ['2@g.us']);
+
+  // A later, honest scan still adds it back if the account rejoins: the mark
+  // refuses observations older than the leave, not the group forever.
+  f.tick();
+  const rejoined = f.create();
+  rejoined.start({ groupFetchAllParticipating: async () => ({ '1@g.us': { subject: 'Rejoined' } }) });
+  await rejoined.scan();
+  assert.ok('1@g.us' in f.read().groups, 'a genuine later observation is kept');
+});
+
 test('a prune is ordered against a scan rather than racing it', async t => {
   const f = fixture(t), d = f.create();
   let release;

@@ -929,7 +929,15 @@ unconfirmed and left queued, so a reconnecting account still performs it.
 
 A successful leave prunes the group from that account's inventory file, because
 the inventory is merge-only and would otherwise keep listing a membership that
-no longer exists. Failures are reported in fixed words (`leave_failed`,
+no longer exists. The prune is timestamped in memory and a scan drops any group
+whose lookup began before it, so a lookup still in flight at the moment of the
+leave cannot write the departed group back -- nothing would ever remove it
+again.
+
+Clearing a group's records touches `runtime/cron-state/<name>/state.json` under
+a `state.json.lock` file beside it, which `promo_broadcast` also takes when it
+saves. Keep those lock files during runtime cleanup, or just let them be
+recreated; they hold no state. Failures are reported in fixed words (`leave_failed`,
 `leave_timeout`, `not_authorized`); provider errors are never forwarded.
 
 `GENAIE_GROUP_ACTIONS=0` switches the surface off at both ends: the route answers

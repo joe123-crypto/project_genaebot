@@ -1337,10 +1337,20 @@ for on its own:
   group inventory, holding the live socket -- performs it and writes the answer
   to `results/<uuid>.json`. A successful leave also prunes the group from that
   account's discovery inventory, because an inventory that still lists it would
-  put the group straight back under `discoveredGroups`. A group the account is
-  not in reports as already done, not as a failure.
-* **clearRecords** -- remove the group from every campaign's `sent` and
-  `resolved` map in `runtime/cron-state/<name>/state.json`. This deliberately
+  put the group straight back under `discoveredGroups`. A scan never removes a
+  group that has gone -- it only merges what the lookup returned -- so a lookup
+  that resolved before the leave would restore the entry for good; the prune is
+  timestamped and the merge drops observations older than it. A group the
+  account is not in reports as already done, not as a failure.
+* **clearRecords** -- remove the group from every campaign's state in
+  `runtime/cron-state/<name>/state.json`: its `sent` receipt, and any `resolved`
+  invite-link cache entry that points at it (`resolved` is keyed by the link,
+  with the jid as the value, so it is matched by value, not by key). The sweep
+  reads and writes under the state file's lock, which `promo_broadcast` also
+  takes when it saves, so a send committed while the sweep is waiting cannot be
+  overwritten -- losing a receipt would let the next run post the same advert
+  again. Locking fails open: a lock that cannot be taken never stops a send.
+  This deliberately
   does **not** touch `ad-refs.json` or `ad-ref-history.json`: those are keyed by
   a ref code derived from the jid, are written live by the public-service-gate
   plugin, and are evidence somebody replied to an advert. Stale entries there are
