@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
-import { patchWhatsAppGroupActivity, patchWhatsAppGroupDiscovery, patchWhatsAppHealthAudit, patchWhatsAppCacheCleanup, patchWhatsAppMonitor } from './whatsapp-lid-loader.mjs';
+import { patchWhatsAppGroupActions, patchWhatsAppGroupActivity, patchWhatsAppGroupDiscovery, patchWhatsAppHealthAudit, patchWhatsAppCacheCleanup, patchWhatsAppMonitor } from './whatsapp-lid-loader.mjs';
 
 const root = process.env.GENAIE_WHATSAPP_ROOT;
 if (process.env.GENAIE_REQUIRE_INTEGRATION === '1' && !root) throw new Error('Pinned WhatsApp adapter is required for discovery compatibility');
@@ -23,10 +23,15 @@ test('actual pinned WhatsApp lifecycle and socket contracts accept every compose
   assert.match(original, /groupFetchAllParticipating\(\)/, 'adapter uses the unbounded group lookup');
   // Compose in the order whatsapp-lid-loader.mjs applies at load time, so an
   // anchor one patch moves under another is caught here and not in production.
-  const patched = patchWhatsAppCacheCleanup(patchWhatsAppGroupDiscovery(patchWhatsAppGroupActivity(patchWhatsAppHealthAudit(patchWhatsAppMonitor(original)))));
+  const patched = patchWhatsAppCacheCleanup(patchWhatsAppGroupActions(patchWhatsAppGroupDiscovery(patchWhatsAppGroupActivity(patchWhatsAppHealthAudit(patchWhatsAppMonitor(original))))));
   assert.equal(patchWhatsAppGroupDiscovery(patched), patched);
   assert.equal(patchWhatsAppGroupActivity(patched), patched);
+  assert.equal(patchWhatsAppGroupActions(patched), patched);
   assert.match(original, /messages\.upsert/, 'collector receives raw socket messages before admission');
+  // Every helper has to survive the others' insertions at the shared anchors.
+  assert.equal((patched.match(/genaieGroupDiscovery\.start\(/g) || []).length, 1);
+  assert.equal((patched.match(/genaieGroupActivity\.start\(/g) || []).length, 1);
+  assert.equal((patched.match(/genaieGroupActions\.start\(/g) || []).length, 1);
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'discovery-adapter-'));
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
   const filename = path.join(temporary, 'monitor.mjs'); fs.writeFileSync(filename, patched);
