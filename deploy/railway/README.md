@@ -31,6 +31,16 @@ in the `railway-release` artifact. Local dirty and untracked files cannot enter
 the upload. Railway rebuilds the same source; the recorded digest identifies the
 image it actually produced, rather than asserting that separate builds are identical.
 
+The job first installs Railway CLI 5.71.0. Its npm postinstall downloads a GitHub
+release binary, so npm registry retry settings alone cannot recover a 504 from
+that download. The workflow retries installation and `railway --version` up to
+three times, waiting 10 then 20 seconds, within a five-minute step timeout. An
+exhausted installation failure stops before the release helper runs and does not
+upload an image. To recover a transient installation failure, open the failed
+GitHub Actions run and choose **Re-run failed jobs**. This retries the deploy job
+using the already-tested commit; the release helper still checks that it is the
+current `main` before changing production.
+
 The job checks a bounded, sanitized startup log record for the baked source SHA,
 campaign transport, catalog/history policy, allocator setting, the connected main WhatsApp account and all ten
 campaigns. Failure restores the previous successful deployment's

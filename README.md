@@ -18,6 +18,10 @@ main WhatsApp account and the enabled jobs, and restores the previous image on
 failure. The advertising account is optional for release readiness: an offline
 ad line is reported as degraded without blocking a healthy main-line deployment.
 
+Before releasing, the job installs pinned Railway CLI 5.71.0 with up to three
+attempts for transient registry or GitHub binary-download failures. If installation
+still fails, the release step never runs; re-run the failed job in GitHub Actions.
+
 This gate requires the production-scoped `RAILWAY_TOKEN` GitHub Actions secret
 and Railway's direct GitHub auto-deploy to be disconnected. Until the one-time
 cutover is completed, the existing direct integration still deploys `main`

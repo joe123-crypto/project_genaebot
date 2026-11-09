@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 from pathlib import Path
 import re
+import subprocess
+import tempfile
+import textwrap
 import unittest
 
 
@@ -97,6 +101,75 @@ class WorkflowContractTests(unittest.TestCase):
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
         self.assertIn("default: preserve", workflow)
         self.assertIn("RELEASE_PROFILE: ${{ inputs.profile || 'preserve' }}", job_block(workflow, "deploy"))
+
+
+class RailwayInstallTests(unittest.TestCase):
+    """Execute the workflow's install step with fake network and CLI commands."""
+
+    def run_install(self, failures: int, broken_binary: bool = False):
+        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+        step = workflow.split("      - name: Install pinned Railway CLI\n", 1)[1].split("\n      - name:", 1)[0]
+        self.assertIn("timeout-minutes: 5", step)
+        script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            shims = {
+                "npm": '''#!/usr/bin/env bash
+set -euo pipefail
+echo "npm $*" >> "$INSTALL_TRACE"
+count=0
+if [ -f "$INSTALL_COUNT" ]; then read -r count < "$INSTALL_COUNT"; fi
+count=$((count + 1))
+echo "$count" > "$INSTALL_COUNT"
+if [ "$count" -le "$INSTALL_FAILURES" ]; then
+  echo "Failed fetching the binary (504 Gateway Time-out)" >&2
+  exit 1
+fi
+''',
+                "railway": '''#!/usr/bin/env bash
+echo "railway $*" >> "$INSTALL_TRACE"
+if [ "$INSTALL_BROKEN_BINARY" = 1 ]; then exit 1; fi
+echo "railway 5.71.0"
+''',
+                "sleep": '''#!/usr/bin/env bash
+echo "sleep $*" >> "$INSTALL_TRACE"
+''',
+            }
+            for name, body in shims.items():
+                path = root / name
+                path.write_text(body)
+                path.chmod(0o755)
+            env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"],
+                       INSTALL_TRACE=str(root / "trace"), INSTALL_COUNT=str(root / "count"),
+                       INSTALL_FAILURES=str(failures), INSTALL_BROKEN_BINARY=str(int(broken_binary)))
+            result = subprocess.run(["bash", "-euo", "pipefail", "-c", script], env=env,
+                                    text=True, capture_output=True, timeout=10)
+            return result, (root / "trace").read_text().splitlines()
+
+    def test_success_does_not_retry(self):
+        result, trace = self.run_install(0)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(trace, ["npm install --global @railway/cli@5.71.0", "railway --version"])
+
+    def test_transient_binary_download_failure_recovers_with_backoff(self):
+        result, trace = self.run_install(2)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(trace, ["npm install --global @railway/cli@5.71.0", "sleep 10",
+                                 "npm install --global @railway/cli@5.71.0", "sleep 20",
+                                 "npm install --global @railway/cli@5.71.0", "railway --version"])
+
+    def test_exhausted_downloads_fail_before_release(self):
+        result, trace = self.run_install(3)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("::error::", result.stdout)
+        self.assertEqual(sum(line.startswith("npm ") for line in trace), 3)
+        self.assertNotIn("railway --version", trace)
+        self.assertEqual([line for line in trace if line.startswith("sleep ")], ["sleep 10", "sleep 20"])
+
+    def test_successful_npm_install_with_a_broken_binary_still_fails(self):
+        result, trace = self.run_install(0, broken_binary=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(trace.count("railway --version"), 3)
 
 
 if __name__ == "__main__":
