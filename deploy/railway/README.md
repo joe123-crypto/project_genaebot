@@ -994,6 +994,13 @@ railway variable set GENAIE_AD_ASSETS_SOURCE=repo --skip-deploys && railway rede
 
 `repo` is the baked images, the same as unset (`ad_assets.mode`).
 
+The image also bakes `deploy/ad-assets.json`, the committed mirror of the index,
+at `/usr/local/lib/genaie/ad-assets.json`. The console falls back to it when
+Firestore cannot be read and no snapshot has been written — which is the normal
+state of a fresh container in `repo` mode, where no run ever touches the index.
+Without it a Firestore outage or an exhausted quota blanks every picture in the
+operator console. Regenerate it with `deploy/upload-ad-image.py`, never by hand.
+
 The bucket is `r2.dev`-public and read anonymously, so the base URL is not a
 secret; it is a variable rather than a constant so a custom domain can replace it
 without a code change. Confirm it answers before the first flip -- a missing

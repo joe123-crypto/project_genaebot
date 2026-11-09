@@ -363,10 +363,13 @@ class CatalogueTest(Harness):
         self.assertEqual(len(found["campaigns"]["cv"]), 2)
 
     def test_an_unreadable_index_is_a_note_rather_than_an_exception(self):
+        # It falls through to the committed mirror rather than showing nothing,
+        # but the note still says the live index was not the source -- the two
+        # can disagree, and the screen must not imply otherwise. The case with
+        # genuinely nothing to show is covered below, with the mirror removed.
         self.env.pop("GCP_SERVICE_ACCOUNT_B64")
         found = self.catalogue()
-        self.assertEqual(found["campaigns"], {})
-        self.assertIsNone(found["source"])
+        self.assertEqual(found["source"], "mirror")
         self.assertIn("no service account", found["note"])
 
     def test_firestore_down_falls_back_to_the_snapshot_and_says_so(self):
@@ -402,6 +405,142 @@ class CatalogueTest(Harness):
         self.env["GENAIE_AD_ASSETS_SOURCE"] = "repo"
         self.store(entry("cv", "cv-ad.png", PNG))
         self.assertEqual(len(self.catalogue()["campaigns"]["cv"]), 1)
+
+    # --- the mirror, and not retrying a Firestore that already said no ----
+    def mirror(self, *entries):
+        path = os.path.join(self.dir, "ad-assets.json")
+        document = {"version": 1, "campaigns": {}}
+        for one in entries:
+            one = dict(one)
+            one.setdefault("id", "%s-%d" % (one["campaign"], (one.get("rank") or 10) // 10))
+            document["campaigns"].setdefault(one["campaign"], []).append(one)
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(document, handle)
+        self.env[aa.MIRROR_VAR] = path
+        return path
+
+    def test_the_committed_mirror_answers_when_there_is_no_index_and_no_snapshot(self):
+        # The production failure this exists for: the project's Firestore quota
+        # is exhausted, and in repo mode no run has ever written a snapshot.
+        self.mirror(entry("cv", "cv-ad.png", PNG))
+        self.env.pop("GCP_SERVICE_ACCOUNT_B64")
+        found = self.catalogue()
+        self.assertEqual(found["source"], "mirror")
+        self.assertEqual([e["url"] for e in found["campaigns"]["cv"]],
+                         ["%s/ads/cv/%s.png" % (BASE, digest(PNG))])
+        # Still says why it is not the live index, because it is not.
+        self.assertIn("no service account", found["note"])
+
+    def test_the_mirror_is_a_last_resort_not_a_preference(self):
+        self.mirror(entry("cv", "old-ad.png", PNG))
+        self.store(entry("cv", "cv-ad.png", PNG2))
+        found = self.catalogue()
+        self.assertEqual(found["source"], "firestore")
+        self.assertEqual([e["filename"] for e in found["campaigns"]["cv"]], ["cv-ad.png"])
+
+    def test_a_mirror_row_is_revalidated_rather_than_trusted(self):
+        self.mirror(entry("cv", "cv-ad.png", PNG),
+                    entry("cv", "bad.png", PNG2, rank=20, sha256="nope"))
+        self.env.pop("GCP_SERVICE_ACCOUNT_B64")
+        found = self.catalogue()
+        self.assertEqual([e["filename"] for e in found["campaigns"]["cv"]], ["cv-ad.png"])
+
+    def test_no_mirror_and_no_index_is_the_one_case_with_nothing_to_show(self):
+        self.env[aa.MIRROR_VAR] = os.path.join(self.dir, "absent.json")
+        self.env.pop("GCP_SERVICE_ACCOUNT_B64")
+        found = self.catalogue()
+        self.assertEqual(found["campaigns"], {})
+        self.assertIsNone(found["source"])
+        self.assertIn("no service account", found["note"])
+
+    def test_a_failed_read_is_not_repeated_on_every_call(self):
+        self.mirror(entry("cv", "cv-ad.png", PNG))
+        self.world.firestore.down = True
+        self.catalogue()
+        before = len(self.world.firestore.requests)
+        self.assertEqual(self.catalogue()["source"], "mirror")
+        self.assertEqual(len(self.world.firestore.requests), before)
+
+    def test_the_retry_window_expires_so_a_recovered_quota_is_noticed(self):
+        self.mirror(entry("cv", "old-ad.png", PNG))
+        self.world.firestore.down = True
+        self.catalogue()
+        self.world.firestore.down = False
+        self.store(entry("cv", "cv-ad.png", PNG2))
+        self.clock[0] += aa.RETRY_AFTER_SECONDS + 1
+        found = self.catalogue()
+        self.assertEqual(found["source"], "firestore")
+        self.assertEqual([e["filename"] for e in found["campaigns"]["cv"]], ["cv-ad.png"])
+
+    def test_a_read_that_works_forgets_the_earlier_failure(self):
+        self.mirror(entry("cv", "old-ad.png", PNG))
+        self.world.firestore.down = True
+        self.catalogue()
+        self.assertTrue(os.path.exists(aa.failure_path(self.env)))
+        self.world.firestore.down = False
+        self.store(entry("cv", "cv-ad.png", PNG2))
+        self.clock[0] += aa.RETRY_AFTER_SECONDS + 1
+        self.catalogue()
+        self.assertFalse(os.path.exists(aa.failure_path(self.env)))
+
+    def test_a_failed_read_over_a_snapshot_still_opens_the_retry_window(self):
+        # The branch that always exists in production: a container that has
+        # read Firestore once has a snapshot, so a later failure answers out of
+        # it instead of raising. That is still a failed read -- without it the
+        # backoff would do nothing on any deployed container.
+        self.mirror(entry("cv", "old-ad.png", PNG))
+        self.store(entry("cv", "cv-ad.png", PNG))
+        self.catalogue()                                    # writes the snapshot
+        self.clock[0] += aa.CATALOGUE_MAX_AGE_SECONDS + 1
+        self.world.firestore.down = True
+        self.assertEqual(self.catalogue()["source"], "snapshot")
+        self.assertTrue(os.path.exists(aa.failure_path(self.env)))
+        before = len(self.world.firestore.requests)
+        found = self.catalogue()
+        self.assertEqual(len(self.world.firestore.requests), before)
+        # And the window keeps the snapshot: suppressing the read must not cost
+        # the fresher answer that read would have fallen back to.
+        self.assertEqual(found["source"], "snapshot")
+        self.assertEqual([e["filename"] for e in found["campaigns"]["cv"]], ["cv-ad.png"])
+        self.assertTrue(found["note"])
+
+    def test_the_window_over_a_snapshot_expires_like_any_other(self):
+        self.store(entry("cv", "cv-ad.png", PNG))
+        self.catalogue()
+        self.clock[0] += aa.CATALOGUE_MAX_AGE_SECONDS + 1
+        self.world.firestore.down = True
+        self.catalogue()
+        self.world.firestore.down = False
+        self.store(entry("cv", "cv-ad-2.png", PNG2))
+        self.clock[0] += aa.RETRY_AFTER_SECONDS + 1
+        found = self.catalogue()
+        self.assertEqual(found["source"], "firestore")
+        self.assertEqual([e["filename"] for e in found["campaigns"]["cv"]], ["cv-ad-2.png"])
+        self.assertFalse(os.path.exists(aa.failure_path(self.env)))
+
+    def test_inside_the_window_a_snapshot_past_the_limit_drops_to_the_mirror(self):
+        self.mirror(entry("cv", "old-ad.png", PNG))
+        self.store(entry("cv", "cv-ad.png", PNG2))
+        self.catalogue()
+        self.clock[0] += aa.INDEX_MAX_AGE_SECONDS + 1       # snapshot now too old to act on
+        self.world.firestore.down = True
+        self.assertEqual(self.catalogue()["source"], "mirror")
+        before = len(self.world.firestore.requests)
+        found = self.catalogue()
+        self.assertEqual(len(self.world.firestore.requests), before)
+        self.assertEqual(found["source"], "mirror")
+        self.assertEqual([e["filename"] for e in found["campaigns"]["cv"]], ["old-ad.png"])
+
+    def test_the_repo_mirror_this_branch_ships_parses_through_the_validator(self):
+        # deploy/ad-assets.json is what a container actually falls back to, so
+        # a row this module would quarantine must be caught here, not in
+        # production at the moment Firestore goes away.
+        root = os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(aa.__file__))))
+        found = aa.mirror_index({aa.MIRROR_VAR: os.path.join(root, "deploy", "ad-assets.json")})
+        self.assertIsNotNone(found)
+        self.assertEqual(found["quarantined"], {})
+        self.assertTrue(found["campaigns"])
 
     def test_it_describes_pictures_without_fetching_a_single_byte(self):
         self.store(entry("cv", "cv-ad.png", PNG))

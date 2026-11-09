@@ -101,6 +101,10 @@ COPY deploy/railway/console_accounts.py /usr/local/bin/console_accounts.py
 # console-read resolves the declared cron manifest from deploy/, which
 # stage-openclaw-source.sh never stages, so bake a copy beside the helpers.
 COPY deploy/promo-crons.json /usr/local/lib/genaie/promo-crons.json
+# And the committed mirror of the ad-asset index, for the same reason: it is
+# what the console falls back to when Firestore cannot be read and no snapshot
+# has been written yet, which in `repo` mode is every container's first hours.
+COPY deploy/ad-assets.json /usr/local/lib/genaie/ad-assets.json
 RUN python3 -c 'from zoneinfo import ZoneInfo; ZoneInfo("Africa/Algiers")'
 COPY deploy/railway/wait-gateway-lease.py /usr/local/bin/wait-gateway-lease.py
 COPY deploy/railway/whatsapp-lid-loader.mjs deploy/railway/whatsapp-lid-recovery.mjs deploy/railway/whatsapp-cache-cleanup.mjs deploy/railway/whatsapp-health-audit.mjs /usr/local/lib/genaie/
