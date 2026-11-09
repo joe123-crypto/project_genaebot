@@ -1200,6 +1200,24 @@ attaches the baked copy. An index that cannot be read costs the pictures and
 nothing else: `assets` is `[]`, `adAssets.note` says why, and the campaigns
 payload is otherwise complete.
 
+When neither a snapshot nor Firestore can answer, the console falls back to
+**`deploy/ad-assets.json`**, the committed mirror, baked into the image at
+`/usr/local/lib/genaie/ad-assets.json` because `deploy/` is never staged onto
+the volume. That rung is not theoretical: the first deploy of this feature
+showed every tile blank, because the project's Firestore quota was exhausted
+(`429 RESOURCE_EXHAUSTED`) **and** `repo` mode means no run had ever written a
+snapshot — so there was nothing anywhere to say where the pictures were, while
+the bytes sat in the bucket. The mirror is deploy-time truth: an operator's
+edit in the Firebase Console is not in it, so `adAssets.source` reports
+`mirror` rather than passing it off as the index, and `note` still says why the
+live read did not happen.
+
+A live read that fails also writes `runtime/firestore/ad-assets-unreadable.json`
+and is not retried for `RETRY_AFTER_SECONDS`. A console tab refreshes every 60
+seconds, and retrying an exhausted quota on that loop is both useless and part
+of what keeps it exhausted. One attempt per window still notices the quota
+coming back.
+
 Reading it is snapshot-first (`ad_assets.catalogue`, bounded by
 `CATALOGUE_MAX_AGE_SECONDS`, 5 minutes). A console tab refreshes every 60
 seconds and the bridge is a fresh process each time, so without that bound every

@@ -37,6 +37,15 @@ class ConsoleApiWiringTests(unittest.TestCase):
             "COPY deploy/promo-crons.json /usr/local/lib/genaie/promo-crons.json",
             DOCKERFILE)
 
+    def test_the_asset_index_mirror_is_baked_in(self):
+        """Same reason, and the one that bit: with Firestore's quota exhausted
+        and no snapshot written yet, the mirror is the only thing that knows
+        where a campaign's pictures are. From a checkout it resolves through
+        deploy/; in the container it has to be here."""
+        self.assertIn(
+            "COPY deploy/ad-assets.json /usr/local/lib/genaie/ad-assets.json",
+            DOCKERFILE)
+
     def test_the_token_reaches_the_server_through_the_sanitized_env(self):
         secrets = ENTRYPOINT.split("SECRET_KEYS=(", 1)[1].split(")", 1)[0]
         self.assertIn("CONSOLE_API_TOKEN", secrets.split())

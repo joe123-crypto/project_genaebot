@@ -128,14 +128,15 @@ class ConsoleReadTests(unittest.TestCase):
         slots = [(r["hour"], r["minute"]) for r in records]
         self.assertEqual(slots, sorted(slots))
 
-    def test_an_unreadable_asset_index_costs_the_pictures_and_nothing_else(self):
+    def test_no_index_and_no_mirror_costs_the_pictures_and_nothing_else(self):
         """The whole point of the bridge's catalogue being failure-tolerant. With
-        no credentials and no snapshot there is no index, and the campaigns
-        screen must still load in full and say why its tiles are empty rather
-        than implying the campaigns have no pictures."""
+        no credentials, no snapshot and no mirror there is nothing to show, and
+        the campaigns screen must still load in full and say why its tiles are
+        empty rather than implying the campaigns have no pictures."""
         with tempfile.TemporaryDirectory() as empty:
             payload = self.ok_with(("campaigns", "--date", DAY),
                                    GENAIE_FIRESTORE_DIR=empty,
+                                   GENAIE_AD_ASSETS_MIRROR=os.path.join(empty, "absent.json"),
                                    GENAIE_AD_ASSETS_BASE_URL="")
         self.assertTrue(payload["campaigns"])
         for record in payload["campaigns"]:
@@ -144,6 +145,27 @@ class ConsoleReadTests(unittest.TestCase):
             self.assertTrue(record["captions"], record["slug"])
         self.assertIsNone(payload["adAssets"]["source"])
         self.assertTrue(payload["adAssets"]["note"])
+
+    def test_the_committed_mirror_carries_the_pictures_when_firestore_cannot(self):
+        """What production actually hit: the Firestore quota was exhausted and,
+        in repo mode, no run had ever written a snapshot. Every tile went blank
+        over pictures that were sitting in the bucket."""
+        base = "https://ads.example.test"
+        with tempfile.TemporaryDirectory() as empty:
+            payload = self.ok_with(("campaigns", "--date", DAY),
+                                   GENAIE_FIRESTORE_DIR=empty,
+                                   GENAIE_AD_ASSETS_BASE_URL=base)
+        self.assertEqual(payload["adAssets"]["source"], "mirror")
+        shown = [r for r in payload["campaigns"] if r["assets"]]
+        self.assertTrue(shown, "the committed mirror should name some pictures")
+        for record in shown:
+            for asset in record["assets"]:
+                self.assertEqual(set(asset), ASSET_KEYS, record["slug"])
+                self.assertTrue(asset["url"].startswith(base + "/ads/"))
+            # The mirror is the index for the same campaign the post script
+            # declares, so the two lists must still be about the same pictures.
+            self.assertLessEqual({a["filename"] for a in record["assets"]},
+                                 set(record["images"]), record["slug"])
 
     def test_preview_renders_the_caption_the_cron_would_send(self):
         payload = self.ok("preview", "borehole-drilling", "--date", DAY)

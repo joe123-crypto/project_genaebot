@@ -128,6 +128,24 @@ INDEX_MAX_AGE_SECONDS = operator_config.SNAPSHOT_MAX_AGE_SECONDS
 # that rate-limits the thing it is monitoring costs the monitoring.
 CATALOGUE_MAX_AGE_SECONDS = 300
 
+# Where the committed mirror of the index lives. `deploy/` is not staged onto
+# the volume, so the container gets a baked copy at the second path, exactly as
+# the cron manifest does. The variable is for tests.
+MIRROR_VAR = "GENAIE_AD_ASSETS_MIRROR"
+MIRROR_FILE = "ad-assets.json"
+MIRROR_CANDIDATES = (
+    os.path.join(os.path.dirname(os.path.dirname(LIB)), "deploy", MIRROR_FILE),
+    os.path.join("/usr/local/lib/genaie", MIRROR_FILE),
+)
+
+# How long a failed live read suppresses the next one. Without it every console
+# refresh retries a Firestore that has already said no -- and the failure this
+# exists for is a project whose daily quota is exhausted, where retrying on a
+# loop is both useless and part of the problem. One attempt per window is
+# enough to notice the quota coming back.
+RETRY_AFTER_SECONDS = CATALOGUE_MAX_AGE_SECONDS
+FAILURE_FILE = "ad-assets-unreadable.json"
+
 # Cloudflare's r2.dev public endpoint answers 403 to a request whose User-Agent
 # is urllib's default "Python-urllib/3.x" -- and 200 to any other value, an empty
 # one included. Measured against the live bucket on 2026-11-08: curl, a named
@@ -396,21 +414,97 @@ def _from_snapshot(env, why, now=None):
         raise AssetsUnavailable(
             "the index is unreadable (%s) and the snapshot is %.0f h old, past the "
             "%.0f h limit" % (why, age / 3600.0, INDEX_MAX_AGE_SECONDS / 3600.0))
-    campaigns, quarantined = {}, dict(snapshot.get("quarantined") or {})
-    for slug, entries in snapshot["campaigns"].items():
+    campaigns, quarantined = _from_json(snapshot["campaigns"],
+                                        snapshot.get("quarantined"))
+    return {"source": "snapshot", "fetchedAt": snapshot.get("fetchedAt"),
+            "degraded": why, "campaigns": _enabled_only(campaigns),
+            "quarantined": quarantined}
+
+
+def _from_json(campaigns_json, quarantined=None):
+    """``({slug: [entry]}, {id: problem})`` out of plain JSON.
+
+    The snapshot and the committed mirror have the same shape and are both
+    files that something other than this process last wrote, so neither is
+    trusted: every row goes back through :func:`_entry`."""
+    campaigns, quarantined = {}, dict(quarantined or {})
+    for slug, entries in (campaigns_json or {}).items():
         kept = []
         for entry in entries if isinstance(entries, list) else []:
-            # A snapshot this module wrote is already validated, but it is a file
-            # on a volume: re-check rather than assume.
             try:
                 kept.append(_entry(entry.get("id", "?"), entry))
             except (ValueError, AttributeError) as ex:
                 quarantined[str(entry)[:80]] = str(ex)
         if kept:
             campaigns[slug] = kept
-    return {"source": "snapshot", "fetchedAt": snapshot.get("fetchedAt"),
-            "degraded": why, "campaigns": _enabled_only(campaigns),
-            "quarantined": quarantined}
+    return campaigns, quarantined
+
+
+def mirror_path(env=None):
+    """The committed mirror of the index, or ``None`` when there is none here."""
+    env = os.environ if env is None else env
+    override = env.get(MIRROR_VAR)
+    for candidate in [override] if override else list(MIRROR_CANDIDATES):
+        if candidate and os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def mirror_index(env=None):
+    """``deploy/ad-assets.json``, the index as it stood when this was deployed,
+    or ``None`` when it is absent or unusable.
+
+    Deploy-time truth, not live truth: an operator's edit in the Firebase
+    Console is not in it, which is why callers report ``source: "mirror"``
+    rather than passing it off as the index. It exists because the alternative
+    when Firestore cannot be reached and no snapshot has been written yet is
+    showing nothing at all -- and the bytes it names are the very bytes baked
+    into the running container, which ``deploy/test_ad_assets_mirror.py``
+    pins."""
+    path = mirror_path(env)
+    if path is None:
+        return None
+    document = operator_config._read_json(path)
+    if not isinstance(document, dict) or not isinstance(document.get("campaigns"), dict):
+        return None
+    campaigns, quarantined = _from_json(document["campaigns"])
+    if not campaigns:
+        return None
+    return {"source": "mirror", "fetchedAt": None, "degraded": None,
+            "campaigns": _enabled_only(campaigns), "quarantined": quarantined}
+
+
+def failure_path(env=None):
+    return os.path.join(operator_config.state_dir(env), FAILURE_FILE)
+
+
+def _recently_failed(env, now):
+    """Whether a live read failed inside the retry window, and why.
+
+    Kept on disk rather than in memory because every caller that matters is a
+    fresh process: an in-memory flag would stop nothing."""
+    stamp = operator_config._read_json(failure_path(env))
+    if not isinstance(stamp, dict):
+        return None
+    at = stamp.get("at")
+    if not isinstance(at, (int, float)) or now() - at > RETRY_AFTER_SECONDS:
+        return None
+    return str(stamp.get("why") or "a recent read failed")
+
+
+def _note_failure(env, why, now, log):
+    try:
+        operator_config._write_private_json(failure_path(env),
+                                            {"at": now(), "why": why})
+    except OSError as ex:
+        log("could not write %s: %s" % (failure_path(env), ex))
+
+
+def _clear_failure(env):
+    try:
+        os.remove(failure_path(env))
+    except OSError:
+        pass
 
 
 def _recent_snapshot(env, max_age, now):
@@ -432,6 +526,14 @@ def _recent_snapshot(env, max_age, now):
     if age is None or age > max_age:
         return None
     return dict(result, degraded=None)
+
+
+def _fallback(env, why):
+    """The committed mirror, marked as standing in for a read that did not
+    happen. ``None`` when there is no mirror either, which is the one case with
+    genuinely nothing to show."""
+    found = mirror_index(env)
+    return None if found is None else dict(found, degraded=why)
 
 
 def catalogue(env=None, *, max_age=CATALOGUE_MAX_AGE_SECONDS, now=None, log=None,
@@ -465,11 +567,21 @@ def catalogue(env=None, *, max_age=CATALOGUE_MAX_AGE_SECONDS, now=None, log=None
 
     current = _recent_snapshot(env, max_age, now)
     if current is None:
-        try:
-            current = index(env, now=now, log=log, **inject)
-        except AssetsUnavailable as ex:
-            return {"campaigns": {}, "source": None, "fetchedAt": None,
-                    "note": str(ex)}
+        # A read that failed moments ago is not worth repeating on every
+        # refresh, and the case this guards -- an exhausted Firestore quota --
+        # is one where retrying in a loop is part of what keeps it exhausted.
+        why = _recently_failed(env, now)
+        if why is None:
+            try:
+                current = index(env, now=now, log=log, **inject)
+                _clear_failure(env)
+            except AssetsUnavailable as ex:
+                why = str(ex)
+                _note_failure(env, why, now, log)
+        if current is None:
+            current = _fallback(env, why)
+        if current is None:
+            return {"campaigns": {}, "source": None, "fetchedAt": None, "note": why}
 
     # Resolved once, outside the loop: a bad setting is one answer about the
     # whole index, not the same complaint repeated per picture.
@@ -486,7 +598,7 @@ def catalogue(env=None, *, max_age=CATALOGUE_MAX_AGE_SECONDS, now=None, log=None
         (slug, [dict(entry, url=None if root is None else public_url(entry, env))
                 for entry in entries])
         for slug, entries in current["campaigns"].items())
-    reasons = [why for why in (current.get("degraded"), setting) if why]
+    reasons = [reason for reason in (current.get("degraded"), setting) if reason]
     return {"campaigns": campaigns, "source": current.get("source"),
             "fetchedAt": current.get("fetchedAt"),
             "note": "; ".join(reasons) or None}
