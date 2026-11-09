@@ -33,6 +33,9 @@ which imports this module.
 """
 
 import json
+import datetime
+import time
+from zoneinfo import ZoneInfo
 import os
 import sys
 
@@ -188,6 +191,14 @@ def resolve(promo, targets_file=None, membership_path=None, env=None, err=None,
         declared = manifest_switches(env)
         switches = dict((slug_, on and declared.get(slug_, True))
                         for slug_, on in loaded["enabled"].items())
+        # Data-defined campaigns have no baked manifest entry. A pending job
+        # cannot consume cap turns until reconciliation verifies its schedule.
+        for key, meta in (membership.get("promos") or {}).items():
+            if meta.get("kind") == "console":
+                import console_campaigns
+                campaign_day = datetime.datetime.fromtimestamp(inject.get("now", time.time)(), ZoneInfo("Africa/Harare")).date()
+                switches[key] = (switches.get(key, False) and meta.get("scheduleStatus") == "ready"
+                                 and console_campaigns.schedule_occurrence(meta, campaign_day) is not None)
         # A caller that names no campaign (the console's read model) wants the
         # membership and the switches, not one campaign's target list.
         doc = promo_membership.targets_payload(membership, slug) if slug else {}

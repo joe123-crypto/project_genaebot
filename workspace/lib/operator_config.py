@@ -417,6 +417,25 @@ def assemble(raw):
     return membership, enabled, undecodable
 
 
+def validate_captions(captions):
+    """A campaign override is a non-empty list of non-blank caption templates."""
+    if (not isinstance(captions, list) or not captions or
+            any(not isinstance(text, str) or not text.strip() for text in captions)):
+        raise ConfigInvalid("captions must be a non-empty list of non-blank strings")
+    if len(json.dumps(captions, ensure_ascii=False).encode("utf-8")) > 60 * 1024:
+        raise ConfigInvalid("captions exceed 60 KiB")
+    return list(captions)
+
+
+def campaign_captions(source, slug, fallback):
+    """Copy from the same resolved config as targeting; file mode is a rollback."""
+    if source.get("mode") != "firestore":
+        return list(fallback)
+    meta = ((source.get("membership") or {}).get("promos") or {}).get(slug) or {}
+    return validate_captions(meta["captions"]) if "captions" in meta else list(fallback)
+
+
+
 def quarantine(membership, undecodable=None):
     """``(clean, report)``. Each group is validated on its own, against the shared
     settings; one that fails is left out of ``clean`` and listed in

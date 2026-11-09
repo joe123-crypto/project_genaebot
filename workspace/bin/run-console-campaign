@@ -1,0 +1,10 @@
+#!/usr/bin/env python3
+"""Generic data-defined campaign command. No write key or arbitrary code."""
+import fcntl
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+from console_campaigns import run_campaign
+
+if __name__ == "__main__":
+    sys.exit(run_campaign(sys.argv[1], sys.argv[2:]))

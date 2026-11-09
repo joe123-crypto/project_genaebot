@@ -237,7 +237,7 @@ class WriteBridge:
 
     def run(self, request):
         """Return (status, body). Never raises, and never leaks stderr."""
-        payload = json.dumps(request).encode("utf-8")
+        payload = json.dumps(request, ensure_ascii=False).encode("utf-8")
         with self.lock:
             self.runs += 1
             try:
@@ -445,8 +445,39 @@ class Handler(BaseHTTPRequestHandler):
             bridge.cache.clear()
         self.send_any(status, body, with_body)
 
+    def campaign_create_request(self, split):
+        if not authorized(self.headers.get("Authorization"), self.server.console["token"]):
+            self.send_any(401, b'{"error":"unauthorized"}', True)
+            return
+        if not (os.environ.get(WRITE_KEY_VAR) or "").strip():
+            self.send_any(503, b'{"error":"Campaign writes are not enabled."}', True)
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if split.query or not 0 < length <= 60 * 1024 or self.headers.get("Transfer-Encoding"):
+                raise ValueError("invalid request size")
+            if self.headers.get_content_type() != "application/json":
+                raise ValueError("use application/json")
+            raw = self.rfile.read(length)
+            if len(raw) != length:
+                raise ValueError("incomplete request")
+            request = json.loads(raw)
+            if not isinstance(request, dict) or "reconcile" in request:
+                raise ValueError("invalid campaign request")
+        except (ValueError, TypeError):
+            self.send_any(400, b'{"error":"Invalid campaign creation request."}', True)
+            return
+        status, body = self.server.console["campaigns"].run(request)
+        bridge = self.server.console["bridge"]
+        with bridge.lock:
+            bridge.cache.clear()
+        self.send_any(status, body, True)
+
     def do_POST(self):
         split = urlsplit(self.path)
+        if split.path == PREFIX + "campaigns/create":
+            self.campaign_create_request(split)
+            return
         if split.path.startswith(PREFIX + "config/"):
             if not authorized(self.headers.get("Authorization"),
                               self.server.console["token"]):
@@ -565,7 +596,9 @@ def build_server(bind, port, token, bridge_path, write_path=None, **kwargs):
     server.server_close = close
     server.console = {"token": token, "bridge": Bridge(bridge_path, **kwargs),
                       "accounts": AccountControls(),
-                      "writes": WriteBridge(write_path or default_write_bridge())}
+                      "writes": WriteBridge(write_path or default_write_bridge()),
+                      "campaigns": WriteBridge(_volume_bin("console-campaign-create"), timeout=120)}
+    server.console["campaigns"].lock = server.console["writes"].lock
     return server
 
 
@@ -591,10 +624,24 @@ def main():
 
     if not os.path.exists(bridge_path):
         log("warning: bridge not found at %s; requests will answer 502" % bridge_path)
+    # A durable Firestore desired schedule is retried after API/gateway restart.
+    stop_reconcile = threading.Event()
+    def reconcile_campaigns():
+        while not stop_reconcile.is_set():
+            if (os.environ.get(WRITE_KEY_VAR) or "").strip():
+                status, _ = server.console["campaigns"].run({"reconcile": True})
+                bridge = server.console["bridge"]
+                with bridge.lock:
+                    bridge.cache.clear()
+                if status != 200:
+                    log("campaign schedule reconciliation is pending")
+            stop_reconcile.wait(60)
+    threading.Thread(target=reconcile_campaigns, daemon=True).start()
     log("listening on %s:%d, bridge %s" % (bind, port, bridge_path))
     try:
         server.serve_forever()
     finally:
+        stop_reconcile.set()
         server.server_close()
     return 0
 

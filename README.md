@@ -1669,3 +1669,31 @@ campaigns declared enabled. The original CV poster still contains the offline
 ads contact number and must be corrected before re-enabling this campaign.
 Restore `enabled: true` and run the CV installer to resume; a merge alone does
 not change the live cron state.
+
+
+### Console-created campaigns
+
+The console API accepts authenticated `POST /internal/console/campaigns/create`
+requests when its existing write key is installed. This requires
+`GENAIE_CONFIG_SOURCE=firestore` and `GENAIE_AD_ASSETS_SOURCE=r2`, with
+`GENAIE_AD_ASSETS_BASE_URL` configured. Campaigns, group assignments, image index,
+audit and idempotency receipt save in one Firestore transaction. Existing
+manifest campaigns retain their installers and scripts.
+
+The console signs direct, immutable R2 picture uploads using its own bucket-scoped
+write token. The gateway needs no R2 write credentials. `console-campaign-create`
+checks uploaded bytes before saving; `run-console-campaign` uses the shared
+broadcast engine and the runtime read key. Caption overrides are also supported.
+
+Desired schedules reconcile when the console API starts and every minute.
+Stable `console-<slug>-promo` names and a volume lock recover uncertain gateway
+acknowledgements without duplicate jobs. Read-back verifies the job; pending
+campaigns cannot post or consume caps. Creation never triggers an immediate send.
+Failure alerts are off unless explicitly configured. New scripts are included by
+the existing workspace bin/lib staging rules.
+
+Run `python3 workspace/lib/test_console_campaigns.py` and
+`python3 deploy/test_console_campaign_api.py`, then the existing operator config,
+writer, broadcast, read bridge and console API test suites before deploying.
+Deploy bot support before enabling the console creation controls. Keep
+`GCP_SERVICE_ACCOUNT_WRITE_B64` isolated to the console API as before.
