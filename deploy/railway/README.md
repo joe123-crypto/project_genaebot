@@ -242,6 +242,18 @@ The startup report runs after the gateway restarts, so this operator preflight
 must happen before merging. GitHub CI's release gate validates the tested
 source and startup; it does not acquire a pre-deployment cron lock.
 
+As a backstop, the deploy job's *Wait for a quiet promo window* step
+(`deploy/promo-deploy-window.py`) reads `deploy/promo-crons.json` and holds the
+release while any enabled campaign started under 60 minutes ago or starts within
+20 minutes. It waits up to 45 minutes; beyond that it fails and names the next
+quiet time, and GitHub Actions → *Re-run failed jobs* after that time releases
+the same commit. A deliberate restart during a run is a manual dispatch with
+`ignore_promo_window`. The step sees only the committed manifest, not live
+schedule drift or console-created campaigns, so it does not replace the checks
+above. It exists because the 2026-11-09 08:31 merge of #184 restarted the
+gateway at 08:42, inside fruit-trees-promo's 08:40 run, and with no automatic
+catch-up fruit-trees posted to no group that day.
+
 ## Recovery
 
 The release refuses to mutate production without a known previous image digest.

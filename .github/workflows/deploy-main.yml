@@ -21,6 +21,10 @@ on:
           - cache-trial
           - standby-trial
         default: preserve
+      ignore_promo_window:
+        description: Release even while a promo campaign is sending (it will be cut off for the day)
+        type: boolean
+        default: false
 
 permissions:
   actions: read
@@ -152,7 +156,7 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: [validate, secrets, compatibility]
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 110
     concurrency:
       group: railway-production
       cancel-in-progress: false
@@ -181,6 +185,10 @@ jobs:
             echo "::warning::Railway CLI installation failed; retrying in ${delay}s"
             sleep "$delay"
           done
+      - name: Wait for a quiet promo window
+        if: ${{ !inputs.ignore_promo_window }}
+        timeout-minutes: 50
+        run: python3 deploy/promo-deploy-window.py --max-wait-minutes 45
       - name: Release or restore the exact previous image
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
