@@ -50,7 +50,9 @@ Std-lib only, Python 3.11+ (the container runs Debian bookworm's python3).
 
 import base64
 import datetime
+import email.utils
 import json
+import math
 import os
 import secrets
 import subprocess
@@ -101,6 +103,20 @@ DEFAULT_STATE_DIR = "/home/joseph/.openclaw"
 
 class ConfigUnavailable(Exception):
     """No usable config: Firestore unreachable or refusing, and no snapshot."""
+
+    def __init__(self, message, *, upstreamStatus=None, code=None, quota=None,
+                 retryAfterSeconds=None):
+        super().__init__(message)
+        self.metadata = {}
+        if isinstance(upstreamStatus, int) and 100 <= upstreamStatus <= 599:
+            self.metadata["upstreamStatus"] = upstreamStatus
+        if code == "config_rate_limited":
+            self.metadata["code"] = code
+        if quota in ("daily", "rate", "unknown"):
+            self.metadata["quota"] = quota
+        if (isinstance(retryAfterSeconds, (int, float))
+                and math.isfinite(retryAfterSeconds) and 0 <= retryAfterSeconds <= 86400):
+            self.metadata["retryAfterSeconds"] = retryAfterSeconds
 
 
 class ConfigInvalid(Exception):
@@ -219,6 +235,53 @@ def access_token(creds, cache_path, *, opener, signer, now, sleep):
 # HTTP
 
 
+def _failure_metadata(error, host):
+    """Extract only enums and numbers, never Google's free-form error text."""
+    metadata = {"upstreamStatus": error.code}
+    if host != "firestore.googleapis.com" or error.code != 429:
+        return metadata
+    metadata.update(code="config_rate_limited", quota="unknown")
+    delays = []
+    header = error.headers.get("Retry-After") if error.headers else None
+    if header:
+        try:
+            delays.append(float(header))
+        except ValueError:
+            try:
+                delays.append(email.utils.parsedate_to_datetime(header).timestamp() - time.time())
+            except (ValueError, TypeError, OverflowError):
+                pass
+    try:
+        payload = json.loads(error.read(8192))
+        body = payload.get("error", {}) if isinstance(payload, dict) else {}
+        details = body.get("details", []) if isinstance(body, dict) else []
+        for detail in details if isinstance(details, list) else []:
+            if not isinstance(detail, dict):
+                continue
+            if detail.get("@type") == "type.googleapis.com/google.rpc.ErrorInfo":
+                info = detail.get("metadata")
+                if isinstance(info, dict):
+                    limit = str(info.get("quota_limit", "")).lower()
+                    if "daily" in limit or "perday" in limit or "per_day" in limit:
+                        metadata["quota"] = "daily"
+                    elif metadata["quota"] != "daily" and any(unit in limit for unit in (
+                            "perminute", "persecond", "per_minute", "per_second")):
+                        metadata["quota"] = "rate"
+            if detail.get("@type") == "type.googleapis.com/google.rpc.RetryInfo":
+                delay = detail.get("retryDelay")
+                if isinstance(delay, str) and delay.endswith("s"):
+                    try:
+                        delays.append(float(delay[:-1]))
+                    except ValueError:
+                        pass
+    except (ValueError, OSError):
+        pass
+    delays = [delay for delay in delays if math.isfinite(delay) and 0 <= delay <= 86400]
+    if delays:
+        metadata["retryAfterSeconds"] = max(delays)
+    return metadata
+
+
 def _request(url, *, opener, sleep, data=None, headers=None, method=None,
              missing_ok=False):
     """JSON from ``url``, one retry on a transient failure. Raises
@@ -232,15 +295,17 @@ def _request(url, *, opener, sleep, data=None, headers=None, method=None,
             with opener(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
                 return json.loads(response.read().decode("utf-8") or "{}")
         except urllib.error.HTTPError as ex:
+            metadata = _failure_metadata(ex, host)
             # An HTTPError holds the response; close it now rather than at GC.
             ex.close()
             if missing_ok and ex.code == 404:
                 return None
-            if ex.code in RETRYABLE_STATUS and attempt == 0:
-                sleep(RETRY_BACKOFF_SECONDS)
+            if (ex.code in RETRYABLE_STATUS and attempt == 0
+                    and metadata.get("quota") != "daily"):
+                sleep(min(5, metadata.get("retryAfterSeconds", RETRY_BACKOFF_SECONDS)))
                 continue
             raise ConfigUnavailable("%s answered HTTP %d%s"
-                                    % (host, ex.code, HTTP_HINTS.get(ex.code, "")))
+                                    % (host, ex.code, HTTP_HINTS.get(ex.code, "")), **metadata)
         except (urllib.error.URLError, TimeoutError, OSError) as ex:
             if attempt == 0:
                 sleep(RETRY_BACKOFF_SECONDS)
@@ -698,7 +763,8 @@ def fetch(env=None, *, opener=None, signer=None, now=None, sleep=None):
     return creds["project_id"], raw
 
 
-def load(env=None, *, opener=None, signer=None, now=None, sleep=None, log=None):
+def load(env=None, *, opener=None, signer=None, now=None, sleep=None, log=None,
+         allow_snapshot=True):
     """The operator config to act on, as a dict::
 
         {"source": "firestore" | "snapshot",
@@ -719,8 +785,13 @@ def load(env=None, *, opener=None, signer=None, now=None, sleep=None, log=None):
         membership, enabled, undecodable = assemble(raw)
         clean, report = quarantine(membership, undecodable)
     except (ConfigUnavailable, ConfigInvalid) as ex:
+        if not allow_snapshot:
+            raise
         log("Firestore unusable (%s); using the last-known-good snapshot" % ex)
-        return _from_snapshot(directory, str(ex), now=now)
+        try:
+            return _from_snapshot(directory, str(ex), now=now)
+        except ConfigUnavailable as fallback_error:
+            raise ConfigUnavailable(str(fallback_error), **getattr(ex, "metadata", {})) from ex
 
     at = datetime.datetime.fromtimestamp(now(), datetime.timezone.utc)
     stamp = at.strftime("%Y-%m-%dT%H:%M:%SZ")

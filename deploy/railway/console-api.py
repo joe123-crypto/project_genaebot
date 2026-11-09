@@ -86,6 +86,7 @@ import hmac
 import json
 import os
 import re
+import secrets
 import subprocess
 import sys
 import threading
@@ -166,6 +167,15 @@ class Bridge:
         self.lock = threading.Lock()
         self.cache = {}
         self.runs = 0
+        self.generation = secrets.token_hex(16)
+        self.config_generation = self.generation
+
+    def invalidate(self, config=True):
+        with self.lock:
+            self.cache.clear()
+            self.generation = secrets.token_hex(16)
+            if config:
+                self.config_generation = self.generation
 
     def cached(self, key):
         now = time.monotonic()
@@ -179,9 +189,11 @@ class Bridge:
                 return None
             return body
 
-    def store(self, key, body):
+    def store(self, key, body, generation=None):
         now = time.monotonic()
         with self.lock:
+            if generation is not None and generation != self.generation:
+                return
             # Drop whatever expired before trimming, so a burst of distinct
             # requests cannot evict live entries while dead ones sit there.
             for stale in [k for k, (expires, _) in self.cache.items() if expires <= now]:
@@ -193,7 +205,8 @@ class Bridge:
     def run(self, args):
         """Return (status, body). Never raises, and never leaks stderr."""
         key = tuple(args)
-        body = self.cached(key)
+        fresh = "--fresh-config" in args
+        body = None if fresh else self.cached(key)
         if body is not None:
             return 200, body
 
@@ -201,15 +214,18 @@ class Bridge:
             log("busy: refused %s" % " ".join(args))
             return 503, b'{"error": "busy"}'
         try:
-            body = self.cached(key)
+            body = None if fresh else self.cached(key)
             if body is not None:
                 return 200, body
             with self.lock:
                 self.runs += 1
+                generation = self.generation
+                config_generation = self.config_generation
             try:
                 done = subprocess.run(
                     [sys.executable, "-I", self.path] + list(args),
                     capture_output=True, timeout=self.timeout,
+                    env={**os.environ, "GENAIE_CONSOLE_CONFIG_GENERATION": config_generation},
                 )
             except subprocess.TimeoutExpired:
                 log("timeout after %ss: %s" % (self.timeout, " ".join(args)))
@@ -219,7 +235,8 @@ class Bridge:
                 return 502, b'{"error": "bridge unavailable"}'
 
             if done.returncode == 0:
-                self.store(key, done.stdout)
+                if not fresh:
+                    self.store(key, done.stdout, generation)
                 return 200, done.stdout
 
             # Something the caller named does not exist. That is their error,
@@ -318,8 +335,8 @@ def curated(stdout):
         payload = json.loads(stdout or b"")
     except ValueError:
         return False
-    return isinstance(payload, dict) and set(payload) == {"error"} \
-        and isinstance(payload["error"], str)
+    return isinstance(payload, dict) and set(payload) <= {"error", "code", "upstreamStatus", "quota", "retryAfterSeconds"} \
+        and isinstance(payload.get("error"), str)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -402,8 +419,7 @@ class Handler(BaseHTTPRequestHandler):
         # configuration reads even on failure, and never replay it automatically.
         if method == "POST":
             bridge = self.server.console["bridge"]
-            with bridge.lock:
-                bridge.cache.clear()
+            bridge.invalidate(config=False)
         self.send_any(status, body, with_body)
 
     def config_request(self, route, query, with_body=True):
@@ -468,12 +484,13 @@ class Handler(BaseHTTPRequestHandler):
             if name in payload:
                 request[name] = payload[name]
 
+        bridge = self.server.console["bridge"]
+        if not request.get("dryRun"):
+            bridge.invalidate()
         status, body = self.server.console["writes"].run(request)
         # A change the caller can see means every cached read of it is wrong. An
         # uncertain write may still have landed, so clear on failure too.
-        bridge = self.server.console["bridge"]
-        with bridge.lock:
-            bridge.cache.clear()
+        bridge.invalidate(config=not request.get("dryRun"))
         self.send_any(status, body, with_body)
 
     def campaign_create_request(self, split):
@@ -498,10 +515,10 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, TypeError):
             self.send_any(400, b'{"error":"Invalid campaign creation request."}', True)
             return
-        status, body = self.server.console["campaigns"].run(request)
         bridge = self.server.console["bridge"]
-        with bridge.lock:
-            bridge.cache.clear()
+        bridge.invalidate()
+        status, body = self.server.console["campaigns"].run(request)
+        bridge.invalidate()
         self.send_any(status, body, True)
 
     def group_action_request(self, route, query, with_body=True):
@@ -661,7 +678,7 @@ def plan(route, query):
         raise Refuse(404, "not found")
 
     fields = parse_qs(query, keep_blank_values=True)
-    unknown = sorted(set(fields) - {"date"})
+    unknown = sorted(set(fields) - {"date", "fresh"})
     if unknown:
         raise Refuse(400, "unsupported query parameter: %s" % ", ".join(unknown))
     dates = fields.get("date") or []
@@ -671,6 +688,10 @@ def plan(route, query):
         if not DATE_RE.match(dates[0]):
             raise Refuse(400, "date wants YYYY-MM-DD")
         args += ["--date", dates[0]]
+    if "fresh" in fields:
+        if fields["fresh"] != ["1"]:
+            raise Refuse(400, "fresh must be given once with value 1")
+        args += ["--fresh-config"]
     return args
 
 
@@ -739,8 +760,7 @@ def main():
             if (os.environ.get(WRITE_KEY_VAR) or "").strip():
                 status, _ = server.console["campaigns"].run({"reconcile": True})
                 bridge = server.console["bridge"]
-                with bridge.lock:
-                    bridge.cache.clear()
+                bridge.invalidate(config=False)
                 if status != 200:
                     log("campaign schedule reconciliation is pending")
             stop_reconcile.wait(60)

@@ -145,7 +145,7 @@ def targets_doc_from_file(targets_file, err=None):
 
 
 def resolve(promo, targets_file=None, membership_path=None, env=None, err=None,
-            **inject):
+            config_loader=None, **inject):
     """What this run acts on::
 
         {"source": "file" | "firestore" | "snapshot",
@@ -180,7 +180,7 @@ def resolve(promo, targets_file=None, membership_path=None, env=None, err=None,
         note(warning)
 
     if current == FIRESTORE:
-        loaded = operator_config.load(env, log=note, **inject)
+        loaded = (config_loader or operator_config.load)(env, log=note, **inject)
         membership = loaded["membership"]
         # Two switches, and a campaign is on only if both are: the cron manifest
         # decides whether the gateway has a cron registered at all, Firestore

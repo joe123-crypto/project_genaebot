@@ -42,6 +42,7 @@ The payload says which; a caller reads ``status``, not the exit code.
 Std-lib only.
 """
 
+import contextlib
 import json
 import os
 import sys
@@ -54,6 +55,7 @@ if LIB_DIR not in sys.path:
 
 import operator_config  # noqa: E402
 import operator_writer  # noqa: E402
+import console_config  # noqa: E402
 
 WRITE_KEY_VAR = "GCP_SERVICE_ACCOUNT_WRITE_B64"
 # A request is one small object; anything larger is a mistake or an attack.
@@ -140,16 +142,18 @@ def main(argv, stdin=None, stdout=None, env=None):
     stdout = stdout or sys.stdout
     try:
         request = parse_request(stdin.read(MAX_REQUEST_BYTES + 1))
-        if "delete" in request:
-            result = operator_writer.delete(
-                request["collection"], request["id"].strip(), request.get("actor"),
-                env=write_env(env), reason=request.get("reason"),
-                dry_run=bool(request.get("dryRun")))
-        else:
-            result = operator_writer.write(
-                request["collection"], request["id"].strip(), request["fields"],
-                request.get("actor"), env=write_env(env),
-                dry_run=bool(request.get("dryRun")))
+        guard = contextlib.nullcontext() if request.get("dryRun") else console_config.mutation(env)
+        with guard:
+            if "delete" in request:
+                result = operator_writer.delete(
+                    request["collection"], request["id"].strip(), request.get("actor"),
+                    env=write_env(env), reason=request.get("reason"),
+                    dry_run=bool(request.get("dryRun")))
+            else:
+                result = operator_writer.write(
+                    request["collection"], request["id"].strip(), request["fields"],
+                    request.get("actor"), env=write_env(env),
+                    dry_run=bool(request.get("dryRun")))
     except operator_writer.WriteRefused as ex:
         payload = {"ok": False, "status": ex.status, "error": str(ex),
                    "problems": ex.problems}
@@ -157,7 +161,7 @@ def main(argv, stdin=None, stdout=None, env=None):
         # A write must never be applied to a guess at the current state.
         payload = {"ok": False, "status": 503,
                    "error": "cannot read the current config, so nothing was "
-                            "changed: %s" % ex, "problems": []}
+                            "changed: %s" % ex, "problems": [], **ex.metadata}
     except operator_config.ConfigInvalid as ex:
         payload = {"ok": False, "status": 409,
                    "error": "the stored config is not readable: %s" % ex,

@@ -493,6 +493,40 @@ class DocumentTest(Harness):
                                           opener=self.firestore, sleep=lambda s: None))
 
 
+class FirestoreErrorsTest(unittest.TestCase):
+    def request_failure(self, body, headers=None):
+        calls = []
+        delays = []
+        def limited(request, **kw):
+            calls.append(request.full_url)
+            raise urllib.error.HTTPError(request.full_url, 429, "limited", headers or {}, io.BytesIO(body))
+        with self.assertRaises(oc.ConfigUnavailable) as caught:
+            oc._request("https://firestore.googleapis.com/v1/test", opener=limited, sleep=delays.append)
+        return caught.exception, calls, delays
+
+    def test_daily_quota_is_classified_without_retrying_or_leaking_response_text(self):
+        body = {"error": {"message": "CANARY-KEY-MATERIAL", "details": [
+            {"@type": "type.googleapis.com/google.rpc.ErrorInfo", "metadata": {
+                "quota_limit": "FreeTierReadUnitsPerDay", "consumer": "secret-project"}}]}}
+        error, calls, delays = self.request_failure(json.dumps(body).encode())
+        self.assertEqual(error.metadata, {"upstreamStatus": 429, "code": "config_rate_limited", "quota": "daily"})
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(delays, [])
+        self.assertNotIn("CANARY", str(error))
+        self.assertNotIn("secret", json.dumps(error.metadata))
+
+    def test_retry_after_is_preserved_but_sleep_is_bounded(self):
+        error, calls, delays = self.request_failure(b"{}", {"Retry-After": "40"})
+        self.assertEqual(error.metadata["retryAfterSeconds"], 40)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(delays, [5])
+
+    def test_malformed_or_large_bodies_and_invalid_delays_remain_curated(self):
+        for body in (b"not JSON", b"[1]", b"x" * 20000):
+            error, _, _ = self.request_failure(body, {"Retry-After": "nan"})
+            self.assertEqual(error.metadata, {"upstreamStatus": 429, "code": "config_rate_limited", "quota": "unknown"})
+
+
 class NodeSignerTest(unittest.TestCase):
     """The real signer, end to end through its stdin path. Skipped only where no
     node binary exists; CI and the image both have one."""

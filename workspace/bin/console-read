@@ -9,14 +9,17 @@ promo_caps, the caption variant and ref code from promo_broadcast, the copy and
 tracking config from each campaign's own module, and the declared schedule from
 deploy/promo-crons.json.
 
-It never writes and never contacts the gateway, so it is safe to run locally, on
-the gateway, or behind the console API.
+It never changes operator config or contacts the gateway. Private display caches
+and outage snapshots live on the state volume.
 
 Usage:
   console-read overview [--date YYYY-MM-DD]
   console-read groups [--date YYYY-MM-DD]
   console-read campaigns [--date YYYY-MM-DD]
   console-read preview SLUG [--date YYYY-MM-DD]
+
+All commands accept --fresh-config to bypass display caches and require live
+Firestore configuration. Campaign sends and writers never use the display cache.
 
 Prints one JSON document on stdout. On failure prints {"error": ...} and exits
 non-zero, so a caller never has to parse a traceback.
@@ -30,6 +33,7 @@ import json
 import os
 import sys
 from datetime import date
+from functools import partial
 from pathlib import Path
 
 WORKSPACE = Path(__file__).resolve().parents[1]
@@ -45,6 +49,7 @@ import config_shadow  # noqa: E402
 import promo_config  # noqa: E402
 import console_campaigns
 import operator_config  # noqa: E402
+import console_config  # noqa: E402
 import operator_writer  # noqa: E402
 import group_discovery  # noqa: E402
 import group_metrics  # noqa: E402
@@ -72,6 +77,12 @@ class BridgeError(Exception):
     """A condition the caller should see as a message, not a traceback."""
 
 
+class ConfigReadError(BridgeError):
+    def __init__(self, message, metadata):
+        super().__init__(message)
+        self.metadata = metadata
+
+
 class NotFound(BridgeError):
     """The caller named something that does not exist."""
 
@@ -88,6 +99,8 @@ def parse_args(args):
             if not rest:
                 raise BridgeError("--date wants YYYY-MM-DD")
             day = rest.pop(0)
+        elif token == "--fresh-config":
+            pass  # main supplies the strict loader; not a positional argument.
         elif token.startswith("--"):
             raise BridgeError("unknown option %r" % token)
         elif command is None:
@@ -113,6 +126,7 @@ def parse_day(raw):
 
 
 _RESOLVED = {}
+_FRESH_CONFIG = False
 
 
 def resolved():
@@ -127,9 +141,11 @@ def resolved():
         notes = io.StringIO()
         try:
             _RESOLVED["config"] = promo_config.resolve(None, membership_path=MEMBERSHIP,
-                                                       err=notes)
-        except operator_config.ConfigUnavailable as exc:
-            raise BridgeError("no operator config to read: %s" % exc) from exc
+                                                       err=notes, config_loader=partial(
+                                                       console_config.load, fresh=_FRESH_CONFIG))
+        except (operator_config.ConfigUnavailable, operator_config.ConfigInvalid) as exc:
+            raise ConfigReadError("no operator config to read: %s" % exc,
+                                  getattr(exc, "metadata", {})) from exc
     return _RESOLVED["config"]
 
 
@@ -665,6 +681,8 @@ def overview(day):
 
 
 def main(argv):
+    global _FRESH_CONFIG
+    _FRESH_CONFIG = "--fresh-config" in argv
     try:
         command, slug, raw_day = parse_args(argv)
         day = parse_day(raw_day)
@@ -686,7 +704,7 @@ def main(argv):
         else:
             payload = overview(day)
     except BridgeError as exc:
-        json.dump({"error": str(exc)}, sys.stdout)
+        json.dump({"error": str(exc), **getattr(exc, "metadata", {})}, sys.stdout)
         sys.stdout.write("\n")
         return EXIT_NOT_FOUND if isinstance(exc, NotFound) else EXIT_ERROR
 
