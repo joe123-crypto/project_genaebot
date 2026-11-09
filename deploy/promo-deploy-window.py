@@ -9,15 +9,20 @@ merge of #184 at 08:31 Harare deployed at 08:42, two minutes into
 fruit-trees-promo's 08:40 run, and fruit-trees posted to no group that day.
 
 This gate runs in the deploy job immediately before the release. A moment is
-*busy* when an enabled campaign in deploy/promo-crons.json started less than
---run-minutes ago (it may still be sending) or starts within --lead-minutes
-(the build and startup verification would restart the gateway under it). If the
+*busy* when an enabled campaign in deploy/promo-crons.json may still be sending
+or starts within --lead-minutes (the build and startup verification would
+restart the gateway under it). How long a campaign may still be sending is the
+engine's own worst case for its committed target list -- the full start jitter,
+the longest gap between every pair of sends and the per-send allowance from
+workspace/lib/promo_broadcast.py -- capped at the job's timeout, which kills a
+run anyway. A campaign without a readable targets.json is given the whole
+timeout. If the
 next quiet moment is within --max-wait-minutes the gate sleeps until then;
 otherwise it fails, naming the next quiet time, so the release can be re-run
 from GitHub Actions ("Re-run failed jobs") once that time has passed.
 
-It reads only the committed manifest -- the schedule this repo ships -- and
-never contacts the gateway. Console-created campaigns (Firestore-scheduled) and
+It reads only committed files -- the manifest and each campaign's targets.json
+-- and never contacts the gateway. Console-created campaigns (Firestore-scheduled) and
 live drift are not visible here; the manual preflight still covers those.
 
 Exit codes: 0 quiet (possibly after waiting), 1 busy beyond the wait bound,
@@ -33,11 +38,39 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 MANIFEST = Path(__file__).resolve().parent / "promo-crons.json"
+REPO = Path(__file__).resolve().parents[1]
 UTC = dt.timezone.utc
+# Mirrors of workspace/lib/promo_broadcast.py's defaults (pinned by a test). The
+# release runner has no PYTHONPATH for the engine, and importing it would pull in
+# the gateway client.
+START_JITTER_SECONDS = 900.0
+SEND_GAP_MAX_SECONDS = 60.0
+SEND_ALLOWANCE_SECONDS = 12.0
 
 
-def daily_starts(manifest):
-    """[(name, tz, hour, minute)] for every enabled campaign."""
+def target_count(promo, repo=REPO):
+    """Groups in the campaign's committed targets.json, or None if unreadable."""
+    path = repo / "workspace" / "cron" / ("%s-promo" % promo.get("slug", "")) / "targets.json"
+    try:
+        groups = json.loads(path.read_text(encoding="utf-8")).get("groups")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return len(groups) if isinstance(groups, list) else None
+
+
+def run_budget_minutes(promo, timeout_seconds, repo=REPO):
+    """Worst-case minutes a campaign run may keep sending after its cron fires."""
+    timeout = float(promo.get("timeoutSeconds") or timeout_seconds or 7200)
+    count = target_count(promo, repo)
+    if count is None:
+        return timeout / 60.0
+    worst = (START_JITTER_SECONDS + count * SEND_ALLOWANCE_SECONDS
+             + max(count - 1, 0) * SEND_GAP_MAX_SECONDS)
+    return min(worst, timeout) / 60.0
+
+
+def daily_starts(manifest, repo=REPO):
+    """[(name, tz, hour, minute, run_minutes)] for every enabled campaign."""
     starts = []
     for promo in manifest.get("promos", []):
         if promo.get("enabled", True) is False:
@@ -49,39 +82,39 @@ def daily_starts(manifest):
         minute, hour = int(fields[0]), int(fields[1])
         if not (0 <= minute < 60 and 0 <= hour < 24):
             raise ValueError("%s: bad cron time %r" % (promo.get("name"), promo.get("cron")))
-        starts.append((promo["name"], ZoneInfo(promo.get("tz") or "UTC"), hour, minute))
+        starts.append((promo["name"], ZoneInfo(promo.get("tz") or "UTC"), hour, minute,
+                       run_budget_minutes(promo, manifest.get("timeoutSeconds"), repo)))
     return starts
 
 
 def runs_near(starts, now):
     """Concrete UTC start times from yesterday to tomorrow around `now`."""
     out = []
-    for name, tz, hour, minute in starts:
+    for name, tz, hour, minute, run_minutes in starts:
         local_day = now.astimezone(tz).date()
-        for offset in (-1, 0, 1):
+        for offset in (-2, -1, 0, 1):
             day = local_day + dt.timedelta(days=offset)
             local = dt.datetime(day.year, day.month, day.day, hour, minute, tzinfo=tz)
-            out.append((local.astimezone(UTC), name))
+            out.append((local.astimezone(UTC), name, run_minutes))
     return sorted(out)
 
 
-def conflicts(starts, at, run_minutes, lead_minutes):
+def conflicts(starts, at, lead_minutes):
     """Campaign runs that make `at` unsafe for a restart."""
-    run = dt.timedelta(minutes=run_minutes)
     lead = dt.timedelta(minutes=lead_minutes)
-    return [(start, name) for start, name in runs_near(starts, at)
-            if at - run < start <= at + lead]
+    return [(start, name) for start, name, run_minutes in runs_near(starts, at)
+            if at - dt.timedelta(minutes=run_minutes) < start <= at + lead]
 
 
-def next_quiet(starts, now, run_minutes, lead_minutes):
+def next_quiet(starts, now, lead_minutes):
     """The first whole minute at or after `now` with no conflicting run."""
     at = now.replace(second=0, microsecond=0)
     if at < now:
         at += dt.timedelta(minutes=1)
-    if not conflicts(starts, now, run_minutes, lead_minutes):
+    if not conflicts(starts, now, lead_minutes):
         return now
     for _ in range(2 * 24 * 60):
-        if not conflicts(starts, at, run_minutes, lead_minutes):
+        if not conflicts(starts, at, lead_minutes):
             return at
         at += dt.timedelta(minutes=1)
     return None
@@ -95,8 +128,8 @@ def describe(moment, tz):
 def parse_args(argv):
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     parser.add_argument("--manifest", default=str(MANIFEST))
-    parser.add_argument("--run-minutes", type=int, default=60,
-                        help="how long after its start a campaign may still be sending")
+    parser.add_argument("--repo", default=str(REPO),
+                        help="checkout whose workspace/cron/*/targets.json sizes each run")
     parser.add_argument("--lead-minutes", type=int, default=20,
                         help="time from this gate to the gateway restart")
     parser.add_argument("--max-wait-minutes", type=int, default=45)
@@ -104,7 +137,7 @@ def parse_args(argv):
     parser.add_argument("--check-only", action="store_true",
                         help="report and exit; never sleep")
     args = parser.parse_args(argv)
-    for name in ("run_minutes", "lead_minutes", "max_wait_minutes"):
+    for name in ("lead_minutes", "max_wait_minutes"):
         if getattr(args, name) < 0:
             parser.error("--%s must not be negative" % name.replace("_", "-"))
     return args
@@ -114,7 +147,7 @@ def main(argv=None, clock=None, sleep=time.sleep):
     args = parse_args(sys.argv[1:] if argv is None else argv)
     try:
         manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
-        starts = daily_starts(manifest)
+        starts = daily_starts(manifest, Path(args.repo))
     except (OSError, ValueError, KeyError) as exc:
         print("::error::promo deploy window: %s" % exc, file=sys.stderr)
         return 2
@@ -129,11 +162,11 @@ def main(argv=None, clock=None, sleep=time.sleep):
     shown_tz = starts[0][1] if starts else UTC
 
     now = clock()
-    busy = conflicts(starts, now, args.run_minutes, args.lead_minutes)
+    busy = conflicts(starts, now, args.lead_minutes)
     if not busy:
         print("Promo window quiet at %s; releasing." % describe(now, shown_tz))
         return 0
-    quiet = next_quiet(starts, now, args.run_minutes, args.lead_minutes)
+    quiet = next_quiet(starts, now, args.lead_minutes)
     names = ", ".join("%s at %s" % (name, describe(start, shown_tz)) for start, name in busy)
     print("Promo campaigns in the restart window: %s." % names)
     if quiet is None:

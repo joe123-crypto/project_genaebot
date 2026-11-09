@@ -244,8 +244,12 @@ source and startup; it does not acquire a pre-deployment cron lock.
 
 As a backstop, the deploy job's *Wait for a quiet promo window* step
 (`deploy/promo-deploy-window.py`) reads `deploy/promo-crons.json` and holds the
-release while any enabled campaign started under 60 minutes ago or starts within
-20 minutes. It waits up to 45 minutes; beyond that it fails and names the next
+release while any enabled campaign may still be sending or starts within 20
+minutes. "May still be sending" is the engine's worst case for the campaign's
+committed `targets.json` (full start jitter, the longest gap between every send
+and the per-send allowance), capped at the job timeout: about 69 minutes for a
+46-group campaign. With today's schedule the quiet windows are roughly
+10:59-12:30, 15:36-16:46 and after 18:16 Harare. It waits up to 45 minutes; beyond that it fails and names the next
 quiet time, and GitHub Actions → *Re-run failed jobs* after that time releases
 the same commit. A deliberate restart during a run is a manual dispatch with
 `ignore_promo_window`. The step sees only the committed manifest, not live

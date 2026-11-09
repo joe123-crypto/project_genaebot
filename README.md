@@ -166,6 +166,10 @@ Before merging, perform the [live cron preflight](deploy/railway/README.md#cron-
 Require zero active runs and choose a gap that allows CI, deployment, startup
 verification and recovery to finish before the next campaign. The main workflow
 spends about ten minutes testing the runtime before it can begin deployment.
+The deploy job also waits (up to 45 minutes) for a quiet window computed from
+`deploy/promo-crons.json` and each campaign's `targets.json`, and fails with
+the next quiet time rather than restart the gateway mid-run; see the preflight
+section for the override.
 
 After the [one-time cutover](deploy/railway/README.md#one-time-wiring), the
 serialized `Deploy verified production commit` job is the production gate even
