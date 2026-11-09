@@ -79,7 +79,13 @@ def load(env=None, *, fresh=False, now=None, log=None, **inject):
     log = log or config._log
     directory = config.state_dir(env)
     path = os.path.join(directory, CACHE_FILE)
-    identity = _identity(env)
+    try:
+        identity = _identity(env)
+    except config.ConfigUnavailable:
+        # An unreadable credential cannot identify a display-cache entry.
+        # Let the normal loader validate the outage snapshot instead; strict
+        # save reads still require a successful live read and must fail here.
+        return config.load(env, now=now, log=log, allow_snapshot=not fresh, **inject)
     os.makedirs(directory, mode=0o700, exist_ok=True)
     fd = os.open(path + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
     with os.fdopen(fd, "a") as lock:

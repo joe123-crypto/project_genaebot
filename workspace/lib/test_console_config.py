@@ -114,6 +114,56 @@ class ConsoleCacheTests(Harness):
             self.display()
             self.assertGreater(len(self.firestore.requests), before)
 
+    def test_credential_identity_failure_uses_snapshot_for_display_but_not_fresh_reads(self):
+        first = self.display()
+        original_env = dict(self.env)
+        with open(self.path(), "rb") as stream:
+            cached = stream.read()
+        requests = len(self.firestore.requests)
+        failures = (
+            {"GCP_SERVICE_ACCOUNT_B64": "malformed*credential"},
+            {"GCP_SERVICE_ACCOUNT_B64": "", "GCP_SERVICE_ACCOUNT_FILE": os.path.join(self.dir, "missing-key.json")},
+        )
+        for override in failures:
+            with self.subTest(override=tuple(override)):
+                self.env = {**original_env, **override}
+                result = self.display()
+                self.assertEqual(result, self.load())
+                self.assertEqual(result["source"], "snapshot")
+                self.assertEqual(result["membership"], first["membership"])
+                self.assertEqual(result["fetchedAt"], first["fetchedAt"])
+                self.assertTrue(result["degraded"])
+                with self.assertRaises(config.ConfigUnavailable):
+                    self.display(fresh=True)
+                with open(self.path(), "rb") as stream:
+                    self.assertEqual(stream.read(), cached)
+        self.assertEqual(len(self.firestore.requests), requests)
+
+    def test_credential_identity_failure_cannot_serve_an_expired_snapshot(self):
+        self.display()
+        self.clock[0] += config.SNAPSHOT_MAX_AGE_SECONDS + 1
+        self.env["GCP_SERVICE_ACCOUNT_B64"] = "malformed*credential"
+        with self.assertRaisesRegex(config.ConfigUnavailable, "past the"):
+            self.display()
+
+    def test_credential_identity_failure_without_a_snapshot_still_fails_closed(self):
+        self.env["GCP_SERVICE_ACCOUNT_B64"] = "malformed*credential"
+        with self.assertRaisesRegex(config.ConfigUnavailable, "no snapshot"):
+            self.display()
+        self.assertFalse(os.path.exists(self.path()))
+
+    def test_credential_identity_failure_cannot_serve_an_invalid_snapshot(self):
+        self.display()
+        snapshot_path = config.snapshot_path(config.state_dir(self.env))
+        with open(snapshot_path) as stream:
+            snapshot = json.load(stream)
+        snapshot["membership"]["version"] = 99
+        with open(snapshot_path, "w") as stream:
+            json.dump(snapshot, stream)
+        self.env["GCP_SERVICE_ACCOUNT_B64"] = "malformed*credential"
+        with self.assertRaisesRegex(config.ConfigUnavailable, "snapshot is invalid"):
+            self.display()
+
     def test_local_and_api_invalidation_force_new_reads(self):
         self.display()
         for invalidate in (lambda: cache.invalidate(self.env),
