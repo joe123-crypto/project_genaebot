@@ -857,6 +857,40 @@ WhatsApp 2026.9.9 package before exercising its contracts in the networkless
 test container. See the repository README's *Automatic group discovery* section
 for behavior and the separate manual probe.
 
+### Group activity and member totals
+
+The hourly inventory also retains each group's participant total (provider
+`size`, otherwise participant-array length) and `memberCountObservedAt`. It
+retains no participant identities. Missing metadata keeps the previous total
+with its original timestamp, so the console can label stale observations.
+
+`whatsapp-group-activity.mjs` independently listens on each existing socket
+before reply admission. DMC counts original incoming text/media over a rolling
+24 hours, excluding bot accounts, protocol events, reactions, edits and history
+synchronization. Group/message IDs deduplicate copies across accounts and
+reconnects. No message body or member list is stored.
+
+Keep `runtime/whatsapp-activity.sqlite` on the durable volume. It contains
+minimal event metadata (including hashed senders for bot exclusion), collector
+coverage intervals and bot identity hashes. Events and coverage expire after
+48 hours; bot identity hashes persist across reconnects. The collector uses a
+30-second heartbeat with a 90-second freshness limit, and disconnects, process
+stalls and write failures leave gaps. Counts remain partial until the entire
+rolling window is covered, including after deployment and overnight standby.
+An unclean disconnect can take up to 90 seconds to become visible in coverage.
+
+`GENAIE_GROUP_ACTIVITY=0` disables new activity collection independently of
+metadata discovery. `[whatsapp-activity]` warnings indicate unavailable or
+partial telemetry; failures never interrupt channel handling. The Groups API
+adds read-only `metrics` to configured and discovered rows: nullable
+`dailyMessageCount`, `memberCount`, `memberCountObservedAt`, ISO `windowStart`
+and `asOf`, and `coverage` (`complete`, `partial`, `unavailable`). Counts always
+describe the live rolling window, even for a historical campaign `date`.
+
+Release this bot support before the paired console UI. Existing consoles ignore
+the added fields; the new console displays `—` with an older bot. No historical
+backfill, advertising tier changes or cap changes are involved.
+
 ## Firestore: shadow mode and the cutover
 
 Off unless explicitly enabled. What each mode means, what shadow mode compares,

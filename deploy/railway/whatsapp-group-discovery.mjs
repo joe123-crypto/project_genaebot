@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { observeWhatsAppGroups } from './whatsapp-group-activity.mjs';
 
 export const DISCOVERY_INTERVAL_MS = 60 * 60 * 1000;
 export const DISCOVERY_TIMEOUT_MS = 45_000;
@@ -113,14 +114,19 @@ export function createWhatsAppGroupDiscovery({ accountId,
           inventory.lastAttemptAt = stamp;
           inventory.lastError = failure;
           if (!failure) {
+            observeWhatsAppGroups(accountId, groups, root);
             inventory.lastSuccessAt = stamp;
             for (const [jid, metadata] of Object.entries(groups)) {
               if (!GROUP.test(jid) || jid.length > 128) continue;
               const previous = inventory.groups[jid];
               const name = typeof metadata?.subject === 'string'
                 ? Array.from(metadata.subject.trim().toWellFormed()).slice(0, 512).join('') : '';
+              const memberCount = Number.isSafeInteger(metadata?.size) && metadata.size >= 0 ? metadata.size
+                : Array.isArray(metadata?.participants) ? metadata.participants.length : null;
               inventory.groups[jid] = { name: name || previous?.name || null,
-                firstSeenAt: previous?.firstSeenAt ?? stamp, lastSeenAt: stamp };
+                firstSeenAt: previous?.firstSeenAt ?? stamp, lastSeenAt: stamp,
+                memberCount: memberCount ?? previous?.memberCount ?? null,
+                memberCountObservedAt: memberCount !== null ? stamp : previous?.memberCountObservedAt ?? null };
             }
           }
           await atomicSave(filename, inventory, current);

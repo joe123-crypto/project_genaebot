@@ -30,7 +30,7 @@ DAY = "2026-11-04"
 
 GROUP_KEYS = {
     "jid", "name", "source", "status", "activity", "account", "dailyCapOverride",
-    "promos", "pausedPromos", "weekly", "note", "cap", "replyScore", "allowedToday",
+    "promos", "pausedPromos", "weekly", "note", "cap", "replyScore", "allowedToday", "metrics",
 }
 PREVIEW_KEYS = {
     "jid", "name", "account", "contactNumber", "ref", "variant", "caption",
@@ -222,8 +222,14 @@ class ConsoleReadTests(unittest.TestCase):
                 self.assertFalse(row["sendsToday"], row["jid"])
 
     def test_the_same_day_always_gives_the_same_answer(self):
-        self.assertEqual(self.run_bridge("groups", "--date", DAY).stdout,
-                         self.run_bridge("groups", "--date", DAY).stdout)
+        # Campaign decisions are deterministic; rolling telemetry is live even
+        # when the operator asks to inspect a historical campaign date.
+        first = self.ok("groups", "--date", DAY)
+        second = self.ok("groups", "--date", DAY)
+        for payload in (first, second):
+            for row in payload["groups"] + payload["discoveredGroups"]:
+                row.pop("metrics", None)
+        self.assertEqual(first, second)
 
     # -- refusals ---------------------------------------------------------
 

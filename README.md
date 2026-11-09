@@ -410,8 +410,9 @@ overnight standby stop the timers.
 Each account keeps a private, atomically replaced inventory at
 `$OPENCLAW_STATE_DIR/runtime/whatsapp-groups/<accountId>.json` (the state root
 defaults to `/home/joseph/.openclaw`). This is outside the boot-synced workspace,
-so observations survive redeploys. Only IDs, names, first/last-seen times and
-scan health are saved, never participants, messages or credentials. Names
+so observations survive redeploys. Only IDs, names, first/last-seen times,
+member totals with observation times, and scan health are saved, never member
+lists, message contents or credentials. Names
 refresh when WhatsApp returns a nonblank subject; missing names retain the last
 known name. Lookup failures retain previous observations. A 45-second timeout
 reports failure without piling requests onto a still-pending lookup; replacing
@@ -1158,6 +1159,25 @@ observations, deduplicated by JID, with per-account observation times) and
 success and a sanitized error code). These are separate from `groups`: they
 are not targets, do not affect caps or counts, and cannot resume a paused group.
 Reading the API only reads saved observations; it never triggers a WhatsApp scan.
+
+Configured and discovered rows also carry read-only `metrics`: rolling
+`dailyMessageCount` (incoming messages over the last 24 hours), `windowStart`,
+`asOf`, `coverage` (`complete`, `partial`, `unavailable`), `memberCount` and
+`memberCountObservedAt`. Counts are nullable; known zero is distinct from missing
+data. The metadata scan supplies the newest member total. The independent socket
+collector excludes bot posts, edits, reactions, protocol events and history sync,
+and deduplicates group/message IDs across lines and reconnects. It stores only
+minimal event metadata and hashed senders in a separate durable SQLite database,
+with 48-hour event/coverage retention. It never affects tiers, caps or targeting.
+Counts are partial during warm-up, downtime and collection failures. Collection
+starts at release with no history backfill. Metrics remain live even when
+`date` asks for a historical campaign plan.
+
+Deploy this bot support before the paired console UI, which shows DMC and
+Members and moves notes under **More**. Older consoles ignore the added fields;
+the new console shows unavailable metrics with an older bot. See
+[group activity operations](deploy/railway/README.md#group-activity-and-member-totals)
+for storage, coverage, opt-out and failure behavior.
 
 ### Changing operator config from the console
 
