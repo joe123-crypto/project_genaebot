@@ -1148,6 +1148,43 @@ railway ssh -- python3 /home/joseph/.openclaw/deploy/patch-openclaw-config.py --
 The template remains the tracked source of truth for what the config *should* be;
 `openclaw.json` and its backup/pre-update variants are gitignored.
 
+## Firestore read efficiency
+
+Console displays cache validated configuration for 180 seconds across bridge
+processes. Each campaign scope has its own cache and bounded outage snapshot;
+scoped reads never overwrite a full snapshot. Failures suppress background
+retries for at least 300 seconds, respecting longer upstream retry delays.
+Mutation markers and API generations fence older in-flight reads after writes.
+Save checks use `fresh=1` (`--fresh-config` locally) and fail if a live read fails.
+
+Campaign runs and previews query only groups assigned through `promos`, which
+also covers valid weekly and paused assignments. The same shared rules and cap
+calculation apply. Existing group edits/deletions use point reads plus shared
+validation dependencies. Campaign creation reads only its selected groups;
+switch and caption save checks read one campaign document. Settings reads omit groups and campaign definitions;
+capability reports read no database documents. Sidebar counters use Firestore
+aggregations. The overview does not fetch the picture index. Image resolution
+queries only assets belonging to the current campaign.
+
+New authenticated read routes are `campaign/<slug>`, `campaign-groups/<slug>`,
+`campaign-state/<slug>`, `captions/<slug>`, `group/<jid>`, `groups-by-id/<comma-separated-jids>`, `settings`,
+`capabilities`, and `navigation`. Existing routes remain available. Group IDs
+retain both modern and legacy WhatsApp formats.
+
+`POST /internal/console/config/batch/groups` accepts `changes` (1..100 existing
+groups, each with `id`, `fields`, and optional expected values for changed
+fields), `actor`, and optional `dryRun`. It reads shared rules once inside a
+Firestore transaction, validates every change, and commits changed groups and
+per-group audits together. A refusal, conflict or dry run writes nothing;
+unchanged groups have no audit/write. An uncertain commit is reported as unknown
+and must be read back before manually retrying.
+
+Schedule reconciliation queries only `kind=console` campaigns every five
+minutes, increasing the delay after failures up to one hour. Campaign edits wake
+it immediately. Already-current schedule statuses are not rewritten. Broad
+configuration reads remain for complete list/overview screens, creation rank
+allocation, and validation of shared changes that can affect other groups.
+
 ## Operator Console API
 
 `deploy/railway/console-api.py` serves the operator console's read model over
@@ -1274,7 +1311,7 @@ which production has read since the cutover (*Moving membership to Firestore*);
 effect from each campaign's **next run** -- a run already sending keeps the
 config it resolved when it started.
 
-Console displays use `workspace/lib/console_config.py` to share a five-minute
+Console displays use `workspace/lib/console_config.py` to share a three-minute
 config cache between read bridge processes. A volume lock shares each refresh;
 cached data is scoped to the credential/project context and API generation.
 After a failed refresh, background display reads wait five minutes before trying

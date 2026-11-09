@@ -400,8 +400,14 @@ def write(collection, doc_id, patch, actor, env=None, *, opener=None, signer=Non
         except operator_config.ConfigInvalid as ex:
             raise WriteRefused(str(ex)) from ex
     now = now or time.time
-    project, raw = operator_config.fetch(env, opener=opener, signer=signer,
-                                         now=now, sleep=sleep)
+    fetch_args = {"opener": opener, "signer": signer, "now": now, "sleep": sleep}
+    # Changing one existing group cannot invalidate another group. Only its
+    # record and shared validation dependencies are needed. Creation still
+    # needs the existing ranks to append in the canonical sending order.
+    project, raw = operator_config.fetch(env, **fetch_args,
+                                         **({"group_ids": [doc_id]} if collection == "groups" else {}))
+    if collection == "groups" and not raw["groups"]:
+        project, raw = operator_config.fetch(env, **fetch_args)
     fields, before, _, report = prepare(raw, collection, doc_id, patch)
     warnings = list(report.get("warnings") or [])
     result = {"collection": collection, "id": doc_id, "fields": [], "before": before,
@@ -428,6 +434,70 @@ def write(collection, doc_id, patch, actor, env=None, *, opener=None, signer=Non
            [], opener=opener, sleep=sleep)
     result["audit"] = entry_id
     return result
+
+
+def write_group_batch(changes, actor, env=None, *, dry_run=False, store=None):
+    """Validate a bounded group edit against one live transactional snapshot.
+
+    Shared rules are read once. No writes are issued until every change passes;
+    changed groups and their audits fit in one atomic commit (at most 200 writes).
+    """
+    import re
+    if (not isinstance(changes, list) or not 1 <= len(changes) <= 100
+            or actor is not None and not isinstance(actor, str)):
+        raise WriteRefused("batch must name 1..100 group changes and a valid actor")
+    ids = []
+    for change in changes:
+        if (not isinstance(change, dict) or set(change) - {"id", "fields", "expected"}
+                or not isinstance(change.get("id"), str)
+                or not re.fullmatch(r"[0-9]+(?:-[0-9]+)?@g\.us", change["id"])
+                or not isinstance(change.get("fields"), dict)
+                or not isinstance(change.get("expected", {}), dict)
+                or set(change.get("expected", {})) - set(change["fields"])):
+            raise WriteRefused("invalid group batch change")
+        ids.append(change["id"])
+    if len(set(ids)) != len(ids):
+        raise WriteRefused("batch names a group more than once")
+    if store is None:
+        from console_campaigns import Store
+        store = Store(env)
+    store.begin()
+    try:
+        settings = store.get("settings", operator_config.SETTINGS_DOC)
+        raw = {"settings": [] if settings is None else [(operator_config.SETTINGS_DOC, operator_config.encode_fields(settings))],
+               "lines": store.list("lines"), "campaigns": store.list("campaigns"), "groups": []}
+        for jid in ids:
+            try:
+                fields = store.get("groups", jid)
+            except ValueError as exc:
+                raise WriteRefused("group %s cannot be read" % jid, status=409) from exc
+            if fields is None:
+                raise WriteRefused("group %s no longer exists" % jid, status=409)
+            raw["groups"].append((jid, operator_config.encode_fields(fields)))
+        docs = []
+        for change in changes:
+            jid = change["id"]
+            fields, before, _, _ = prepare(raw, "groups", jid, change["fields"])
+            for key, expected in change.get("expected", {}).items():
+                current = before.get(key)
+                if key in ("promos", "paused_promos"):
+                    current = current or []
+                elif key == "weekly":
+                    current = current or {}
+                if current != expected:
+                    raise WriteRefused("group %s changed since the draft was checked" % jid, status=409)
+            if before == fields:
+                continue
+            entry_id, entry = audit_document(actor, "groups", jid, before, fields)
+            docs.extend([("groups", jid, fields, True), (AUDIT_COLLECTION, entry_id, entry, False)])
+        if docs and not dry_run:
+            try:
+                store.commit(docs)
+            except operator_config.ConfigUnavailable as exc:
+                raise WriteRefused("The batch outcome is unknown. Reload before retrying; some or all changes may have been saved.", status=503) from exc
+        return {"done": ids, "changed": len(docs) // 2}
+    finally:
+        store.rollback()
 
 
 def prepare_delete(raw, collection, doc_id):
@@ -479,7 +549,7 @@ def delete(collection, doc_id, actor, env=None, *, reason=None, opener=None,
     env = os.environ if env is None else env
     now = now or time.time
     project, raw = operator_config.fetch(env, opener=opener, signer=signer,
-                                         now=now, sleep=sleep)
+                                         now=now, sleep=sleep, group_ids=[doc_id])
     before, report = prepare_delete(raw, collection, doc_id)
     entry_id, entry = audit_document(actor, collection, doc_id, before, None,
                                      now=now, reason=reason)

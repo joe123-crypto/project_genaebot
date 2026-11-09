@@ -130,6 +130,33 @@ class FakeFirestore(object):
                              "token_type": "Bearer"})
         assert request.get_header("Authorization", "").startswith("Bearer tok-"), url
         parts = urllib.parse.urlsplit(url)
+        if parts.path.endswith(("/documents:runQuery", "/documents:runAggregationQuery")):
+            body = json.loads(request.data)
+            query = body.get("structuredQuery") or body["structuredAggregationQuery"]["structuredQuery"]
+            collection = query["from"][0]["collectionId"]
+            def matches(fields, predicate):
+                if "compositeFilter" in predicate:
+                    rule = predicate["compositeFilter"]
+                    results = [matches(fields, child) for child in rule["filters"]]
+                    return any(results) if rule["op"] == "OR" else all(results)
+                rule = predicate.get("fieldFilter") or predicate["unaryFilter"]
+                value = oc.decode_fields(fields)
+                for segment in rule["field"]["fieldPath"].split("."):
+                    value = value.get(segment.strip("`")) if isinstance(value, dict) else None
+                if rule["op"] == "IS_NOT_NULL":
+                    return value is not None
+                expected = oc.decode_value(rule["value"])
+                if rule["op"] == "ARRAY_CONTAINS":
+                    return isinstance(value, list) and expected in value
+                if rule["op"] == "IN":
+                    return value in expected
+                return value == expected
+            rows = [(key, fields) for key, fields in sorted(self.store.get(collection, {}).items())
+                    if not query.get("where") or matches(fields, query["where"])]
+            if "structuredAggregationQuery" in body:
+                return Response([{"result": {"aggregateFields": {"total": {"integerValue": str(len(rows))}}}}])
+            return Response([{"document": {"name": "x/documents/%s/%s" % (collection, key), "fields": fields}}
+                             for key, fields in rows] or [{"readTime": "now"}])
         tail = parts.path.split("/documents/", 1)[1].split("/")
         collection = urllib.parse.unquote(tail[0])
         docs = self.store.get(collection, {})

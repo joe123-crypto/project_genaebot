@@ -146,6 +146,18 @@ class ConsoleCacheTests(Harness):
         with self.assertRaisesRegex(config.ConfigUnavailable, "past the"):
             self.display()
 
+    def test_credential_failure_filters_full_snapshot_for_scoped_displays(self):
+        first = self.display()
+        self.env["GCP_SERVICE_ACCOUNT_B64"] = "malformed*credential"
+        result = self.display(group_ids=[JID_A])
+        self.assertEqual(list(result["membership"]["groups"]), [JID_A])
+        self.assertEqual(result["fetchedAt"], first["fetchedAt"])
+        settings = self.display(include_groups=False, include_campaigns=False)
+        self.assertEqual(settings["membership"]["groups"], {})
+        self.assertEqual(settings["membership"]["promos"], {})
+        with self.assertRaises(config.ConfigUnavailable):
+            self.display(group_ids=[JID_A], fresh=True)
+
     def test_credential_identity_failure_without_a_snapshot_still_fails_closed(self):
         self.env["GCP_SERVICE_ACCOUNT_B64"] = "malformed*credential"
         with self.assertRaisesRegex(config.ConfigUnavailable, "no snapshot"):

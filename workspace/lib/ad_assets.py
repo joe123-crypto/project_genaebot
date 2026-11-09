@@ -230,6 +230,12 @@ def public_url(entry, env=None):
 
 
 def index_path(env=None):
+    env = os.environ if env is None else env
+    slug = env.get("GENAIE_AD_ASSETS_SCOPE")
+    if slug:
+        import hashlib
+        return os.path.join(operator_config.state_dir(env), "asset-scopes",
+                            hashlib.sha256(slug.encode()).hexdigest(), INDEX_FILE)
     return os.path.join(operator_config.state_dir(env), INDEX_FILE)
 
 
@@ -374,9 +380,17 @@ def index(env=None, *, opener=None, signer=None, now=None, sleep=None, log=None)
             creds, operator_config.token_cache_path(operator_config.state_dir(env)),
             opener=opener or urllib.request.urlopen,
             signer=signer or operator_config.node_signer, now=now, sleep=sleep)
-        rows = operator_config.list_documents(
-            creds["project_id"], COLLECTION, token,
-            opener=opener or urllib.request.urlopen, sleep=sleep)
+        slug = env.get("GENAIE_AD_ASSETS_SCOPE")
+        if slug:
+            rows = operator_config.query_documents(
+                creds["project_id"], COLLECTION,
+                {"fieldFilter": {"field": {"fieldPath": "campaign"}, "op": "EQUAL",
+                                 "value": {"stringValue": slug}}}, token,
+                opener=opener or urllib.request.urlopen, sleep=sleep)
+        else:
+            rows = operator_config.list_documents(
+                creds["project_id"], COLLECTION, token,
+                opener=opener or urllib.request.urlopen, sleep=sleep)
     except (operator_config.ConfigUnavailable, AssetsUnavailable) as ex:
         log("index unreadable (%s); using the last-known-good snapshot" % ex)
         return _from_snapshot(env, str(ex), now=now)
@@ -403,6 +417,10 @@ def _from_snapshot(env, why, now=None):
     now = now or time.time
     path = index_path(env)
     snapshot = operator_config._read_json(path)
+    if not isinstance(snapshot, dict) and (env or {}).get("GENAIE_AD_ASSETS_SCOPE"):
+        original = dict(env)
+        original.pop("GENAIE_AD_ASSETS_SCOPE", None)
+        snapshot = operator_config._read_json(index_path(original))
     if not isinstance(snapshot, dict) or not isinstance(snapshot.get("campaigns"), dict):
         raise AssetsUnavailable("the index is unreadable (%s) and there is no snapshot "
                                 "at %s" % (why, path))
@@ -416,6 +434,9 @@ def _from_snapshot(env, why, now=None):
             "%.0f h limit" % (why, age / 3600.0, INDEX_MAX_AGE_SECONDS / 3600.0))
     campaigns, quarantined = _from_json(snapshot["campaigns"],
                                         snapshot.get("quarantined"))
+    if (env or {}).get("GENAIE_AD_ASSETS_SCOPE"):
+        slug = env["GENAIE_AD_ASSETS_SCOPE"]
+        campaigns = {slug: campaigns[slug]} if slug in campaigns else {}
     return {"source": "snapshot", "fetchedAt": snapshot.get("fetchedAt"),
             "degraded": why, "campaigns": _enabled_only(campaigns),
             "quarantined": quarantined}
@@ -782,7 +803,7 @@ def prune(index_, env=None, log=None):
 def _entries_for(promo_name, env, deadline, log, inject):
     """``(entries, index_or_None)`` for this campaign, or ``([], None)``."""
     slug = promo_config.promo_key(promo_name)
-    found = index(env, log=log, **inject)
+    found = index(dict(env, GENAIE_AD_ASSETS_SCOPE=slug), log=log, **inject)
     entries = (found.get("campaigns") or {}).get(slug) or []
     if not entries:
         # Nothing indexed for this campaign is "not migrated yet", not an error:

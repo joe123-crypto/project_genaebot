@@ -180,7 +180,10 @@ def resolve(promo, targets_file=None, membership_path=None, env=None, err=None,
         note(warning)
 
     if current == FIRESTORE:
-        loaded = (config_loader or operator_config.load)(env, log=note, **inject)
+        if config_loader is None and slug:
+            loaded = operator_config.load(env, log=note, campaign=slug, **inject)
+        else:
+            loaded = (config_loader or operator_config.load)(env, log=note, **inject)
         membership = loaded["membership"]
         # Two switches, and a campaign is on only if both are: the cron manifest
         # decides whether the gateway has a cron registered at all, Firestore

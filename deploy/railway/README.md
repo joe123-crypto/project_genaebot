@@ -859,17 +859,34 @@ new `workspace/lib/console_accounts.mjs`. Deploy the backend before enabling the
 console controls. The gateway token stays inside the container; the local console
 uses only `BOT_API_BASE_URL` and the matching `BOT_API_TOKEN`.
 
-Firestore configuration inside those responses has a separate five-minute,
+Firestore configuration inside those responses has a separate three-minute,
 process-shared display cache at `$GENAIE_FIRESTORE_DIR/console-config.json`
 (default `$OPENCLAW_STATE_DIR/runtime/firestore`). Private cache and lock files
 live on the volume; credential/project hashes and invalidation generations prevent
-reuse across contexts. Background failures have a five-minute cooldown and use
+reuse across contexts. Campaign, selected-group and settings reads have isolated
+cache/snapshot files under `scopes/`, while all scopes watch the same mutation
+marker. Background failures have a five-minute minimum cooldown, respect longer
+upstream retry delays, and use
 the validated snapshot with its original timestamp and 48-hour age limit. Metrics
-and discovery remain on their existing schedules. The one-minute reconciler
-clears response caches without discarding config on every unchanged pass.
+and discovery remain on their existing schedules. Unchanged scheduler passes do
+not clear response caches or rewrite campaign status.
 
-`GET /internal/console/groups?fresh=1` (also supported by overview, campaigns and
-preview, alongside `date`) forwards `--fresh-config`, bypasses both display
+The console can request `campaign/<slug>`, `campaign-groups/<slug>`, `group/<jid>`
+or `groups-by-id/<comma-separated-jids>` instead of loading every group. Campaign
+targeting uses the existing single-field array index on `groups.promos`; no new
+composite index or data migration is needed. `settings` omits group and campaign
+collections, `capabilities` needs no Firestore read, and `navigation` caches two
+small count queries. `campaign-state/<slug>` and `captions/<slug>` read one campaign
+document for save preflight. Campaign asset queries also filter by slug.
+
+`POST /internal/console/config/batch/groups` accepts up to 100 selected group
+changes with optional expected field values. The native transaction reads shared
+validation rules once and commits changed groups with their audit entries
+together; no-ops and dry runs write nothing. An uncertain commit is reported as
+unknown and must be re-read before retrying.
+
+`GET /internal/console/groups?fresh=1` (also supported by the scoped config routes,
+overview, campaigns and preview, alongside `date`) forwards `--fresh-config`, bypasses both display
 caches and refuses unavailable live config. Deploy this backend before the console
 uses fresh reads for save validation. A Firestore 429 carries optional curated
 `code: config_rate_limited`, `upstreamStatus: 429`, `quota` and
@@ -879,10 +896,12 @@ cached config to authorize a save, and the console never automatically resubmits
 a config write.
 
 Validate with `python3 workspace/lib/test_console_config.py`, the operator config,
-writer, read bridge and API suites, then `./deploy/ci-check.sh`. After backend and
+writer, read bridge, scoped-read and API suites, then
+`./deploy/ci-check.sh --base-sha <base-commit> --head-sha HEAD` to include the
+deployment documentation contract. After backend and
 console rollout, verify an intended tier edit appears immediately and compare
 Firestore read usage across several page refreshes: the config cache's `checkedAt`
-should advance at most once per five minutes without writes or fresh reads. If
+should advance at most once per three minutes per scope without writes or fresh reads. If
 quota is already exhausted, verify after recovery; this change does not raise
 quota or enable billing.
 
@@ -1246,7 +1265,10 @@ write token. The gateway needs no R2 write credentials. `console-campaign-create
 checks uploaded bytes before saving; `run-console-campaign` uses the shared
 broadcast engine and the runtime read key. Caption overrides are also supported.
 
-Desired schedules reconcile when the console API starts and every minute.
+Desired schedules reconcile when the console API starts, after a campaign config
+change, and every five minutes after a successful pass. Pending or failed passes
+back off up to one hour. Reconciliation queries only campaigns with `kind=console`
+and skips writes when `scheduleStatus` is unchanged.
 Stable `console-<slug>-promo` names and a volume lock recover uncertain gateway
 acknowledgements without duplicate jobs. Read-back verifies the job; pending
 campaigns cannot post or consume caps. Creation never triggers an immediate send.

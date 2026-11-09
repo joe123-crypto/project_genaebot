@@ -99,7 +99,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from console_accounts import AccountControls
 
 PREFIX = "/internal/console/"
-DATA_ROUTES = ("overview", "groups", "campaigns")
+DATA_ROUTES = ("overview", "groups", "campaigns", "capabilities", "settings", "navigation")
 SLUG_RE = re.compile(r"\A[a-z0-9][a-z0-9-]{0,63}\Z")
 DATE_RE = re.compile(r"\A[0-9]{4}-[0-9]{2}-[0-9]{2}\Z")
 
@@ -446,30 +446,33 @@ class Handler(BaseHTTPRequestHandler):
         # The route is settled before the body is looked at, so "no such
         # document" and "that change is not a change" cannot answer alike.
         parts = route.split("/")
+        is_batch = route == "config/batch/groups"
         try:
             doc_id = unquote(parts[2]) if len(parts) == 3 else ""
         except UnicodeError:
             doc_id = ""
-        if not (len(parts) == 3 and parts[0] == "config"
+        if not is_batch and not (len(parts) == 3 and parts[0] == "config"
                 and parts[1] in CONFIG_COLLECTIONS and DOC_ID_RE.match(doc_id)):
             self.send_any(404, b'{"error":"not found"}', with_body)
             return
 
         try:
             size = int(self.headers.get("Content-Length") or "0")
-            if self.headers.get("Transfer-Encoding") or not 0 < size <= 2048:
+            if self.headers.get("Transfer-Encoding") or not 0 < size <= (64 * 1024 if is_batch else 2048):
                 raise ValueError()
             if self.headers.get("Content-Type", "").split(";", 1)[0].strip() != "application/json":
                 raise ValueError()
             payload = json.loads(self.rfile.read(size))
             if not isinstance(payload, dict):
                 raise ValueError()
-            if set(payload) - {"fields", "delete", "reason", "actor", "dryRun"}:
+            if set(payload) - ({"changes", "actor", "dryRun"} if is_batch else {"fields", "delete", "reason", "actor", "dryRun"}):
                 raise ValueError()
             # Exactly one operation: change named fields, or delete the document.
             # Which collections may be deleted, and what a legal reason is, is
             # console-write's call; this only refuses a request with no clear verb.
-            if ("fields" in payload) == ("delete" in payload):
+            if is_batch and (not isinstance(payload.get("changes"), list) or not 1 <= len(payload["changes"]) <= 100):
+                raise ValueError()
+            if not is_batch and ("fields" in payload) == ("delete" in payload):
                 raise ValueError()
             if "fields" in payload and not isinstance(payload["fields"], dict):
                 raise ValueError()
@@ -479,8 +482,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_any(400, b'{"error":"Invalid config change."}', True)
             return
 
-        request = {"collection": parts[1], "id": doc_id}
-        for name in ("fields", "delete", "reason", "actor", "dryRun"):
+        request = {"collection": "groups"} if is_batch else {"collection": parts[1], "id": doc_id}
+        for name in ("fields", "delete", "reason", "actor", "dryRun", "changes"):
             if name in payload:
                 request[name] = payload[name]
 
@@ -491,6 +494,9 @@ class Handler(BaseHTTPRequestHandler):
         # A change the caller can see means every cached read of it is wrong. An
         # uncertain write may still have landed, so clear on failure too.
         bridge.invalidate(config=not request.get("dryRun"))
+        if (status == 200 and request["collection"] == "campaigns" and not request.get("dryRun")
+                and self.server.console.get("reconcileWake") is not None):
+            self.server.console["reconcileWake"].set()
         self.send_any(status, body, with_body)
 
     def campaign_create_request(self, split):
@@ -670,10 +676,16 @@ def plan(route, query):
     parts = route.split("/")
     if parts[0] in DATA_ROUTES and len(parts) == 1:
         args = [parts[0]]
-    elif parts[0] == "preview" and len(parts) == 2:
+    elif parts[0] in ("preview", "captions", "campaign", "campaign-state", "campaign-groups") and len(parts) == 2:
         if not SLUG_RE.match(parts[1]):
             raise Refuse(404, "not found")
-        args = ["preview", parts[1]]
+        args = [parts[0], parts[1]]
+    elif parts[0] in ("group", "groups-by-id") and len(parts) == 2:
+        jid = unquote(parts[1])
+        jids = jid.split(",") if parts[0] == "groups-by-id" else [jid]
+        if not 1 <= len(jids) <= 100 or any(not DOC_ID_RE.match(item) or not item.endswith("@g.us") for item in jids):
+            raise Refuse(404, "not found")
+        args = [parts[0], jid]
     else:
         raise Refuse(404, "not found")
 
@@ -755,21 +767,31 @@ def main():
         log("warning: bridge not found at %s; requests will answer 502" % bridge_path)
     # A durable Firestore desired schedule is retried after API/gateway restart.
     stop_reconcile = threading.Event()
+    wake_reconcile = threading.Event()
+    server.console["reconcileWake"] = wake_reconcile
     def reconcile_campaigns():
+        delay = 300
         while not stop_reconcile.is_set():
+            wake_reconcile.clear()
             if (os.environ.get(WRITE_KEY_VAR) or "").strip():
-                status, _ = server.console["campaigns"].run({"reconcile": True})
-                bridge = server.console["bridge"]
-                bridge.invalidate(config=False)
-                if status != 200:
+                status, body = server.console["campaigns"].run({"reconcile": True})
+                try:
+                    pending = json.loads(body).get("pending", 0)
+                except (ValueError, AttributeError):
+                    pending = 1
+                if status != 200 or pending:
                     log("campaign schedule reconciliation is pending")
-            stop_reconcile.wait(60)
+                    delay = min(delay * 2, 3600)
+                else:
+                    delay = 300
+            wake_reconcile.wait(delay)
     threading.Thread(target=reconcile_campaigns, daemon=True).start()
     log("listening on %s:%d, bridge %s" % (bind, port, bridge_path))
     try:
         server.serve_forever()
     finally:
         stop_reconcile.set()
+        wake_reconcile.set()
         server.server_close()
     return 0
 

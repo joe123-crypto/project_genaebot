@@ -51,6 +51,7 @@ Std-lib only, Python 3.11+ (the container runs Debian bookworm's python3).
 import base64
 import datetime
 import email.utils
+import hashlib
 import json
 import math
 import os
@@ -353,14 +354,68 @@ def list_documents(project, collection, token, *, opener, sleep):
             return out
 
 
-def get_document(project, collection, doc_id, token, *, opener, sleep):
+def get_document(project, collection, doc_id, token, *, opener, sleep, raw=False):
     """One document's decoded fields, or ``None`` if it does not exist. The send
     loop re-reads a group with this just before posting to it."""
     reply = _request(documents_url(project, collection, doc_id), opener=opener,
                      sleep=sleep, headers=_auth(token), missing_ok=True)
     if reply is None:
         return None
-    return decode_fields(reply.get("fields") or {})
+    fields = reply.get("fields") or {}
+    return fields if raw else decode_fields(fields)
+
+
+def query_documents(project, collection, where, token, *, opener, sleep):
+    """Read matching documents on the server; never fall back to a collection scan.
+
+    runQuery returns a JSON array, including a readTime-only row for an empty
+    result. Firestore performs the filtering, so unrelated documents are not
+    downloaded or billed as document reads.
+    """
+    base = documents_url(project, collection).rsplit("/", 1)[0]
+    body = {"structuredQuery": {"from": [{"collectionId": collection}], "where": where}}
+    reply = _request(base + ":runQuery", data=json.dumps(body).encode(), method="POST",
+                     headers=dict(_auth(token), **{"Content-Type": "application/json"}),
+                     opener=opener, sleep=sleep)
+    if not isinstance(reply, list):
+        raise ConfigUnavailable("Firestore returned an invalid query response")
+    return [(doc_id_of(row["document"]["name"]), row["document"].get("fields") or {})
+            for row in reply if isinstance(row, dict) and "document" in row]
+
+
+def campaign_groups_filter(slug):
+    # The validator requires weekly and paused campaigns to be present in
+    # promos too. A single array index therefore covers every valid assignment,
+    # including weekly-only cadence and paused groups, without composite indexes.
+    return {"fieldFilter": {"field": {"fieldPath": "promos"}, "op": "ARRAY_CONTAINS",
+                            "value": {"stringValue": slug}}}
+
+
+def count_documents(project, collection, token, *, where=None, opener, sleep):
+    query = {"from": [{"collectionId": collection}]}
+    if where is not None:
+        query["where"] = where
+    body = {"structuredAggregationQuery": {"structuredQuery": query,
+            "aggregations": [{"alias": "total", "count": {}}]}}
+    base = documents_url(project, collection).rsplit("/", 1)[0]
+    reply = _request(base + ":runAggregationQuery", data=json.dumps(body).encode(), method="POST",
+                     headers=dict(_auth(token), **{"Content-Type": "application/json"}),
+                     opener=opener, sleep=sleep)
+    try:
+        return int(reply[0]["result"]["aggregateFields"]["total"]["integerValue"])
+    except (KeyError, TypeError, ValueError, IndexError) as ex:
+        raise ConfigUnavailable("Firestore returned an invalid count response") from ex
+
+
+def scope_directory(env=None, *, campaign=None, group_ids=None, include_groups=True, include_campaigns=True):
+    directory = state_dir(env)
+    if campaign is None and group_ids is None and include_groups and include_campaigns:
+        return directory
+    creds = credentials(env) or {}
+    identity = [creds.get("project_id"), creds.get("client_email"), campaign,
+                sorted(set(group_ids)) if group_ids is not None else None, include_groups, include_campaigns]
+    digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+    return os.path.join(directory, "scopes", digest)
 
 
 # --------------------------------------------------------------------------
@@ -743,8 +798,9 @@ def _log(message):
     sys.stderr.write("[operator-config] %s\n" % message)
 
 
-def fetch(env=None, *, opener=None, signer=None, now=None, sleep=None):
-    """Read all four collections live. Raises :class:`ConfigUnavailable` when
+def fetch(env=None, *, opener=None, signer=None, now=None, sleep=None,
+          campaign=None, group_ids=None, include_groups=True, include_campaigns=True):
+    """Read shared config and only the requested groups live. Raises :class:`ConfigUnavailable` when
     Firestore cannot be reached or refuses. Returns ``(project, raw)``."""
     env = os.environ if env is None else env
     opener = opener or urllib.request.urlopen
@@ -757,14 +813,30 @@ def fetch(env=None, *, opener=None, signer=None, now=None, sleep=None):
                                 "(GCP_SERVICE_ACCOUNT_B64 or GCP_SERVICE_ACCOUNT_FILE)")
     token = access_token(creds, token_cache_path(state_dir(env)), opener=opener,
                          signer=signer, now=now, sleep=sleep)
-    raw = dict((collection, list_documents(creds["project_id"], collection, token,
-                                           opener=opener, sleep=sleep))
-               for collection in COLLECTIONS)
+    project = creds["project_id"]
+    settings = get_document(project, "settings", SETTINGS_DOC, token, opener=opener, sleep=sleep, raw=True)
+    raw = {"settings": [] if settings is None else [(SETTINGS_DOC, settings)]}
+    for collection in ("lines", "campaigns"):
+        raw[collection] = [] if collection == "campaigns" and not include_campaigns else list_documents(
+            project, collection, token, opener=opener, sleep=sleep)
+    if not include_groups:
+        raw["groups"] = []
+    elif group_ids is not None:
+        raw["groups"] = []
+        for jid in dict.fromkeys(group_ids):
+            fields = get_document(project, "groups", jid, token, opener=opener, sleep=sleep, raw=True)
+            if fields is not None:
+                raw["groups"].append((jid, fields))
+    elif campaign is not None:
+        raw["groups"] = query_documents(project, "groups", campaign_groups_filter(campaign),
+                                         token, opener=opener, sleep=sleep)
+    else:
+        raw["groups"] = list_documents(project, "groups", token, opener=opener, sleep=sleep)
     return creds["project_id"], raw
 
 
 def load(env=None, *, opener=None, signer=None, now=None, sleep=None, log=None,
-         allow_snapshot=True):
+         allow_snapshot=True, campaign=None, group_ids=None, include_groups=True, include_campaigns=True):
     """The operator config to act on, as a dict::
 
         {"source": "firestore" | "snapshot",
@@ -779,9 +851,10 @@ def load(env=None, *, opener=None, signer=None, now=None, sleep=None, log=None,
     env = os.environ if env is None else env
     now = now or time.time
     log = log or _log
-    directory = state_dir(env)
+    scope = {"campaign": campaign, "group_ids": group_ids, "include_groups": include_groups, "include_campaigns": include_campaigns}
     try:
-        _, raw = fetch(env, opener=opener, signer=signer, now=now, sleep=sleep)
+        directory = scope_directory(env, **scope)
+        _, raw = fetch(env, opener=opener, signer=signer, now=now, sleep=sleep, **scope)
         membership, enabled, undecodable = assemble(raw)
         clean, report = quarantine(membership, undecodable)
     except (ConfigUnavailable, ConfigInvalid) as ex:
@@ -789,7 +862,7 @@ def load(env=None, *, opener=None, signer=None, now=None, sleep=None, log=None,
             raise
         log("Firestore unusable (%s); using the last-known-good snapshot" % ex)
         try:
-            return _from_snapshot(directory, str(ex), now=now)
+            return scope_snapshot(env, str(ex), now=now, **scope)
         except ConfigUnavailable as fallback_error:
             raise ConfigUnavailable(str(fallback_error), **getattr(ex, "metadata", {})) from ex
 
@@ -813,6 +886,45 @@ def load(env=None, *, opener=None, signer=None, now=None, sleep=None, log=None,
     _report(report, log)
     return {"source": "firestore", "membership": clean, "enabled": switches,
             "report": report, "fetchedAt": stamp, "degraded": None}
+
+
+def scope_snapshot(env, why, *, now=None, campaign=None, group_ids=None, include_groups=True, include_campaigns=True):
+    scoped_error = None
+    try:
+        directory = scope_directory(env, campaign=campaign, group_ids=group_ids, include_groups=include_groups, include_campaigns=include_campaigns)
+    except ConfigUnavailable:
+        # Without a credential identity only the full validated snapshot can
+        # supply a fallback. Filter it below before returning a scoped result.
+        directory = None
+    if directory is not None:
+        try:
+            return _from_snapshot(directory, why, now=now)
+        except ConfigUnavailable as exc:
+            if directory == state_dir(env):
+                raise
+            scoped_error = exc
+    # A previous full read can seed a scope during an outage, but a scoped
+    # read must never replace the full snapshot or add unrelated groups.
+    try:
+        result = _from_snapshot(state_dir(env), why, now=now)
+    except ConfigUnavailable:
+        if scoped_error is not None:
+            raise scoped_error
+        raise
+    membership = dict(result["membership"])
+    groups = membership.get("groups") or {}
+    if not include_groups:
+        groups = {}
+    elif group_ids is not None:
+        groups = {jid: groups[jid] for jid in group_ids if jid in groups}
+    elif campaign is not None:
+        groups = {jid: entry for jid, entry in groups.items()
+                  if campaign in (entry.get("promos") or []) or campaign in (entry.get("weekly") or {})}
+    membership["groups"] = groups
+    if not include_campaigns:
+        membership["promos"] = {}
+        result = dict(result, enabled={})
+    return dict(result, membership=membership)
 
 
 def _snapshot_age_seconds(snapshot, now):
