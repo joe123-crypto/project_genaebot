@@ -1,4 +1,9 @@
 // Metadata inventory only. Never opens a connection or changes ad targeting.
+// `pruneGroupFromInventory` is the one operator-driven edit: it removes a single
+// group after the account has actually left it, so the inventory stops claiming a
+// membership that no longer exists. It goes through this module, rather than the
+// caller writing the file, because `owners` and `writes` below are module-scoped:
+// a write from anywhere else would not be ordered against a scan in flight.
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -12,6 +17,12 @@ const GROUP = /^\d+(?:-\d+)?@g\.us$/;
 // A reconnect may replace the monitor before its old request finishes.
 const owners = new Map();
 const writes = new Map();
+
+/** Where an account's inventory lives. Shared so a caller that prunes an entry
+ *  cannot name a different file than the scan that writes it. */
+export function inventoryPath(root, accountId) {
+  return path.join(root, 'runtime', 'whatsapp-groups', `${accountId}.json`);
+}
 
 async function serialWrite(key, task) {
   const pending = (writes.get(key) ?? Promise.resolve()).catch(() => {}).then(task);
@@ -57,6 +68,32 @@ async function atomicSave(filename, value, current) {
   }
 }
 
+/**
+ * Drop one group from an account's inventory. Returns true when an entry was
+ * actually removed, false when the inventory had none (already pruned, never
+ * scanned, or unreadable -- none of which is an error worth failing a leave
+ * over).
+ *
+ * A scan whose lookup finished before the leave can still re-add the group on
+ * its way out; the next scan, at most an hour later, sees the truth and drops
+ * it again.
+ */
+export async function pruneGroupFromInventory(filename, accountId, jid) {
+  if (!GROUP.test(jid ?? '')) throw new Error('Invalid group id');
+  return serialWrite(filename, async () => {
+    let inventory;
+    try {
+      inventory = await readInventory(filename, accountId);
+    } catch {
+      return false;
+    }
+    if (!Object.prototype.hasOwnProperty.call(inventory.groups, jid)) return false;
+    delete inventory.groups[jid];
+    await atomicSave(filename, inventory, () => true);
+    return true;
+  });
+}
+
 export function createWhatsAppGroupDiscovery({ accountId,
   root = process.env.OPENCLAW_STATE_DIR || path.join(os.homedir(), '.openclaw'),
   environment = process.env, now = () => new Date(), warn = console.warn,
@@ -65,7 +102,7 @@ export function createWhatsAppGroupDiscovery({ accountId,
 } = {}) {
   const enabled = environment.GENAIE_GROUP_DISCOVERY !== '0' && ACCOUNT.test(accountId ?? '') &&
     !['__proto__', 'constructor', 'prototype'].includes(accountId);
-  const filename = path.join(root, 'runtime', 'whatsapp-groups', `${accountId}.json`);
+  const filename = inventoryPath(root, accountId);
   const owner = {};
   let socket, timer, generation = 0, inFlight;
 

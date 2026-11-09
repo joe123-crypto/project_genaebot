@@ -49,12 +49,29 @@ need GCP_SERVICE_ACCOUNT_WRITE_B64 -- a key with Cloud Datastore User, separate
 from the read-only runtime key the cron runs carry -- and answer 503 without it,
 which is how the write surface ships inert.
 
+Group actions (bearer, no cache):
+  POST /internal/console/groups/<jid>/actions
+       {"leave": true, "clearRecords": true, "account": "ads", "actor": "..."}
+
+The two things a config delete cannot do for itself: take the account's number
+out of the WhatsApp group, and forget the per-campaign send history for it. At
+least one must be asked for. Neither writes Firestore, so neither needs the
+write key; the leave is queued for the channel monitor, which holds the only
+socket that can perform it, and a result that does not arrive in time is
+reported as unconfirmed rather than failed. GENAIE_GROUP_ACTIONS=0 answers 503.
+
 Environment:
   CONSOLE_API_TOKEN   required, >= MIN_TOKEN_LENGTH chars; the server refuses to
                       start without it, so it can never come up unauthenticated
   CONSOLE_API_PORT    default 18790
   CONSOLE_API_BIND    default 0.0.0.0
   CONSOLE_READ_BIN    default $OPENCLAW_STATE_DIR/workspace/bin/console-read
+  CONSOLE_WRITE_BIN   default $OPENCLAW_STATE_DIR/workspace/bin/console-write
+  CONSOLE_GROUP_ACTION_BIN
+                      default $OPENCLAW_STATE_DIR/workspace/bin/console-group-action
+  GENAIE_GROUP_ACTIONS
+                      set to 0 to switch group actions off; the route then
+                      answers 503 and the monitor's helper stays inactive
   GENAIE_PROMO_CRONS  passed through to the bridge, which needs the declared
                       cron manifest that deploy/ never stages into the image
 
@@ -98,6 +115,12 @@ WRITE_STATUSES = frozenset((200, 400, 404, 409, 503))
 WRITE_TIMEOUT_SECONDS = 30
 WRITE_KEY_VAR = "GCP_SERVICE_ACCOUNT_WRITE_B64"
 
+# Group actions: leaving a WhatsApp group and forgetting a group's local
+# records. Neither touches Firestore, so neither is gated on the write key --
+# the capability here is the gateway, not a credential.
+GROUP_ACTION_KEYS = frozenset(("leave", "clearRecords", "account", "actor"))
+GROUP_ACTIONS_VAR = "GENAIE_GROUP_ACTIONS"
+
 MIN_TOKEN_LENGTH = 32
 MAX_CONCURRENCY = 2
 CACHE_TTL_SECONDS = 30.0
@@ -120,6 +143,10 @@ def default_bridge():
 
 def default_write_bridge():
     return _volume_bin("console-write")
+
+
+def default_action_bridge():
+    return _volume_bin("console-group-action")
 
 
 def _volume_bin(name):
@@ -229,11 +256,15 @@ class WriteBridge:
     Nothing is cached: a write's answer is about this moment, and serving a
     stale one would tell an operator a change landed that did not."""
 
-    def __init__(self, path, timeout=WRITE_TIMEOUT_SECONDS):
+    def __init__(self, path, timeout=WRITE_TIMEOUT_SECONDS, label=None):
         self.path = path
         self.timeout = timeout
         self.lock = threading.Lock()
         self.runs = 0
+        # What a log line calls the thing being changed. Group actions name a
+        # jid rather than a collection and id.
+        self.label = label or (lambda request: "%s/%s" % (request.get("collection"),
+                                                          request.get("id")))
 
     def run(self, request):
         """Return (status, body). Never raises, and never leaks stderr."""
@@ -248,8 +279,8 @@ class WriteBridge:
             except subprocess.TimeoutExpired:
                 # The change may or may not have landed. Say so rather than
                 # implying it did not; a caller re-reads instead of retrying.
-                log("write timed out after %ss: %s/%s"
-                    % (self.timeout, request.get("collection"), request.get("id")))
+                log("write timed out after %ss: %s"
+                    % (self.timeout, self.label(request)))
                 return 504, b'{"error": "the change may or may not have been ' \
                              b'applied; re-read before retrying"}'
             except OSError as exc:
@@ -258,10 +289,10 @@ class WriteBridge:
 
         status = write_status(done.stdout)
         if status is None:
-            log("write bridge exited %d: %s | %s/%s" % (
+            log("write bridge exited %d: %s | %s" % (
                 done.returncode,
                 (done.stderr or b"").decode("utf-8", "replace").strip()[:500],
-                request.get("collection"), request.get("id")))
+                self.label(request)))
             return 502, b'{"error": "write bridge failed"}'
         return status, done.stdout
 
@@ -473,6 +504,70 @@ class Handler(BaseHTTPRequestHandler):
             bridge.cache.clear()
         self.send_any(status, body, True)
 
+    def group_action_request(self, route, query, with_body=True):
+        """POST /internal/console/groups/<jid>/actions
+
+        Body: {"leave": true, "clearRecords": true, "account": "ads",
+        "actor": "..."}. The jid is percent-encoded by the caller, because it
+        carries an "@".
+
+        Unlike the config route this writes no Firestore document and needs no
+        write key: it takes the account's number out of a WhatsApp group and
+        forgets what the bot stored about it. Both are the gateway's to do, so
+        what gates this route is whether group actions are switched on, and the
+        judgement about any particular value is console-group-action's.
+        """
+        if query:
+            self.send_any(400, b'{"error":"Group action routes take no query '
+                               b'parameters."}', with_body)
+            return
+        if (os.environ.get(GROUP_ACTIONS_VAR) or "").strip() == "0":
+            self.send_any(503, b'{"error":"Group actions are switched off on this '
+                               b'gateway."}', with_body)
+            return
+        parts = route.split("/")
+        try:
+            doc_id = unquote(parts[1]) if len(parts) == 3 else ""
+        except UnicodeError:
+            doc_id = ""
+        if not (len(parts) == 3 and parts[0] == "groups" and parts[2] == "actions"
+                and DOC_ID_RE.match(doc_id)):
+            self.send_any(404, b'{"error":"not found"}', with_body)
+            return
+
+        try:
+            size = int(self.headers.get("Content-Length") or "0")
+            if self.headers.get("Transfer-Encoding") or not 0 < size <= 2048:
+                raise ValueError()
+            if self.headers.get("Content-Type", "").split(";", 1)[0].strip() != "application/json":
+                raise ValueError()
+            payload = json.loads(self.rfile.read(size))
+            if not isinstance(payload, dict) or set(payload) - GROUP_ACTION_KEYS:
+                raise ValueError()
+            for name in ("leave", "clearRecords"):
+                if name in payload and not isinstance(payload[name], bool):
+                    raise ValueError()
+            # A request that asks for nothing is a mistake, not a no-op: the
+            # caller meant to tick something and would be told it was done.
+            if not (payload.get("leave") or payload.get("clearRecords")):
+                raise ValueError()
+        except (ValueError, TypeError, UnicodeError):
+            self.send_any(400, b'{"error":"Invalid group action."}', True)
+            return
+
+        request = {"jid": doc_id}
+        for name in ("leave", "clearRecords", "account", "actor"):
+            if name in payload:
+                request[name] = payload[name]
+
+        status, body = self.server.console["actions"].run(request)
+        # Leaving a group changes what discovery will list, so every cached read
+        # of the groups payload is now wrong.
+        bridge = self.server.console["bridge"]
+        with bridge.lock:
+            bridge.cache.clear()
+        self.send_any(status, body, with_body)
+
     def do_POST(self):
         split = urlsplit(self.path)
         if split.path == PREFIX + "campaigns/create":
@@ -484,6 +579,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_any(401, b'{"error":"unauthorized"}', True)
                 return
             self.config_request(split.path[len(PREFIX):], split.query)
+            return
+        if split.path.startswith(PREFIX + "groups/"):
+            if not authorized(self.headers.get("Authorization"),
+                              self.server.console["token"]):
+                self.send_any(401, b'{"error":"unauthorized"}', True)
+                return
+            self.group_action_request(split.path[len(PREFIX):], split.query)
             return
         if not split.path.startswith(PREFIX + "accounts"):
             self.refuse_other_methods()
@@ -583,7 +685,8 @@ def authorized(header, token):
     return hmac.compare_digest(presented.encode("utf-8"), token.encode("utf-8"))
 
 
-def build_server(bind, port, token, bridge_path, write_path=None, **kwargs):
+def build_server(bind, port, token, bridge_path, write_path=None,
+                 action_path=None, **kwargs):
     if len(token or "") < MIN_TOKEN_LENGTH:
         raise ValueError(
             "CONSOLE_API_TOKEN must be at least %d characters" % MIN_TOKEN_LENGTH)
@@ -597,7 +700,10 @@ def build_server(bind, port, token, bridge_path, write_path=None, **kwargs):
     server.console = {"token": token, "bridge": Bridge(bridge_path, **kwargs),
                       "accounts": AccountControls(),
                       "writes": WriteBridge(write_path or default_write_bridge()),
-                      "campaigns": WriteBridge(_volume_bin("console-campaign-create"), timeout=120)}
+                      "campaigns": WriteBridge(_volume_bin("console-campaign-create"), timeout=120),
+                      "actions": WriteBridge(
+                          action_path or default_action_bridge(),
+                          label=lambda request: "groups/%s" % request.get("jid"))}
     server.console["campaigns"].lock = server.console["writes"].lock
     return server
 
@@ -613,8 +719,10 @@ def main():
         return 78
 
     try:
-        server = build_server(bind, port, token, bridge_path,
-                              os.environ.get("CONSOLE_WRITE_BIN") or default_write_bridge())
+        server = build_server(
+            bind, port, token, bridge_path,
+            os.environ.get("CONSOLE_WRITE_BIN") or default_write_bridge(),
+            os.environ.get("CONSOLE_GROUP_ACTION_BIN") or default_action_bridge())
     except ValueError as exc:
         log("%s; refusing to start" % exc)
         return 78

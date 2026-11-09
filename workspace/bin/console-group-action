@@ -1,0 +1,217 @@
+#!/usr/bin/env python3
+"""Act on one group's WhatsApp membership and local records.
+
+The third console bridge, beside ``console-read`` and ``console-write``, and the
+only one that does not touch Firestore. It covers the two things a config delete
+cannot do for itself:
+
+* **leave** -- take the account's number out of the WhatsApp group. Nothing in
+  this process can do that: the gateway exposes no RPC for it and a second
+  process cannot borrow an account's socket. So the leave is queued as a request
+  file on the shared state volume, where ``whatsapp-group-actions.mjs``, running
+  inside the channel monitor with the live socket, performs it and writes back a
+  result. This waits for that result.
+* **clearRecords** -- forget the per-campaign send history for the group. That is
+  ordinary file work and happens here, in ``group_cleanup``.
+
+One request per run, read from stdin as JSON::
+
+    {"jid": "263786627810-1599925488@g.us", "account": "ads",
+     "leave": true, "clearRecords": true, "actor": "joe"}
+
+and one JSON object on stdout::
+
+    {"ok": true, "status": 200, "jid": ..., "account": ...,
+     "leave": {"requested": true, "ok": true, "already": false, "error": null},
+     "cleared": {"requested": true, "campaigns": {...}, "checked": 3}}
+
+A leave whose result does not arrive in time is reported as ``ok: null`` with
+``error: "unconfirmed"``. It is **not** a failure: the request is on the queue
+and the account may well have left already. Saying "it failed" would be a worse
+answer than saying "I do not know", because the operator would retry something
+that had already happened.
+
+Exit status: 0 when the request was understood and acted on, 1 when it was
+refused. A caller reads ``status``, not the exit code.
+
+No Firestore credentials of any kind are read here. Std-lib only.
+"""
+
+import json
+import os
+import re
+import sys
+import time
+import uuid
+from pathlib import Path
+
+WORKSPACE = Path(__file__).resolve().parents[1]
+LIB_DIR = str(WORKSPACE / "lib")
+if LIB_DIR not in sys.path:
+    sys.path.insert(0, LIB_DIR)
+
+import group_cleanup  # noqa: E402
+
+MAX_REQUEST_BYTES = 64 * 1024
+REQUIRED = ("jid",)
+OPTIONAL = ("account", "leave", "clearRecords", "actor")
+DEFAULT_ACCOUNT = "default"
+# Comfortably inside the console API's 30s subprocess timeout, so a slow leave
+# is answered as unconfirmed by this process rather than killed by its caller.
+WAIT_SECONDS = 25.0
+POLL_SECONDS = 0.2
+
+
+class Refused(Exception):
+    """The request was not acted on, and the caller should say why."""
+
+    def __init__(self, message, status=400):
+        super().__init__(message)
+        self.status = status
+
+
+def _valid_jid(value):
+    if not isinstance(value, str) or not value.endswith("@g.us") or len(value) > 128:
+        return False
+    local = value[: -len("@g.us")]
+    parts = local.split("-")
+    return len(parts) <= 2 and all(part.isdigit() and part for part in parts)
+
+
+# The same shape the monitor accepts, so an id this lets through cannot be one
+# the queue directory refuses.
+ACCOUNT_RE = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,63}\Z")
+
+
+def _valid_account(value):
+    if not isinstance(value, str) or not ACCOUNT_RE.match(value):
+        return False
+    return value not in ("__proto__", "constructor", "prototype")
+
+
+def parse_request(raw):
+    """The request as a dict, or :class:`Refused`."""
+    if len(raw) > MAX_REQUEST_BYTES:
+        raise Refused("request is too large")
+    try:
+        request = json.loads(raw or b"{}")
+    except ValueError as ex:
+        raise Refused("request is not valid JSON: %s" % ex)
+    if not isinstance(request, dict):
+        raise Refused("request must be a JSON object")
+    missing = [name for name in REQUIRED if name not in request]
+    if missing:
+        raise Refused("request is missing %s" % ", ".join(missing))
+    unknown = sorted(set(request) - set(REQUIRED) - set(OPTIONAL))
+    if unknown:
+        raise Refused("request has unexpected key(s): %s" % ", ".join(unknown))
+    if not _valid_jid(request["jid"]):
+        raise Refused("jid must be a WhatsApp group id")
+    account = request.get("account", DEFAULT_ACCOUNT)
+    if account is None:
+        account = DEFAULT_ACCOUNT
+    if not _valid_account(account):
+        raise Refused("account must be a line id")
+    request["account"] = account
+    for name in ("leave", "clearRecords"):
+        if not isinstance(request.get(name, False), bool):
+            raise Refused("%s must be true or false" % name)
+    if request.get("actor") is not None and not isinstance(request.get("actor"), str):
+        raise Refused("actor must be a string")
+    if not (request.get("leave") or request.get("clearRecords")):
+        # Nothing to do is a mistake worth naming: the caller meant to tick
+        # something, and answering "done" would hide that it did not.
+        raise Refused("request must ask for leave, clearRecords, or both")
+    return request
+
+
+def queue_dir(account, env=None):
+    env = os.environ if env is None else env
+    root = env.get("OPENCLAW_STATE_DIR") or group_cleanup.DEFAULT_STATE_DIR
+    return os.path.join(root, "runtime", "whatsapp-group-actions", account)
+
+
+def request_leave(jid, account, env=None, wait=WAIT_SECONDS, poll=POLL_SECONDS,
+                  clock=time.monotonic, sleep=time.sleep):
+    """Queue a leave for the account's monitor and wait for its answer.
+
+    Returns ``{"ok": bool|None, "already": bool, "error": str|None}``. ``None``
+    means the result had not arrived in time, which is not the same as failure.
+    """
+    directory = queue_dir(account, env)
+    requests = os.path.join(directory, "requests")
+    results = os.path.join(directory, "results")
+    identifier = str(uuid.uuid4())
+    try:
+        os.makedirs(requests, mode=0o700, exist_ok=True)
+        os.makedirs(results, mode=0o700, exist_ok=True)
+    except OSError as ex:
+        raise Refused("cannot reach the group action queue: %s" % ex, status=503)
+
+    payload = json.dumps({"id": identifier, "jid": jid,
+                          "requestedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                                       time.gmtime())})
+    target = os.path.join(requests, identifier + ".json")
+    temporary = target + ".tmp"
+    try:
+        # Written aside and renamed, so the monitor never reads a half-written
+        # request and answers it as invalid.
+        with open(temporary, "w") as handle:
+            handle.write(payload)
+        os.replace(temporary, target)
+    except OSError as ex:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise Refused("cannot queue the leave: %s" % ex, status=503)
+
+    answer = os.path.join(results, identifier + ".json")
+    deadline = clock() + wait
+    while True:
+        try:
+            with open(answer) as handle:
+                result = json.load(handle)
+        except (OSError, ValueError):
+            result = None
+        if isinstance(result, dict):
+            try:
+                os.unlink(answer)
+            except OSError:
+                pass
+            return {"ok": bool(result.get("ok")),
+                    "already": bool(result.get("already")),
+                    "error": result.get("error") if not result.get("ok") else None}
+        if clock() >= deadline:
+            # Leave the request in place: the monitor may be reconnecting, and
+            # the leave is still wanted when it comes back.
+            return {"ok": None, "already": False, "error": "unconfirmed"}
+        sleep(poll)
+
+
+def main(argv, stdin=None, stdout=None, env=None):
+    stdin = stdin or sys.stdin.buffer
+    stdout = stdout or sys.stdout
+    try:
+        request = parse_request(stdin.read(MAX_REQUEST_BYTES + 1))
+        jid, account = request["jid"], request["account"]
+        cleared = {"requested": False}
+        leave = {"requested": False}
+        # Records first: it cannot fail in a way that should stop a leave, and
+        # doing it after an unconfirmed leave would mean reporting two unknowns.
+        if request.get("clearRecords"):
+            cleared = dict(group_cleanup.clear_group(jid, env=env), requested=True)
+        if request.get("leave"):
+            leave = dict(request_leave(jid, account, env=env), requested=True)
+    except Refused as ex:
+        payload = {"ok": False, "status": ex.status, "error": str(ex), "problems": []}
+    else:
+        payload = {"ok": True, "status": 200, "jid": jid, "account": account,
+                   "leave": leave, "cleared": cleared}
+    json.dump(payload, stdout, ensure_ascii=False)
+    stdout.write("\n")
+    return 0 if payload["ok"] else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import test from 'node:test';
-import { createWhatsAppGroupDiscovery, DISCOVERY_INTERVAL_MS } from './whatsapp-group-discovery.mjs';
+import { createWhatsAppGroupDiscovery, DISCOVERY_INTERVAL_MS, inventoryPath, pruneGroupFromInventory } from './whatsapp-group-discovery.mjs';
 import { patchWhatsAppGroupDiscovery, patchWhatsAppHealthAudit, patchWhatsAppCacheCleanup } from './whatsapp-lid-loader.mjs';
 
 const upstream = fs.readFileSync(new URL('./fixtures/whatsapp-lifecycle-2026.9.9.js', import.meta.url), 'utf8');
@@ -183,4 +183,52 @@ test('load-time integration composes with lifecycle audit and guards the install
   // The existing metadata-owner cleanup patch also remains independent.
   const cache = fs.readFileSync(new URL('./fixtures/whatsapp-cache-owner-2026.9.9.js', import.meta.url), 'utf8');
   assert.match(patchWhatsAppCacheCleanup(cache), /genaieStartExpiredCacheCleanup/);
+});
+
+test('pruneGroupFromInventory removes one group and leaves the rest', async t => {
+  const f = fixture(t), d = f.create();
+  d.start({ groupFetchAllParticipating: async () => ({ '1@g.us': { subject: 'One' }, '2@g.us': { subject: 'Two' } }) });
+  await d.scan();
+
+  const file = inventoryPath(f.root, 'ads');
+  assert.equal(await pruneGroupFromInventory(file, 'ads', '1@g.us'), true);
+  assert.deepEqual(Object.keys(f.read().groups), ['2@g.us']);
+  // Already gone is not an error: a leave must not fail because the inventory
+  // had never listed the group.
+  assert.equal(await pruneGroupFromInventory(file, 'ads', '1@g.us'), false);
+});
+
+test('a prune is ordered against a scan rather than racing it', async t => {
+  const f = fixture(t), d = f.create();
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  d.start({ groupFetchAllParticipating: async () => {
+    await gate;
+    return { '1@g.us': { subject: 'One' }, '2@g.us': { subject: 'Two' } };
+  } });
+
+  const scanning = d.scan();
+  const pruning = pruneGroupFromInventory(inventoryPath(f.root, 'ads'), 'ads', '1@g.us');
+  release();
+  await Promise.all([scanning, pruning]);
+
+  // Whichever ran first, the file is one or the other's whole result -- never
+  // a half-applied mixture, and never a lost scan.
+  const saved = f.read();
+  assert.ok(saved.lastSuccessAt, 'the scan still landed');
+  assert.ok(!('1@g.us' in saved.groups) || '2@g.us' in saved.groups);
+});
+
+test('a prune never invents an inventory for an account that has none', async t => {
+  const f = fixture(t);
+  const file = inventoryPath(f.root, 'nobody');
+  assert.equal(await pruneGroupFromInventory(file, 'nobody', '1@g.us'), false);
+  assert.equal(fs.existsSync(file), false);
+});
+
+test('a prune refuses anything that is not a group id', async t => {
+  const f = fixture(t);
+  await assert.rejects(
+    () => pruneGroupFromInventory(inventoryPath(f.root, 'ads'), 'ads', '../../etc@g.us'),
+    /Invalid group id/);
 });
