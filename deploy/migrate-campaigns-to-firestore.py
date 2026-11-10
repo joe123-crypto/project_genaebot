@@ -243,6 +243,8 @@ def convert(entry, manifest, store, *, write, actor, workspace=WORKSPACE, out=sy
         before = store.get("campaigns", slug)
         if before is None:
             raise MigrationError("campaigns/%s does not exist; seed the store first" % slug)
+        if before.get("deleted"):
+            raise MigrationError("campaign was deleted; conversion is refused")
         if before.get("kind") == KIND:
             out.write("%s: already converted; nothing to write\n" % slug)
             return True

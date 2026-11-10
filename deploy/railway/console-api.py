@@ -499,7 +499,7 @@ class Handler(BaseHTTPRequestHandler):
             self.server.console["reconcileWake"].set()
         self.send_any(status, body, with_body)
 
-    def campaign_create_request(self, split):
+    def campaign_create_request(self, split, delete_slug=None):
         if not authorized(self.headers.get("Authorization"), self.server.console["token"]):
             self.send_any(401, b'{"error":"unauthorized"}', True)
             return
@@ -516,15 +516,22 @@ class Handler(BaseHTTPRequestHandler):
             if len(raw) != length:
                 raise ValueError("incomplete request")
             request = json.loads(raw)
-            if not isinstance(request, dict) or "reconcile" in request:
+            if not isinstance(request, dict) or "reconcile" in request or "delete" in request:
                 raise ValueError("invalid campaign request")
         except (ValueError, TypeError):
             self.send_any(400, b'{"error":"Invalid campaign creation request."}', True)
             return
+        if delete_slug is not None:
+            if set(request) - {"actor"}:
+                self.send_any(400, b'{"error":"Invalid campaign deletion request."}', True)
+                return
+            request = {"delete": delete_slug, **request}
         bridge = self.server.console["bridge"]
         bridge.invalidate()
         status, body = self.server.console["campaigns"].run(request)
         bridge.invalidate()
+        if delete_slug is not None and self.server.console.get("reconcileWake") is not None:
+            self.server.console["reconcileWake"].set()
         self.send_any(status, body, True)
 
     def group_action_request(self, route, query, with_body=True):
@@ -593,6 +600,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         split = urlsplit(self.path)
+        deletion = re.fullmatch(re.escape(PREFIX) + r"campaigns/([a-z0-9][a-z0-9-]{0,63})/delete", split.path)
+        if deletion:
+            self.campaign_create_request(split, deletion.group(1))
+            return
         if split.path == PREFIX + "campaigns/create":
             self.campaign_create_request(split)
             return
@@ -776,10 +787,16 @@ def main():
             if (os.environ.get(WRITE_KEY_VAR) or "").strip():
                 status, body = server.console["campaigns"].run({"reconcile": True})
                 try:
-                    pending = json.loads(body).get("pending", 0)
+                    result = json.loads(body)
+                    pending = result.get("pending", 0)
+                    deletions_pending = result.get("deletionsPending", 0)
+                    if result.get("deletionsChanged"):
+                        server.console["bridge"].invalidate()
                 except (ValueError, AttributeError):
                     pending = 1
-                if status != 200 or pending:
+                if status == 200 and deletions_pending:
+                    delay = 60
+                elif status != 200 or pending:
                     log("campaign schedule reconciliation is pending")
                     delay = min(delay * 2, 3600)
                 else:

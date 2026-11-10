@@ -230,6 +230,39 @@ class ConsoleCacheTests(Harness):
                 self.assertEqual(caught.exception.metadata, {"upstreamStatus": 429, "code": "config_rate_limited",
                                                             "quota": "unknown", "retryAfterSeconds": 12.0})
 
+    def test_retirement_protection_never_reuses_a_snapshot_after_cache_invalidation(self):
+        self.env["GENAIE_CAMPAIGN_DELETION"] = "1"
+        self.display()
+        self.firestore.down = True
+        with cache.mutation(self.env):
+            pass
+        with self.assertRaises(config.ConfigUnavailable):
+            self.display(fresh=True)
+        with self.assertRaises(config.ConfigUnavailable):
+            self.display()
+
+    def test_retirement_marker_reaches_cached_readers_after_mutation(self):
+        self.env["GENAIE_CAMPAIGN_DELETION"] = "1"
+        self.display()
+        self.firestore.store["campaigns"]["cv"] = config.encode_fields({"deleted": True, "enabled": False})
+        with cache.mutation(self.env):
+            pass
+        result = self.display()
+        self.assertIn("cv", result["deleted"])
+        self.assertNotIn("cv", result["membership"]["promos"])
+        self.assertFalse(result["enabled"]["cv"])
+
+    def test_retirement_failure_preserves_quota_metadata(self):
+        from unittest.mock import patch
+        self.env["GENAIE_CAMPAIGN_DELETION"] = "1"
+        def limited(request, **kw):
+            raise urllib.error.HTTPError(request.full_url, 429, "limited", {"Retry-After": "12"}, io.BytesIO(b"{}"))
+        self.firestore = limited
+        with patch.object(config, "access_token", return_value="tok"):
+            with self.assertRaises(config.ConfigUnavailable) as caught:
+                self.display()
+            self.assertEqual(caught.exception.metadata["code"], "config_rate_limited")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -402,6 +402,9 @@ class DriftComparatorTests(unittest.TestCase):
 
 SHIM = """#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_CALLS"
+if printf '%s\\n' "$*" | grep -q 'console-campaign-check --deleted'; then
+  printf '[]'; exit 0
+fi
 if printf '%s\\n' "$*" | grep -q 'cron list'; then
   if [ -n "${FAKE_CRON_FAIL:-}" ]; then printf 'ssh: connect failed\\n' >&2; exit 1; fi
   cat "$FAKE_CRON_JOBS"; exit 0

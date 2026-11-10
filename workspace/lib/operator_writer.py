@@ -28,7 +28,7 @@ What this cannot do, on purpose:
   new document is appended after the current last.
 * **No bulk writes.** One document per request, so a refusal names one thing
   and a partial apply cannot happen.
-* **Only a group can be deleted, and only on purpose** (:func:`delete`). The
+* **Only a group can be deleted through this generic writer** (:func:`delete`). The
   ordinary way out of the rotation is still ``status`` or ``paused_promos``, which
   keep the assignments and make resuming a flip. A delete removes the record, so
   the whole record goes into its audit document in the same commit: it is gone
@@ -73,7 +73,7 @@ EDITABLE = {
     "campaigns": ("enabled", "comment", "weekly_comment", "dir", "captions"),
     "settings": ("activity", "caps_enabled", "contact_account", "bands"),
 }
-# What may be deleted outright. See prepare_delete for why nothing else is.
+# Generic document deletions. Campaign retirement uses campaign_deletion instead.
 DELETABLE = ("groups",)
 # A patch value has to survive a Firestore round trip and be something
 # promo_membership.validate expects. Timestamps, bytes and references do not
@@ -291,6 +291,18 @@ def prepare(raw, collection, doc_id, patch):
     name, say, which ``quarantine`` itself treats as a warning."""
     if collection not in EDITABLE:
         raise WriteRefused("%s is not an editable collection" % collection, status=404)
+    import campaign_deletion
+    deleted = campaign_deletion.deleted_slugs(raw)
+    if collection == "campaigns" and doc_id in deleted:
+        raise WriteRefused("this campaign has been deleted", status=409)
+    if collection == "groups":
+        mentioned = set()
+        if isinstance(patch, dict):
+            for value in (patch.get("promos"), patch.get("paused_promos"), patch.get("weekly")):
+                if isinstance(value, (list, dict)):
+                    mentioned.update(slug for slug in value if isinstance(slug, str))
+        if mentioned & deleted:
+            raise WriteRefused("cannot assign a deleted campaign", status=409)
     rows = dict(_decoded(raw, collection))
     before = rows.get(doc_id)
     if doc_id in rows and before is None:
@@ -399,6 +411,9 @@ def write(collection, doc_id, patch, actor, env=None, *, opener=None, signer=Non
             operator_config.validate_captions(patch["captions"])
         except operator_config.ConfigInvalid as ex:
             raise WriteRefused(str(ex)) from ex
+    import campaign_deletion
+    if campaign_deletion.enabled(env) and collection in ("groups", "campaigns"):
+        return campaign_deletion.transactional_write(collection, doc_id, patch, actor, env, dry_run)
     now = now or time.time
     fetch_args = {"opener": opener, "signer": signer, "now": now, "sleep": sleep}
     # Changing one existing group cannot invalidate another group. Only its

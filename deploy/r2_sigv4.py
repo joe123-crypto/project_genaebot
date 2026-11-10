@@ -21,9 +21,10 @@ This is the easy end of SigV4 and deliberately stays there:
 
 R2 takes ``us-east-1`` or ``auto`` as the region and ignores it otherwise.
 
-Credentials live on the operator's machine. They are never written into the
-container, never put in Railway's service variables, and the gateway only ever
-makes unauthenticated GETs.
+Upload credentials live on the operator's machine. Campaign retirement also
+uses this signer for exact-key DELETEs in the console API, whose separate
+bucket-scoped credentials are removed from the gateway environment by the
+entrypoint. Broadcast runners continue to make only unauthenticated GETs.
 """
 
 import datetime

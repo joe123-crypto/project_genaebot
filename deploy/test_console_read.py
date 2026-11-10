@@ -112,7 +112,7 @@ class ConsoleReadTests(unittest.TestCase):
 
     def test_campaigns_describes_every_declared_promo_in_slot_order(self):
         payload = self.ok("campaigns", "--date", DAY)
-        self.assertEqual(set(payload), {"date", "adAssets", "campaigns"})
+        self.assertEqual(set(payload), {"date", "adAssets", "campaigns", "deletions"})
         self.assertEqual(set(payload["adAssets"]), AD_ASSET_KEYS)
         records = payload["campaigns"]
         self.assertTrue(records)

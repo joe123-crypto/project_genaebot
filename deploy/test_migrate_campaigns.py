@@ -86,6 +86,13 @@ class Conversion(unittest.TestCase):
         return TOOL.convert(self.entry, self.manifest, self.store, write=write, actor="tester",
                             workspace=self.workspace, out=self.out)
 
+    def test_retired_campaign_cannot_be_converted_or_restored(self):
+        self.store.docs["campaigns"]["genaie"] = config.encode_fields({"deleted": True, "enabled": False})
+        with self.assertRaises(TOOL.MigrationError):
+            self.convert()
+        self.assertEqual(self.store.commits, [])
+        self.assertTrue(self.store.get("campaigns", "genaie")["deleted"])
+
     def test_dry_run_reports_and_writes_nothing(self):
         before = json.dumps(self.store.docs, sort_keys=True)
         self.assertFalse(self.convert(write=False))

@@ -534,6 +534,11 @@ def assemble(raw):
     membership["groups"] = dict((jid, _without(data, RANK))
                                 for jid, data in decoded["groups"])
     enabled = dict((slug, data.get("enabled", True)) for slug, data in decoded["campaigns"])
+    # Retain negative switches while removing definitions and stale references.
+    import campaign_deletion
+    deleted = campaign_deletion.deleted_slugs(raw)
+    membership = campaign_deletion.strip_membership(membership, deleted)
+    enabled.update({slug: False for slug in deleted})
     return membership, enabled, undecodable
 
 
@@ -860,6 +865,10 @@ def load(env=None, *, opener=None, signer=None, now=None, sleep=None, log=None,
     except (ConfigUnavailable, ConfigInvalid) as ex:
         if not allow_snapshot:
             raise
+        import campaign_deletion
+        if campaign_deletion.enabled(env):
+            log("Firestore unusable; cannot verify campaign deletion")
+            raise ConfigUnavailable("cannot verify campaign deletion; stale snapshots are disabled", **getattr(ex, "metadata", {})) from ex
         log("Firestore unusable (%s); using the last-known-good snapshot" % ex)
         try:
             return scope_snapshot(env, str(ex), now=now, **scope)
@@ -868,7 +877,9 @@ def load(env=None, *, opener=None, signer=None, now=None, sleep=None, log=None,
 
     at = datetime.datetime.fromtimestamp(now(), datetime.timezone.utc)
     stamp = at.strftime("%Y-%m-%dT%H:%M:%SZ")
-    current = {"fetchedAt": stamp, "membership": membership, "enabled": enabled}
+    import campaign_deletion
+    deleted = sorted(campaign_deletion.deleted_slugs(raw))
+    current = {"fetchedAt": stamp, "membership": membership, "enabled": enabled, "deleted": deleted}
     try:
         previous = _read_json(snapshot_path(directory))
         # Snapshot first, change log second: if the log append fails we lose a
@@ -885,7 +896,7 @@ def load(env=None, *, opener=None, signer=None, now=None, sleep=None, log=None,
     report["campaigns"] = campaign_problems
     _report(report, log)
     return {"source": "firestore", "membership": clean, "enabled": switches,
-            "report": report, "fetchedAt": stamp, "degraded": None}
+            "report": report, "fetchedAt": stamp, "degraded": None, "deleted": deleted}
 
 
 def scope_snapshot(env, why, *, now=None, campaign=None, group_ids=None, include_groups=True, include_campaigns=True):

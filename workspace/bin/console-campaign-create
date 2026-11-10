@@ -24,7 +24,15 @@ def main():
         loader.exec_module(bridge)
         store = campaigns.Store(bridge.write_env())
         if data == {"reconcile": True}:
-            result = {"pending": campaigns.reconcile_all(store)}
+            import campaign_deletion
+            epoch = console_config._epoch(operator_config.state_dir())
+            retired_pending = campaign_deletion.reconcile_all(store) if campaign_deletion.enabled() else 0
+            changed = epoch != console_config._epoch(operator_config.state_dir())
+            result = {"pending": campaigns.reconcile_all(store), "deletionsPending": retired_pending, "deletionsChanged": changed}
+        elif isinstance(data, dict) and "delete" in data:
+            campaigns.need(not set(data) - {"delete", "actor"}, "invalid deletion request")
+            import campaign_deletion
+            result = campaign_deletion.delete(data["delete"], data.get("actor"), store)
         else:
             with console_config.mutation():
                 result = campaigns.create(data, store)

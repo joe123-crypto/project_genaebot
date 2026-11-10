@@ -729,6 +729,15 @@ def _write_bytes(path, body):
 
 
 def ensure(entry, env=None, *, opener=None, sleep=None, log=None):
+    # Serialize cache fills with retirement, including stale mirror lookups.
+    import campaign_deletion
+    with campaign_deletion.submission(entry["campaign"], env) as active:
+        if not active:
+            raise AssetsUnavailable("this campaign has been deleted")
+        return _ensure(entry, env, opener=opener, sleep=sleep, log=log)
+
+
+def _ensure(entry, env=None, *, opener=None, sleep=None, log=None):
     """The local path for ``entry``, downloading and verifying it if needed.
 
     The cached file is re-hashed on every call. That is a few milliseconds

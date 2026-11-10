@@ -1299,8 +1299,13 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
             continue
         idx, caption, _ = caption_for(jid, variants, day=day, allowed=weekly.get(jid),
                                       tracking=tracking, bot_number=number)
-        ok, out = send_ad(jid, caption, variant_images.get(idx, image_path),
-                          account=account)
+        import campaign_deletion
+        with campaign_deletion.submission(promo_config.promo_key(promo_name)) as active:
+            if not active:
+                print("Campaign deleted; stopping remaining sends.")
+                break
+            ok, out = send_ad(jid, caption, variant_images.get(idx, image_path),
+                              account=account)
         attempted += 1
         if (not ok) and (not is_permission_error(out)) and is_not_dispatched_error(out):
             # Link was mid-reconnect: the gateway queued this send and replays it

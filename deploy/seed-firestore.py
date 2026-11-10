@@ -342,8 +342,30 @@ def main(argv):
             if not args.write:
                 print("dry run: nothing written (use --write)")
                 return 0
-            operator_writer.commit(creds["project_id"], token, writes,
-                                   strays if args.prune else [])
+            # A seed is a migration, not a way to undo live campaign deletions.
+            # Read retirement markers in the same transaction as the replacements.
+            import console_campaigns
+            import campaign_deletion
+            import base64
+            store_env = dict(os.environ, GCP_SERVICE_ACCOUNT_B64=base64.b64encode(json.dumps(creds).encode()).decode(), GENAIE_FIRESTORE_DIR=cache)
+            store_env.pop("GCP_SERVICE_ACCOUNT_FILE", None)
+            store = console_campaigns.Store(store_env)
+            store.begin()
+            try:
+                current = {name: store.list(name) for name in operator_config.COLLECTIONS}
+                if campaign_deletion.deleted_slugs(current):
+                    raise SeedError("store contains retired campaigns; reseeding would restore deleted configuration and is refused")
+                if current != raw:
+                    raise SeedError("store changed while preparing the seed; refresh the plan")
+                operations = [{"update": {"name": "%s/%s/%s" % (store.base, collection, key), "fields": operator_config.encode_fields(fields)},
+                               "currentDocument": {"exists": exists}} for collection, key, fields, exists in writes]
+                operations += [{"delete": "%s/%s/%s" % (store.base, collection, key)} for collection, key in (strays if args.prune else [])]
+                if len(operations) > 500:
+                    raise SeedError("seed exceeds the atomic write limit; use a separate controlled migration")
+                store.request(":commit", {"transaction": store.transaction, "writes": operations})
+                store.transaction = None
+            finally:
+                store.rollback()
             print("written to project %s" % creds["project_id"])
             return 0
     except SeedError as ex:

@@ -31,7 +31,7 @@ def _identity(env):
     creds = config.credentials(env)
     # Hash the credential context; no private key is persisted in this cache.
     return hashlib.sha256(json.dumps(
-        [config.API_ROOT, creds, env.get("GENAIE_CONSOLE_CONFIG_GENERATION", "")],
+        [config.API_ROOT, creds, env.get("GENAIE_CONSOLE_CONFIG_GENERATION", ""), env.get("GENAIE_CAMPAIGN_DELETION", "")],
         sort_keys=True).encode()).hexdigest()
 
 
@@ -113,10 +113,12 @@ def load(env=None, *, fresh=False, now=None, log=None, campaign=None, group_ids=
             entry.update(error=str(exc), metadata=exc.metadata)
             # A strict save read must fail, while background displays may
             # continue using the validated snapshot during the cooldown.
-            try:
-                entry["result"] = config.scope_snapshot(env, str(exc), now=now, **scope)
-            except config.ConfigUnavailable:
-                pass
+            import campaign_deletion
+            if not campaign_deletion.enabled(env):
+                try:
+                    entry["result"] = config.scope_snapshot(env, str(exc), now=now, **scope)
+                except config.ConfigUnavailable:
+                    pass
             raise
         else:
             entry["result"] = result

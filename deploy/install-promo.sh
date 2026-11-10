@@ -41,6 +41,18 @@ register_promo_cron() {
     false) enable_flag=--disable; add_flags=(--disabled) ;;
     *) printf 'ERROR: invalid enabled state for %s\n' "$name" >&2; return 1 ;;
   esac
+  local slug retirement_status
+  slug="$(jq -r --arg name "$name" '.promos[] | select(.name == $name) | .slug' "$(dirname "${BASH_SOURCE[0]}")/promo-crons.json")"
+  if "${GATEWAY_EXEC[@]}" python3 /home/joseph/.openclaw/workspace/bin/console-campaign-check "$slug"; then
+    :
+  else
+    retirement_status=$?
+    if [ "$retirement_status" -eq 3 ]; then
+      printf '%s was deleted from the console; skipping installation.\n' "$name"
+      return 0
+    fi
+    return "$retirement_status"
+  fi
   local command_argv
   command_argv="$(printf '["python3","%s"]' "$script")"
 
@@ -114,6 +126,18 @@ register_promo_cron() {
       '.jobs[] | select(.name == $name) |
        "  schedule=\(.schedule.expr) tz=\(.schedule.tz) timeout=\(.payload.timeoutSeconds) enabled=\(.enabled)"' >&2
     return 1
+  fi
+
+  # Close the race with a deletion committed while the CLI was registering.
+  if "${GATEWAY_EXEC[@]}" python3 /home/joseph/.openclaw/workspace/bin/console-campaign-check "$slug"; then
+    :
+  else
+    retirement_status=$?
+    if [ "$retirement_status" -eq 3 ]; then
+      "${openclaw[@]}" cron rm "$existing_id" >/dev/null
+      return 0
+    fi
+    return "$retirement_status"
   fi
 
   printf '%s cron registered (%s, %s %s, timeout %ss).\n' \
