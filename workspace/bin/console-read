@@ -387,11 +387,14 @@ def asset_entries(slug):
 def campaign_records(day, only_slug=None, include_assets=True):
     m = membership()
     declared = manifest()
+    # A campaign converted to data keeps its manifest entry until the file path
+    # is retired. Its record comes from the store, once, not from both.
+    converted = console_campaigns.definitions(m)
 
     records = []
     for entry in declared.get("promos", []):
         slug = entry["slug"]
-        if only_slug is not None and slug != only_slug:
+        if slug in converted or (only_slug is not None and slug != only_slug):
             continue
         script = script_path(entry["script"])
         captions = []
@@ -719,7 +722,9 @@ def campaign_edit_state(slug, captions_only=False):
         if captions_only:
             raise NotFound("unknown campaign %r" % slug)
         return {"campaign": None}
-    cron_on = promo_enabled(declared) if declared else doc.get("scheduleStatus") == "ready"
+    cron_on = promo_enabled(declared) if declared else True
+    if doc and doc.get("kind") == "console":
+        cron_on = cron_on and doc.get("scheduleStatus") == "ready"
     enabled = store_on and cron_on
     if not captions_only:
         return {"campaign": {"slug": slug, "enabled": enabled, "storeEnabled": store_on, "cronEnabled": cron_on}}
@@ -742,7 +747,8 @@ def navigation():
         if promo_config.mode()[0] != promo_config.FIRESTORE:
             m = membership()
             review = sum(1 for row in m["groups"].values() if promo_membership.status_of(row) != "active")
-            total = len(manifest().get("promos", [])) + len(console_campaigns.definitions(m))
+            total = len(set(row["slug"] for row in manifest().get("promos", []))
+                        | set(console_campaigns.definitions(m)))
         else:
             import urllib.request
             import time
@@ -759,7 +765,11 @@ def navigation():
                                            "value": operator_config.encode_value(value)}},
                     opener=urllib.request.urlopen, sleep=time.sleep)
             review = count("groups", "status", ["on-hold", "admin-only", "not-a-member"])
-            total = len(manifest().get("promos", [])) + count("campaigns", "kind", "console")
+            # A converted campaign is both declared and kind=console; only it
+            # carries its declared job name, so that is how to count it once.
+            names = [row["name"] for row in manifest().get("promos", []) if row.get("name")]
+            total = (len(manifest().get("promos", [])) + count("campaigns", "kind", "console")
+                     - (count("campaigns", "jobName", names) if names else 0))
         return {"campaignTotal": total, "groupsNeedingReview": review}
     try:
         return console_config.cached_summary("navigation", read)

@@ -26,7 +26,7 @@ SHA = hashlib.sha256(BODY).hexdigest()
 
 def payload():
     return {"requestId": "12345678-1234-1234-1234-123456789abc", "slug": "demo", "name": "Demo Campaign", "enabled": False,
-            "captions": ["Hello {bot_number}"], "schedule": {"time": "09:00", "timezone": "Africa/Harare", "weekdays": list(range(7))},
+            "captions": ["Hello {bot_number}"], "schedule": {"time": "09:05", "timezone": "Africa/Harare", "weekdays": list(range(7))},
             "groups": [{"jid": JID_A}, {"jid": JID_B}],
             "images": [{"filename": "one.png", "key": "ads/demo/%s.png" % SHA, "sha256": SHA, "bytes": len(BODY), "contentType": "image/png"}]}
 
@@ -41,8 +41,18 @@ class MemoryStore:
     def get(self, collection, key):
         fields = self.docs.get(collection, {}).get(key)
         return config.decode_fields(fields) if fields is not None else None
-    def list(self, collection):
-        return copy.deepcopy(list(self.docs.get(collection, {}).items()))
+    def list(self, collection, where=None):
+        rows = copy.deepcopy(list(self.docs.get(collection, {}).items()))
+        if where is None:
+            return rows
+        # The two filters the code under test issues: equality, and membership
+        # of a string in an array field.
+        clause = where["fieldFilter"]
+        name, wanted = clause["field"]["fieldPath"], config.decode_value(clause["value"])
+        def keep(fields):
+            value = config.decode_fields(fields).get(name)
+            return wanted in (value or []) if clause["op"] == "ARRAY_CONTAINS" else value == wanted
+        return [(key, fields) for key, fields in rows if keep(fields)]
     def begin(self):
         self.in_transaction = True
     def rollback(self):
@@ -171,8 +181,52 @@ class Creation(unittest.TestCase):
         result = cc.create(self.data, self.store, ENV, verify=lambda *args: None, reconcile=lambda slug, store: cc.reconcile_one(slug, store, gateway))
         self.assertEqual(result["scheduling"], "ready")
         self.assertTrue(gateway.jobs[0]["enabled"])
-        self.assertEqual(gateway.jobs[0]["schedule"]["expr"], "0 9 * * 1,3,5")
+        self.assertEqual(gateway.jobs[0]["schedule"]["expr"], "5 9 * * 1,3,5")
         self.assertFalse(any("run" in call for call in gateway.calls))
+    def test_on_the_hour_schedules_and_unreachable_group_counts_are_refused(self):
+        on_the_hour = dict(payload(), schedule={"time": "09:00", "timezone": "Africa/Harare", "weekdays": [0]})
+        with self.assertRaisesRegex(writer.WriteRefused, "not on the hour"): cc.validate(on_the_hour)
+        # The ceilings the repository's CI held campaigns to while their target
+        # lists were committed files: 30 groups an hour, 60 in the two-hour job.
+        for timeout, fits in ((3600, 30), (5400, 45), (7200, 60)):
+            self.assertIsNone(cc.spacing_problem(fits, timeout))
+            self.assertIn("full spacing", cc.spacing_problem(fits + 1, timeout))
+        crowded = dict(payload(), timeoutSeconds=600, groups=[{"jid": "1203630000000000%02d@g.us" % n} for n in range(6)])
+        with self.assertRaisesRegex(writer.WriteRefused, "full spacing"): cc.validate(crowded)
+    def test_converted_campaign_keeps_its_job_and_state_under_its_old_name(self):
+        self.data["enabled"] = True
+        self.create()
+        self.store.docs["campaigns"]["demo"].update(config.encode_fields({"jobName": "demo-promo"}))
+        self.assertEqual(cc.job_name("demo", self.store.get("campaigns", "demo")), "demo-promo")
+        self.assertEqual(cc.job_name("demo", {"jobName": "../escape"}), "console-demo-promo")
+        # The job the installer registered: same name, still running the script.
+        gateway = FakeGateway()
+        gateway.jobs.append({"id": "legacy", "name": "demo-promo", "enabled": True,
+                             "schedule": {"expr": "5 9 * * *", "tz": "Africa/Harare"},
+                             "payload": {"argv": ["python3", "/workspace/cron/demo-promo/post_ad.py"],
+                                         "cwd": "/workspace", "timeoutSeconds": 7200}})
+        cc.reconcile_one("demo", self.store, call=gateway)
+        self.assertEqual([job["id"] for job in gateway.jobs], ["legacy"])
+        self.assertEqual(gateway.jobs[0]["payload"]["argv"][-1], "demo")
+        self.assertTrue(gateway.jobs[0]["payload"]["argv"][-2].endswith("bin/run-console-campaign"))
+        self.assertTrue(gateway.jobs[0]["enabled"])
+        self.assertEqual(self.store.get("campaigns", "demo")["scheduleStatus"], "ready")
+        membership, enabled, _ = config.assemble({name: self.store.list(name) for name in config.COLLECTIONS})
+        source = {"mode": "firestore", "source": "firestore", "enabled": True, "switches": enabled,
+                  "membership": membership, "doc": promo_membership_payload(membership)}
+        engine = Mock(return_value=0)
+        self.assertEqual(cc.run_campaign("demo", now=dt.datetime(2026, 11, 9, 9, tzinfo=dt.timezone.utc),
+                                         resolve=lambda _: source, ensure=lambda _: "one.png", broadcast=engine), 0)
+        self.assertEqual(engine.call_args.kwargs["state_file"],
+                         str(Path(self.temp.name) / "runtime" / "cron-state" / "demo-promo" / "state.json"))
+        self.assertEqual(engine.call_args.kwargs["promo_name"], "demo-promo")
+        # A console-created campaign stays where its state has always been.
+        created = cc.state_directory("demo", {"kind": "console"})
+        self.assertEqual(created, Path(self.temp.name) / "runtime" / "firestore" / "runtime" / "cron-state" / "console-demo-promo")
+    def test_images_from_assets_is_the_enabled_rotation_and_round_trips(self):
+        image = self.data["images"][0]
+        entry = cc.image_entry("demo", image, 0)
+        self.assertEqual(cc.images_from_assets([entry, dict(entry, filename="off.png", enabled=False)]), [image])
     def test_asset_verification_checks_magic_size_and_digest(self):
         image = self.data["images"][0]
         cc.verify_image(image, ENV, opener=lambda *args, **kwargs: io.BytesIO(BODY))
@@ -230,6 +284,24 @@ class Creation(unittest.TestCase):
         self.assertTrue(preview["enabled"])
         self.assertTrue(all(row["sendsToday"] for row in preview["groups"]))
         self.assertEqual({row["account"] for row in preview["groups"]}, {"default", "ads"})
+
+    def test_a_converted_campaign_is_listed_once_from_the_store(self):
+        self.data["enabled"] = True
+        self.create()
+        self.store.docs["campaigns"]["demo"].update(config.encode_fields({"scheduleStatus": "ready", "jobName": "demo-promo"}))
+        m, enabled, _ = config.assemble({name: self.store.list(name) for name in config.COLLECTIONS})
+        source = {"mode": "firestore", "source": "firestore", "enabled": True, "storeSwitches": enabled,
+                  "switches": enabled, "membership": m}
+        loader = importlib.machinery.SourceFileLoader("campaign_records_test", str(Path(__file__).resolve().parents[1] / "bin/console-read"))
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        bridge = importlib.util.module_from_spec(spec); loader.exec_module(bridge)
+        # Still declared, with a script that no longer needs to exist.
+        declared = {"promos": [{"slug": "demo", "name": "demo-promo", "cron": "5 9 * * *", "tz": "Africa/Harare",
+                                "script": "/home/joseph/.openclaw/workspace/cron/demo-promo/post_ad.py"}]}
+        with patch.object(bridge, "resolved", return_value=source), patch.object(bridge, "manifest", return_value=declared):
+            rows = [row for row in bridge.campaign_records(dt.date(2026, 11, 9)) if row["slug"] == "demo"]
+        self.assertEqual([(row["source"], row["jobName"], row["error"]) for row in rows], [("console", "demo-promo", None)])
+        self.assertEqual(rows[0]["captions"], ["Hello {bot_number}"])
 
     def test_runner_passes_two_line_targets_and_local_day_to_real_engine(self):
         self.data["enabled"] = True
