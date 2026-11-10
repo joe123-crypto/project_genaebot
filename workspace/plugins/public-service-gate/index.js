@@ -23,6 +23,7 @@ import { recordAdRefs } from "./lib/ad-refs.js";
 import { BOREHOLE_SERVICES, lookupBorehole } from "./services/borehole.js";
 import { recordAndCheck as checkSiblingLine } from "./lib/sibling-lines.js";
 import { containsDash, stripDashes } from "./lib/style.js";
+import { getReplyPacer, isReplyPacingEnabled } from "./lib/reply-pacing.js";
 import {
   FAILSAFE_STOP_PRIORITY,
   clearFailsafeStopSuppression,
@@ -64,6 +65,11 @@ const PUBLIC_SERVICE_ACTIONS = [
   { name: "cv_maker_start", service: "cvMaker" },
 ];
 const SERVICE_DISABLED_UNAVAILABLE = "That isn't available here right now.";
+// Runs after every other outbound hook, so a cancelled reply is never held.
+const REPLY_PACING_PRIORITY = -10;
+// Above the longest hold (MAX_HOLD_MS in lib/reply-pacing.js): if the runner
+// gives up first, the reply is sent at once rather than lost.
+const REPLY_PACING_TIMEOUT_MS = 120_000;
 
 // The refusal names only the services actually switched on, so a chat with the
 // CV maker disabled never offers a CV in the same breath as declining one.
@@ -274,6 +280,34 @@ export default {
       return { content: rewritten };
     });
 
+    // Holds a customer reply for as long as a person would take to type it (see
+    // lib/reply-pacing.js). Only a chat with a recent inbound on record is held,
+    // so broadcasts, alerts and admin chats pass straight through. Returns
+    // nothing: it never rewrites or cancels.
+    api.on(
+      "message_sending",
+      async (event, ctx) => {
+        if (!isEnabled(api) || !isReplyPacingEnabled()) return;
+        const channel = getEventChannel(event, ctx);
+        if (!isWhatsAppChannel(channel)) return;
+        try {
+          const accountId = getEventAccountId(event, ctx) || "default";
+          const content = typeof event?.content === "string" ? event.content : "";
+          // The reply target is usually the sender's phone, but WhatsApp may
+          // address the same chat by a different id than the inbound carried.
+          for (const recipient of [getOutboundRecipient(event), ctx?.senderId, ctx?.from, ctx?.conversationId]) {
+            const held = await getReplyPacer().pauseBeforeSend(accountId, recipient, content);
+            if (held === null) continue;
+            api.logger?.info?.(`public-service-gate: paced WhatsApp reply held ${Math.round(held)}ms account=${accountId}`);
+            break;
+          }
+        } catch (err) {
+          api.logger?.warn?.(`public-service-gate: reply pacing failed open (${String(err)})`);
+        }
+      },
+      { priority: REPLY_PACING_PRIORITY, timeoutMs: REPLY_PACING_TIMEOUT_MS },
+    );
+
     api.on("before_dispatch", trackStandbyActivity(async (event, ctx) => {
       if (!isEnabled(api)) return;
       const channel = getEventChannel(event, ctx);
@@ -314,6 +348,22 @@ export default {
       // customer either, so its DMs are not counted.
       if (!admin && !siblingLine.sibling) recordAdRefs(api, sender, text);
       const gateOn = memberGateEnabled(api);
+
+      // Only a customer's chat is paced: the operator and the sibling line get
+      // no record, so their replies are never held.
+      const accountId = getEventAccountId(event, ctx) || "default";
+      const paced = !admin && !siblingLine.sibling && isReplyPacingEnabled();
+      if (paced) getReplyPacer().noteInbound(accountId, sender, text);
+      // Taken only when the message is about to reach the agent. A reply the
+      // gate sends itself is held at send time instead.
+      const pauseBeforeAgent = async () => {
+        if (!paced) return;
+        try {
+          await getReplyPacer().pauseBeforeReply(accountId, sender);
+        } catch (err) {
+          api.logger?.warn?.(`public-service-gate: reply pacing failed open (${String(err)})`);
+        }
+      };
 
       // Admin-only CV order settlement from chat: "cv approve <id>" / "cv deny
       // <id>". This is the whole payment control, so it is gated on
@@ -378,13 +428,15 @@ export default {
       // Admins fall through to the main agent.
       if (gateOn) {
         if (admin) return;
+        let claimed;
         try {
-          return await handleIntake(api, sender, text, getEventAccountId(event, ctx) || "default");
+          claimed = await handleIntake(api, sender, text, accountId);
         } catch (err) {
           if (isQueueFullError(err)) return busyReply();
           api.logger?.warn?.(`public-service-gate: intake failed (${String(err)})`);
-          return;
         }
+        if (claimed === undefined) await pauseBeforeAgent();
+        return claimed;
       }
 
       // Classic allowlist mode (gate off): only configured public users reach the
@@ -401,6 +453,7 @@ export default {
       api.logger?.info?.(
         `public-service-gate: member WhatsApp text deferred to agent sender=${sender} textLen=${text.length}`,
       );
+      await pauseBeforeAgent();
       return;
     }));
   },

@@ -23,7 +23,7 @@
         ]
       },
       "workspace": "/home/joseph/.openclaw/agent-workspace-admin",
-      "typingMode": "instant",
+      "typingMode": "message",
       "typingIntervalSeconds": 6,
       "blockStreamingDefault": "off",
       "blockStreamingBreak": "text_end",
@@ -395,6 +395,11 @@
     "ttlHours": 168
   },
   "messages": {
+    "inbound": {
+      "byChannel": {
+        "whatsapp": 5000
+      }
+    },
     "queue": {
       "mode": "steer",
       "byChannel": {
