@@ -199,6 +199,9 @@ test('handling never rejects into the channel lifecycle', async t => {
 
 test('abandoned results are swept, collected ones are not waited for', async t => {
   const f = fixture(t), a = f.create({ resultTtlMs: 0 });
+  // start() creates these asynchronously. A manual poll before requests exists
+  // legitimately returns early, so make this sweep fixture ready explicitly.
+  fs.mkdirSync(path.join(f.queue(), 'requests'), { recursive: true });
   fs.mkdirSync(path.join(f.queue(), 'results'), { recursive: true });
   const stale = path.join(f.queue(), 'results', `${crypto.randomUUID()}.json`);
   fs.writeFileSync(stale, '{}');

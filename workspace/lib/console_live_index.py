@@ -46,6 +46,7 @@ class Index:
         self.stream = stream or firestore_stream
         self.error = None
         self.connected = False
+        self.restart_requested = False
         self.counters = {"syncDocuments": 0, "rebuilds": 0, "activeStreams": 0,
                          "indexedRequests": 0, "returnedRows": 0}
         fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
@@ -101,6 +102,32 @@ class Index:
         return {"revision": str(point["revision"]), "syncedAt": stamp, "lagSeconds": lag,
                 "stale": not self.connected or bool(self.error),
                 "state": "syncing" if not point["readTime"] else "stale" if not self.connected or self.error else "live"}
+
+    def request_boundary(self):
+        """Resume the shared stream to obtain a prompt consistent read boundary.
+
+        An idle Listen may not emit a new read_time for a minute. Reconnecting
+        with the durable resume positions confirms writes without a full read.
+        """
+        self.touch()
+        with self.condition:
+            self.restart_requested = True
+            if self.cancel:
+                self.cancel()
+            self.condition.notify_all()
+
+    def await_boundary(self, stamp, timeout=5):
+        target = datetime.datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        deadline = time.monotonic() + timeout
+        with self.condition:
+            while True:
+                point = self.checkpoint()["readTime"]
+                if point and datetime.datetime.fromisoformat(point.replace("Z", "+00:00")) >= target:
+                    return True
+                remaining = deadline - time.monotonic()
+                if self.stopped or remaining <= 0:
+                    return False
+                self.condition.wait(remaining)
 
     def documents(self, collection):
         with self.db() as db:
@@ -175,6 +202,8 @@ class Index:
                        (generation, revision + int(changed), read_time, json.dumps(tokens)))
             db.execute("DELETE FROM docs WHERE generation != ?", (generation,))
         self.error = None
+        with self.condition:
+            self.condition.notify_all()
 
     def _run(self):
         delay = 1
@@ -185,6 +214,7 @@ class Index:
                     self.condition.wait(1)
                 if self.stopped:
                     return
+                self.restart_requested = False
             try:
                 self.counters["activeStreams"] = 1
                 self.stream(self)
@@ -194,8 +224,12 @@ class Index:
                 self.error = type(exc).__name__
                 self.connected = False
                 with self.condition:
-                    self.condition.wait(delay)
-                delay = min(delay * 2, 300)
+                    if self.restart_requested:
+                        self.error = None
+                        delay = 1
+                    else:
+                        self.condition.wait(delay)
+                        delay = min(delay * 2, 300)
             finally:
                 self.counters["activeStreams"] = 0
 
@@ -251,7 +285,7 @@ def firestore_stream(index):
     index.cancel = cancel
     def monitor():
         while not done.wait(0.5):
-            if index.stopped or index.clock() >= index.lease_until:
+            if index.stopped or index.restart_requested or index.clock() >= index.lease_until:
                 cancel()
                 return
     threading.Thread(target=monitor, daemon=True).start()

@@ -1351,4 +1351,14 @@ Compare Firestore reads before/after ordinary viewing and searches; browser
 requests should not trigger a new config scan. Writes still require live reads.
 A post-write fence retains existing UI state until synchronization passes the
 write boundary. Stale indexed displays never become targeting or save authority.
+The fence requests an incremental stream resume to confirm the write promptly.
+Its bounded confirmation wait does not hold the display projection lock, so
+telemetry requests remain independent of Firestore availability. Delayed
+revision-aware responses carry stale/unchanged metadata rather than old rows.
 Roll back the console before the bot, retaining the database on the volume.
+
+Queue-sweep test fixtures create both request and result directories before a
+manual poll. Production startup creates them asynchronously and starts its own
+poll only afterward; tests must not depend on the timing of that initialization.
+Run `node --test deploy/railway/whatsapp-group-actions.test.mjs` alongside the
+portable validation suite when changing those fixtures.
