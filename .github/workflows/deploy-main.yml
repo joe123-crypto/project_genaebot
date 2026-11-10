@@ -73,6 +73,9 @@ jobs:
           )
           docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.11.0 --exclude=SC2016 "${files[@]}"
 
+      - name: Install console stream dependencies
+        run: python3 -m pip install -r deploy/railway/requirements-console.txt
+
       - name: Run repository validation and tests
         run: ./deploy/ci-check.sh --base-sha "$BASE_SHA" --head-sha "$GITHUB_SHA"
 

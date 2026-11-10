@@ -11,7 +11,7 @@ import urllib.error
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import console_config as cache
 import operator_config as config
-from test_operator_config import Harness, FakeFirestore, JID_A, creds_b64
+from test_operator_config import Harness, FakeFirestore, JID_A, JID_B, creds_b64
 
 
 def process_read(env, count, results):
@@ -37,6 +37,46 @@ class ConsoleCacheTests(Harness):
 
     def path(self):
         return os.path.join(config.state_dir(self.env), cache.CACHE_FILE)
+
+    def test_full_directory_seeds_campaign_picker_and_settings_with_zero_reads(self):
+        full = self.display()
+        requests = len(self.firestore.requests)
+        for scope, expected_ids in (({"campaign": "cv"}, {JID_B}),
+                                    ({"campaign": "genaie"}, {JID_A, JID_B}),
+                                    ({"group_ids": [JID_A]}, {JID_A}),
+                                    ({"include_groups": False, "include_campaigns": False}, set())):
+            result = self.display(**scope)
+            self.assertEqual(set(result["membership"]["groups"]), expected_ids)
+            self.assertEqual(result["membership"]["defaults"], full["membership"]["defaults"])
+            if scope.get("include_campaigns") is False:
+                self.assertEqual(result["enabled"], {})
+                self.assertEqual(result["membership"]["promos"], {})
+            self.assertEqual(result["fetchedAt"], full["fetchedAt"])
+            self.assertEqual(len(self.firestore.requests), requests)
+        self.assertEqual(self.display()["membership"], full["membership"])
+
+    def test_broader_cache_does_not_bypass_fresh_expiry_or_mutation(self):
+        self.display()
+        for change in (lambda: None, lambda: self.clock.__setitem__(0, self.clock[0] + cache.TTL_SECONDS),
+                       lambda: cache.invalidate(self.env)):
+            change()
+            before = len(self.firestore.requests)
+            self.display(group_ids=[JID_A], fresh=True)
+            self.assertGreater(len(self.firestore.requests), before)
+        self.display()
+        self.clock[0] += cache.TTL_SECONDS
+        before = len(self.firestore.requests)
+        self.display(campaign="cv")
+        self.assertGreater(len(self.firestore.requests), before)
+
+    def test_mutation_fences_broader_display_cache_for_normal_scoped_reads(self):
+        self.display()
+        self.firestore.store["groups"][JID_A]["name"] = config.encode_value("Changed")
+        cache.invalidate(self.env)
+        before = len(self.firestore.requests)
+        result = self.display(group_ids=[JID_A])
+        self.assertGreater(len(self.firestore.requests), before)
+        self.assertEqual(result["membership"]["groups"][JID_A]["name"], "Changed")
 
     def test_display_reuses_config_until_expiry_but_runtime_load_is_live(self):
         first = self.display()

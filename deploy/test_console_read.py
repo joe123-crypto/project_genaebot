@@ -82,9 +82,19 @@ class ConsoleReadTests(unittest.TestCase):
 
     # -- payload shapes ---------------------------------------------------
 
+    def test_group_controls_match_overview_without_loading_campaign_assets(self):
+        groups = self.ok("groups", "--date", DAY)
+        overview = self.ok("overview", "--date", DAY)
+        context = groups["context"]
+        for key in ("writes", "actions", "accounts", "capSettings"):
+            self.assertEqual(context[key], overview[key])
+        self.assertEqual({row["slug"]: row for row in context["campaigns"]}, {
+            row["slug"]: {key: row[key] for key in ("slug", "name", "enabled")}
+            for row in overview["campaigns"]})
+
     def test_groups_describes_every_known_group_the_same_way(self):
         payload = self.ok("groups", "--date", DAY)
-        self.assertEqual(set(payload), {"date", "disabledPromos", "groups", "discoveredGroups", "groupDiscovery"})
+        self.assertEqual(set(payload), {"date", "disabledPromos", "groups", "discoveredGroups", "groupDiscovery", "context"})
         self.assertEqual(payload["date"], DAY)
         self.assertTrue(payload["groups"])
         for row in payload["groups"]:

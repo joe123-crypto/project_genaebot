@@ -58,6 +58,12 @@ RUN apt-get update \
       passwd sudo ca-certificates tini util-linux \
  && rm -rf /var/lib/apt/lists/*
 
+# Firestore Listen uses one leased stream for every console display.
+COPY deploy/railway/requirements-console.txt /opt/requirements-console.txt
+RUN python3 -m venv /opt/console-python \
+ && /opt/console-python/bin/pip install --no-cache-dir -r /opt/requirements-console.txt
+ENV PATH="/opt/console-python/bin:${PATH}"
+
 # The node base image ships uid 1000 as `node`; use that uid for the gateway
 # account so host-owned bind mounts retain the expected ownership.
 RUN userdel -r node 2>/dev/null || true \

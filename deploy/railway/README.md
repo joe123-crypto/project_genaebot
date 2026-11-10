@@ -1318,3 +1318,37 @@ Deploy the bot before the console update. Old bots keep Save disabled with a
 companion-update explanation. Local `console-schedule --apply` attempts immediate
 application; run the console API worker for automatic pending retries. Neither
 deployment nor changing a start time triggers `cron run` or a catch-up broadcast.
+
+## Leased console display index
+
+The runtime image installs `deploy/railway/requirements-console.txt` into
+`/opt/console-python` and places that virtual environment first on PATH. The
+portable validation job installs the same pinned Firestore client before tests.
+This dependency supplies the public Listen RPC; campaign sends and writer
+validation continue using their existing authoritative Firestore adapters.
+
+Authenticated `/internal/console/live/*` routes share one display index on the
+volume at the private Firestore state directory's `console-live.sqlite`. The
+index watches settings, lines, campaigns, groups and campaign-deletion receipts.
+It publishes only complete, consistent generations and persists resume positions
+with document changes. Existing legacy routes remain available during rollout.
+
+Visible console resources renew a 90-second lease and poll compact responses
+at 30-second intervals. Expired leases stop the stream; returning viewers resume
+it. A bootstrap or required reset may read the indexed collections once. List,
+search, pagination and schedule requests use SQLite. Discovery and selected-group
+metrics use local inventory/telemetry, without a configuration collection fetch.
+Caption-editor requests load text/capabilities only; gallery requests are explicit.
+Line configuration summaries and cap settings also use the index, while actual
+WhatsApp connection status retains the independent gateway account API.
+
+Release this bot version through the existing pipeline before the matching
+console. Check `/internal/console/live/status` with the console bearer token:
+`sync.state`, `sync.syncedAt`, `sync.lagSeconds` and `counters` report stream health,
+bootstrap/rebuild work, active streams, indexed requests and returned rows.
+Verify ten-row pages and that unchanged polls contain freshness metadata only.
+Compare Firestore reads before/after ordinary viewing and searches; browser
+requests should not trigger a new config scan. Writes still require live reads.
+A post-write fence retains existing UI state until synchronization passes the
+write boundary. Stale indexed displays never become targeting or save authority.
+Roll back the console before the bot, retaining the database on the volume.
