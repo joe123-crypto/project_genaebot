@@ -208,5 +208,31 @@ class DescribeTest(Harness):
             TOOL.describe("cv", self.image("cv-ad.png", b""), 10, "cv-1")
 
 
+class ConvertedCampaigns(unittest.TestCase):
+    """A campaign converted from this repo runs from the ``images`` on its own
+    document, so indexing a picture has to refresh that list too."""
+
+    def entry(self, index, filename, enabled=True):
+        digest = "%064x" % index
+        return {"id": "cv-%d" % index, "campaign": "cv", "filename": filename,
+                "key": "ads/cv/%s.png" % digest, "sha256": digest, "bytes": 10 + index,
+                "content_type": "image/png", "rank": index * 10, "enabled": enabled,
+                "comment": None}
+
+    def test_only_a_changed_rotation_of_a_data_defined_campaign_is_rewritten(self):
+        first, second = self.entry(1, "one.png"), self.entry(2, "two.png")
+        retired = self.entry(3, "old.png", enabled=False)
+        campaigns = {"cv": [second, retired, first], "genaie": [dict(first, campaign="genaie")]}
+        want = [{"filename": "one.png", "key": first["key"], "sha256": first["sha256"],
+                 "bytes": 11, "contentType": "image/png"},
+                {"filename": "two.png", "key": second["key"], "sha256": second["sha256"],
+                 "bytes": 12, "contentType": "image/png"}]
+        # genaie is still a script campaign: the index alone decides its pictures.
+        self.assertEqual(TOOL.converted_rotations(campaigns, {"cv": {"images": want[:1]}}),
+                         {"cv": want})
+        self.assertEqual(TOOL.converted_rotations(campaigns, {"cv": {"images": want}}), {})
+        self.assertEqual(TOOL.converted_rotations(campaigns, {}), {})
+
+
 if __name__ == "__main__":
     unittest.main()

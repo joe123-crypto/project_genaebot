@@ -21,14 +21,20 @@ import urllib.request
 from zoneinfo import ZoneInfo
 
 import ad_assets
+import group_cleanup
 import operator_config as config
 import operator_writer as writer
 import promo_config
 import promo_membership
 
 SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+JOB_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}$")
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 MAX_REQUEST = 60 * 1024
+# Planning allowance per send for the spacing rule below. Deliberately the
+# pessimistic figure the repository's CI used while campaign target lists were
+# committed files, so moving the rule here changes no campaign's group ceiling.
+SPACING_SEND_SECONDS = 60
 
 
 def need(condition, message):
@@ -42,14 +48,51 @@ def valid_days(days):
             and len(set(days)) == len(days))
 
 
-def validate(data):
-    need(isinstance(data, dict), "campaign must be an object")
-    allowed = {"requestId", "slug", "name", "enabled", "captions", "images", "schedule", "groups",
-               "tracking", "comment", "weeklyComment", "timeoutSeconds", "failureAlertTo", "actor"}
-    need(not set(data) - allowed, "campaign has unexpected fields")
-    need(len(json.dumps(data).encode()) <= MAX_REQUEST, "campaign configuration exceeds 60 KiB")
-    need(isinstance(data.get("requestId"), str) and re.fullmatch(r"[a-f0-9-]{36}", data["requestId"]), "invalid request ID")
-    need(isinstance(data.get("slug"), str) and SLUG.fullmatch(data["slug"]) and data["slug"] != "new", "invalid or reserved campaign ID")
+def job_name(slug, campaign=None):
+    """The gateway cron job, and the ``runtime/cron-state`` directory, a campaign
+    runs under.
+
+    A campaign created in the console gets ``console-<slug>-promo``. One that
+    was converted from a script in this repository keeps the name it always had,
+    recorded as ``jobName``, so the conversion edits its existing job in place
+    and the run finds the same sent-today state and caption-rotation counters."""
+    name = (campaign or {}).get("jobName")
+    return name if isinstance(name, str) and JOB_NAME.fullmatch(name) else "console-%s-promo" % slug
+
+
+def state_directory(slug, campaign=None):
+    """Where a campaign's run keeps ``state.json``.
+
+    A converted campaign's state is where its script always kept it, at
+    ``runtime/cron-state/<jobName>`` under the state root, so its first run from
+    here sees today's sends and never repeats one. A console-created campaign
+    keeps the location it was first given, below the Firestore tier: moving it
+    now would hide the day's sends from the very next run."""
+    name = job_name(slug, campaign)
+    if (campaign or {}).get("jobName") == name:
+        return Path(group_cleanup.cron_state_dir()) / name
+    return Path(config.state_dir()) / "runtime" / "cron-state" / name
+
+
+def spacing_problem(count, timeout):
+    """Why ``count`` groups cannot be reached at full send spacing inside a
+    ``timeout``-second job, or ``None`` when they can.
+
+    The engine would still deliver every group by tightening its gaps, and
+    tightened gaps are exactly the fixed cadence the spacing exists to avoid. So
+    the ceiling is enforced where a campaign is saved, not discovered in a run."""
+    import promo_broadcast
+    worst = max(count - 1, 0) * promo_broadcast.DEFAULT_SEND_DELAY_MAX + count * SPACING_SEND_SECONDS
+    if worst < timeout:
+        return None
+    return ("%d groups cannot be reached at full spacing within %d seconds; "
+            "choose fewer groups or a longer timeout" % (count, timeout))
+
+
+def validate_definition(slug, data):
+    """The rules for a campaign's own fields, whoever is saving them: the
+    console's create request, or the one-off conversion of a repository
+    campaign (``deploy/migrate-campaigns-to-firestore.py``)."""
     need(isinstance(data.get("name"), str) and 0 < len(data["name"].strip()) <= 120, "enter a campaign name (at most 120 characters)")
     need(type(data.get("enabled")) is bool, "enabled must be boolean")
     captions = data.get("captions")
@@ -57,22 +100,13 @@ def validate(data):
     schedule = data.get("schedule")
     need(isinstance(schedule, dict) and not set(schedule) - {"time", "timezone", "weekdays"}, "invalid schedule")
     need(isinstance(schedule.get("time"), str) and re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", schedule["time"]), "invalid posting time")
+    # Every campaign firing at :00 makes the account's day perfectly periodic.
+    need(not schedule["time"].endswith(":00"), "choose a posting time that is not on the hour")
     need(valid_days(schedule.get("weekdays")), "choose campaign weekdays")
     try:
         ZoneInfo(schedule.get("timezone", ""))
     except (ValueError, KeyError, TypeError):
         raise writer.WriteRefused("invalid timezone")
-    groups = data.get("groups")
-    need(isinstance(groups, list) and 0 < len(groups) <= 100, "choose between 1 and 100 active groups")
-    seen = set()
-    for group in groups:
-        need(isinstance(group, dict) and not set(group) - {"jid", "weekdays", "paused"}, "invalid group assignment")
-        jid = group.get("jid")
-        need(isinstance(jid, str) and re.fullmatch(r"[0-9-]+@g\.us", jid) and jid not in seen, "invalid or duplicate group ID")
-        seen.add(jid)
-        need(type(group.get("paused", False)) is bool, "group pause must be boolean")
-        if "weekdays" in group:
-            need(valid_days(group["weekdays"]) and set(group["weekdays"]) <= set(schedule["weekdays"]), "group weekdays must be a nonempty subset of campaign weekdays")
     images = data.get("images")
     need(isinstance(images, list) and 0 < len(images) <= 20, "choose between 1 and 20 pictures")
     filenames, keys = set(), set()
@@ -80,17 +114,15 @@ def validate(data):
         need(isinstance(image, dict) and set(image) == {"filename", "key", "sha256", "bytes", "contentType"}, "invalid picture metadata")
         need(isinstance(image.get("filename"), str) and ad_assets.FILENAME_RE.fullmatch(image["filename"]), "invalid picture filename")
         try:
-            ad_assets._entry("%s-%s" % (data["slug"], index + 1), image_entry(data["slug"], image, index))
+            ad_assets._entry("%s-%s" % (slug, index + 1), image_entry(slug, image, index))
         except (ValueError, TypeError):
             raise writer.WriteRefused("invalid JPEG/PNG picture metadata (maximum 6 MiB)")
-        need(image["key"].startswith("ads/%s/" % data["slug"]), "picture belongs to a different campaign")
+        need(image["key"].startswith("ads/%s/" % slug), "picture belongs to a different campaign")
         need(image["filename"] not in filenames and image["key"] not in keys, "duplicate picture or filename")
         filenames.add(image["filename"])
         keys.add(image["key"])
     timeout = data.get("timeoutSeconds", 7200)
     need(type(timeout) is int and 60 <= timeout <= 7200, "timeout must be 60 to 7200 seconds")
-    for key in ("comment", "weeklyComment"):
-        need(isinstance(data.get(key, ""), str) and len(data.get(key, "")) <= 2000, "notes must be at most 2000 characters")
     phone = r"\+[1-9][0-9]{6,14}"
     need(isinstance(data.get("failureAlertTo", ""), str), "invalid failure alert number")
     if data.get("failureAlertTo"):
@@ -102,6 +134,34 @@ def validate(data):
         need(all(isinstance(value, str) and len(value) <= 1000 for value in tracking.values()), "invalid tracking text")
         if tracking.get("number"):
             need(re.fullmatch(phone, tracking["number"]), "use an international contact number")
+    return data
+
+
+def validate(data):
+    need(isinstance(data, dict), "campaign must be an object")
+    allowed = {"requestId", "slug", "name", "enabled", "captions", "images", "schedule", "groups",
+               "tracking", "comment", "weeklyComment", "timeoutSeconds", "failureAlertTo", "actor"}
+    need(not set(data) - allowed, "campaign has unexpected fields")
+    need(len(json.dumps(data).encode()) <= MAX_REQUEST, "campaign configuration exceeds 60 KiB")
+    need(isinstance(data.get("requestId"), str) and re.fullmatch(r"[a-f0-9-]{36}", data["requestId"]), "invalid request ID")
+    need(isinstance(data.get("slug"), str) and SLUG.fullmatch(data["slug"]) and data["slug"] != "new", "invalid or reserved campaign ID")
+    validate_definition(data["slug"], data)
+    schedule = data["schedule"]
+    groups = data.get("groups")
+    need(isinstance(groups, list) and 0 < len(groups) <= 100, "choose between 1 and 100 active groups")
+    seen = set()
+    for group in groups:
+        need(isinstance(group, dict) and not set(group) - {"jid", "weekdays", "paused"}, "invalid group assignment")
+        jid = group.get("jid")
+        need(isinstance(jid, str) and re.fullmatch(r"[0-9-]+@g\.us", jid) and jid not in seen, "invalid or duplicate group ID")
+        seen.add(jid)
+        need(type(group.get("paused", False)) is bool, "group pause must be boolean")
+        if "weekdays" in group:
+            need(valid_days(group["weekdays"]) and set(group["weekdays"]) <= set(schedule["weekdays"]), "group weekdays must be a nonempty subset of campaign weekdays")
+    problem = spacing_problem(len(groups), data.get("timeoutSeconds", 7200))
+    need(problem is None, problem)
+    for key in ("comment", "weeklyComment"):
+        need(isinstance(data.get(key, ""), str) and len(data.get(key, "")) <= 2000, "notes must be at most 2000 characters")
     need(isinstance(data.get("actor", ""), str) and len(data.get("actor", "")) <= 200, "invalid actor")
     return data
 
@@ -110,6 +170,15 @@ def image_entry(slug, image, index):
     return {"campaign": slug, "filename": image["filename"], "key": image["key"],
             "sha256": image["sha256"], "bytes": image["bytes"], "content_type": image["contentType"],
             "rank": (index + 1) * 10, "enabled": True, "comment": None}
+
+
+def images_from_assets(entries):
+    """A campaign's ``images`` list from its enabled asset-index entries, in
+    rotation order: :func:`image_entry` read backwards. The index stays the
+    place a picture is uploaded to; this is what a run actually attaches."""
+    return [{"filename": entry["filename"], "key": entry["key"], "sha256": entry["sha256"],
+             "bytes": entry["bytes"], "contentType": entry["content_type"]}
+            for entry in entries if entry.get("enabled", True)]
 
 
 def image_url(image, env=None):
@@ -316,7 +385,7 @@ def _reconcile_one(slug, store, call):
     campaign = store.get("campaigns", slug)
     if not campaign or campaign.get("kind") != "console":
         return
-    name = "console-%s-promo" % slug
+    name = job_name(slug, campaign)
     expression = cron_expression(campaign["schedule"])
     jobs = call(["list", "--all", "--json"]).get("jobs", [])
     matching = [job for job in jobs if job.get("name") == name]
@@ -372,6 +441,22 @@ def mark_status(slug, store, status):
                        "fields": config.encode_fields({"scheduleStatus": status})}, "updateMask": {"fieldPaths": ["scheduleStatus"]},
                        "currentDocument": {"exists": True}}]})
     return True
+
+
+def set_images(project, token, slug, images, *, opener=None, sleep=None):
+    """Replace one campaign's ``images`` and nothing else.
+
+    A field mask for the reason :func:`mark_status` uses one: the caller read
+    the document a moment ago, and a whole-document write would undo a caption
+    or switch edit, or a schedule status, that landed in between."""
+    base = "projects/%s/databases/(default)/documents" % project
+    body = {"writes": [{"update": {"name": "%s/campaigns/%s" % (base, slug),
+                                   "fields": config.encode_fields({"images": images})},
+                        "updateMask": {"fieldPaths": ["images"]},
+                        "currentDocument": {"exists": True}}]}
+    config._request("%s/%s:commit" % (config.API_ROOT, base), data=json.dumps(body).encode(),
+                    method="POST", headers=dict(config._auth(token), **{"Content-Type": "application/json"}),
+                    opener=opener or urllib.request.urlopen, sleep=sleep or time.sleep)
 
 
 def reconcile_all(store):
@@ -436,7 +521,8 @@ def records(membership, day, switches=None, only_slug=None):
                                    "contentType": image["contentType"], "rank": (index + 1) * 10}
                                   for index, image in enumerate(campaign["images"])],
                        "targetCount": len(daily) + len(weekly), "weeklyCount": len(weekly), "accounts": accounts,
-                       "source": "console", "scheduleStatus": campaign.get("scheduleStatus", "pending"), "error": None})
+                       "source": "console", "jobName": job_name(slug, campaign),
+                       "scheduleStatus": campaign.get("scheduleStatus", "pending"), "error": None})
     return result
 
 
@@ -461,7 +547,7 @@ def run_campaign(slug, argv=None, now=None, resolve=None, broadcast=None, ensure
     # baked files to fall back to, and a missing asset must never change rotation.
     paths = [(ensure or ad_assets.ensure)(image_entry(slug, image, index))
              for index, image in enumerate(campaign["images"])]
-    state = Path(config.state_dir()) / "runtime" / "cron-state" / ("console-%s-promo" % slug)
+    state = state_directory(slug, campaign)
     state.mkdir(parents=True, exist_ok=True)
     with (state / "run.lock").open("a") as lock:
         try:

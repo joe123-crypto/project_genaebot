@@ -1880,3 +1880,49 @@ Run `python3 workspace/lib/test_console_campaigns.py` and
 writer, broadcast, read bridge and console API test suites before deploying.
 Deploy bot support before enabling the console creation controls. Keep
 `GCP_SERVICE_ACCOUNT_WRITE_B64` isolated to the console API as before.
+
+### Converting a repository campaign to data
+
+Ten campaigns still keep their captions in `workspace/cron/<name>/post_ad.py`,
+their schedule in `deploy/promo-crons.json` and their picture order in the post
+script. `deploy/migrate-campaigns-to-firestore.py` moves all of that onto the
+campaign's existing Firestore document, one campaign at a time, so it runs
+through `run-console-campaign` exactly like a console-created campaign. This is
+the step that lets the files be deleted; nothing is deleted yet.
+
+```bash
+deploy/migrate-campaigns-to-firestore.py --only cv --key seed-key.json           # dry run
+deploy/migrate-campaigns-to-firestore.py --only cv --key seed-key.json --write   # convert
+deploy/migrate-campaigns-to-firestore.py --all --key seed-key.json --verify      # 0 when all are done
+deploy/migrate-campaigns-to-firestore.py --only cv --key seed-key.json --revert --write
+```
+
+A conversion writes `kind: console`, `captions` (an override already saved from
+the console wins), `tracking`, `schedule`, `timeoutSeconds`, `failureAlertTo`,
+`images` and `jobName`, with an audit document in the same commit. `enabled`
+becomes the store switch AND the manifest switch, so a campaign paused in the
+manifest stays paused.
+
+`jobName` is the campaign's existing cron job name. The console API's
+reconciler finds that job within five minutes and edits it in place, and the
+run keeps using `runtime/cron-state/<jobName>/state.json`, so sent-today state
+and caption-rotation counters carry over and nothing moves on the volume.
+
+The conversion changes where a run reads its inputs, not the inputs. The dry
+run refuses anything that would make them differ: a picture the script names
+that the index lacks, a different picture order, a schedule on the hour, or
+more groups than the timeout reaches at full spacing. Those last two rules now
+also apply when a campaign is created from the console
+(`console_campaigns.validate_definition` and `spacing_problem`): at most 30
+groups per hour of timeout, 60 for the 7200 second job.
+
+Convert in a quiet window at least ten minutes before the campaign's slot and
+wait for `--verify` to pass. Do not re-run a converted campaign's
+`deploy/install-*-promo.sh`; the reconciler would repoint the job again.
+`--revert` followed by that installer is the way back while the script exists.
+`reinstall-promo-crons.sh --check` reports a converted campaign's command as
+drift, which is expected until the manifest is retired.
+
+After conversion a run attaches the `images` on the campaign document.
+`deploy/upload-ad-image.py --write` therefore refreshes that list whenever it
+changes a converted campaign's index entries, and prints the update in its dry run.

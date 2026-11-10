@@ -59,6 +59,7 @@ for extra in (str(LIB), str(ROOT / "deploy")):
         sys.path.insert(0, extra)
 
 import ad_assets  # noqa: E402
+import console_campaigns  # noqa: E402
 import operator_config  # noqa: E402
 import operator_writer  # noqa: E402
 import promo_config  # noqa: E402
@@ -432,6 +433,26 @@ def plan(campaigns, existing):
     return writes, strays
 
 
+def converted_rotations(campaigns, data_defined):
+    """``{slug: images}`` for every data-defined campaign whose own ``images``
+    list no longer matches the index being written.
+
+    A campaign converted from this repo runs from the ``images`` on its own
+    document, not from the index, so indexing a new picture has to update both
+    or the swap would be uploaded, mirrored and never sent."""
+    out = {}
+    for slug, entries in campaigns.items():
+        if slug not in data_defined:
+            continue
+        # The index's own ordering, so this is the rotation a run would have
+        # resolved from it.
+        ordered = operator_config._ranked([(entry["id"], entry) for entry in entries])
+        images = console_campaigns.images_from_assets([entry for _, entry in ordered])
+        if images != data_defined[slug].get("images"):
+            out[slug] = images
+    return out
+
+
 def write_mirror(campaigns):
     payload = {"_comment": MIRROR_COMMENT, "version": MIRROR_VERSION,
                "campaigns": dict(sorted(campaigns.items()))}
@@ -532,8 +553,13 @@ def main(argv):
             campaigns_raw = operator_config.list_documents(
                 creds["project_id"], "campaigns", token,
                 opener=urllib.request.urlopen, sleep=time.sleep)
-            console_slugs = {slug for slug, fields in campaigns_raw
-                             if operator_config.decode_fields(fields).get("kind") == "console"}
+            data_defined = dict((slug, operator_config.decode_fields(fields))
+                                for slug, fields in campaigns_raw)
+            data_defined = dict((slug, doc) for slug, doc in data_defined.items()
+                                if doc.get("kind") == "console")
+            # A campaign converted from this repo is data-defined too, but its
+            # pictures are still the mirror's business until the mirror goes.
+            console_slugs = set(data_defined) - set(dirs)
             rows = [(doc_id, fields) for doc_id, fields in rows
                     if operator_config.decode_fields(fields).get("campaign") not in console_slugs]
             indexed, quarantined = ad_assets._assemble(rows)
@@ -564,6 +590,10 @@ def main(argv):
             for _collection, doc_id in strays:
                 print("%s %s/%s" % ("DELETE " if args.prune else "STRAY  ",
                                     ad_assets.COLLECTION, doc_id))
+            rotations = converted_rotations(campaigns, data_defined)
+            for slug in sorted(rotations):
+                print("UPDATE  campaigns/%s.images (%d picture(s))"
+                      % (slug, len(rotations[slug])))
             print("%d object(s) to upload, %d document(s) to write, %d stray%s"
                   % (len(uploads), len(writes), len(strays),
                      "" if args.prune or not strays else " (kept; --prune deletes them)"))
@@ -592,6 +622,9 @@ def main(argv):
                 print("uploaded %s" % key)
             operator_writer.commit(creds["project_id"], token, writes,
                                    strays if args.prune else [])
+            for slug in sorted(rotations):
+                console_campaigns.set_images(creds["project_id"], token, slug,
+                                             rotations[slug])
             write_mirror(campaigns)
             print("indexed in project %s; %s rewritten -- commit it"
                   % (creds["project_id"], MIRROR.relative_to(ROOT)))
