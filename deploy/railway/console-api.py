@@ -711,7 +711,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if route.startswith("live/"):
             view = route[5:]
-            if view not in ("groups", "campaigns", "schedule", "metrics", "discoveries", "navigation", "campaign", "detail", "preview", "group", "status"):
+            if view not in ("groups", "campaigns", "schedule", "metrics", "discoveries", "navigation", "campaign", "captions", "detail", "preview", "group", "status"):
                 self.send_any(404, b'{"error":"Unknown live view."}', with_body)
                 return
             try:

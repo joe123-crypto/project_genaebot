@@ -169,7 +169,7 @@ class LiveViews:
                 if not group_discovery.GROUP.fullmatch(jid):
                     raise ValueError("Invalid group.")
                 return {"group": next((row for row in model["groups"] if row["jid"] == jid), None), "sync": sync}
-            if route in ("campaign", "detail", "preview"):
+            if route in ("campaign", "captions", "detail", "preview"):
                 slug = params.get("slug", "")
                 if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", slug):
                     raise ValueError("Invalid campaign.")
@@ -181,6 +181,11 @@ class LiveViews:
                     return {"sync": sync, "revision": revision, **({"unchanged": True} if params.get("since") == revision
                             else {"campaign": row, "context": model["context"]})}
                 day = datetime.date.fromisoformat(model["date"])
+                if route == "captions":
+                    records = self.bridge.campaign_records(day, only_slug=slug, include_assets=False)
+                    campaign = records[0] if records else None
+                    return {"campaign": {key: campaign[key] for key in ("slug", "name", "source")} if campaign else None,
+                            "captions": campaign["captions"] if campaign else [], "writes": model["context"]["writes"], "sync": sync}
                 if route == "detail":
                     records = self.bridge.campaign_records(day, only_slug=slug, include_assets=True)
                     return {"campaign": records[0] if records else None, "adAssets": self.bridge.ad_assets_status(), "sync": sync}

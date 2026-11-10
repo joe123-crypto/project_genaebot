@@ -119,6 +119,10 @@ class LiveIndexTests(Harness):
             self.assertEqual(len(view.handle("metrics", "ids=" + JID_A)["rows"]), 1)
             view.handle("discoveries", "")
             view.handle("campaigns", "")
+            captions = view.handle("captions", "slug=cv")
+            self.assertIn("captions", captions)
+            self.assertNotIn("groups", captions)
+            self.assertNotIn("adAssets", captions)
 
     def test_observation_endpoints_do_not_load_full_indexed_config(self):
         view = self.service()
