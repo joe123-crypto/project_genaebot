@@ -1339,6 +1339,8 @@ it. A bootstrap or required reset may read the indexed collections once. List,
 search, pagination and schedule requests use SQLite. Discovery and selected-group
 metrics use local inventory/telemetry, without a configuration collection fetch.
 Caption-editor requests load text/capabilities only; gallery requests are explicit.
+Line configuration summaries and cap settings also use the index, while actual
+WhatsApp connection status retains the independent gateway account API.
 
 Release this bot version through the existing pipeline before the matching
 console. Check `/internal/console/live/status` with the console bearer token:

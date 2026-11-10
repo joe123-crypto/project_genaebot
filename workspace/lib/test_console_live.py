@@ -119,6 +119,8 @@ class LiveIndexTests(Harness):
             self.assertEqual(len(view.handle("metrics", "ids=" + JID_A)["rows"]), 1)
             view.handle("discoveries", "")
             view.handle("campaigns", "")
+            self.assertIn("capSettings", view.handle("settings", ""))
+            self.assertIn("lines", view.handle("lines", ""))
             captions = view.handle("captions", "slug=cv")
             self.assertIn("captions", captions)
             self.assertNotIn("groups", captions)

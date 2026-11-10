@@ -152,6 +152,23 @@ class LiveViews:
             if route == "navigation":
                 return {"sync": sync, "campaignTotal": len(model["campaigns"]),
                         "groupsNeedingReview": sum(row["status"] != "active" for row in model["groups"])}
+            if route == "settings":
+                return dict(model["context"], sync=sync)
+            if route == "lines":
+                off = set(model["disabledPromos"])
+                lines = []
+                for account in model["context"]["accounts"]:
+                    mine = [row for row in model["groups"] if row["account"] == account["id"]]
+                    active = [row for row in mine if row["status"] == "active"]
+                    counts = {}
+                    for group in active:
+                        for slug in group["promos"]:
+                            counts[slug] = counts.get(slug, 0) + 1
+                    promos = [{"slug": slug, "count": count, "off": slug in off} for slug, count in counts.items()]
+                    promos.sort(key=lambda row: -row["count"])
+                    lines.append(dict(account, groupCount=len(mine), advertisingCount=len(active),
+                                      campaignCount=sum(not row["off"] for row in promos), promos=promos))
+                return {"lines": lines, "writes": model["context"]["writes"], "sync": sync}
             if route == "schedule":
                 slots = [{"slug": row["slug"], "name": row["name"],
                           "minutes": row.get("scheduleMinutes", (row["hour"] or 0) * 60 + (row["minute"] or 0)),
