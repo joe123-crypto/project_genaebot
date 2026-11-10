@@ -68,7 +68,7 @@ class LiveViews:
             self.writes_active = max(0, self.writes_active - 1)
             self.write_fence = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
             self.cache = None
-            self.index.touch()
+            self.index.request_boundary()
 
     def close(self):
         self.index.close()
@@ -80,9 +80,10 @@ class LiveViews:
             raise console_live_index.NotReady("Waiting for the active write.")
         config, revision = self.index.snapshot()
         if self.write_fence:
-            if datetime.datetime.fromisoformat(config["fetchedAt"].replace("Z", "+00:00")) < datetime.datetime.fromisoformat(self.write_fence.replace("Z", "+00:00")):
+            if not self.index.await_boundary(self.write_fence):
                 raise console_live_index.NotReady("Waiting for the committed changes to reach the display index.")
             self.write_fence = None
+            config, revision = self.index.snapshot()
         now = time.time()
         day = datetime.datetime.now(ZoneInfo("Africa/Harare")).date()
         signature = (revision, str(day))
@@ -147,7 +148,13 @@ class LiveViews:
                 rows.sort(key=lambda row: (row["name"] or "", row["jid"]))
                 return self.page("discoveries", rows, params, digest(result), self.index.status(),
                                  {"discovery": result.get("groupDiscovery")})
-            model = self._model()
+            try:
+                model = self._model()
+            except console_live_index.NotReady:
+                if params.get("since"):
+                    sync = dict(self.index.status(), stale=True, state="awaiting-commit")
+                    return {"sync": sync, "revision": params["since"], "unchanged": True}
+                raise
             sync = self.index.status()
             if route == "navigation":
                 return {"sync": sync, "campaignTotal": len(model["campaigns"]),

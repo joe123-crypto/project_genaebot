@@ -145,12 +145,39 @@ class LiveIndexTests(Harness):
     def test_post_write_fence_refuses_older_index_until_consistent_boundary(self):
         view = self.service()
         view.write_fence = "2026-11-10T10:01:00Z"
-        with self.assertRaises(live.NotReady):
-            view.handle("groups", "")
+        with patch.object(self.index, "await_boundary", return_value=False):
+            with self.assertRaises(live.NotReady):
+                view.handle("groups", "")
+            held = view.handle("groups", "since=confirmed-client-result")
+            self.assertTrue(held["unchanged"])
+            self.assertEqual(held["sync"]["state"], "awaiting-commit")
         # Local metrics remain available while config waits for the commit.
         self.assertEqual(view.handle("metrics", "ids=" + JID_A)["rows"][0]["jid"], JID_A)
         self.index.publish([], "2026-11-10T10:02:00Z", {})
         self.assertTrue(view.handle("groups", "")["rows"])
+
+    def test_save_resumes_stream_and_waits_for_prompt_boundary_without_rebuild(self):
+        view = self.service()
+        self.index.cancel = Mock()
+        view.begin_write()
+        view.fence()
+        self.index.cancel.assert_called_once()
+        self.assertTrue(self.index.restart_requested)
+        self.assertEqual(self.index.checkpoint()["tokens"], {"1": "resume"})
+        before = self.index.counters.copy()
+        # A resumed Listen confirms a newer boundary even if no documents changed.
+        def confirm():
+            time.sleep(.02)
+            self.index.publish([], "2099-01-01T00:00:00Z", {"1": "resumed"})
+        worker = threading.Thread(target=confirm)
+        worker.start()
+        try:
+            self.assertTrue(view.handle("groups", "")["rows"])
+            self.assertIsNone(view.write_fence)
+            self.assertEqual(self.index.counters["rebuilds"], before["rebuilds"])
+            self.assertEqual(self.index.counters["syncDocuments"], before["syncDocuments"])
+        finally:
+            worker.join()
 
     def test_request_validation_and_telemetry_are_bounded(self):
         view = self.service()
