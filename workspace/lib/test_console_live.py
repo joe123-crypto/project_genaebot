@@ -179,6 +179,35 @@ class LiveIndexTests(Harness):
         finally:
             worker.join()
 
+    def test_telemetry_is_not_locked_behind_a_slow_commit_confirmation(self):
+        view = self.service()
+        view.write_fence = "2099-01-01T00:00:00Z"
+        waiting, release, measured = threading.Event(), threading.Event(), threading.Event()
+        def slow_boundary(*args):
+            waiting.set()
+            release.wait(3)
+            return False
+        def read_groups():
+            view.handle("groups", "since=previous")
+        def read_metrics():
+            try:
+                view.handle("metrics", "ids=" + JID_A)
+                measured.set()
+            except Exception:
+                pass
+        with patch.object(self.index, "await_boundary", side_effect=slow_boundary):
+            reader = threading.Thread(target=read_groups)
+            reader.start()
+            self.assertTrue(waiting.wait(1))
+            metric_reader = threading.Thread(target=read_metrics)
+            metric_reader.start()
+            try:
+                self.assertTrue(measured.wait(1), "telemetry waited for Firestore confirmation")
+            finally:
+                release.set()
+                reader.join()
+                metric_reader.join()
+
     def test_request_validation_and_telemetry_are_bounded(self):
         view = self.service()
         for query in ("unknown=1", "q=a&q=b", "cursor=invalid", "ids=not-a-group"):
