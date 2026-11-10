@@ -368,7 +368,7 @@ deploying is a separate decision.
 railway logs        # expect: [whatsapp] ... starting provider, [gateway] ready,
                     #         [entrypoint] synced source overlay from /opt/live-source/workspace,
                     #         [entrypoint] public WhatsApp prompt updated|unchanged
-                    #         [entrypoint] reply gates unchanged (10 paths already match the template)
+                    #         [entrypoint] reply gates unchanged (12 paths already match the template)
 ```
 
 The release artifact also retains the `GENAIE_RELEASE_READY` record emitted once

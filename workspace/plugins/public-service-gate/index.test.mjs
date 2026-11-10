@@ -7,11 +7,16 @@ import test from "node:test";
 
 import plugin, { createLimiter, isQueueFullError, runJsonCommand } from "./index.js";
 import { busyReply } from "./lib/runtime.js";
+import { REPLY_PACING_ENV, resetReplyPacer } from "./lib/reply-pacing.js";
 import { notifyAdminOfIntake, notifyAdminOfLead } from "./services/membership.js";
 
 const MEMBER = "+233208864185";
 const UNKNOWN = "+19995550123";
 const ADMIN = "+213563719936";
+
+// Reply pacing holds real replies for seconds. The suite runs with it off; the
+// pacing tests below switch it on with a fake clock (see withReplyPacing).
+process.env[REPLY_PACING_ENV] = "0";
 
 const HANDOFF = /your request is in\. Someone will contact you soon/i;
 const PARTNER = "+263775489417";
@@ -106,13 +111,18 @@ esac
     }
     return undefined;
   }
+  // Like the real runner: every handler runs in priority order and results
+  // merge, until one cancels.
   dispatch.messageSending = async function messageSending(event, ctx) {
+    let merged;
     for (const { name, callback } of handlers) {
       if (name !== "message_sending") continue;
       const reply = await callback(event, ctx);
-      if (reply !== undefined) return reply;
+      if (reply === undefined) continue;
+      merged = { ...merged, ...reply };
+      if (merged.cancel === true) break;
     }
-    return undefined;
+    return merged;
   };
   dispatch.publicTool = (ctx) => toolFactory?.(ctx);
   return dispatch;
@@ -927,6 +937,113 @@ test("createLimiter caps concurrency and rejects when the queue is full", async 
   assert.equal(await first, "first");
   assert.equal(await second, "second");
   assert.equal(maxActive, 1);
+});
+
+// ---------------------------------------------------------------------------
+// Reply pacing (lib/reply-pacing.js wired into the hooks)
+// ---------------------------------------------------------------------------
+
+// Pacing on, with a clock that only moves when the pacer sleeps.
+async function withReplyPacing(fn) {
+  const clock = { at: 1_000_000 };
+  const sleeps = [];
+  resetReplyPacer({
+    rng: () => 0.5,
+    now: () => clock.at,
+    sleep: async (ms) => {
+      sleeps.push(ms);
+      clock.at += ms;
+    },
+  });
+  process.env[REPLY_PACING_ENV] = "1";
+  try {
+    return await fn({ clock, sleeps });
+  } finally {
+    process.env[REPLY_PACING_ENV] = "0";
+    resetReplyPacer();
+  }
+}
+
+test("a customer's message waits before the agent, and the reply waits before it is sent", async () => {
+  await withReplyPacing(async ({ clock, sleeps }) => {
+    const handler = intakeHandler({}, intakeStore);
+    const ctx = { channelId: "whatsapp", senderId: UNKNOWN, accountId: "default" };
+    const arrived = clock.at;
+
+    assert.equal(await handler(eventFor("How much are bricks?", UNKNOWN), ctx), undefined);
+    assert.equal(sleeps.length, 1, "one pause before the agent starts");
+    assert.ok(sleeps[0] >= 5000);
+
+    const sent = await handler.messageSending({ to: UNKNOWN, content: "Red commons are $95 per thousand." }, ctx);
+    assert.equal(sent, undefined, "pacing never rewrites or cancels");
+    assert.equal(sleeps.length, 2, "one pause while the reply is typed");
+    assert.ok(clock.at - arrived >= 8000 && clock.at - arrived <= 40000);
+  });
+});
+
+test("a reply the gate sends itself is held at send time instead", async () => {
+  await withReplyPacing(async ({ sleeps }) => {
+    const handler = cvHandler();
+    const ctx = { channelId: "whatsapp", senderId: UNKNOWN, accountId: "default" };
+    await handler.startCv();
+
+    const turn = await handler(eventFor("Jane", UNKNOWN), ctx);
+    assert.equal(turn.text, "What is your full name?");
+    assert.deepEqual(sleeps, [], "a claimed message is not delayed before the gate answers");
+
+    await handler.messageSending({ to: UNKNOWN, content: turn.text }, ctx);
+    assert.equal(sleeps.length, 1);
+    assert.ok(sleeps[0] >= 5000 + 1500, "it owes the read pause and the typing time");
+  });
+});
+
+test("the operator, broadcasts and other channels are never paced", async () => {
+  await withReplyPacing(async ({ sleeps }) => {
+    await withAdminMode("true", async () => {
+      const handler = intakeHandler({ whatsappAdminUsers: [ADMIN] }, intakeStore);
+      const adminCtx = { channelId: "whatsapp", senderId: ADMIN, accountId: "default" };
+
+      assert.equal(await handler(eventFor("status", ADMIN), adminCtx), undefined);
+      await handler.messageSending({ to: ADMIN, content: "All campaigns ran." }, adminCtx);
+      // A promo post and an alert: nobody wrote first.
+      await handler.messageSending(
+        { to: "120363407177302513@g.us", content: "Daily advert", metadata: { accountId: "ads" } },
+        { channelId: "whatsapp", accountId: "ads", conversationId: "120363407177302513@g.us" },
+      );
+      await handler.messageSending({ to: MEMBER, content: "Your CV is ready." }, { channelId: "whatsapp" });
+      await handler.messageSending({ to: UNKNOWN, content: "Hello" }, { channelId: "telegram", senderId: UNKNOWN });
+      assert.deepEqual(sleeps, []);
+    });
+  });
+});
+
+test("a cancelled reply is not held, and a rewritten one still is", async () => {
+  await withReplyPacing(async ({ sleeps }) => {
+    const handler = intakeHandler({}, intakeStore);
+    const ctx = { channelId: "whatsapp", senderId: UNKNOWN, accountId: "default" };
+
+    await handler(eventFor("How much is a survey?", UNKNOWN), ctx);
+    const rewritten = await handler.messageSending({ to: UNKNOWN, content: "Water survey \u2014 $100." }, ctx);
+    assert.equal(rewritten.content, "Water survey, $100.");
+    assert.equal(sleeps.length, 2);
+
+    await handler(eventFor("stop", UNKNOWN), ctx);
+    const suppressed = await handler.messageSending({ to: UNKNOWN, content: "One more thing." }, ctx);
+    assert.equal(suppressed.cancel, true);
+    assert.equal(sleeps.length, 2, "nothing is held once the send is cancelled");
+  });
+});
+
+test("with the kill switch off, nothing is delayed", async () => {
+  await withReplyPacing(async ({ sleeps }) => {
+    process.env[REPLY_PACING_ENV] = "0";
+    const handler = intakeHandler({}, intakeStore);
+    const ctx = { channelId: "whatsapp", senderId: UNKNOWN, accountId: "default" };
+
+    await handler(eventFor("How much are bricks?", UNKNOWN), ctx);
+    await handler.messageSending({ to: UNKNOWN, content: "Red commons are $95 per thousand." }, ctx);
+    assert.deepEqual(sleeps, []);
+  });
 });
 
 // ---------------------------------------------------------------------------

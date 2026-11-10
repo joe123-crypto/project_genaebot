@@ -12,6 +12,8 @@ This sets reply policy gates to their template values on every boot. Default
 account enablement is seeded only when absent; an operator pause survives boot.
 The ads account's DM policy is disabled for the broadcast-only trial; its
 listener remains enabled so scheduled group advertising can continue.
+The two reply-timing settings (typing mode, WhatsApp inbound debounce) ride along
+for the same reason: nothing else carries a template change to the live config.
 Only scalar leaves are written -- no object or array is ever replaced -- so the
 live-only plugin keys that openclaw.plugin.json still requires survive untouched
 (replacing a config subtree is what crashlooped production on 2026-10-12).
@@ -56,6 +58,12 @@ GATED_PATHS: list[list[str]] = [
     # Where CV buyers are told to pay. Governed so a payee change in the template
     # reaches the live bot on the next deploy instead of an old number lingering.
     ["plugins", "entries", "public-service-gate", "config", "cvMakerPaymentDetails"],
+    # How a reply is timed, not whether it is sent: "typing" shows when the reply
+    # text starts rather than the instant a message lands, and a burst of short
+    # messages is answered once. Governed so the pacing in
+    # public-service-gate/lib/reply-pacing.js is not undone by a stale live value.
+    ["agents", "defaults", "typingMode"],
+    ["messages", "inbound", "byChannel", "whatsapp"],
 ]
 
 # Paths this script must never write, each for a reason a later edit could forget.

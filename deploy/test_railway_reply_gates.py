@@ -142,6 +142,8 @@ class ReplyGateSyncTests(unittest.TestCase):
         )
         entries["whatsapp-relevance-gate"]["config"]["enabled"] = False
         entries["whatsapp-relevance-gate"]["config"]["relevanceMode"] = "off"
+        expected["agents"] = {"defaults": {"typingMode": "message"}}
+        expected["messages"] = {"inbound": {"byChannel": {"whatsapp": 5000}}}
         self.assertEqual(synced, expected)
         self.assertEqual(self.config.stat().st_mode & 0o777, 0o600)
 
@@ -281,6 +283,22 @@ class ReplyGateSyncTests(unittest.TestCase):
         self.assertIs(entries["public-service-gate"]["config"]["enabled"], True)
         self.assertIs(entries["whatsapp-relevance-gate"]["config"]["enabled"], False)
         self.assertEqual(entries["whatsapp-relevance-gate"]["config"]["relevanceMode"], "off")
+        self.assertEqual(t["agents"]["defaults"]["typingMode"], "message")
+        self.assertEqual(t["messages"]["inbound"]["byChannel"]["whatsapp"], 5000)
+
+    def test_reply_timing_replaces_a_stale_value_and_keeps_its_neighbours(self) -> None:
+        self.live["agents"] = {"defaults": {"typingMode": "instant", "typingIntervalSeconds": 6}}
+        self.live["messages"] = {"queue": {"mode": "steer"}, "inbound": {"byChannel": {"slack": 1500}}}
+        self.write_live()
+        self.sync()
+        synced = self.read()
+        self.assertEqual(
+            synced["agents"]["defaults"], {"typingMode": "message", "typingIntervalSeconds": 6}
+        )
+        self.assertEqual(synced["messages"], {
+            "queue": {"mode": "steer"},
+            "inbound": {"byChannel": {"slack": 1500, "whatsapp": 5000}},
+        })
 
     # --- kill switch -------------------------------------------------------
 

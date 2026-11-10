@@ -900,7 +900,8 @@ pairing challenge. This covers customer, administrator, self-chat and sibling-li
 DMs. Default continues to handle customer conversations and admin alerts; alerts
 explicitly send through account `default`. Group replies remain disabled on both
 accounts. The ads phone stays on regular WhatsApp for this round; default uses
-WhatsApp Business. Client identity and reply timing settings are unchanged.
+WhatsApp Business. Client identity is unchanged. Reply timing is now paced on
+both lines (see **Reply pacing** below); pacing does not re-open ads DMs.
 
 Each campaign reads gateway account status immediately before sending. Targets
 for an offline or unknown account are deferred without submitting them or marking
@@ -932,6 +933,46 @@ Replies stay disabled after seven days until an explicit decision to resume them
 To resume, change the tracked ads `dmPolicy` to `"open"` and deploy; a valid
 session does not need another relink just to change that policy.
 
+### Reply pacing
+
+WhatsApp cannot read a reply, but it can see how a line behaves. The ads line was
+restricted while it answered customer DMs the way the gateway does by default:
+"typing" the instant a message landed, the reply a few seconds later whatever its
+length, canned replies (the CV interview) in milliseconds, each bubble of a burst
+answered separately, and a night's backlog answered in one second at wake-up.
+
+Customer replies on **both lines** are now held for as long as a person would take
+(`workspace/plugins/public-service-gate/lib/reply-pacing.js`):
+
+| Step | Wait |
+|---|---|
+| Before starting on a message in a quiet chat (no exchange for 5 min) | 5 to 25 s, mostly toward the short end |
+| Before starting on a message in an active chat | 2 to 8 s |
+| Typing the reply | its length at 4 to 8 characters a second, 1.5 to 30 s, less the time the model took |
+| Moving to a different customer's chat on the same line | 2 to 6 s after the previous reply |
+
+A first reply lands after roughly 8 to 40 s and a follow-up after 4 to 20 s. No
+reply is held longer than 90 s, and any failure sends it at once: a late reply is
+acceptable, a lost one is not. Only a chat whose customer wrote in the last 10
+minutes is paced, so promo broadcasts, admin alerts, partner forwards and CV
+deliveries are untouched, as are the operator's own chat, the sibling line and
+groups.
+
+Two template values go with it and are forced into the live config on every boot
+by `sync-reply-gates.py`: `agents.defaults.typingMode: "message"` ("typing" shows
+when the reply text starts, after the read pause) and
+`messages.inbound.byChannel.whatsapp: 5000` (a burst of short messages becomes one
+turn). The outbound hook registers a 120 s budget because OpenClaw 2026.9.9 gives
+`message_sending` handlers 15 s by default; a handler that runs out of budget is
+skipped and the reply is sent.
+
+Set `GENAIE_REPLY_PACING=0` in the Railway variables to switch the waits off; the
+two template values stay. Known gaps: "typing" is not refreshed once the model has
+finished, so on a long hold it can lapse before the message arrives; read receipts
+stay off; the linked device still registers as the OpenClaw client. Pacing removes
+the timing signature. It does not make an unofficial client sanctioned, and it is
+not a guarantee against restriction.
+
 ### The two lines talking to each other
 
 When both lines have DM replies enabled, one DMing the other can make them answer
@@ -956,7 +997,7 @@ applies `config/openclaw.template.json` (see **Deploying Changes**), and
 the template does **not** reach the live config here — it only matters for a Compose
 deploy or a fresh seed. To silence the `ads` line on Railway, hand-edit the live
 `openclaw.json` on the volume (`accounts.ads.enabled` to `false`); that edit is *not*
-undone on the next deploy, because the reply-gate sync only forces the eight tracked
+undone on the next deploy, because the reply-gate sync only forces its tracked
 scalars (and appends the `allowFrom` wildcard) and leaves everything else — the `ads`
 account, `groupPolicy`, `bindings`, every `PRESERVE_PATHS` entry — alone.
 
@@ -1094,7 +1135,7 @@ Changing a governed plugin's template boolean restores it on the next deploy.
 See [Railway cost measurement](deploy/railway/README.md#cost-measurement) for
 baseline comparisons, the separate allocator experiment and the $8 usage alert.
 
-The reply-gate sync logs `reply gates unchanged (9 paths already match the template)`,
+The reply-gate sync logs `reply gates unchanged (12 paths already match the template)`,
 `reply gates updated: <path> <old> -> <new>; ...`, or, on any problem,
 `reply gates NOT synced: <err>` and the boot carries on with the config unchanged.
 A non-fatal `openclaw config validate` runs straight after and only warns, because
