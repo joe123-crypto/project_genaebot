@@ -1298,3 +1298,23 @@ existing job name and shared-runner ownership. Uploads, installers and reseeding
 cannot restore retired campaigns. Roll back console code independently while
 retaining retirement-aware bot readers, runners and cleanup receipts. Deploying
 this support does not itself retire any campaign.
+
+## Console recurring schedule edits
+
+The bot advertises `writes.scheduleEditing.edit` when live Firestore scheduling
+support is installed. `POST /internal/console/schedule` uses the existing console
+bearer token and write key; each accepted batch atomically saves desired times,
+expected-revision checks and audit records. No additional deployment flags or
+credentials are required for schedule editing.
+
+The existing worker wakes after schedule writes, verifies the gateway job by
+reading it back, and retries pending updates every minute after restart. Reads
+separate saved desired times from last-confirmed times. Installers and drift
+checks respect saved manifest overrides, converted campaigns retain their job
+names, and script installers refuse to overwrite converted jobs. Conversion and
+revert retain saved times, and reseeding refuses to replace console edits.
+
+Deploy the bot before the console update. Old bots keep Save disabled with a
+companion-update explanation. Local `console-schedule --apply` attempts immediate
+application; run the console API worker for automatic pending retries. Neither
+deployment nor changing a start time triggers `cron run` or a catch-up broadcast.

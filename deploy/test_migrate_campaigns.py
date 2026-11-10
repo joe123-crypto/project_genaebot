@@ -86,6 +86,13 @@ class Conversion(unittest.TestCase):
         return TOOL.convert(self.entry, self.manifest, self.store, write=write, actor="tester",
                             workspace=self.workspace, out=self.out)
 
+    def test_conversion_preserves_a_saved_start_time(self):
+        doc = self.store.get("campaigns", "genaie")
+        doc["scheduleOverride"] = {"cron": "21 14 * * *", "timezone": "Africa/Harare"}
+        self.store.docs["campaigns"]["genaie"] = config.encode_fields(doc)
+        self.convert()
+        self.assertEqual(self.store.get("campaigns", "genaie")["schedule"]["time"], "14:21")
+
     def test_retired_campaign_cannot_be_converted_or_restored(self):
         self.store.docs["campaigns"]["genaie"] = config.encode_fields({"deleted": True, "enabled": False})
         with self.assertRaises(TOOL.MigrationError):

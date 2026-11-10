@@ -239,6 +239,7 @@ def main(argv):
                         help="file holding `openclaw cron list --all --json`, or - for stdin")
     parser.add_argument("--only", action="append", default=[], metavar="PROMO",
                         help="limit to this promo (slug or job name); repeatable")
+    parser.add_argument("--schedules", help="JSON map of saved schedule overrides from the live gateway")
     parser.add_argument("--deleted", help="JSON list of retired slugs read from the live gateway")
     parser.add_argument("--json", action="store_true", dest="as_json")
     args = parser.parse_args(argv[1:])
@@ -270,6 +271,19 @@ def main(argv):
             raise ValueError("expected a list of retired slugs")
     except (OSError, ValueError) as ex:
         sys.stderr.write("ERROR: cannot read campaign retirements: %s\n" % ex)
+        return 2
+    try:
+        overrides = json.loads(Path(args.schedules).read_text()) if args.schedules else {}
+        if not isinstance(overrides, dict):
+            raise ValueError("expected a schedule override map")
+        for promo in manifest["promos"]:
+            if promo["slug"] in overrides:
+                value = overrides[promo["slug"]]
+                if not isinstance(value, dict) or set(value) != {"cron", "timezone"} or not all(isinstance(v, str) and v for v in value.values()):
+                    raise ValueError("invalid saved schedule")
+                promo.update(cron=value["cron"], tz=value["timezone"])
+    except (OSError, ValueError) as ex:
+        sys.stderr.write("ERROR: cannot read saved schedules: %s\n" % ex)
         return 2
     report = classify(manifest, jobs, args.only, deleted)
     if args.as_json:

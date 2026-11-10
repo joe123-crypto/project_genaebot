@@ -136,7 +136,8 @@ fi
 live_state="$(mktemp)"
 read_error="$(mktemp)"
 retired_state="$(mktemp)"
-trap 'rm -f "$live_state" "$read_error" "$retired_state"' EXIT
+schedule_state="$(mktemp)"
+trap 'rm -f "$live_state" "$read_error" "$retired_state" "$schedule_state"' EXIT
 
 read_live() {
   if ! "${GATEWAY_OPENCLAW[@]}" cron list --all --json >"$live_state" 2>"$read_error"; then
@@ -157,7 +158,11 @@ if ! "${GATEWAY_EXEC[@]}" python3 /home/joseph/.openclaw/workspace/bin/console-c
   printf 'ERROR: could not verify campaign retirements; no cron was installed.\n' >&2
   exit 75
 fi
-drift_args=(--manifest "$MANIFEST" --live "$live_state" --deleted "$retired_state")
+if ! "${GATEWAY_EXEC[@]}" python3 /home/joseph/.openclaw/workspace/bin/console-campaign-check --schedules >"$schedule_state"; then
+  printf 'ERROR: could not verify saved schedules; no cron was installed.\n' >&2
+  exit 75
+fi
+drift_args=(--manifest "$MANIFEST" --live "$live_state" --deleted "$retired_state" --schedules "$schedule_state")
 for want in ${only[@]+"${only[@]}"}; do drift_args+=(--only "$want"); done
 [ "$as_json" -eq 1 ] && drift_args+=(--json)
 

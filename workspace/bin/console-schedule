@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+"""One bounded schedule request on stdin, using the write bridge's credentials."""
+import importlib.machinery
+import importlib.util
+import json
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+import console_campaigns as campaigns
+import console_schedule as schedule
+import operator_config
+import operator_writer
+
+
+def main():
+    try:
+        schedule.need(sys.argv[1:] in ([], ["--apply"]), "Unsupported schedule command.")
+        raw = sys.stdin.buffer.read(campaigns.MAX_REQUEST + 1)
+        schedule.need(len(raw) <= campaigns.MAX_REQUEST, "Request is too large.")
+        data = json.loads(raw)
+        schedule.validate(data)
+        loader = importlib.machinery.SourceFileLoader("schedule_write_env", str(Path(__file__).with_name("console-write")))
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        bridge = importlib.util.module_from_spec(spec)
+        loader.exec_module(bridge)
+        store = campaigns.Store(bridge.write_env())
+        result = schedule.save(data, store)
+        if sys.argv[1:] == ["--apply"]:
+            # The local adapter may have no HTTP worker to wake. Try applying
+            # now; durable pending receipts still support later worker recovery.
+            for row in data["changes"]:
+                try:
+                    schedule.reconcile_one(row["slug"], store)
+                except Exception:
+                    pass
+            declared = schedule.declarations()
+            day = schedule.validate(data)
+            result = {"campaigns": [schedule.summary(row["slug"], store, declared, day) for row in data["changes"]]}
+        print(json.dumps({"ok": True, "status": 200, **result}))
+        return 0
+    except (operator_writer.WriteRefused, operator_config.ConfigUnavailable, ValueError) as ex:
+        print(json.dumps({"ok": False, "status": getattr(ex, "status", 503), "error": str(ex),
+                          "problems": getattr(ex, "problems", []), **getattr(ex, "metadata", {})}))
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
