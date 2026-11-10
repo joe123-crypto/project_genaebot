@@ -1983,6 +1983,11 @@ requests read local inventories and indexed membership without invoking config
 loaders. Metrics keep their own observation timestamps. Stale config remains
 viewable with synchronization status; saves still validate live Firestore state.
 Successful writes fence displays until the stream passes the write boundary.
+After a write, the API resumes the shared stream from its durable positions to
+obtain a prompt consistent boundary instead of waiting for an idle heartbeat.
+The bounded wait leaves local telemetry available. If confirmation is delayed,
+revision-aware polls return stale/unchanged metadata and retain displayed data;
+uncertain writes are never replayed to make the display catch up.
 
 The API validates and authenticates the live routes independently of the legacy
 read bridge. `groups`, `campaigns`, `discoveries` and `preview` return at most ten
