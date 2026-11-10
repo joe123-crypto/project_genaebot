@@ -57,7 +57,7 @@ def bot_hashes(membership):
     return result
 
 
-def activity_observations(root, membership, now, live_enabled=True):
+def activity_observations(root, membership, now, live_enabled=True, group_ids=None):
     """One SQLite read snapshot; missing/corrupt telemetry never fails a roster."""
     filename = root / "runtime/whatsapp-activity.sqlite"
     start = now - WINDOW_MS
@@ -72,11 +72,15 @@ def activity_observations(root, membership, now, live_enabled=True):
                 exclusions = (f" AND (sender_hash IS NULL OR sender_hash NOT IN ({placeholders}))"
                               f" AND (sender_alt_hash IS NULL OR sender_alt_hash NOT IN ({placeholders}))")
                 args += hashes + hashes
+            selection = ""
+            if group_ids is not None:
+                selection = " AND jid IN (%s)" % (",".join("?" for _ in group_ids) or "NULL")
+                args += list(group_ids)
             counts = dict(db.execute("SELECT jid, COUNT(*) FROM events WHERE message_at > ? AND message_at <= ?"
-                                     + exclusions + " GROUP BY jid", args))
+                                     + exclusions + selection + " GROUP BY jid", args))
             intervals = {}
             for jid, first, last, live in db.execute(
-                    "SELECT jid, started_at, through_at, live FROM coverage WHERE through_at >= ? ORDER BY started_at", (start,)):
+                    "SELECT jid, started_at, through_at, live FROM coverage WHERE through_at >= ?" + selection + " ORDER BY started_at", [start] + (list(group_ids) if group_ids is not None else [])):
                 if not (isinstance(first, int) and isinstance(last, int) and first <= last <= now):
                     continue
                 end = now if live_enabled and live == 1 and now - last <= MAX_HEARTBEAT_GAP_MS else last
@@ -86,13 +90,13 @@ def activity_observations(root, membership, now, live_enabled=True):
         return {}, {}
 
 
-def attach(payload, membership, env=None, now=None):
+def attach(payload, membership, env=None, now=None, group_ids=None):
     """Enrich only Groups API rows, keeping both console adapters identical."""
     env = os.environ if env is None else env
     now = int(time.time() * 1000) if now is None else int(now)
     root = Path(env.get("OPENCLAW_STATE_DIR") or "/home/joseph/.openclaw")
     members = member_observations(root, now)
-    counts, intervals = activity_observations(root, membership, now, env.get("GENAIE_GROUP_ACTIVITY") != "0")
+    counts, intervals = activity_observations(root, membership, now, env.get("GENAIE_GROUP_ACTIVITY") != "0", group_ids)
     start = now - WINDOW_MS
     for row in payload.get("groups", []) + payload.get("discoveredGroups", []):
         jid = row["jid"]

@@ -1964,3 +1964,39 @@ Local callers send the same request to `workspace/bin/console-schedule --apply`
 on stdin; that mode attempts gateway reconciliation immediately. The console API
 worker provides automatic retry for any pending updates. Repeating a request for
 an already-saved time is safe; stale revisions reject changes as a whole.
+
+## Indexed live console views
+
+The console's Schedule home page, paginated Groups/Campaigns views, and assignment
+pickers use `/internal/console/live/*`. A single demand-driven Firestore Listen
+stream maintains `console-live.sqlite` in the private Firestore state directory.
+The stream covers settings, lines, campaigns, groups and campaign-deletion receipts;
+it never watches audit entries or asset bytes. No display query downloads config
+collections. The initial sync, a credential/schema change, or an existence mismatch
+can require a complete bootstrap. Restart and idle reconnects resume from durable
+positions. Bootstrap and reset generations publish only at consistent boundaries.
+
+Visible console resources poll every 30 seconds and renew a 90-second activity
+lease. When the lease expires, the stream disconnects and the index stays on disk.
+Group DMC/member requests read only local telemetry for requested IDs. Discovery
+requests read local inventories and indexed membership without invoking config
+loaders. Metrics keep their own observation timestamps. Stale config remains
+viewable with synchronization status; saves still validate live Firestore state.
+Successful writes fence displays until the stream passes the write boundary.
+
+The API validates and authenticates the live routes independently of the legacy
+read bridge. `groups`, `campaigns`, `discoveries` and `preview` return at most ten
+rows plus query/revision-bound continuation cursors. `q` retains case-insensitive
+substring matching, and filters apply before pagination. Changed revisions return
+an anchor-based current window; unchanged polls return only freshness metadata.
+`metrics` accepts up to 100 validated group IDs. `schedule` contains only timeline
+slots and editing capabilities. Campaign metadata, captions/pictures and previews
+have separate requests. `/live/status` exposes sync lag and counters for indexed
+requests, returned rows, streamed documents, rebuilds and active streams.
+
+The runtime image and portable CI install `deploy/railway/requirements-console.txt`.
+For local testing, install it in a virtual environment before running the index
+protocol tests. Existing CLI config readers, campaign runners and all writer
+validation remain authoritative and independent of this display index. Deploy the
+bot endpoints before the updated console; it intentionally has no full-directory
+fallback when a live endpoint is missing. Roll back the console before the bot.

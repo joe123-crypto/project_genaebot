@@ -96,6 +96,26 @@ class ConsoleApiTests(unittest.TestCase):
             with error:
                 return error.code, error.read(), dict(error.headers)
 
+    def test_live_routes_are_authenticated_uncached_and_do_not_run_legacy_bridge(self):
+        base = self.serve()
+        live = unittest.mock.Mock()
+        live.handle.return_value = {"rows": [], "sync": {"stale": False}, "revision": "1"}
+        self.server.console["live"] = live
+        self.assertEqual(self.fetch(base + "/live/groups", token=None)[0], 401)
+        for _ in range(2):
+            status, body, headers = self.fetch(base + "/live/groups?q=market")
+            self.assertEqual(status, 200)
+            self.assertEqual(headers["Cache-Control"], "no-store")
+        self.assertEqual(live.handle.call_count, 2)
+        self.assertEqual(live.handle.call_args.args, ("groups", "q=market"))
+        self.assertEqual(self.server.console["bridge"].runs, 0)
+        live.handle.side_effect = ValueError("bad cursor")
+        self.assertEqual(self.fetch(base + "/live/groups?cursor=bad")[0], 400)
+        live.handle.side_effect = RuntimeError("private detail")
+        status, body, _ = self.fetch(base + "/live/groups")
+        self.assertEqual(status, 503)
+        self.assertNotIn(b"private detail", body)
+
     def test_account_routes_use_separate_uncached_controls(self):
         base = self.serve()
         controls = self.server.console["accounts"]

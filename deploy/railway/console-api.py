@@ -630,6 +630,17 @@ class Handler(BaseHTTPRequestHandler):
         self.send_any(status, body, with_body)
 
     def do_POST(self):
+        live = self.server.console.get("live")
+        if live is not None:
+            live.begin_write()
+        try:
+            return self._do_POST()
+        finally:
+            live = self.server.console.get("live")
+            if live is not None:
+                live.fence()
+
+    def _do_POST(self):
         split = urlsplit(self.path)
         deletion = re.fullmatch(re.escape(PREFIX) + r"campaigns/([a-z0-9][a-z0-9-]{0,63})/delete", split.path)
         if deletion:
@@ -696,6 +707,26 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_any(405, b'{"error":"Use GET for account status."}', False)
                 return
             self.account_request(route, split.query, "GET", with_body)
+            return
+
+        if route.startswith("live/"):
+            view = route[5:]
+            if view not in ("groups", "campaigns", "schedule", "metrics", "discoveries", "navigation", "campaign", "detail", "preview", "group", "status"):
+                self.send_any(404, b'{"error":"Unknown live view."}', with_body)
+                return
+            try:
+                with config["liveLock"]:
+                    if config.get("live") is None:
+                        sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(config["bridge"].path)), "lib"))
+                        from console_live_api import LiveViews
+                        config["live"] = LiveViews(config["bridge"].path)
+                payload = config["live"].handle(view, split.query)
+                self.send_any(200, json.dumps(payload).encode(), with_body)
+            except ValueError:
+                self.send_any(400, b'{"error":"Invalid live-view query."}', with_body)
+            except Exception:
+                self.send_any(503, b'{"error":"Live view is synchronizing or unavailable. Previous data is retained."}', with_body,
+                              headers=(("Retry-After", "5"),))
             return
 
         try:
@@ -773,9 +804,11 @@ def build_server(bind, port, token, bridge_path, write_path=None,
     close_server = server.server_close
     def close():
         server.console["accounts"].close()
+        if server.console.get("live") is not None:
+            server.console["live"].close()
         close_server()
     server.server_close = close
-    server.console = {"token": token, "bridge": Bridge(bridge_path, **kwargs),
+    server.console = {"live": None, "liveLock": threading.Lock(), "token": token, "bridge": Bridge(bridge_path, **kwargs),
                       "accounts": AccountControls(),
                       "writes": WriteBridge(write_path or default_write_bridge()),
                       "schedules": WriteBridge(_volume_bin("console-schedule"), timeout=30),

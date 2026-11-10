@@ -857,6 +857,21 @@ def main(argv):
             if command == "group":
                 payload["discoveredGroups"] = [row for row in payload.get("discoveredGroups", []) if row["jid"] == slug]
             group_metrics.attach(payload, membership())
+            if command in ("groups", "group"):
+                # All of this comes from the config already read for the rows;
+                # no overview, preview or asset catalogue is needed by a picker.
+                declared = manifest().get("promos", [])
+                converted = console_campaigns.definitions(membership())
+                choices = [{"slug": row["slug"], "name": row.get("name"),
+                            "enabled": effective_enabled(row)} for row in declared
+                           if row["slug"] not in converted and row["slug"] not in resolved().get("deleted", [])]
+                choices.extend({"slug": slug, "name": row.get("name"),
+                                "enabled": bool(resolved().get("storeSwitches", {}).get(slug))
+                                           and row.get("scheduleStatus") == "ready"}
+                               for slug, row in converted.items())
+                payload["context"] = {"writes": write_capabilities(), "actions": action_capabilities(),
+                                      "accounts": accounts(membership()), "capSettings": cap_settings(membership()),
+                                      "campaigns": choices}
         elif command == "campaigns":
             payload = {"date": day.isoformat(), "adAssets": ad_assets_status(),
                        "campaigns": campaign_records(day), "deletions": deletion_records()}

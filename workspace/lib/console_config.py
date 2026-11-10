@@ -80,6 +80,23 @@ def _cached(entry, identity, epoch, now):
     return dict(result, source="snapshot")
 
 
+def _project(result, *, campaign=None, group_ids=None, include_groups=True, include_campaigns=True):
+    """Derive a narrower display without changing the original cache or its age."""
+    membership = dict(result["membership"])
+    groups = membership.get("groups") or {}
+    if not include_groups:
+        groups = {}
+    elif group_ids is not None:
+        groups = {jid: groups[jid] for jid in group_ids if jid in groups}
+    elif campaign is not None:
+        groups = {jid: row for jid, row in groups.items()
+                  if campaign in (row.get("promos") or []) or campaign in (row.get("weekly") or {})}
+    membership["groups"] = groups
+    if not include_campaigns:
+        membership["promos"] = {}
+    return dict(result, membership=membership, enabled=result["enabled"] if include_campaigns else {})
+
+
 def load(env=None, *, fresh=False, now=None, log=None, campaign=None, group_ids=None,
          include_groups=True, include_campaigns=True, **inject):
     env = os.environ if env is None else env
@@ -103,6 +120,17 @@ def load(env=None, *, fresh=False, now=None, log=None, campaign=None, group_ids=
         fcntl.flock(lock, fcntl.LOCK_EX)
         epoch = _epoch(epoch_directory)
         if not fresh:
+            # A healthy full-directory read already contains every narrower
+            # display. Never use outage data or extend its TTL by copying it.
+            if directory != epoch_directory:
+                full = config._read_json(os.path.join(epoch_directory, CACHE_FILE))
+                if isinstance(full, dict) and not full.get("error"):
+                    try:
+                        broader = _cached(full, identity, epoch, now)
+                    except config.ConfigUnavailable:
+                        broader = None
+                    if broader is not None and not broader.get("degraded"):
+                        return _project(broader, **scope)
             hit = _cached(config._read_json(path), identity, epoch, now)
             if hit is not None:
                 return hit
