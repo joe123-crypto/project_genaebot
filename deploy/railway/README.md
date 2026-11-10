@@ -1280,3 +1280,41 @@ Run `python3 workspace/lib/test_console_campaigns.py` and
 writer, broadcast, read bridge and console API test suites before deploying.
 Deploy bot support before enabling the console creation controls. Keep
 `GCP_SERVICE_ACCOUNT_WRITE_B64` isolated to the console API as before.
+
+## Console campaign retirement
+
+Campaign deletion is opt-in: set `GENAIE_CAMPAIGN_DELETION=1` alongside
+`GENAIE_CONFIG_SOURCE=firestore`, the existing console write key, and scoped R2
+cleanup credentials (`R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`,
+`R2_SECRET_ACCESS_KEY`). The entrypoint supplies R2 write credentials only to the
+console API process and removes them before starting the gateway. The image also
+bakes the SigV4 cleanup helper beside the manifest.
+
+`POST /internal/console/campaigns/<slug>/delete` uses the existing bearer token.
+Acceptance is a transaction containing the retirement marker, audit snapshot and
+cleanup receipt. The startup worker retries cleanup, waking immediately after
+acceptance and checking pending work every minute. Converted jobs retain their
+existing job name and shared-runner ownership. Uploads, installers and reseeding
+cannot restore retired campaigns. Roll back console code independently while
+retaining retirement-aware bot readers, runners and cleanup receipts. Deploying
+this support does not itself retire any campaign.
+
+## Console recurring schedule edits
+
+The bot advertises `writes.scheduleEditing.edit` when live Firestore scheduling
+support is installed. `POST /internal/console/schedule` uses the existing console
+bearer token and write key; each accepted batch atomically saves desired times,
+expected-revision checks and audit records. No additional deployment flags or
+credentials are required for schedule editing.
+
+The existing worker wakes after schedule writes, verifies the gateway job by
+reading it back, and retries pending updates every minute after restart. Reads
+separate saved desired times from last-confirmed times. Installers and drift
+checks respect saved manifest overrides, converted campaigns retain their job
+names, and script installers refuse to overwrite converted jobs. Conversion and
+revert retain saved times, and reseeding refuses to replace console edits.
+
+Deploy the bot before the console update. Old bots keep Save disabled with a
+companion-update explanation. Local `console-schedule --apply` attempts immediate
+application; run the console API worker for automatic pending retries. Neither
+deployment nor changing a start time triggers `cron run` or a catch-up broadcast.

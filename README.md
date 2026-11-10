@@ -1927,6 +1927,23 @@ After conversion a run attaches the `images` on the campaign document.
 `deploy/upload-ad-image.py --write` therefore refreshes that list whenever it
 changes a converted campaign's index entries, and prints the update in its dry run.
 
+## Campaign retirement from the console
+
+The authenticated console API accepts `POST /internal/console/campaigns/<slug>/delete`
+only when `GENAIE_CAMPAIGN_DELETION=1`, live Firestore configuration, the console
+write key, and the existing R2 cleanup credentials are available. Acceptance
+atomically commits a disabled retirement marker, audit snapshot and cleanup
+receipt. The background worker retries owned cron removal, group assignment
+cleanup, indexed/exclusive picture removal and cache cleanup after restart.
+Readers and broadcast submissions respect retirement immediately; an already
+submitted message can finish. Picture cleanup waits for bounded upload leases.
+
+Converted campaigns retain their existing job name, and cleanup recognizes their
+shared runner command. Conversion and reseeding refuse to restore retired state.
+Installers check retirement before and after registration. Deploy this support
+before enabling the console delete control. Deployment alone deletes nothing;
+retain retirement-aware readers and receipts during rollback.
+
 ## Console schedule edits
 
 With live Firestore configuration and the existing console write key, the bot
