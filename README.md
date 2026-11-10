@@ -1926,3 +1926,24 @@ drift, which is expected until the manifest is retired.
 After conversion a run attaches the `images` on the campaign document.
 `deploy/upload-ad-image.py --write` therefore refreshes that list whenever it
 changes a converted campaign's index entries, and prints the update in its dry run.
+
+## Console schedule edits
+
+With live Firestore configuration and the existing console write key, the bot
+advertises `writes.scheduleEditing.edit`. Authenticated `POST /internal/console/schedule`
+accepts a displayed date/timezone and changed `{slug, time, expectedRevision}` rows.
+The writer atomically stores each change and its audit record. Built-in campaigns
+receive a `scheduleOverride`; console-created campaigns keep their existing
+schedule structure. Existing weekdays, timezone, commands and enabled states remain.
+
+The response and campaign reads include `scheduleEdit` with an opaque revision,
+editability, pending/ready status and last-confirmed displayed minute. The existing
+console worker wakes after writes, verifies gateway jobs by reading them back,
+and retries pending edits after restart. Cron installers, drift checks and the
+borehole legacy-job migration respect saved overrides. Reseeding refuses to
+silently replace console schedule edits. Changing a time never invokes `cron run`.
+
+Local callers send the same request to `workspace/bin/console-schedule --apply`
+on stdin; that mode attempts gateway reconciliation immediately. The console API
+worker provides automatic retry for any pending updates. Repeating a request for
+an already-saved time is safe; stale revisions reject changes as a whole.

@@ -355,6 +355,8 @@ def main(argv):
                 current = {name: store.list(name) for name in operator_config.COLLECTIONS}
                 if campaign_deletion.deleted_slugs(current):
                     raise SeedError("store contains retired campaigns; reseeding would restore deleted configuration and is refused")
+                if any(operator_config.decode_fields(fields).get("scheduleEdit") for _, fields in current.get("campaigns", [])):
+                    raise SeedError("store contains console schedule edits; reseeding would overwrite saved times and is refused")
                 if current != raw:
                     raise SeedError("store changed while preparing the seed; refresh the plan")
                 operations = [{"update": {"name": "%s/%s/%s" % (store.base, collection, key), "fields": operator_config.encode_fields(fields)},

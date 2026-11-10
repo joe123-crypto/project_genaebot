@@ -12,6 +12,9 @@ import json, os, sys
 from pathlib import Path
 p=Path(os.environ['FAKE_JOBS'])
 d=json.loads(p.read_text())
+if '--schedule' in sys.argv:
+ print(json.dumps({'cron':os.environ['FAKE_SCHEDULE_CRON'],'timezone':'Africa/Harare'}) if os.environ.get('FAKE_SCHEDULE_CRON') else '{}')
+ sys.exit(0)
 args=sys.argv[sys.argv.index('cron')+1:]
 if args[:1]==['list']:
  print(json.dumps(d))
@@ -37,7 +40,7 @@ def jobs():
 
 
 class RetireBoreholeTests(unittest.TestCase):
-    def run_script(self, payload, *args):
+    def run_script(self, payload, *args, env=None):
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)
             fake = directory / "gateway"
@@ -46,7 +49,7 @@ class RetireBoreholeTests(unittest.TestCase):
             state = directory / "jobs.json"
             state.write_text(json.dumps(payload))
             result = subprocess.run(["bash", str(SCRIPT), *args], text=True, capture_output=True,
-                                    env={**os.environ, "OPENCLAW_EXEC_MODE": "docker", "DOCKER": str(fake), "FAKE_JOBS": str(state)})
+                                    env={**os.environ, "OPENCLAW_EXEC_MODE": "docker", "DOCKER": str(fake), "FAKE_JOBS": str(state), **(env or {})})
             return result, json.loads(state.read_text())
 
     def test_removes_only_retired_names_including_duplicates(self):
@@ -57,6 +60,13 @@ class RetireBoreholeTests(unittest.TestCase):
         again, unchanged = self.run_script(remaining)
         self.assertEqual(again.returncode, 0, again.stderr)
         self.assertEqual(remaining, unchanged)
+
+    def test_saved_start_time_is_a_verified_replacement(self):
+        initial = jobs()
+        initial["jobs"][0]["schedule"]["expr"] = "10 7 * * *"
+        result, remaining = self.run_script(initial, env={"FAKE_SCHEDULE_CRON": "10 7 * * *"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(remaining["jobs"], [initial["jobs"][i] for i in [0, 4, 5]])
 
     def test_dry_run_never_mutates(self):
         initial = jobs()

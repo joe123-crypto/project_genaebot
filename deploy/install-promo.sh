@@ -53,6 +53,13 @@ register_promo_cron() {
     fi
     return "$retirement_status"
   fi
+  # A saved console time takes precedence over the wrapper's shipped default.
+  local schedule_override
+  schedule_override="$("${GATEWAY_EXEC[@]}" python3 /home/joseph/.openclaw/workspace/bin/console-campaign-check --schedule "$slug")" || return $?
+  if [ "$schedule_override" != '{}' ]; then
+    cron_expr="$(printf '%s' "$schedule_override" | jq -er '.cron')" || return $?
+    tz="$(printf '%s' "$schedule_override" | jq -er '.timezone')" || return $?
+  fi
   local command_argv
   command_argv="$(printf '["python3","%s"]' "$script")"
 
@@ -140,6 +147,9 @@ register_promo_cron() {
     return "$retirement_status"
   fi
 
+  # Re-read under the same lock as saves: an edit accepted while this installer
+  # was running must not be reverted by the earlier snapshot.
+  "${GATEWAY_EXEC[@]}" python3 /home/joseph/.openclaw/workspace/bin/console-campaign-check --apply-schedule "$slug" >/dev/null || return $?
   printf '%s cron registered (%s, %s %s, timeout %ss).\n' \
     "$name" "$existing_id" "$cron_expr" "$tz" "$PROMO_CRON_TIMEOUT_SECONDS"
 }

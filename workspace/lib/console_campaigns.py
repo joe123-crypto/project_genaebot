@@ -469,7 +469,11 @@ def reconcile_all(store):
                 reconcile_one(slug, store)
             except Exception as ex:
                 failures += 1
-                mark_status(slug, store, "pending")
+                current = store.get("campaigns", slug) or {}
+                # A start-time edit still has its previous registered job. Keep
+                # that campaign visible while its schedule receipt is pending.
+                if not (current.get("scheduleEdit", {}).get("pending") and current.get("scheduleStatus") == "ready"):
+                    mark_status(slug, store, "pending")
                 sys.stderr.write("[console-campaign] schedule pending for %s: %s\n" % (slug, type(ex).__name__))
     return failures
 

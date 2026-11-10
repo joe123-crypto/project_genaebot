@@ -405,6 +405,18 @@ printf '%s\\n' "$*" >> "$FAKE_DOCKER_CALLS"
 if printf '%s\\n' "$*" | grep -q 'console-campaign-check --deleted'; then
   printf '[]'; exit 0
 fi
+if printf '%s\\n' "$*" | grep -q 'console-campaign-check --schedules'; then
+  if [ -n "${FAKE_SCHEDULE_CRON:-}" ]; then
+    printf '{"borehole-drilling":{"cron":"%s","timezone":"Africa/Harare"}}' "$FAKE_SCHEDULE_CRON"
+  else printf '{}'; fi
+  exit 0
+fi
+if printf '%s\\n' "$*" | grep -q 'console-campaign-check --schedule '; then
+  if [ -n "${FAKE_SCHEDULE_CRON:-}" ] && printf '%s\\n' "$*" | grep -q 'borehole-drilling'; then
+    printf '{"cron":"%s","timezone":"Africa/Harare"}' "$FAKE_SCHEDULE_CRON"
+  else printf '{}'; fi
+  exit 0
+fi
 if printf '%s\\n' "$*" | grep -q 'cron list'; then
   if [ -n "${FAKE_CRON_FAIL:-}" ]; then printf 'ssh: connect failed\\n' >&2; exit 1; fi
   cat "$FAKE_CRON_JOBS"; exit 0
@@ -449,6 +461,17 @@ class OrchestratorTests(unittest.TestCase):
         seen = [p["name"] for p in MANIFEST["promos"]
                 if re.search(r"--name %s\b" % re.escape(p["name"]), calls)]
         self.assertEqual(seen, [p["name"] for p in MANIFEST["promos"]])
+
+    def test_saved_schedule_survives_reinstall_and_is_the_drift_baseline(self):
+        payload = live_jobs(patch={"borehole-drilling-promo": {"schedule.expr": "10 7 * * *"}})
+        for args in [("--check",), ("--only", "borehole-drilling")]:
+            proc, calls = self.run_orchestrator(*args, payload=payload, env={"FAKE_SCHEDULE_CRON": "10 7 * * *"})
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            if "--check" not in args:
+                edits = [line for line in calls.splitlines() if "--name borehole-drilling-promo" in line]
+                self.assertTrue(edits)
+                self.assertIn("--cron 10 7 * * *", edits[0])
+                self.assertIn("--apply-schedule borehole-drilling", calls)
 
     def test_cv_installer_keeps_pause(self):
         proc, calls = self.run_orchestrator("--only", "cv")

@@ -16,7 +16,16 @@ fi
 if jq -e '.jobs[] | select((.name == "borehole-paid-promo" or .name == "big-player-promo" or .name == "borehole-drilling-promo") and .state.runningAtMs != null)' <<<"$jobs_json" >/dev/null; then
   printf 'ERROR: a borehole campaign is running; let it finish before migrating.\n' >&2; exit 1
 fi
-if [ "$dry" -eq 0 ] && ! jq -e '.jobs[] | select(.name == "borehole-drilling-promo" and .enabled == true and .schedule.expr == "15 7 * * *" and .schedule.tz == "Africa/Harare" and .payload.argv == ["python3", "/home/joseph/.openclaw/workspace/cron/borehole-drilling-promo/post_ad.py"])' <<<"$jobs_json" >/dev/null; then
+expected_cron="15 7 * * *"
+expected_tz="Africa/Harare"
+if [ "$dry" -eq 0 ]; then
+  saved_schedule="$("${GATEWAY_EXEC[@]}" python3 /home/joseph/.openclaw/workspace/bin/console-campaign-check --schedule borehole-drilling)"
+  if [ "$saved_schedule" != '{}' ]; then
+    expected_cron="$(jq -er '.cron' <<<"$saved_schedule")"
+    expected_tz="$(jq -er '.timezone' <<<"$saved_schedule")"
+  fi
+fi
+if [ "$dry" -eq 0 ] && ! jq -e --arg cron "$expected_cron" --arg tz "$expected_tz" '.jobs[] | select(.name == "borehole-drilling-promo" and .enabled == true and .schedule.expr == $cron and .schedule.tz == $tz and .payload.argv == ["python3", "/home/joseph/.openclaw/workspace/cron/borehole-drilling-promo/post_ad.py"])' <<<"$jobs_json" >/dev/null; then
   printf 'ERROR: verify the replacement borehole job before retiring old jobs.\n' >&2; exit 1
 fi
 while IFS=$'\t' read -r id name; do

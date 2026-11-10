@@ -534,6 +534,37 @@ class Handler(BaseHTTPRequestHandler):
             self.server.console["reconcileWake"].set()
         self.send_any(status, body, True)
 
+    def schedule_request(self, split):
+        if not authorized(self.headers.get("Authorization"), self.server.console["token"]):
+            self.send_any(401, b'{"error":"unauthorized"}', True)
+            return
+        if not (os.environ.get(WRITE_KEY_VAR) or "").strip():
+            self.send_any(503, b'{"error":"Schedule writes are not enabled."}', True)
+            return
+        try:
+            size = int(self.headers.get("Content-Length", "0"))
+            if split.query or not 0 < size <= 60 * 1024 or self.headers.get("Transfer-Encoding"):
+                raise ValueError()
+            if self.headers.get_content_type() != "application/json":
+                raise ValueError()
+            raw = self.rfile.read(size)
+            if len(raw) != size:
+                raise ValueError()
+            request = json.loads(raw)
+            if not isinstance(request, dict) or set(request) - {"changes", "date", "timezone", "actor"}:
+                raise ValueError()
+        except (ValueError, TypeError):
+            self.send_any(400, b'{"error":"Invalid schedule change."}', True)
+            return
+        bridge = self.server.console["bridge"]
+        bridge.invalidate()
+        status, body = self.server.console["schedules"].run(request)
+        bridge.invalidate()
+        # Unknown outcomes can also have committed desired state.
+        if self.server.console.get("reconcileWake") is not None:
+            self.server.console["reconcileWake"].set()
+        self.send_any(status, body, True)
+
     def group_action_request(self, route, query, with_body=True):
         """POST /internal/console/groups/<jid>/actions
 
@@ -603,6 +634,9 @@ class Handler(BaseHTTPRequestHandler):
         deletion = re.fullmatch(re.escape(PREFIX) + r"campaigns/([a-z0-9][a-z0-9-]{0,63})/delete", split.path)
         if deletion:
             self.campaign_create_request(split, deletion.group(1))
+            return
+        if split.path == PREFIX + "schedule":
+            self.schedule_request(split)
             return
         if split.path == PREFIX + "campaigns/create":
             self.campaign_create_request(split)
@@ -744,10 +778,12 @@ def build_server(bind, port, token, bridge_path, write_path=None,
     server.console = {"token": token, "bridge": Bridge(bridge_path, **kwargs),
                       "accounts": AccountControls(),
                       "writes": WriteBridge(write_path or default_write_bridge()),
+                      "schedules": WriteBridge(_volume_bin("console-schedule"), timeout=30),
                       "campaigns": WriteBridge(_volume_bin("console-campaign-create"), timeout=120),
                       "actions": WriteBridge(
                           action_path or default_action_bridge(),
                           label=lambda request: "groups/%s" % request.get("jid"))}
+    server.console["schedules"].lock = server.console["writes"].lock
     server.console["campaigns"].lock = server.console["writes"].lock
     return server
 
@@ -786,15 +822,17 @@ def main():
             wake_reconcile.clear()
             if (os.environ.get(WRITE_KEY_VAR) or "").strip():
                 status, body = server.console["campaigns"].run({"reconcile": True})
+                deletions_pending = schedule_pending = 0
                 try:
                     result = json.loads(body)
                     pending = result.get("pending", 0)
+                    schedule_pending = result.get("schedulePending", 0)
                     deletions_pending = result.get("deletionsPending", 0)
                     if result.get("deletionsChanged"):
                         server.console["bridge"].invalidate()
                 except (ValueError, AttributeError):
                     pending = 1
-                if status == 200 and deletions_pending:
+                if status == 200 and (deletions_pending or schedule_pending):
                     delay = 60
                 elif status != 200 or pending:
                     log("campaign schedule reconciliation is pending")

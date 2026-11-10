@@ -50,6 +50,7 @@ import ad_assets  # noqa: E402
 import config_shadow  # noqa: E402
 import promo_config  # noqa: E402
 import console_campaigns
+import console_schedule
 import operator_config  # noqa: E402
 import console_config  # noqa: E402
 import operator_writer  # noqa: E402
@@ -457,6 +458,10 @@ def campaign_records(day, only_slug=None, include_assets=True):
             }
         )
     records.extend(console_campaigns.records(m, day, resolved().get("storeSwitches"), only_slug=only_slug))
+    declared_by_slug = {row["slug"]: row for row in declared.get("promos", [])}
+    for row in records:
+        doc = (m.get("promos") or {}).get(row["slug"], {})
+        row.update(console_schedule.read_fields(doc, declared_by_slug.get(row["slug"]), day))
     records.sort(key=lambda row: (row["hour"] if row["hour"] is not None else 99, row["minute"] or 0))
     return records
 
@@ -649,6 +654,7 @@ def write_capabilities():
                        for collection, names in operator_writer.EDITABLE.items()),
         "delete": list(operator_writer.DELETABLE),
         "campaignDeletion": __import__("campaign_deletion").capability(),
+        "scheduleEditing": {"edit": current == promo_config.FIRESTORE and os.path.isfile(str(Path(__file__).with_name("console-schedule")))},
         "campaignCreation": {"create": current == promo_config.FIRESTORE,
                              "images": ad_assets.mode()[0] == "r2" and bool(ad_assets.base_url()),
                              "scheduling": True},

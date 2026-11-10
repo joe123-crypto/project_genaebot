@@ -182,6 +182,11 @@ def desired(entry, manifest, before, assets, workspace=WORKSPACE):
     store_switch = before.get("enabled", True)
     if type(store_switch) is not bool:
         raise MigrationError("%s: the store's enabled is %r, not a boolean" % (slug, store_switch))
+    effective_entry = dict(entry)
+    if before.get("scheduleOverride"):
+        effective_entry.update(cron=before["scheduleOverride"]["cron"], tz=before["scheduleOverride"]["timezone"])
+    if before.get("kind") == KIND and before.get("scheduleEdit"):
+        effective_entry.update(cron=console_campaigns.cron_expression(before["schedule"]), tz=before["schedule"]["timezone"])
     after = dict(before)
     after.update({
         "kind": KIND,
@@ -190,7 +195,7 @@ def desired(entry, manifest, before, assets, workspace=WORKSPACE):
         # An override saved from the console is already what a run sends.
         "captions": before["captions"] if "captions" in before else captions,
         "tracking": tracking,
-        "schedule": schedule_of(entry),
+        "schedule": schedule_of(effective_entry),
         "timeoutSeconds": int(entry.get("timeoutSeconds") or manifest.get("timeoutSeconds") or 7200),
         "failureAlertTo": entry.get("failureAlertTo") or "",
         "images": console_campaigns.images_from_assets(assets),
