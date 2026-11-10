@@ -170,6 +170,9 @@ def resolve(promo, targets_file=None, membership_path=None, env=None, err=None,
     err = err or sys.stderr
     slug = promo_key(promo)
     current, warning = mode(env)
+    import campaign_deletion
+    if campaign_deletion.enabled(env) and current != FIRESTORE:
+        raise operator_config.ConfigUnavailable("campaign deletion protection requires live Firestore configuration")
     notes = []
 
     def note(message):
@@ -211,7 +214,7 @@ def resolve(promo, targets_file=None, membership_path=None, env=None, err=None,
         return {"source": loaded["source"], "mode": current, "doc": doc,
                 "membership": membership, "switches": switches,
                 "storeSwitches": dict(loaded["enabled"]), "cronSwitches": declared,
-                "enabled": loaded["enabled"].get(slug), "report": loaded["report"],
+                "enabled": loaded["enabled"].get(slug), "report": loaded["report"], "deleted": loaded.get("deleted", []),
                 "notes": notes}
 
     doc = {}

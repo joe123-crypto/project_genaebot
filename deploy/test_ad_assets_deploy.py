@@ -67,26 +67,26 @@ class SwitchTest(unittest.TestCase):
 
 
 class CredentialTest(unittest.TestCase):
-    def test_no_r2_write_credential_reaches_the_container(self):
-        # The bot reads the bucket over plain public HTTPS. Only the operator's
-        # machine ever signs anything, so none of these may appear in the
-        # entrypoint, in a release profile, or in the runtime module.
+    def test_r2_write_credentials_reach_only_the_console_api_child(self):
         for name in R2_WRITE_VARS:
-            self.assertNotIn(name, ENTRYPOINT, name)
             self.assertNotIn(name, RELEASE, name)
             self.assertNotIn(name, MODULE, name)
+        self.assertIn("unset R2_ACCOUNT_ID R2_BUCKET R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY", ENTRYPOINT)
+        self.assertLess(ENTRYPOINT.index("unset R2_ACCOUNT_ID"), ENTRYPOINT.index('if [ "${GENAIE_CONSOLE_API:-0}"'))
+        self.assertIn('R2_ACCESS_KEY_ID="$console_r2_access" R2_SECRET_ACCESS_KEY="$console_r2_secret"', ENTRYPOINT)
+        self.assertIn("unset console_r2_account console_r2_bucket console_r2_access console_r2_secret", ENTRYPOINT)
 
     def test_the_runtime_module_never_signs_a_request(self):
         for forbidden in ("hmac", "Authorization", "AWS4", "r2_sigv4"):
             self.assertNotIn(forbidden, MODULE, forbidden)
 
-    def test_the_signer_is_not_staged_into_the_container(self):
-        # deploy/ is never staged into the image; only workspace/ is. Keeping the
-        # signer in deploy/ is what makes that true by construction.
+    def test_the_signer_is_baked_separately_from_the_broadcast_workspace(self):
+        # Broadcasts continue to use public GETs; the console API loads this helper.
         staged = (ROOT / "deploy/stage-workspace.rsync").read_text(encoding="utf-8")
         self.assertNotIn("r2_sigv4", staged)
         self.assertTrue((ROOT / "deploy/r2_sigv4.py").is_file())
         self.assertFalse((ROOT / "workspace/lib/r2_sigv4.py").exists())
+        self.assertIn("COPY deploy/r2_sigv4.py /usr/local/lib/genaie/r2_sigv4.py", (ROOT / "deploy/railway/Dockerfile").read_text())
 
     def test_the_upload_script_names_its_firestore_key_explicitly(self):
         # Never pick up the read-only runtime key by accident, the way

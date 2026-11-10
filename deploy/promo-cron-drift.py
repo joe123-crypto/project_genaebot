@@ -23,6 +23,7 @@ then reported separately: their schedules belong to the Firestore reconciler.
 Exit codes: 0 in sync, 1 drift/missing/legacy/undeclared, 2 bad input or manifest.
 """
 
+from pathlib import Path
 import argparse
 import json
 import os
@@ -118,8 +119,8 @@ def informational(job):
     return {"cwd": cwd, "cwdKey": next(iter(found), None), "failureAlert": alert or None}
 
 
-def classify(manifest, jobs, only=None):
-    promos = manifest["promos"]
+def classify(manifest, jobs, only=None, deleted=()):
+    promos = [p for p in manifest["promos"] if p["slug"] not in deleted]
     if only:
         wanted = set(only)
         promos = [p for p in promos if p["slug"] in wanted or p["name"] in wanted]
@@ -145,10 +146,10 @@ def classify(manifest, jobs, only=None):
 
     # Anything promo-shaped that we did not declare keeps firing forever: register_promo_cron
     # matches on .name only, so a leftover under another name posts the same ad a second time.
-    declared_names = {p["name"] for p in manifest["promos"]}
+    declared_names = {p["name"] for p in manifest["promos"] if p["slug"] not in deleted}
     legacy_owner = {legacy: p["name"] for p in manifest["promos"]
                     for legacy in p.get("legacyNames", [])}
-    selected_dirs = {p["name"] for p in promos}
+    selected_dirs = {p["name"] for p in manifest["promos"] if not only or p["slug"] in only or p["name"] in only}
     for job in jobs:
         name = job.get("name")
         if not name or name in declared_names:
@@ -163,7 +164,7 @@ def classify(manifest, jobs, only=None):
                "enabled": job.get("enabled"),
                "argv": argv,
                "shadows": match.group(1) if match else None}
-        if name not in legacy_owner and console_owned(manifest, name, argv):
+        if name not in legacy_owner and name not in {"console-%s-promo" % slug for slug in deleted} and console_owned(manifest, name, argv):
             if not only:
                 report["consoleOwned"].append(row)
             continue
@@ -238,6 +239,7 @@ def main(argv):
                         help="file holding `openclaw cron list --all --json`, or - for stdin")
     parser.add_argument("--only", action="append", default=[], metavar="PROMO",
                         help="limit to this promo (slug or job name); repeatable")
+    parser.add_argument("--deleted", help="JSON list of retired slugs read from the live gateway")
     parser.add_argument("--json", action="store_true", dest="as_json")
     args = parser.parse_args(argv[1:])
 
@@ -262,7 +264,14 @@ def main(argv):
         sys.stderr.write("ERROR: unusable live cron state: %s\n" % ex)
         return 2
 
-    report = classify(manifest, jobs, args.only)
+    try:
+        deleted = json.loads(Path(args.deleted).read_text()) if args.deleted else []
+        if not isinstance(deleted, list) or any(not isinstance(slug, str) for slug in deleted):
+            raise ValueError("expected a list of retired slugs")
+    except (OSError, ValueError) as ex:
+        sys.stderr.write("ERROR: cannot read campaign retirements: %s\n" % ex)
+        return 2
+    report = classify(manifest, jobs, args.only, deleted)
     if args.as_json:
         json.dump({"manifest": args.manifest, "checked": len(report["ok"]) + len(report["drifted"]),
                    "ok": [e["name"] for e in report["ok"]],

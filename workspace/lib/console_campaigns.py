@@ -348,6 +348,7 @@ def create(data, store, env=None, verify=verify_image, reconcile=None):
 
 
 def finish(slug, store, reconcile):
+    need(not (store.get("campaigns", slug) or {}).get("deleted"), "this campaign has been deleted")
     try:
         if reconcile is None:
             reconcile_one(slug, store)

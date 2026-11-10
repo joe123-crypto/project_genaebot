@@ -409,6 +409,11 @@ fi
 # Read-only operator console API, off unless explicitly enabled. Backgrounded
 # and never waited on, like the readiness probe below, so neither a crash nor a
 # slow start here can abort this boot or disturb the gateway.
+console_r2_account="${R2_ACCOUNT_ID:-}"
+console_r2_bucket="${R2_BUCKET:-}"
+console_r2_access="${R2_ACCESS_KEY_ID:-}"
+console_r2_secret="${R2_SECRET_ACCESS_KEY:-}"
+unset R2_ACCOUNT_ID R2_BUCKET R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY
 if [ "${GENAIE_CONSOLE_API:-0}" = "1" ]; then
   # The operator-config write key is deliberately NOT in SECRET_KEYS. That list
   # is exported into this shell, so the gateway and every cron run it spawns
@@ -422,6 +427,8 @@ if [ "${GENAIE_CONSOLE_API:-0}" = "1" ]; then
   console_write_key="${console_write_key%"${console_write_key##*[![:space:]]}"}"
   console_write_key="${console_write_key#\"}"; console_write_key="${console_write_key%\"}"
   console_write_key="${console_write_key#\'}"; console_write_key="${console_write_key%\'}"
+  R2_ACCOUNT_ID="$console_r2_account" R2_BUCKET="$console_r2_bucket" \
+  R2_ACCESS_KEY_ID="$console_r2_access" R2_SECRET_ACCESS_KEY="$console_r2_secret" \
   GCP_SERVICE_ACCOUNT_WRITE_B64="$console_write_key" \
     runuser -u joseph -- python3 /usr/local/bin/console-api.py &
   if [ -n "$console_write_key" ]; then
@@ -429,8 +436,9 @@ if [ "${GENAIE_CONSOLE_API:-0}" = "1" ]; then
   else
     log "console api enabled on port ${CONSOLE_API_PORT:-18790} (read-only: no write key)"
   fi
-  unset console_write_key
+  unset console_write_key console_r2_account console_r2_bucket console_r2_access console_r2_secret
 fi
+unset console_r2_account console_r2_bucket console_r2_access console_r2_secret
 runuser -u joseph -- python3 /usr/local/bin/report-release-ready.py &
 # setpriv execs the supervisor directly. runuser handles SIGTERM itself and
 # force-kills its child after two seconds, defeating the gateway's drain budget.

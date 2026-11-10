@@ -105,6 +105,7 @@ COPY deploy/promo-crons.json /usr/local/lib/genaie/promo-crons.json
 # what the console falls back to when Firestore cannot be read and no snapshot
 # has been written yet, which in `repo` mode is every container's first hours.
 COPY deploy/ad-assets.json /usr/local/lib/genaie/ad-assets.json
+COPY deploy/r2_sigv4.py /usr/local/lib/genaie/r2_sigv4.py
 RUN python3 -c 'from zoneinfo import ZoneInfo; ZoneInfo("Africa/Algiers")'
 COPY deploy/railway/wait-gateway-lease.py /usr/local/bin/wait-gateway-lease.py
 COPY deploy/railway/whatsapp-lid-loader.mjs deploy/railway/whatsapp-lid-recovery.mjs deploy/railway/whatsapp-cache-cleanup.mjs deploy/railway/whatsapp-health-audit.mjs /usr/local/lib/genaie/

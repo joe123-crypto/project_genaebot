@@ -37,6 +37,31 @@ class CampaignAPI(Harness):
         self.assertEqual(code, 200)
         self.assertEqual(json.loads(body)["scheduling"], "pending")
 
+    def test_delete_route_authentication_forwarding_and_cache_invalidation(self):
+        base = self.serve_campaign()
+        self.assertEqual(self.post(base, "/campaigns/demo/delete", {}, token=None)[0], 401)
+        self.server.console["bridge"].cache["stale"] = (99999999999, b"cached")
+        import threading
+        self.server.console["reconcileWake"] = threading.Event()
+        code, body = self.post(base, "/campaigns/demo/delete", {"actor": "Operator"})
+        self.assertTrue(self.server.console["reconcileWake"].is_set())
+        self.assertEqual(code, 200)
+        self.assertEqual(json.loads(body)["echo"], {"delete": "demo", "actor": "Operator"})
+        self.assertEqual(self.server.console["bridge"].cache, {})
+        self.set_key(None)
+        self.assertEqual(self.post(base, "/campaigns/demo/delete", {})[0], 503)
+    def test_delete_rejects_untrusted_commands_and_additional_fields(self):
+        base = self.serve_campaign()
+        for body in [{"reconcile": True}, {"delete": "other"}, {"actor": "Operator", "key": "ads/arbitrary"}, []]:
+            self.assertEqual(self.post(base, "/campaigns/demo/delete", body)[0], 400)
+        self.assertEqual(self.server.console["campaigns"].runs, 0)
+    def test_accepted_pending_deletion_is_success(self):
+        source = 'import json,sys\nsys.stdin.read()\njson.dump({"ok":True,"status":200,"slug":"demo","cleanup":"pending"},sys.stdout)'
+        base = self.serve_campaign(source)
+        code, body = self.post(base, "/campaigns/demo/delete", {})
+        self.assertEqual(code, 200)
+        self.assertEqual(json.loads(body)["cleanup"], "pending")
+
 
 if __name__ == "__main__":
     unittest.main()

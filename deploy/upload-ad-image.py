@@ -553,15 +553,17 @@ def main(argv):
             campaigns_raw = operator_config.list_documents(
                 creds["project_id"], "campaigns", token,
                 opener=urllib.request.urlopen, sleep=time.sleep)
-            data_defined = dict((slug, operator_config.decode_fields(fields))
-                                for slug, fields in campaigns_raw)
-            data_defined = dict((slug, doc) for slug, doc in data_defined.items()
-                                if doc.get("kind") == "console")
-            # A campaign converted from this repo is data-defined too, but its
-            # pictures are still the mirror's business until the mirror goes.
+            data_defined = {slug: operator_config.decode_fields(fields) for slug, fields in campaigns_raw}
+            deleted = {slug for slug, doc in data_defined.items() if doc.get("deleted") is True}
+            if args.campaign in deleted:
+                raise UploadError("this campaign has been deleted")
+            campaigns = {slug: entries for slug, entries in campaigns.items() if slug not in deleted}
+            data_defined = {slug: doc for slug, doc in data_defined.items()
+                            if doc.get("kind") == "console" and slug not in deleted}
+            # Converted repo campaigns remain part of the picture mirror.
             console_slugs = set(data_defined) - set(dirs)
             rows = [(doc_id, fields) for doc_id, fields in rows
-                    if operator_config.decode_fields(fields).get("campaign") not in console_slugs]
+                    if operator_config.decode_fields(fields).get("campaign") not in console_slugs | deleted]
             indexed, quarantined = ad_assets._assemble(rows)
 
             if args.verify:
@@ -615,17 +617,59 @@ def main(argv):
                 print("dry run: nothing uploaded or written (use --write)")
                 return 0
 
+            # Reserve upload keys before the first PUT. Deletion reads these
+            # receipts atomically and waits out their bounded upload lease, even
+            # if the uploader crashes before indexing its objects.
+            import console_campaigns
+            import secrets
+            store_env = dict(os.environ, GENAIE_FIRESTORE_DIR=cache, GCP_SERVICE_ACCOUNT_B64=__import__("base64").b64encode(json.dumps(creds).encode()).decode())
+            store_env.pop("GCP_SERVICE_ACCOUNT_FILE", None)
+            store = console_campaigns.Store(store_env)
+            receipt = secrets.token_hex(16)
+            planned = [dict(entry) for entries in campaigns.values() for entry in entries]
+            store.begin()
+            try:
+                current = {slug: operator_config.decode_fields(fields) for slug, fields in store.list("campaigns")}
+                if any(current.get(slug, {}).get("deleted") for slug in campaigns):
+                    raise UploadError("campaign was deleted while preparing uploads; refresh the plan")
+                store.commit([("campaign_asset_uploads", receipt, {"assets": planned,
+                              "expiresAt": int(time.time()) + len(uploads) * r2_sigv4.HTTP_TIMEOUT_SECONDS + 600}, False)])
+            finally:
+                store.rollback()
             endpoint, bucket, access, secret = r2 if r2 else (None, None, None, None)
             for key, name, _size, content_type in uploads:
                 r2_sigv4.put_object(endpoint, bucket, key, bodies[key], content_type,
                                     access_key=access, secret_key=secret)
                 print("uploaded %s" % key)
-            operator_writer.commit(creds["project_id"], token, writes,
-                                   strays if args.prune else [])
-            for slug in sorted(rotations):
-                console_campaigns.set_images(creds["project_id"], token, slug,
-                                             rotations[slug])
-            write_mirror(campaigns)
+            store.begin()
+            try:
+                current = {slug: operator_config.decode_fields(fields) for slug, fields in store.list("campaigns")}
+                if any(current.get(slug, {}).get("deleted") for slug in campaigns):
+                    raise UploadError("campaign was deleted during upload; its reserved pictures will be cleaned up")
+                # The old plan must still describe the current index.
+                current_assets = dict(store.list("assets"))
+                if any(current_assets.get(key) != dict(rows).get(key) for key in [row[1] for row in writes] + ([row[1] for row in strays] if args.prune else [])):
+                    raise UploadError("asset index changed during upload; refresh the plan")
+                operations = [{"update": {"name": "%s/%s/%s" % (store.base, collection, key),
+                                          "fields": operator_config.encode_fields(fields)},
+                               "currentDocument": {"exists": exists}}
+                              for collection, key, fields, exists in writes]
+                operations += [{"delete": "%s/%s/%s" % (store.base, collection, key)} for collection, key in (strays if args.prune else [])]
+                for slug, images in rotations.items():
+                    if current.get(slug, {}).get("kind") != "console":
+                        raise UploadError("campaign conversion changed during upload; refresh the plan")
+                    operations.append({"update": {"name": "%s/campaigns/%s" % (store.base, slug),
+                                                  "fields": operator_config.encode_fields({"images": images})},
+                                       "updateMask": {"fieldPaths": ["images"]},
+                                       "currentDocument": {"exists": True}})
+                operations.append({"delete": "%s/campaign_asset_uploads/%s" % (store.base, receipt)})
+                if len(operations) > 500:
+                    raise UploadError("asset update exceeds the atomic write limit; upload fewer files")
+                store.request(":commit", {"transaction": store.transaction, "writes": operations})
+                store.transaction = None
+            finally:
+                store.rollback()
+            write_mirror({**{slug: entries for slug, entries in mirror.get("campaigns", {}).items() if slug in deleted}, **campaigns})
             print("indexed in project %s; %s rewritten -- commit it"
                   % (creds["project_id"], MIRROR.relative_to(ROOT)))
             return 0

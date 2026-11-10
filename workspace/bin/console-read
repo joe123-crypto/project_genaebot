@@ -32,6 +32,8 @@ import io
 import json
 import os
 import sys
+import time
+import urllib.request
 from datetime import date
 from functools import partial
 from pathlib import Path
@@ -394,7 +396,7 @@ def campaign_records(day, only_slug=None, include_assets=True):
     records = []
     for entry in declared.get("promos", []):
         slug = entry["slug"]
-        if slug in converted or (only_slug is not None and slug != only_slug):
+        if slug in converted or (only_slug is not None and slug != only_slug) or slug in resolved().get("deleted", []):
             continue
         script = script_path(entry["script"])
         captions = []
@@ -471,6 +473,8 @@ def preview(slug, day):
     """
     m = membership()
     declared = manifest()
+    if slug in resolved().get("deleted", []):
+        raise NotFound("campaign has been deleted")
 
     entry = next((row for row in declared.get("promos", []) if row["slug"] == slug), None)
     custom = console_campaigns.definitions(m).get(slug)
@@ -605,6 +609,28 @@ def ad_assets_status():
             "note": catalogue["note"]}
 
 
+def deletion_records():
+    import campaign_deletion
+    if not campaign_deletion.enabled():
+        return []
+    # API reads already hold the writer credential. Use its separate token cache.
+    # A direct local read can use read-only credentials for this collection too.
+    env = dict(os.environ)
+    key = env.get("GCP_SERVICE_ACCOUNT_WRITE_B64")
+    if key:
+        env["GCP_SERVICE_ACCOUNT_B64"] = key
+        env.pop("GCP_SERVICE_ACCOUNT_FILE", None)
+        env["GENAIE_FIRESTORE_DIR"] = str(Path(operator_config.state_dir()) / "writer")
+    creds = operator_config.credentials(env)
+    if not creds:
+        raise BridgeError("cannot read campaign deletion status")
+    token = operator_config.access_token(creds, operator_config.token_cache_path(operator_config.state_dir(env)),
+        opener=urllib.request.urlopen,
+        signer=operator_config.node_signer, now=time.time, sleep=time.sleep)
+    rows = operator_config.list_documents(creds["project_id"], "campaign_deletions", token, opener=urllib.request.urlopen, sleep=time.sleep)
+    return [campaign_deletion.summary(slug, operator_config.decode_fields(fields)) for slug, fields in rows]
+
+
 def write_capabilities():
     """What a console may offer to change, straight from the writer that will
     judge it, so no screen can present an edit the bot is going to refuse.
@@ -622,6 +648,7 @@ def write_capabilities():
         "fields": dict((collection, list(names))
                        for collection, names in operator_writer.EDITABLE.items()),
         "delete": list(operator_writer.DELETABLE),
+        "campaignDeletion": __import__("campaign_deletion").capability(),
         "campaignCreation": {"create": current == promo_config.FIRESTORE,
                              "images": ad_assets.mode()[0] == "r2" and bool(ad_assets.base_url()),
                              "scheduling": True},
@@ -681,6 +708,7 @@ def overview(day):
         "groupsByStatus": by_status,
         "groupTotal": len(groups),
         "campaignTotal": len(campaigns),
+        "deletedCampaigns": resolved().get("deleted", []),
         "plannedSendsToday": planned,
         "accounts": accounts(m),
         "capsEnabled": bool((m.get("defaults") or {}).get("caps_enabled")),
@@ -718,6 +746,10 @@ def campaign_edit_state(slug, captions_only=False):
         store_on = switch if isinstance(switch, bool) else False
     else:
         store_on = store_enabled(declared) if declared else False
+    if doc and doc.get("deleted") is True:
+        if captions_only:
+            raise NotFound("campaign has been deleted")
+        return {"campaign": None}
     if declared is None and (not doc or doc.get("kind") != "console"):
         if captions_only:
             raise NotFound("unknown campaign %r" % slug)
@@ -765,10 +797,16 @@ def navigation():
                                            "value": operator_config.encode_value(value)}},
                     opener=urllib.request.urlopen, sleep=time.sleep)
             review = count("groups", "status", ["on-hold", "admin-only", "not-a-member"])
-            # A converted campaign is both declared and kind=console; only it
-            # carries its declared job name, so that is how to count it once.
-            names = [row["name"] for row in manifest().get("promos", []) if row.get("name")]
-            total = (len(manifest().get("promos", [])) + count("campaigns", "kind", "console")
+            builtins = {entry["slug"] for entry in manifest().get("promos", [])}
+            retired = []
+            if __import__("campaign_deletion").enabled():
+                retired = operator_config.query_documents(creds["project_id"], "campaigns",
+                    {"fieldFilter": {"field": {"fieldPath": "deleted"}, "op": "EQUAL", "value": {"booleanValue": True}}},
+                    token, opener=urllib.request.urlopen, sleep=time.sleep)
+            retired_slugs = {slug for slug, fields in retired}
+            names = [row["name"] for row in manifest().get("promos", [])
+                     if row.get("name") and row["slug"] not in retired_slugs]
+            total = (len(builtins - retired_slugs) + count("campaigns", "kind", "console")
                      - (count("campaigns", "jobName", names) if names else 0))
         return {"campaignTotal": total, "groupsNeedingReview": review}
     try:
@@ -815,7 +853,7 @@ def main(argv):
             group_metrics.attach(payload, membership())
         elif command == "campaigns":
             payload = {"date": day.isoformat(), "adAssets": ad_assets_status(),
-                       "campaigns": campaign_records(day)}
+                       "campaigns": campaign_records(day), "deletions": deletion_records()}
         elif command == "campaign":
             records = campaign_records(day, only_slug=slug)
             payload = {"date": day.isoformat(), "adAssets": ad_assets_status(),

@@ -1,0 +1,23 @@
+#!/usr/bin/env python3
+"""Installer check: 0 active, 3 retired, 1 unavailable (do not install)."""
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+import campaign_deletion as deletion
+
+if __name__ == "__main__":
+    try:
+        slug = sys.argv[1]
+        if slug == "--deleted":
+            import json
+            if deletion.enabled():
+                _, raw = deletion.config.fetch()
+                print(json.dumps(sorted(deletion.deleted_slugs(raw))))
+            else:
+                print("[]")
+            sys.exit(0)
+        if deletion.enabled() and deletion.live_campaign(slug).get("deleted") is True:
+            sys.exit(3)
+    except Exception as ex:
+        sys.stderr.write("Cannot verify campaign retirement (%s); refusing cron installation.\n" % type(ex).__name__)
+        sys.exit(1)
