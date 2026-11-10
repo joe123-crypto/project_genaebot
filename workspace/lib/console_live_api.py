@@ -80,7 +80,7 @@ class LiveViews:
             raise console_live_index.NotReady("Waiting for the active write.")
         config, revision = self.index.snapshot()
         if self.write_fence:
-            if not self.index.await_boundary(self.write_fence):
+            if datetime.datetime.fromisoformat(config["fetchedAt"].replace("Z", "+00:00")) < datetime.datetime.fromisoformat(self.write_fence.replace("Z", "+00:00")):
                 raise console_live_index.NotReady("Waiting for the committed changes to reach the display index.")
             self.write_fence = None
             config, revision = self.index.snapshot()
@@ -136,6 +136,13 @@ class LiveViews:
             with self.index.condition:
                 self.index.lease_until = self.index.clock() + console_live_index.LEASE_SECONDS
         self.index.counters["indexedRequests"] += 1
+        # Never hold the projection lock while waiting on the network. Local
+        # telemetry and other requests must remain usable during an outage.
+        if route not in ("metrics", "discoveries", "status"):
+            with self.lock:
+                boundary = self.write_fence if not self.writes_active else None
+            if boundary:
+                self.index.await_boundary(boundary)
         with self.lock:
             if route == "metrics":
                 return self.metrics(params)
