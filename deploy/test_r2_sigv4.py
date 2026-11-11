@@ -243,5 +243,112 @@ class PutObjectTest(unittest.TestCase):
         self.assertNotIn("secret", repr(self.seen).lower())
 
 
+
+
+LIST_NS = 'xmlns="http://s3.amazonaws.com/doc/2006-03-01/"'
+
+
+def listing(contents, *, truncated=False, token=None):
+    """A ListObjectsV2 reply, in the shape and namespace R2 answers with."""
+    items = "".join(
+        "<Contents><Key>%s</Key><Size>%s</Size><ETag>&quot;%s&quot;</ETag>"
+        "<LastModified>%s</LastModified></Contents>"
+        % (key, size, etag, modified) for key, size, etag, modified in contents)
+    tail = "<NextContinuationToken>%s</NextContinuationToken>" % token if token else ""
+    return ("<?xml version='1.0' encoding='UTF-8'?>"
+            "<ListBucketResult %s><IsTruncated>%s</IsTruncated>%s%s</ListBucketResult>"
+            % (LIST_NS, "true" if truncated else "false", items, tail)).encode("utf-8")
+
+
+class ListObjectsTest(unittest.TestCase):
+    def setUp(self):
+        self.requests = []
+
+    def opener(self, replies):
+        pages = list(replies)
+
+        class Response:
+            def __init__(self, payload):
+                self.status = 200
+                self._payload = payload
+
+            def read(self):
+                return self._payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+        def open_(request, timeout=None):
+            self.requests.append((request.full_url, request.method,
+                                  dict((k.lower(), v) for k, v in request.headers.items())))
+            return Response(pages.pop(0))
+
+        return open_
+
+    def list(self, replies, **kwargs):
+        return r2_sigv4.list_objects(
+            "https://acc.r2.cloudflarestorage.com", "genaie-ads",
+            access_key="k", secret_key="s", opener=self.opener(replies), **kwargs)
+
+    def test_a_listing_is_decoded_and_sorted_by_key(self):
+        rows = self.list([listing([("ads/b.jpg", "20", "e2", "2026-11-02T00:00:00Z"),
+                                   ("ads/a.jpg", "10", "e1", "2026-11-01T00:00:00Z")])])
+        self.assertEqual(rows, [
+            {"key": "ads/a.jpg", "bytes": 10, "etag": "e1", "modified": "2026-11-01T00:00:00Z"},
+            {"key": "ads/b.jpg", "bytes": 20, "etag": "e2", "modified": "2026-11-02T00:00:00Z"}])
+
+    def test_the_request_is_signed_and_asks_for_v2(self):
+        self.list([listing([])])
+        url, method, headers = self.requests[0]
+        self.assertEqual(method, "GET")
+        self.assertIn("list-type=2", url)
+        self.assertIn("max-keys=1000", url)
+        self.assertEqual(headers["x-amz-content-sha256"],
+                         hashlib.sha256(b"").hexdigest())
+        self.assertTrue(headers["authorization"].startswith("AWS4-HMAC-SHA256 "))
+
+    def test_a_prefix_is_passed_through(self):
+        self.list([listing([])], prefix="ads/cv/")
+        self.assertIn("prefix=ads%2Fcv%2F", self.requests[0][0])
+
+    def test_every_page_is_followed(self):
+        rows = self.list([
+            listing([("ads/a.jpg", "1", "e", "t")], truncated=True, token="page-2"),
+            listing([("ads/b.jpg", "2", "e", "t")])])
+        self.assertEqual([row["key"] for row in rows], ["ads/a.jpg", "ads/b.jpg"])
+        self.assertIn("continuation-token=page-2", self.requests[1][0])
+
+    def test_a_truncated_listing_with_no_token_is_refused(self):
+        # Returning the first page as if it were the whole bucket would make a
+        # backup quietly incomplete, which is worse than failing.
+        with self.assertRaises(r2_sigv4.R2Error) as caught:
+            self.list([listing([("ads/a.jpg", "1", "e", "t")], truncated=True)])
+        self.assertIn("continuation token", str(caught.exception))
+
+    def test_an_unreadable_reply_is_refused(self):
+        with self.assertRaises(r2_sigv4.R2Error) as caught:
+            self.list([b"<not xml"])
+        self.assertIn("unreadable listing", str(caught.exception))
+
+
+class SettingsTest(unittest.TestCase):
+    """Only the endpoint resolution lives here; the credentials file itself is
+    covered in deploy/test_ad_assets_deploy.py, which also asserts that no real
+    value is ever committed."""
+
+    def test_settings_expand_the_account_id_and_name_what_is_missing(self):
+        endpoint, bucket, access, secret = r2_sigv4.settings(
+            {"R2_ACCOUNT_ID": "acc", "R2_BUCKET": "ads",
+             "R2_ACCESS_KEY_ID": "k", "R2_SECRET_ACCESS_KEY": "s"})
+        self.assertEqual(endpoint, "https://acc.r2.cloudflarestorage.com")
+        self.assertEqual((bucket, access, secret), ("ads", "k", "s"))
+        with self.assertRaises(r2_sigv4.R2Error) as caught:
+            r2_sigv4.settings({"R2_ACCOUNT_ID": "acc"})
+        self.assertIn("R2_BUCKET", str(caught.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

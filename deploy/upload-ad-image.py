@@ -45,7 +45,6 @@ import argparse
 import hashlib
 import json
 import os
-import stat
 import sys
 import tempfile
 import time
@@ -305,97 +304,12 @@ def bodies_for(dirs, campaigns, extra_paths):
 
 
 # ------------------------------------------------------------------- write ----
-DEFAULT_ENV_FILE = os.path.join(
-    os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
-    "genaie", "r2-upload.env")
-
-
-def parse_env_file(text):
-    """``KEY=VALUE`` lines as a dict. Blank lines and ``#`` comments are
-    ignored, as is a leading ``export``, and one layer of surrounding quotes is
-    stripped -- the same shapes the entrypoint's variable sanitiser allows, so a
-    value pasted from the Cloudflare dashboard behaves the same in both places.
-
-    Not a shell: no substitution, no command execution. A file of credentials is
-    the last thing that should be able to run something."""
-    out = {}
-    for number, raw in enumerate(text.splitlines(), start=1):
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line[len("export "):].lstrip()
-        if "=" not in line:
-            raise UploadError("line %d is not KEY=VALUE: %r" % (number, raw.strip()))
-        name, _, value = line.partition("=")
-        name, value = name.strip(), value.strip()
-        for quote in ('"', "'"):
-            if len(value) >= 2 and value.startswith(quote) and value.endswith(quote):
-                value = value[1:-1]
-                break
-        out[name] = value
-    return out
-
-
-def load_env_file(path, *, required, env=None):
-    """Fill ``env`` from ``path`` without overwriting anything already set.
-
-    Returns the path it read, or ``None``. A file holding an R2 secret that any
-    other account on the machine can read is refused rather than used: the whole
-    point of keeping these off the server is that exactly one place has them."""
-    env = os.environ if env is None else env
-    try:
-        with open(path, encoding="utf-8") as handle:
-            # fstat the open handle, not the path: it is the bytes just read
-            # whose permissions matter, and nothing can swap the file underneath.
-            mode = os.fstat(handle.fileno()).st_mode
-            text = handle.read()
-    except FileNotFoundError:
-        if required:
-            raise UploadError("no such env file: %s" % path)
-        return None
-    except OSError as ex:
-        raise UploadError("cannot read %s: %s" % (path, ex))
-    if mode & (stat.S_IRGRP | stat.S_IROTH):
-        raise UploadError("%s is readable by other accounts; run "
-                          "`chmod 600 %s` and try again" % (path, path))
-    try:
-        values = parse_env_file(text)
-    except UploadError as ex:
-        raise UploadError("%s: %s" % (path, ex))
-    for name, value in values.items():
-        env.setdefault(name, value)
-    return path
-
-
-def r2_target(endpoint, bucket):
-    """``<host>/<bucket>`` for the log, with the account id shortened.
-
-    Enough for an operator to see they are pointed at the right bucket in the
-    right account; not the whole account id, because this line ends up in
-    terminal scrollback and pasted output."""
-    host = urllib.parse.urlsplit(endpoint).netloc
-    account, _, rest = host.partition(".")
-    if len(account) > 8:
-        host = "%s...%s.%s" % (account[:6], account[-2:], rest)
-    return "%s/%s" % (host, bucket)
-
-
-def r2_settings(args):
-    endpoint = args.endpoint or os.environ.get("R2_ENDPOINT")
-    account = os.environ.get("R2_ACCOUNT_ID")
-    if not endpoint and account:
-        endpoint = "https://%s.r2.cloudflarestorage.com" % account
-    bucket = args.bucket or os.environ.get("R2_BUCKET")
-    access = os.environ.get("R2_ACCESS_KEY_ID")
-    secret = os.environ.get("R2_SECRET_ACCESS_KEY")
-    missing = [name for name, value in (("R2_ACCOUNT_ID or --endpoint", endpoint),
-                                        ("R2_BUCKET or --bucket", bucket),
-                                        ("R2_ACCESS_KEY_ID", access),
-                                        ("R2_SECRET_ACCESS_KEY", secret)) if not value]
-    if missing:
-        raise UploadError("R2 is not configured: no %s" % ", ".join(missing))
-    return endpoint, bucket, access, secret
+# Reading the bucket credentials, resolving the endpoint and shortening the
+# account id for the log all live in deploy/r2_sigv4.py, beside the signing they
+# are for, so this script and deploy/backup-operator-data.py cannot disagree
+# about where a credential comes from or refuse a world-readable file
+# differently. They raise R2Error, which main() already handles beside
+# UploadError.
 
 
 def firestore_credentials(key):
@@ -502,7 +416,7 @@ def main(argv):
     parser.add_argument("--key", help="service-account key file "
                                       "(else GCP_SERVICE_ACCOUNT_FILE)")
     parser.add_argument("--env-file", metavar="PATH",
-                        help="credentials file (default: %s)" % DEFAULT_ENV_FILE)
+                        help="credentials file (default: %s)" % r2_sigv4.DEFAULT_ENV_FILE)
     parser.add_argument("--no-env-file", action="store_true",
                         help="read credentials only from the environment")
     parser.add_argument("--endpoint", help="R2 S3 endpoint (else R2_ACCOUNT_ID)")
@@ -518,8 +432,8 @@ def main(argv):
 
     try:
         if not args.no_env_file:
-            loaded = load_env_file(args.env_file or DEFAULT_ENV_FILE,
-                                   required=bool(args.env_file))
+            loaded = r2_sigv4.load_env_file(args.env_file or r2_sigv4.DEFAULT_ENV_FILE,
+                                            required=bool(args.env_file))
             if loaded:
                 print("credentials from %s" % loaded)
         dirs = campaign_dirs()
@@ -606,13 +520,13 @@ def main(argv):
             r2 = None
             if uploads:
                 try:
-                    r2 = r2_settings(args)
-                except UploadError as ex:
+                    r2 = r2_sigv4.settings(endpoint=args.endpoint, bucket=args.bucket)
+                except r2_sigv4.R2Error as ex:
                     if args.write:
                         raise
                     print("R2 not ready: %s" % ex)
                 if r2:
-                    print("R2 target: %s" % r2_target(r2[0], r2[1]))
+                    print("R2 target: %s" % r2_sigv4.target(r2[0], r2[1]))
             if not args.write:
                 print("dry run: nothing uploaded or written (use --write)")
                 return 0

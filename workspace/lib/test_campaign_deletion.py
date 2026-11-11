@@ -277,7 +277,7 @@ class Retirement(unittest.TestCase):
             stack.enter_context(patch.object(tool, "token_for", return_value="test-token"))
             stack.enter_context(patch.object(tool.operator_config, "list_documents", side_effect=lambda project, collection, token, **kwargs: self.store.list(collection)))
             stack.enter_context(patch.object(tool, "bodies_for", return_value={entry["key"]: BODY}))
-            stack.enter_context(patch.object(tool, "r2_settings", return_value=("https://r2.example", "pictures", "access", "secret")))
+            stack.enter_context(patch.object(tool.r2_sigv4, "settings", return_value=("https://r2.example", "pictures", "access", "secret")))
             stack.enter_context(patch.object(tool.r2_sigv4, "put_object", side_effect=put))
             stack.enter_context(patch.object(campaigns, "Store", return_value=self.store))
             mirror = stack.enter_context(patch.object(tool, "write_mirror"))

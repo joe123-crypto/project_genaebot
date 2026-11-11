@@ -22,6 +22,7 @@ for path in (str(ROOT / "workspace/lib"), str(ROOT / "deploy")):
         sys.path.insert(0, path)
 
 import ad_assets  # noqa: E402
+import r2_sigv4  # noqa: E402
 
 
 def upload_module():
@@ -142,17 +143,17 @@ class CredentialFileTest(unittest.TestCase):
         # deploy/** is un-ignored wholesale, so a credentials file in the repo
         # would be staged by `git add -A`, and ci/check.py only refuses tracked
         # names BEGINNING with ".env" -- so "deploy/r2.env" would slip through.
-        self.assertNotIn(str(ROOT), TOOL.DEFAULT_ENV_FILE)
-        self.assertTrue(TOOL.DEFAULT_ENV_FILE.endswith("genaie/r2-upload.env"))
+        self.assertNotIn(str(ROOT), r2_sigv4.DEFAULT_ENV_FILE)
+        self.assertTrue(r2_sigv4.DEFAULT_ENV_FILE.endswith("genaie/r2-upload.env"))
 
     def test_a_file_readable_by_other_accounts_is_refused(self):
         for mode in (0o644, 0o640, 0o604):
             self.write("R2_BUCKET=ads\n", mode)
-            with self.assertRaisesRegex(TOOL.UploadError, "readable by other"):
-                TOOL.load_env_file(self.path, required=True, env={})
+            with self.assertRaisesRegex(r2_sigv4.R2Error, "readable by other"):
+                r2_sigv4.load_env_file(self.path, required=True, env={})
 
     def test_comments_blank_lines_export_and_quotes_are_handled(self):
-        values = TOOL.parse_env_file(
+        values = r2_sigv4.parse_env_file(
             '# a comment\n\n'
             'R2_BUCKET=genaie-ads\n'
             'export R2_ACCOUNT_ID=abc123\n'
@@ -165,29 +166,29 @@ class CredentialFileTest(unittest.TestCase):
 
     def test_it_is_not_a_shell(self):
         # A file of credentials must not be able to run anything or interpolate.
-        values = TOOL.parse_env_file("R2_BUCKET=$(whoami)\nR2_ACCOUNT_ID=${HOME}\n")
+        values = r2_sigv4.parse_env_file("R2_BUCKET=$(whoami)\nR2_ACCOUNT_ID=${HOME}\n")
         self.assertEqual(values["R2_BUCKET"], "$(whoami)")
         self.assertEqual(values["R2_ACCOUNT_ID"], "${HOME}")
 
     def test_a_malformed_line_names_its_number(self):
         self.write("R2_BUCKET=ads\nthis is not an assignment\n")
-        with self.assertRaisesRegex(TOOL.UploadError, "line 2"):
-            TOOL.load_env_file(self.path, required=True, env={})
+        with self.assertRaisesRegex(r2_sigv4.R2Error, "line 2"):
+            r2_sigv4.load_env_file(self.path, required=True, env={})
 
     def test_the_environment_wins_over_the_file(self):
         self.write("R2_BUCKET=from-file\nR2_ACCOUNT_ID=from-file\n")
         env = {"R2_BUCKET": "from-the-shell"}
-        TOOL.load_env_file(self.path, required=True, env=env)
+        r2_sigv4.load_env_file(self.path, required=True, env=env)
         self.assertEqual(env["R2_BUCKET"], "from-the-shell")
         self.assertEqual(env["R2_ACCOUNT_ID"], "from-file")
 
     def test_a_missing_default_file_is_not_an_error(self):
-        self.assertIsNone(TOOL.load_env_file(
+        self.assertIsNone(r2_sigv4.load_env_file(
             os.path.join(self.dir, "absent.env"), required=False, env={}))
 
     def test_a_missing_named_file_is_an_error(self):
-        with self.assertRaisesRegex(TOOL.UploadError, "no such env file"):
-            TOOL.load_env_file(os.path.join(self.dir, "absent.env"),
+        with self.assertRaisesRegex(r2_sigv4.R2Error, "no such env file"):
+            r2_sigv4.load_env_file(os.path.join(self.dir, "absent.env"),
                                required=True, env={})
 
     def test_no_credential_value_is_committed_anywhere_in_the_repo(self):
@@ -203,13 +204,13 @@ class CredentialFileTest(unittest.TestCase):
 class R2TargetTest(unittest.TestCase):
     def test_the_account_id_is_shortened_in_the_log_line(self):
         account = "0123456789abcdef0123456789abcdef"
-        line = TOOL.r2_target("https://%s.r2.cloudflarestorage.com" % account, "ads")
+        line = r2_sigv4.target("https://%s.r2.cloudflarestorage.com" % account, "ads")
         self.assertNotIn(account, line)
         self.assertTrue(line.startswith("012345...ef."))
         self.assertTrue(line.endswith("r2.cloudflarestorage.com/ads"))
 
     def test_a_short_host_is_left_alone(self):
-        self.assertEqual(TOOL.r2_target("https://r2.example", "ads"),
+        self.assertEqual(r2_sigv4.target("https://r2.example", "ads"),
                          "r2.example/ads")
 
 

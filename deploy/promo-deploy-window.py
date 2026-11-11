@@ -9,24 +9,31 @@ merge of #184 at 08:31 Harare deployed at 08:42, two minutes into
 fruit-trees-promo's 08:40 run, and fruit-trees posted to no group that day.
 
 This gate runs in the deploy job immediately before the release. A moment is
-*busy* when an enabled campaign in deploy/promo-crons.json may still be sending
-or starts within --lead-minutes (the build and startup verification would
-restart the gateway under it). How long a campaign may still be sending is the
-engine's own worst case for its committed target list -- the full start jitter,
-the longest gap between every pair of sends and the per-send allowance from
-workspace/lib/promo_broadcast.py -- capped at the job's timeout, which kills a
-run anyway. A campaign without a readable targets.json is given the whole
-timeout. If the
-next quiet moment is within --max-wait-minutes the gate sleeps until then;
-otherwise it fails, naming the next quiet time, so the release can be re-run
-from GitHub Actions ("Re-run failed jobs") once that time has passed.
+*busy* when an enabled campaign may still be sending or starts within
+--lead-minutes (the build and startup verification would restart the gateway
+under it). How long a campaign may still be sending is the engine's own worst
+case for its target list -- the full start jitter, the longest gap between every
+pair of sends and the per-send allowance from workspace/lib/promo_broadcast.py
+-- capped at the job's timeout, which kills a run anyway. If the next quiet
+moment is within --max-wait-minutes the gate sleeps until then; otherwise it
+fails, naming the next quiet time, so the release can be re-run from GitHub
+Actions ("Re-run failed jobs") once that time has passed.
 
-It reads only committed files -- the manifest and each campaign's targets.json
--- and never contacts the gateway. Console-created campaigns (Firestore-scheduled) and
-live drift are not visible here; the manual preflight still covers those.
+The campaign list comes from the gateway (deploy/gateway_campaigns.py), because
+the schedules and target counts are operator data that now lives only in
+Firestore. That fixed the blind spot this gate shipped with: campaigns created
+in the console were invisible to it, so it never held a release out of their
+sending windows, and a live schedule override was invisible too. If the gateway
+cannot be reached the gate refuses rather than guesses -- a gate that cannot see
+must not wave a release through -- and the workflow's ignore_promo_window input
+is the deliberate override.
 
-Exit codes: 0 quiet (possibly after waiting), 1 busy beyond the wait bound,
-2 bad manifest or arguments.
+Every campaign is treated as if it could fire at its time on any day. A campaign
+that skips some weekdays then holds a release slightly more often than it had
+to, which is the right direction for this to err in.
+
+Exit codes: 0 quiet (possibly after waiting), 1 busy beyond the wait bound or
+the gateway unreachable, 2 bad input.
 """
 
 import argparse
@@ -37,8 +44,10 @@ import time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-MANIFEST = Path(__file__).resolve().parent / "promo-crons.json"
-REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import gateway_campaigns  # noqa: E402
+
 UTC = dt.timezone.utc
 # Mirrors of workspace/lib/promo_broadcast.py's defaults (pinned by a test). The
 # release runner has no PYTHONPATH for the engine, and importing it would pull in
@@ -48,42 +57,28 @@ SEND_GAP_MAX_SECONDS = 60.0
 SEND_ALLOWANCE_SECONDS = 12.0
 
 
-def target_count(promo, repo=REPO):
-    """Groups in the campaign's committed targets.json, or None if unreadable."""
-    path = repo / "workspace" / "cron" / ("%s-promo" % promo.get("slug", "")) / "targets.json"
-    try:
-        groups = json.loads(path.read_text(encoding="utf-8")).get("groups")
-    except (OSError, ValueError, AttributeError):
-        return None
-    return len(groups) if isinstance(groups, list) else None
-
-
-def run_budget_minutes(promo, timeout_seconds, repo=REPO):
+def run_budget_minutes(row):
     """Worst-case minutes a campaign run may keep sending after its cron fires."""
-    timeout = float(promo.get("timeoutSeconds") or timeout_seconds or 7200)
-    count = target_count(promo, repo)
-    if count is None:
-        return timeout / 60.0
+    timeout = float(row.get("timeoutSeconds") or 7200)
+    count = int(row["targetCount"])
     worst = (START_JITTER_SECONDS + count * SEND_ALLOWANCE_SECONDS
              + max(count - 1, 0) * SEND_GAP_MAX_SECONDS)
     return min(worst, timeout) / 60.0
 
 
-def daily_starts(manifest, repo=REPO):
+def daily_starts(rows):
     """[(name, tz, hour, minute, run_minutes)] for every enabled campaign."""
     starts = []
-    for promo in manifest.get("promos", []):
-        if promo.get("enabled", True) is False:
-            continue
-        fields = str(promo.get("cron", "")).split()
-        if len(fields) != 5 or fields[2:] != ["*", "*", "*"]:
-            raise ValueError("%s: only daily 'M H * * *' schedules are understood, got %r"
-                             % (promo.get("name"), promo.get("cron")))
-        minute, hour = int(fields[0]), int(fields[1])
+    for row in gateway_campaigns.enabled(rows):
+        hour, minute = int(row["hour"]), int(row["minute"])
         if not (0 <= minute < 60 and 0 <= hour < 24):
-            raise ValueError("%s: bad cron time %r" % (promo.get("name"), promo.get("cron")))
-        starts.append((promo["name"], ZoneInfo(promo.get("tz") or "UTC"), hour, minute,
-                       run_budget_minutes(promo, manifest.get("timeoutSeconds"), repo)))
+            raise ValueError("%s: bad schedule time %02d:%02d" % (row["slug"], hour, minute))
+        try:
+            zone = ZoneInfo(row["timezone"])
+        except Exception as ex:
+            raise ValueError("%s: unusable timezone %r (%s)" % (row["slug"], row["timezone"], ex))
+        starts.append((row.get("jobName") or row["slug"], zone, hour, minute,
+                       run_budget_minutes(row)))
     return starts
 
 
@@ -127,9 +122,9 @@ def describe(moment, tz):
 
 def parse_args(argv):
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
-    parser.add_argument("--manifest", default=str(MANIFEST))
-    parser.add_argument("--repo", default=str(REPO),
-                        help="checkout whose workspace/cron/*/targets.json sizes each run")
+    parser.add_argument("--campaigns", metavar="FILE",
+                        help="a saved `console-read campaigns` reply to use instead "
+                             "of asking the gateway, for reproducing a decision")
     parser.add_argument("--lead-minutes", type=int, default=20,
                         help="time from this gate to the gateway restart")
     parser.add_argument("--max-wait-minutes", type=int, default=45)
@@ -143,14 +138,28 @@ def parse_args(argv):
     return args
 
 
-def main(argv=None, clock=None, sleep=time.sleep):
+def main(argv=None, clock=None, sleep=time.sleep, read=None):
     args = parse_args(sys.argv[1:] if argv is None else argv)
     try:
-        manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
-        starts = daily_starts(manifest, Path(args.repo))
+        if args.campaigns:
+            rows = gateway_campaigns.parse(Path(args.campaigns).read_text(encoding="utf-8"))
+        else:
+            rows = (read or gateway_campaigns.read)()
+        starts = daily_starts(rows)
+    except gateway_campaigns.Unavailable as exc:
+        # Refuse, do not guess: holding a release that did not need holding costs
+        # a re-run, while releasing into a campaign's window costs that campaign
+        # its whole day, which is the incident this gate exists because of.
+        print("::error::Cannot read the live campaigns, so this gate cannot tell "
+              "whether a campaign is sending: %s. Fix the gateway access and "
+              "re-run this job, or dispatch the workflow with "
+              "ignore_promo_window if the restart is deliberate." % exc, file=sys.stderr)
+        return 1
     except (OSError, ValueError, KeyError) as exc:
         print("::error::promo deploy window: %s" % exc, file=sys.stderr)
         return 2
+    print("Read %d campaign(s) from the gateway, %d enabled."
+          % (len(rows), len(gateway_campaigns.enabled(rows))))
     if clock is None:
         clock = lambda: dt.datetime.now(UTC)
     if args.now:
@@ -170,8 +179,8 @@ def main(argv=None, clock=None, sleep=time.sleep):
     names = ", ".join("%s at %s" % (name, describe(start, shown_tz)) for start, name in busy)
     print("Promo campaigns in the restart window: %s." % names)
     if quiet is None:
-        print("::error::No quiet window in the next 48 hours; check deploy/promo-crons.json.",
-              file=sys.stderr)
+        print("::error::No quiet window in the next 48 hours; check the campaign "
+              "schedules in the console.", file=sys.stderr)
         return 1
     wait = (quiet - now).total_seconds()
     if args.check_only or wait > args.max_wait_minutes * 60:

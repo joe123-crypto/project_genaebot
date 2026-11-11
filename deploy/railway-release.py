@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
@@ -26,6 +27,11 @@ SETTING_FIELDS = {"GENAIE_CAMPAIGN_TRANSPORT": "transport",
                   "GENAIE_WHATSAPP_CACHE_CLEANUP": "whatsappCacheCleanup",
                   "GENAIE_OVERNIGHT_STANDBY": "overnightStandby"}
 PREFIX = "GENAIE_RELEASE_READY "
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import gateway_campaigns  # noqa: E402
+
 SCOPE = ["--project", PROJECT, "--service", SERVICE, "--environment", ENVIRONMENT]
 
 
@@ -76,10 +82,14 @@ def validate_readiness(report, deployment_id, sha, profile, jobs, settings=None)
         raise ValueError("required campaigns are not enabled")
 
 
-def required_campaigns(entries):
-    if any(type(item.get("enabled", True)) is not bool for item in entries):
-        raise ValueError("campaign enabled must be a boolean")
-    return {item["name"] for item in entries if item.get("enabled", True)}
+def required_campaigns(rows):
+    """The cron jobs every enabled campaign must have once the gateway is back.
+
+    The campaign list used to be deploy/promo-crons.json, read out of the commit
+    being released. It is operator data and now lives only in Firestore, so the
+    gateway is asked instead -- which also means a campaign created in the
+    console is checked for, where the manifest could never have named one."""
+    return gateway_campaigns.job_names(rows)
 
 
 def startup_result(deployment_id, sha, profile, jobs, timeout=600, settings=None):
@@ -244,10 +254,10 @@ def release(root, sha, profile, report):
                    "previousImageDigest": previous.get("meta", {}).get("imageDigest"), "runtimeSettings": settings})
     with tempfile.TemporaryDirectory(prefix="genaebot-release-") as temporary:
         archive_commit(root, sha, temporary)
-        manifest = json.loads((Path(temporary) / "deploy/promo-crons.json").read_text())
-        entries = manifest if isinstance(manifest, list) else manifest.get("promos", manifest.get("jobs", []))
-        # The repository's manifest is the authority; never install or edit crons here.
-        jobs = required_campaigns(entries)
+        # The gateway's live campaign list is the authority for what must come
+        # back up; this never installs or edits crons. Read before the release so
+        # an unreachable gateway fails the job while production is still intact.
+        jobs = required_campaigns(gateway_campaigns.read())
         idle = settings["GENAIE_CATALOG_IDLE_RETIREMENT"]
         identifier = None
         upload_started = False

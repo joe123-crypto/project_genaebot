@@ -2005,3 +2005,70 @@ protocol tests. Existing CLI config readers, campaign runners and all writer
 validation remain authoritative and independent of this display index. Deploy the
 bot endpoints before the updated console; it intentionally has no full-directory
 fallback when a live endpoint is missing. Roll back the console before the bot.
+
+## Backups of the operator data
+
+Git used to be the backup and the history for this data: the groups, the
+campaigns, their copy and their pictures sat in the repository, so any mistake
+was one `git revert` away. Once they live only in Firestore and R2 that is gone,
+and the last-known-good snapshot in `runtime/firestore/` is not a substitute --
+it holds one generation, it is overwritten by the next healthy read, and it
+expires after 48 hours. `deploy/backup-operator-data.py` is what replaces git.
+
+```bash
+deploy/backup-operator-data.py --key seed-key.json                  # write today's backup
+deploy/backup-operator-data.py --key seed-key.json --verify         # newest backup vs. live
+deploy/backup-operator-data.py --key seed-key.json \
+    --restore runtime/backups/2026-11-11 --collection groups        # what it would put back
+```
+
+A backup is a directory named for the day under `runtime/backups/` on the
+volume, holding one JSON file per collection plus `manifest.json` with each
+file's document count and sha256. Documents are decoded exactly as a campaign
+run decodes them, so a backup is readable by a person and can be written
+straight back. The directory is assembled under a temporary name and renamed
+into place, so a half-written backup is never mistaken for a whole one, and
+every file is `0600` inside a `0700` directory.
+
+Nine collections are copied: the four config collections, the `assets` picture
+index, the `audit` trail -- which is the real change history, with the before and
+after of every console write -- and the three that record that an operation
+already happened (`campaign_creations`, `campaign_deletions`,
+`campaign_asset_uploads`), because restoring the config without them would let a
+replayed request run a second time. The console's live index is deliberately not
+copied: it is a derived SQLite cache, rebuilt from these.
+
+R2 holds the picture bytes, which are far too large to copy and are already
+content-addressed, so what is recorded is the object list: every key, its size
+and R2's own etag. Listing the bucket needs the S3 credentials the entrypoint
+deliberately strips from the gateway environment, so the weekly cron records the
+Firestore side and says in the manifest that the bucket was not listed; a run on
+the operator's machine, which has `~/.config/genaie/r2-upload.env`, records both.
+`--no-r2` skips the listing even where it is configured.
+
+`--retain N` keeps the newest N backups and deletes the rest (default 8, `0`
+keeps everything). Anything that is not a dated directory with a manifest is
+left alone, so an operator's own copy beside them is never pruned.
+
+`--restore` writes whole documents, not the field patches `console-write` is
+limited to, because a restore has to be able to put back a field no console
+screen can edit. That is also why it is one collection per run, dry by default,
+and prints every document it would change; `--write` applies it and commits one
+audit document of its own. A document created since the backup is listed and
+left alone -- deleting it is a separate, deliberate act through the console.
+
+A backup needs only read access, so the gateway's read-only runtime key is
+enough; a restore needs Cloud Datastore User, so it needs the seed key. Register
+the weekly run by hand, as every other cron on this gateway is registered --
+merging this repository schedules nothing:
+
+```bash
+railway ssh -- env -u OPENCLAW_HOME HOME=/home/joseph \
+  OPENCLAW_GATEWAY_TOKEN="$GATEWAY_AUTH_TOKEN" openclaw cron add \
+  --name operator-data-backup --schedule "40 3 * * 0" --tz Africa/Harare \
+  --command "python3 /home/joseph/.openclaw/deploy/backup-operator-data.py"
+```
+
+Pull a backup to your own machine with `railway ssh -- tar cz -C
+/home/joseph/.openclaw/runtime/backups .` and keep at least one copy off the
+volume: a backup that only exists beside the thing it is backing up is not one.
