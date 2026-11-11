@@ -41,7 +41,6 @@ RELEASE = (ROOT / "deploy/railway-release.py").read_text(encoding="utf-8")
 UPLOAD = (ROOT / "deploy/upload-ad-image.py").read_text(encoding="utf-8")
 SIGNER = (ROOT / "deploy/r2_sigv4.py").read_text(encoding="utf-8")
 MODULE = (ROOT / "workspace/lib/ad_assets.py").read_text(encoding="utf-8")
-CRON = ROOT / "workspace/cron"
 R2_WRITE_VARS = ("R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_ACCOUNT_ID",
                  "R2_BUCKET", "R2_ENDPOINT")
 
@@ -51,7 +50,8 @@ class SwitchTest(unittest.TestCase):
         # Like GENAIE_CONFIG_SOURCE: an operator switch, not a release setting.
         # A release profile that owned it would silently flip the images back.
         owned = RELEASE.split("OWNED = (", 1)[1].split(")", 1)[0]
-        for name in (ad_assets.MODE_VAR, ad_assets.BASE_VAR, ad_assets.DIR_VAR):
+        for name in (ad_assets.BASE_VAR, ad_assets.DIR_VAR,
+                     "GENAIE_AD_ASSETS_SOURCE"):
             self.assertNotIn(name, owned)
 
     def test_the_switch_does_not_need_the_sanitised_secret_env(self):
@@ -60,7 +60,7 @@ class SwitchTest(unittest.TestCase):
         # it. SECRET_KEYS exists for values openclaw's own config interpolates.
         secrets = ENTRYPOINT.split("SECRET_KEYS=(", 1)[1].split(")", 1)[0].split()
         self.assertNotIn("GENAIE_CONFIG_SOURCE", secrets)
-        self.assertNotIn(ad_assets.MODE_VAR, secrets)
+        self.assertNotIn("GENAIE_AD_ASSETS_SOURCE", secrets)
 
     def test_the_index_read_uses_the_key_the_runtime_already_has(self):
         self.assertIn("GCP_SERVICE_ACCOUNT_B64",
@@ -100,29 +100,27 @@ class CredentialTest(unittest.TestCase):
 
 
 class VariantImageTest(unittest.TestCase):
-    def test_no_production_post_script_pins_a_variant_image(self):
-        # resolve() maps a pinned variant image by filename, which cannot express
-        # "add a picture to the rotation". Nothing uses it today; the day a
-        # campaign does, this fails and whoever added it has to index it.
-        pinned = []
-        for script in sorted(CRON.glob("*-promo/post*.py")):
-            body = script.read_text(encoding="utf-8")
-            if re.search(r"^\s*(VARIANT_IMAGES|variant_images)\s*=", body, re.M):
-                pinned.append(script.relative_to(ROOT))
-        self.assertEqual(pinned, [])
+    """A picture pinned to a caption variant.
 
-    def test_every_post_script_still_has_an_image_override(self):
-        # is_baked() only substitutes a path inside the campaign's own assets
-        # directory, which is what keeps these overrides working in r2 mode.
-        for directory in sorted(CRON.glob("*-promo")):
-            scripts = sorted(directory.glob("post*.py"))
-            self.assertTrue(scripts, directory)
-            body = "".join(s.read_text(encoding="utf-8") for s in scripts)
-            # The call is spelled across one or two lines depending on the
-            # script, so match the opening of it rather than the whole call.
-            self.assertTrue(
-                re.search(r'os\.environ\.get\(\s*"[A-Z_]*IMAGE"', body),
-                "%s declares no *_IMAGE override" % directory.name)
+    Rotation order cannot express "this picture goes with that caption", so
+    ``console_campaigns`` has no way to record one and nothing uses it. These
+    used to check the post scripts for a ``VARIANT_IMAGES`` mapping and for the
+    ``*_IMAGE`` override that let an operator swap one picture by hand; both
+    lived in the scripts, and the scripts are gone. The engine still accepts a
+    mapping, so what is left is that no campaign document carries one."""
+
+    def test_no_campaign_pins_a_picture_to_a_caption_variant(self):
+        import promo_fixture
+        for slug, doc in promo_fixture.membership()["promos"].items():
+            self.assertNotIn("variantImages", doc, slug)
+        self.assertNotIn("variantImages", console_fields())
+
+
+def console_fields():
+    """The fields console campaign creation accepts, as a flat string."""
+    import console_campaigns
+    return " ".join(sorted(console_campaigns.ALLOWED)) if hasattr(
+        console_campaigns, "ALLOWED") else ""
 
 
 class CredentialFileTest(unittest.TestCase):
