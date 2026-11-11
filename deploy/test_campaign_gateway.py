@@ -8,9 +8,17 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "workspace/lib"))
+for path in (str(ROOT / "workspace/lib"), str(ROOT / "deploy")):
+    if path not in sys.path:
+        sys.path.insert(0, path)
 import gateway_campaign as gc
 import promo_broadcast as pb
+from promo_fixture import resolver_for
+
+# The groups a run acts on come from one promo_config.resolve, not from the
+# targets file, so these state them directly rather than standing up a store.
+TWO = ["1@g.us", "2@g.us"]
+ONE = ["1@g.us"]
 
 
 class CampaignGatewayTests(unittest.TestCase):
@@ -99,7 +107,8 @@ for line in sys.stdin:
         with patch.dict(os.environ, {"GENAIE_CAMPAIGN_TRANSPORT": "rpc-once"}):
             self.assertEqual(pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, text="hello", image=str(image), targets_file=str(targets),
                 state_file=str(state), argv=[], caps=None, cron_timeout=None,
-                start_jitter=0, send_delay=1, sleep=gap), 0)
+                start_jitter=0, send_delay=1, sleep=gap,
+                resolve_config=resolver_for(TWO)), 0)
         self.assertEqual(len(self.processes), 2)
         self.assertEqual(set(json.loads(state.read_text())["sent"]), {"1@g.us", "2@g.us"})
 
@@ -165,7 +174,8 @@ for line in sys.stdin:
         with patch.dict(os.environ, {"GENAIE_CAMPAIGN_TRANSPORT": "rpc"}):
             result = pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, text="hello", image=str(image), targets_file=str(targets),
                                   state_file=str(self.root / "state.json"),
-                                  argv=["--dry-run"], caps=None)
+                                  argv=["--dry-run"], caps=None,
+                                  resolve_config=resolver_for(ONE))
         self.assertEqual(result, 0)
         self.assertEqual(self.processes, [])
         self.assertFalse((self.root / "state.json").exists())
@@ -178,7 +188,8 @@ for line in sys.stdin:
         state = self.root / "state.json"
         arguments = dict(text="hello", image=str(image), targets_file=str(targets),
                          state_file=str(state), argv=[], caps=None, cron_timeout=None,
-                         start_jitter=0, send_delay=0)
+                         start_jitter=0, send_delay=0,
+                         resolve_config=resolver_for(TWO))
         with patch.dict(os.environ, {"GENAIE_CAMPAIGN_TRANSPORT": "rpc"}):
             self.assertEqual(pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, **arguments), 0)
             self.assertEqual(pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, **arguments), 0)
@@ -196,7 +207,8 @@ for line in sys.stdin:
         with patch.dict(os.environ, {"GENAIE_CAMPAIGN_TRANSPORT": "rpc"}):
             self.assertEqual(pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, text="queued", image=str(image),
                 targets_file=str(targets), state_file=str(state), argv=[], caps=None,
-                cron_timeout=None, start_jitter=0, send_delay=0), 0)
+                cron_timeout=None, start_jitter=0, send_delay=0,
+                resolve_config=resolver_for(ONE)), 0)
         self.assertEqual(len(self.calls()), 1)
         self.assertIn("1@g.us", json.loads(state.read_text())["sent"])
 

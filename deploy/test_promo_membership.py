@@ -1,12 +1,13 @@
-"""workspace/cron/membership.json is the single source of truth for the groups
-the bot advertises in (workspace/lib/promo_membership.py reads it).
+"""The shape of the operator config, and the validation that keeps a bad edit
+out of production (workspace/lib/promo_membership.py).
 
-The seven promo targets.json files used to be hand-maintained, with the same
-JIDs copy-pasted across them and the exclusion rules repeated in prose. They are
-now generated from membership.json. These tests pin the migration -- each
-promo's group set and weekly cadence is exactly what the hand-written files
-carried when they were folded in -- and the validation that keeps a bad edit
-from reaching production.
+This file used to carry the ad roster: every campaign's group count and weekly
+cadence, frozen at the commit that folded the hand-written targets files
+together, with a running commentary of which groups had joined which campaign
+and when. That made it a second place the operator's data lived, and a test that
+failed because someone paused a group. The config is in Firestore now, so the
+roster is gone from here and what is left is the rules -- checked against
+``deploy/promo_fixture``, which is built to exercise each one.
 
 unittest-style so deploy/ci-check.sh, which runs each test file with plain
 ``python3``, executes them.
@@ -20,76 +21,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 LIB_DIR = ROOT / "workspace/lib"
-CRON = ROOT / "workspace/cron"
+
 if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 
+if str(ROOT / "deploy") not in sys.path:
+    sys.path.insert(0, str(ROOT / "deploy"))
+
 import promo_membership as pm  # noqa: E402
+import promo_fixture as fixture  # noqa: E402
 
-MEMBERSHIP = CRON / "membership.json"
-
-# Frozen from the hand-written targets.json files at the commit that introduced
-# membership.json (#111's successor). A change here means a campaign's reach
-# changed: intended edits update these numbers in the same commit, accidents
-# show up as a failure.
-# The three ads-line promos gained BULAWAYO ADVERTISEMENT, CHIREDZI
-# BUSINESS FORUM and CHIREDZI MARKETPLACE on 2026-10-27, followed by
-# TawPro Adverts and ONLINE MARKETING, ONLINE MARKETING 2 and ONLINE MARKETING 03.
-# On 2026-10-28, let's build bindura and BULAWAYO ADVERTS each gained
-# building-materials, fruit-trees and genaie-advertisers on the ads account.
-# Both groups are active again after the stability trial, restoring two daily
-# targets to each of those three campaigns.
-# Zim Market Hub and ZiMarket Grp41 each gained appliance-repairs,
-# industrial-lighting and building-materials on the ads account on 2026-11-07.
-# MAGWEGWE DEALS buy&sell group 1 gained borehole-drilling,
-# building-materials, genaie-advertisers and industrial-lighting on the ads
-# account on 2026-11-07.
-# BYO HUSTLERS.COM gained building-materials on 2026-11-07; it already
-# receives genaie-advertisers on the ads account.
-# The Advertisement Hub (Buy & Sell) gained building-materials and
-# genaie-advertisers on the ads account on 2026-11-08.
-EXPECTED_DAILY = {
-    "appliance-repairs": 8,
-    "industrial-lighting": 14,
-    "genaie-advertisers": 14,
-    "borehole-drilling": 43,
-    "building-materials": 17,
-    # skylight-solar launched (2026-10-19) targeting the Bulawayo/BYO groups plus
-    # Kwekwe, Gweru, both lowveld/Chiredzi groups, Mutare, Magwegwe, Lobengula West
-    # and Chikombedzi: 23 groups, no weekly cadence.
-    "skylight-solar": 23,
-    # cv/fruit-trees/genaie/genaie-leads each gained the same five groups --
-    # Business in Mutare, CHIKOMBEDZI MARKETPLACE, Gweru Market Mall, KWEKWE
-    # BUSINESS PLUG 4 and LOWVELD HUSTLERS (#115): cv 18 -> 23, fruit-trees
-    # 17 -> 22, genaie-leads 20 -> 25, genaie 21 -> 26.
-    # Then each gained the same ten newly-joined groups discovered in the
-    # sender-key store (one in-roster with empty promos, nine new, seven of
-    # them legacy <creator>-<timestamp> JIDs from the 2026-10-17 burst): cv
-    # 23 -> 33, fruit-trees 22 -> 32, genaie-leads 25 -> 35, genaie 26 -> 36.
-    # Then three groups started answering every send with 'forbidden' and were
-    # marked admin-only: ZIMBABWE UPDATE BYO (fruit-trees, cv, genaie,
-    # genaie-leads), 120363168421689199 (cv, genaie, genaie-leads) and
-    # 263713652561-1592027591 (cv, fruit-trees, genaie, genaie-leads): cv
-    # 33 -> 30, fruit-trees 32 -> 30, genaie-leads 35 -> 32, genaie 36 -> 33.
-    # Those three admin-only groups then had their promo lists cleared to [] on
-    # 2026-10-18 (terminal decommission); the counts above are unchanged because
-    # admin-only had already excluded them.
-    # Then each gained the same fourteen groups from the 2026-10-18 Bulawayo
-    # burst (fifteen new joins named that day, all except Harare business
-    # classifie, all legacy <creator>-<timestamp> JIDs): cv 30 -> 44, fruit-trees
-    # 30 -> 44, genaie-leads 32 -> 46, genaie 33 -> 47. The shared promo cron
-    # timeout was raised 5400 -> 7200 s to hold promos up to ~60 groups.
-    # (Harare business classifie instead took appliance-repairs: 5 -> 6.)
-    "cv": 44,
-    "fruit-trees": 46,
-    "genaie-leads": 46,
-    "genaie": 46,
-}
-EXPECTED_WEEKLY = {
-    "borehole-drilling": {"120363166672509962@g.us": ["mon", "wed", "fri"]},
-    "building-materials": {"120363166672509962@g.us": ["mon", "wed", "fri"]},
-    "cv": {"120363407177302513@g.us": ["mon", "thu"]},
-}
 
 
 def minimal(**groups):
@@ -132,64 +73,56 @@ class ContactAccountTests(unittest.TestCase):
         self.assertNotIn("contact_account", pm.targets_payload(minimal(), "cv"))
 
 
-class MembershipFileTests(unittest.TestCase):
-    def setUp(self):
-        self.m = pm.load(str(MEMBERSHIP))
-        self.assertIsNotNone(self.m, "membership.json must exist and parse")
+class ConfigShapeTests(unittest.TestCase):
+    """The rules a config has to satisfy, asserted against the shared fixture.
 
-    def test_the_committed_file_is_valid(self):
+    These used to be asserted against the committed membership.json, together
+    with its group counts and weekly cadences frozen into this file. That made
+    the test a second home for the ad roster: a test could start failing because
+    someone paused a group. The config lives in Firestore now, so what is left
+    here is the shape every config must have, checked against
+    ``deploy/promo_fixture``, which is deliberately built to exercise each rule.
+    """
+
+    def setUp(self):
+        self.m = fixture.membership()
+
+    def test_the_fixture_is_a_valid_config(self):
         self.assertEqual(pm.validate(self.m), [])
 
-    def test_declares_exactly_the_promo_directories(self):
-        on_disk = sorted(p.name[: -len("-promo")] for p in CRON.glob("*-promo"))
-        self.assertEqual(sorted(self.m["promos"]), on_disk)
-
-    def test_every_promo_has_a_generated_file_comment(self):
-        for promo, meta in self.m["promos"].items():
-            self.assertIn("GENERATED", meta.get("comment", ""),
-                          "%s's targets.json must say it is generated" % promo)
-
-    def test_group_counts_match_the_hand_written_targets_files(self):
-        for promo, expected in EXPECTED_DAILY.items():
-            jids, _ = pm.groups_for_promo(self.m, promo)
-            self.assertEqual(len(jids), expected, promo)
-            self.assertEqual(len(set(jids)), len(jids), "%s has duplicates" % promo)
-
-    def test_weekly_cadences_match_the_hand_written_targets_files(self):
-        for promo in self.m["promos"]:
-            _, weekly = pm.groups_for_promo(self.m, promo)
-            self.assertEqual(weekly, EXPECTED_WEEKLY.get(promo, {}), promo)
+    def test_every_jid_is_a_group_jid(self):
+        for jid in pm.groups(self.m):
+            self.assertTrue(jid.endswith("@g.us"), jid)
 
     def test_a_weekly_group_is_not_also_in_the_daily_list(self):
         for promo in self.m["promos"]:
             jids, weekly = pm.groups_for_promo(self.m, promo)
             self.assertEqual(set(jids) & set(weekly), set(), promo)
+        # And the fixture has at least one, or the rule is untested.
+        self.assertTrue(any(pm.groups_for_promo(self.m, promo)[1]
+                            for promo in self.m["promos"]))
 
     def test_only_active_groups_are_advertised_to(self):
+        # A non-active group keeps its configured campaigns -- that is how
+        # resuming it is one status flip -- but must reach no target list.
+        targeted = set()
+        for promo in self.m["promos"]:
+            daily, weekly = pm.groups_for_promo(self.m, promo)
+            targeted.update(daily)
+            targeted.update(weekly)
         for jid, entry in pm.groups(self.m).items():
             if pm.status_of(entry) != "active":
-                self.assertEqual(pm.promos_for_group(self.m, jid), [],
+                self.assertNotIn(jid, targeted,
                                  "%s is %s but still advertised to"
                                  % (jid, pm.status_of(entry)))
+                self.assertTrue(pm.promos_for_group(self.m, jid) is not None)
 
-    def test_paused_groups_keep_their_record(self):
-        """admin-only / not-a-member / on-hold groups stay listed, so the
-        discovery sweep does not re-add them as if they were new. At least one
-        non-active (paused) record must survive; which paused statuses are
-        present varies as groups are removed or resumed."""
+    def test_a_paused_record_keeps_its_place(self):
+        # A non-active record stays listed, so the discovery sweep does not
+        # re-add the group as if it were new.
         statuses = set(pm.status_of(e) for e in pm.groups(self.m).values())
-        self.assertIn("admin-only", statuses)
-        self.assertIn("not-a-member", statuses)
         self.assertTrue(statuses - {"active"},
-                        "at least one paused (non-active) record must survive")
-
-    def test_caps_are_enabled_in_the_committed_file(self):
-        """The active rollout enforces per-group posting allowances."""
-        self.assertTrue(pm.caps_enabled(self.m))
-
-    def test_every_jid_is_a_group_jid(self):
-        for jid in pm.groups(self.m):
-            self.assertTrue(jid.endswith("@g.us"), jid)
+                        "the fixture must carry at least one paused record")
 
     def test_bands_cover_every_tier_in_use(self):
         bands = pm.bands(self.m)

@@ -141,6 +141,48 @@ def targets_payload(promo, config=None):
     return promo_membership.targets_payload(config or membership(), promo)
 
 
+def config_for(groups, *, promo="alpha", enabled=True, caps_enabled=False,
+               entries=None):
+    """A ``promo_config.resolve`` result for a bare list of group JIDs.
+
+    The engine takes its targeting, membership and switches from one resolve, so
+    a test that only cares about sending wants a resolve it can state in a line
+    rather than a store to stand up. Caps are off by default, because a test
+    about send order should not also be a test about allowances.
+    """
+    jids = list(groups)
+    records = dict((jid, {"name": None, "status": "active", "activity": "normal",
+                          "daily_cap": None, "promos": [promo]}) for jid in jids)
+    for jid, extra in (entries or {}).items():
+        records.setdefault(jid, {"name": None, "status": "active",
+                                 "activity": "normal", "daily_cap": None,
+                                 "promos": [promo]}).update(extra)
+    config = {
+        "version": 1,
+        "defaults": {"activity": "normal", "caps_enabled": caps_enabled,
+                     "contact_account": "default",
+                     "accounts": {"default": {"number": LINES["default"]}},
+                     "bands": {"normal": [1, 3]}},
+        "promos": {promo: campaign(promo, "09:07", enabled=enabled)},
+        "groups": records,
+    }
+    return {"source": "firestore", "mode": "firestore",
+            "doc": {"groups": jids, "accounts": {},
+                    "account_numbers": {"default": LINES["default"]},
+                    "contact_account": "default"},
+            "membership": config, "switches": {promo: enabled},
+            "storeSwitches": {promo: enabled}, "cronSwitches": {promo: True},
+            "enabled": enabled, "deleted": [],
+            "report": {"quarantined": {}, "warnings": [], "campaigns": {}},
+            "notes": []}
+
+
+def resolver_for(groups, **kw):
+    """A ``resolve_config`` callable answering from :func:`config_for`."""
+    config = config_for(groups, **kw)
+    return lambda *args, **kwargs: config
+
+
 class Harness(unittest.TestCase):
     """A real campaign run with a fake sender, a fake Firestore and no delays."""
 

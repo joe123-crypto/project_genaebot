@@ -973,28 +973,28 @@ def promo_key(promo_name):
     return name
 
 
-def apply_caps(promo_name, jids, day, caps=_PROBE_CAPS, membership_path=None,
-               record=True, membership=_PROBE_MEMBERSHIP, switches=None):
+def apply_caps(promo_name, jids, day, caps=_PROBE_CAPS, record=True,
+               membership=_PROBE_MEMBERSHIP, switches=None):
     """Drop the groups whose daily ad allowance is spoken for by other campaigns
     today (see :mod:`promo_caps`). Returns ``(kept, decisions)``, with
     ``decisions`` empty when caps are off.
 
     ``membership`` and ``switches`` come from the run's single
     ``promo_config.resolve``, so the caps read the same config the targeting did
-    rather than re-reading the file (or Firestore) for themselves. Explicit
-    ``membership=None`` means resolution found no usable membership. Without them
-    the membership file and the cron manifest are read, as before.
+    rather than reading it again for themselves. They are the only source: there
+    used to be a fallback that read the committed membership file and the cron
+    manifest, and with those gone a caller that resolved nothing has nothing to
+    apply caps from. Explicit ``membership=None`` means the same thing.
 
-    Deliberately fail-open: a missing membership file, bad data or an import
-    problem leaves every group in place and logs a warning. A capacity nicety
-    must never be the reason a day's ads do not go out."""
+    Deliberately fail-open: no membership, bad data or an import problem leaves
+    every group in place and logs a warning. A capacity nicety must never be the
+    reason a day's ads do not go out."""
     if caps is None or not jids:
         return list(jids), {}
     try:
         import promo_membership
 
-        m = (promo_membership.load(membership_path)
-             if membership is _PROBE_MEMBERSHIP else membership)
+        m = None if membership is _PROBE_MEMBERSHIP else membership
         if m is None:
             return list(jids), {}
         if caps is _PROBE_CAPS:
@@ -1033,7 +1033,7 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
               tracking=None, promo_name=None, variant_images=None,
               send_delay_min=None, send_delay_max=None, rng=None, sleep=None,
               cron_timeout=_PROBE_CRON_TIMEOUT, start_jitter=None,
-              caps=_PROBE_CAPS, membership_path=None, account_status=None,
+              caps=_PROBE_CAPS, account_status=None,
               resolve_config=None, run_day=None, cap_day=None):
     """Resolve targets, skip groups already sent today (and weekly-limited groups
     off their configured weekday), then send the advert to each pending group,
@@ -1073,7 +1073,7 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
 
     ``rng`` (anything with a ``uniform`` method, default the ``random`` module),
     ``sleep`` (default ``time.sleep``), ``cron_timeout`` (default: ask the
-    gateway; None disables the fit) and ``membership_path`` are injectable for
+    gateway; None disables the fit) is injectable for
     tests."""
     args = sys.argv[1:] if argv is None else argv
     show_refs = "--refs" in args
@@ -1204,7 +1204,6 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
     # ads a day. Rotation decides which campaigns use today's allowance, so this
     # promo may be asked to stand down for a group it still targets.
     eligible, cap_decisions = apply_caps(promo_name, eligible, cap_day or day, caps=caps,
-                                         membership_path=membership_path,
                                          record=not dry,
                                          membership=source["membership"],
                                          switches=source["switches"])
