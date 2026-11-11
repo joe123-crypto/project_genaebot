@@ -142,34 +142,55 @@ def targets_payload(promo, config=None):
 
 
 def config_for(groups, *, promo="alpha", enabled=True, caps_enabled=False,
-               entries=None):
+               entries=None, weekly=None, accounts=None, numbers=None,
+               contact_account="default"):
     """A ``promo_config.resolve`` result for a bare list of group JIDs.
 
     The engine takes its targeting, membership and switches from one resolve, so
     a test that only cares about sending wants a resolve it can state in a line
-    rather than a store to stand up. Caps are off by default, because a test
-    about send order should not also be a test about allowances.
+    rather than a store to stand up. This is what replaced writing a
+    ``targets.json`` into a temporary directory and letting the engine read it:
+    there is no file to read any more, so a test hands the engine the resolve.
+
+    Caps are off by default, because a test about send order should not also be
+    a test about allowances. ``weekly`` is ``{jid: [weekday, ...]}`` for groups
+    posted to only on certain days, ``accounts`` is ``{jid: line}`` and
+    ``numbers`` is ``{line: number}``; ``contact_account=None`` leaves the
+    advertised number to each group's own posting line.
     """
     jids = list(groups)
-    records = dict((jid, {"name": None, "status": "active", "activity": "normal",
-                          "daily_cap": None, "promos": [promo]}) for jid in jids)
+    weekly = dict(weekly or {})
+    accounts = dict(accounts or {})
+    numbers = dict(numbers or {"default": LINES["default"]})
+
+    def record(jid):
+        entry = {"name": None, "status": "active", "activity": "normal",
+                 "daily_cap": None, "promos": [] if jid in weekly else [promo]}
+        if jid in weekly:
+            entry["weekly"] = {promo: list(weekly[jid])}
+        if jid in accounts:
+            entry["account"] = accounts[jid]
+        return entry
+
+    records = dict((jid, record(jid)) for jid in list(jids) + list(weekly))
     for jid, extra in (entries or {}).items():
-        records.setdefault(jid, {"name": None, "status": "active",
-                                 "activity": "normal", "daily_cap": None,
-                                 "promos": [promo]}).update(extra)
+        records.setdefault(jid, record(jid)).update(extra)
     config = {
         "version": 1,
         "defaults": {"activity": "normal", "caps_enabled": caps_enabled,
-                     "contact_account": "default",
-                     "accounts": {"default": {"number": LINES["default"]}},
+                     "contact_account": contact_account,
+                     "accounts": dict((line, {"number": number})
+                                      for line, number in numbers.items()),
                      "bands": {"normal": [1, 3]}},
         "promos": {promo: campaign(promo, "09:07", enabled=enabled)},
         "groups": records,
     }
-    return {"source": "firestore", "mode": "firestore",
-            "doc": {"groups": jids, "accounts": {},
-                    "account_numbers": {"default": LINES["default"]},
-                    "contact_account": "default"},
+    doc = {"groups": jids, "accounts": accounts, "account_numbers": numbers}
+    if weekly:
+        doc["weekly_groups"] = dict((jid, list(days)) for jid, days in weekly.items())
+    if contact_account is not None:
+        doc["contact_account"] = contact_account
+    return {"source": "firestore", "mode": "firestore", "doc": doc,
             "membership": config, "switches": {promo: enabled},
             "storeSwitches": {promo: enabled}, "cronSwitches": {promo: True},
             "enabled": enabled, "deleted": [],

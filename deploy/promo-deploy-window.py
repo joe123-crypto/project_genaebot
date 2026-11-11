@@ -32,8 +32,14 @@ Every campaign is treated as if it could fire at its time on any day. A campaign
 that skips some weekdays then holds a release slightly more often than it had
 to, which is the right direction for this to err in.
 
-Exit codes: 0 quiet (possibly after waiting), 1 busy beyond the wait bound or
-the gateway unreachable, 2 bad input.
+It also reports the two schedule guardrails that used to be repository tests
+over the committed group lists and cron manifest (see
+``gateway_campaigns.problems``): a campaign that cannot finish inside its own
+job timeout fails this gate, and two campaigns overlapping on one WhatsApp line
+are a warning.
+
+Exit codes: 0 quiet (possibly after waiting), 1 busy beyond the wait bound, a
+campaign that cannot finish its own run, or the gateway unreachable; 2 bad input.
 """
 
 import argparse
@@ -49,21 +55,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gateway_campaigns  # noqa: E402
 
 UTC = dt.timezone.utc
-# Mirrors of workspace/lib/promo_broadcast.py's defaults (pinned by a test). The
-# release runner has no PYTHONPATH for the engine, and importing it would pull in
-# the gateway client.
-START_JITTER_SECONDS = 900.0
-SEND_GAP_MAX_SECONDS = 60.0
-SEND_ALLOWANCE_SECONDS = 12.0
 
 
 def run_budget_minutes(row):
     """Worst-case minutes a campaign run may keep sending after its cron fires."""
-    timeout = float(row.get("timeoutSeconds") or 7200)
-    count = int(row["targetCount"])
-    worst = (START_JITTER_SECONDS + count * SEND_ALLOWANCE_SECONDS
-             + max(count - 1, 0) * SEND_GAP_MAX_SECONDS)
-    return min(worst, timeout) / 60.0
+    return gateway_campaigns.run_budget_seconds(row) / 60.0
 
 
 def daily_starts(rows):
@@ -160,6 +156,18 @@ def main(argv=None, clock=None, sleep=time.sleep, read=None):
         return 2
     print("Read %d campaign(s) from the gateway, %d enabled."
           % (len(rows), len(gateway_campaigns.enabled(rows))))
+    # The schedule guardrails. These used to be repository tests over the
+    # committed group lists and cron manifest; the data is in Firestore now, so
+    # this is where they are checked, against what the bot is actually doing.
+    found = gateway_campaigns.problems(rows)
+    for severity, message in found:
+        print("::%s::%s" % (severity, message), file=sys.stderr)
+    if any(severity == "error" for severity, _ in found):
+        print("::error::A campaign cannot finish inside its own job timeout, so it "
+              "loses groups every day. Fix it in the console (or raise the job "
+              "timeout) and re-run this job; dispatch with ignore_promo_window if "
+              "the release must go out first.", file=sys.stderr)
+        return 1
     if clock is None:
         clock = lambda: dt.datetime.now(UTC)
     if args.now:

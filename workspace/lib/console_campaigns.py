@@ -557,6 +557,6 @@ def run_campaign(slug, argv=None, now=None, resolve=None, broadcast=None, ensure
         except BlockingIOError:
             return 0
         return (broadcast or promo_broadcast.broadcast)(text=campaign["captions"], image=paths,
-                    targets_file=str(state / "targets.json"), state_file=str(state / "state.json"),
+                    state_file=str(state / "state.json"),
                     tracking=campaign.get("tracking") or None, promo_name=slug + "-promo", argv=argv or [],
                     cron_timeout=campaign["timeoutSeconds"], run_day=day, cap_day=now.astimezone(ZoneInfo("Africa/Harare")).date(), resolve_config=lambda *args, **kwargs: source)

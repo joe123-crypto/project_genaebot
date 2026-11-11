@@ -27,10 +27,12 @@ override with the workflow's ``ignore_promo_window`` input.
 Std-lib only, like everything else the deploy job runs.
 """
 
+import datetime as dt
 import json
 import os
 import subprocess
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 SCRIPT = Path(__file__).resolve().parent / "gateway-campaigns.sh"
 # Generous: this is one ssh round trip into a container that may be cold, and
@@ -41,6 +43,16 @@ TIMEOUT_SECONDS = 180
 # a missing schedule to midnight is worse than one that says it cannot tell.
 REQUIRED = ("slug", "enabled", "hour", "minute", "timezone", "targetCount",
             "timeoutSeconds")
+
+
+# Mirrors of workspace/lib/promo_broadcast.py's defaults, pinned by a test. The
+# release runner has no PYTHONPATH for the engine, and importing it would pull
+# in the gateway client.
+START_JITTER_SECONDS = 900.0
+SEND_GAP_MAX_SECONDS = 60.0
+SEND_ALLOWANCE_SECONDS = 12.0
+DEFAULT_TIMEOUT_SECONDS = 7200.0
+DEFAULT_ACCOUNT = "default"
 
 
 class Unavailable(Exception):
@@ -119,3 +131,87 @@ def job_names(rows):
             raise Unavailable("campaign %r has no job name" % row.get("slug"))
         names.add(name)
     return names
+
+
+def worst_case_seconds(row, count=None):
+    """How long a run may still be sending after its cron fires.
+
+    The engine's own worst case: the full start jitter, then every gap between
+    sends at the top of its range, plus a per-send allowance. ``count`` narrows
+    it to one line's share of the target list."""
+    sends = int(row["targetCount"] if count is None else count)
+    return (START_JITTER_SECONDS + sends * SEND_ALLOWANCE_SECONDS
+            + max(sends - 1, 0) * SEND_GAP_MAX_SECONDS)
+
+
+def run_budget_seconds(row):
+    """The worst case, capped at the job timeout that kills the run anyway."""
+    timeout = float(row.get("timeoutSeconds") or DEFAULT_TIMEOUT_SECONDS)
+    return min(worst_case_seconds(row), timeout)
+
+
+def _per_account(row):
+    """``{line: count}`` for one campaign, however the gateway reports it."""
+    accounts = row.get("accounts")
+    if isinstance(accounts, dict) and accounts:
+        return dict((str(line), int(count)) for line, count in accounts.items())
+    return {DEFAULT_ACCOUNT: int(row["targetCount"])}
+
+
+def problems(rows):
+    """``[(severity, message)]`` for schedules that cannot do what they promise.
+
+    Two guardrails that used to be repository tests, because every input was a
+    committed file: the group lists, the schedules and the job timeouts. They are
+    operator data now, so the only place they can be checked is against the live
+    list -- which is also the only place worth checking, since the committed
+    copies had drifted from what the bot was actually doing.
+
+    ``error`` is a campaign whose own run cannot finish inside its own job
+    timeout: the gateway kills it every day with groups unreached, and no deploy
+    changes that. ``warning`` is two campaigns on the same WhatsApp line where
+    the earlier may still be posting when the later starts -- the 20-60 s
+    spacing is per line, so two overlapping runs double that line's send rate
+    and defeat it. Spacing degrades; it does not break, hence the lesser
+    severity.
+    """
+    found = []
+    live = enabled(rows)
+    for row in sorted(live, key=lambda row: row["slug"]):
+        timeout = float(row.get("timeoutSeconds") or DEFAULT_TIMEOUT_SECONDS)
+        worst = worst_case_seconds(row)
+        if worst > timeout:
+            found.append(("error",
+                          "%s sends to %d group(s), which needs up to %.0f min, "
+                          "but its job timeout is %.0f min: the run is killed with "
+                          "groups unreached. Raise the timeout or split the campaign."
+                          % (row["slug"], int(row["targetCount"]), worst / 60.0,
+                             timeout / 60.0)))
+    # Overlap is per line and per timezone-independent instant, so compare the
+    # start times as minutes from midnight UTC on one arbitrary day.
+    day = dt.date(2026, 1, 1)
+    by_line = {}
+    for row in live:
+        try:
+            zone = ZoneInfo(row["timezone"])
+        except Exception as ex:
+            raise Unavailable("campaign %r has an unusable timezone %r (%s)"
+                              % (row["slug"], row["timezone"], ex))
+        start = dt.datetime(day.year, day.month, day.day, int(row["hour"]),
+                            int(row["minute"]), tzinfo=zone)
+        at = start.astimezone(dt.timezone.utc)
+        for line, count in _per_account(row).items():
+            by_line.setdefault(line, []).append(
+                (at.hour * 3600 + at.minute * 60, row["slug"], count, row))
+    for line, runs in sorted(by_line.items()):
+        runs.sort()
+        for (at, slug, count, row), (next_at, next_slug, _, _) in zip(runs, runs[1:]):
+            latest = at + min(worst_case_seconds(row, count),
+                              float(row.get("timeoutSeconds") or DEFAULT_TIMEOUT_SECONDS))
+            if latest > next_at:
+                found.append(("warning",
+                              "%s (%d group(s) on the %s line) can still be posting "
+                              "%.0f min after %s starts, and the send spacing is per "
+                              "line: move one of them."
+                              % (slug, count, line, (latest - next_at) / 60.0, next_slug)))
+    return found

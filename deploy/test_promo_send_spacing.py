@@ -24,12 +24,13 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-LIB_DIR = ROOT / "workspace/lib"
-CRON = ROOT / "workspace/cron"
-if str(LIB_DIR) not in sys.path:
-    sys.path.insert(0, str(LIB_DIR))
+for _path in (str(ROOT / "workspace/lib"), str(ROOT / "deploy")):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
 import promo_broadcast as pb  # noqa: E402
 import json_store  # noqa: E402
+import promo_fixture  # noqa: E402
+import gateway_campaigns  # noqa: E402
 
 OK = (True, '{"messageId":"m"}')
 
@@ -77,11 +78,10 @@ class SendSpacingTests(unittest.TestCase):
         self.events.append(("sleep", seconds))
 
     def _run(self, groups, argv=(), weekly=None, **kwargs):
-        data = {"groups": groups}
-        if weekly is not None:
-            data["weekly_groups"] = weekly
-        targets = self.tmp / "targets.json"
-        targets.write_text(json.dumps(data))
+        # The engine is handed its resolved config, the way a real run is: there
+        # is no targets file to point it at any more.
+        kwargs.setdefault("resolve_config",
+                          promo_fixture.resolver_for(groups, weekly=weekly))
         kwargs.setdefault("rng", RecordingRng())
         kwargs.setdefault("account_status", lambda accounts: {a: True for a in accounts})
         kwargs.setdefault("cron_timeout", None)  # no gateway lookup in tests
@@ -91,7 +91,7 @@ class SendSpacingTests(unittest.TestCase):
         kwargs.setdefault("caps", None)  # per-group caps have their own tests
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             return pb.broadcast(text="hi", image=str(self.image),
-                                targets_file=str(targets), state_file=str(self.state),
+                                state_file=str(self.state), promo_name="alpha-promo",
                                 argv=list(argv), sleep=self._sleep, **kwargs)
 
     def sleeps(self):
@@ -242,75 +242,77 @@ class SendSpacingTests(unittest.TestCase):
         self.assertEqual(self.events, [("send", "3@g.us")])
 
 
-class CallerWiringTests(unittest.TestCase):
-    def test_promo_scripts_do_not_pin_a_fixed_delay(self):
-        scripts = sorted(CRON.glob("*-promo/post_*.py"))
-        self.assertEqual(len(scripts), 10)
-        for script in scripts:
-            src = script.read_text(encoding="utf-8")
-            self.assertIn("promo_broadcast.broadcast(", src, script)
-            self.assertNotIn("send_delay=", src, script)
+class ScheduleGuardrailTests(unittest.TestCase):
+    """The two things a campaign's schedule has to be able to deliver.
 
-    def test_promo_cron_timeout_covers_worst_case_run(self):
-        installer = (ROOT / "deploy/install-promo.sh").read_text(encoding="utf-8")
-        self.assertNotIn("--timeout-seconds 600", installer)
-        self.assertIn('PROMO_CRON_TIMEOUT_SECONDS="${PROMO_CRON_TIMEOUT_SECONDS:-7200}"',
-                      installer)
-        # Re-running an installer must prove the timeout reached the volume's
-        # cron state, not just that the job exists.
-        self.assertIn(".payload.timeoutSeconds == $timeout", installer)
-        largest = 0
-        for targets in CRON.glob("*-promo/targets.json"):
-            data = json.loads(targets.read_text(encoding="utf-8"))
-            jids = set(data.get("groups", [])) | set(data.get("weekly_groups", {}))
-            largest = max(largest, len(jids))
-        # Every gap at the 60 s max plus a generous 60 s per send must still fit.
-        worst = (largest - 1) * pb.DEFAULT_SEND_DELAY_MAX + largest * 60
-        self.assertLess(worst, 7200, "largest promo (%d groups) may exceed the timeout"
-                        % largest)
+    Both of these used to be read straight out of the checkout: the group counts
+    from ten committed ``targets.json`` files, the times and timeouts from
+    ``deploy/promo-crons.json``, and the fixed-delay check from ten copies of a
+    post script. All of that is operator data in Firestore now, so the guardrails
+    live in ``deploy/gateway_campaigns.problems`` and run on every release
+    against the live list -- which is the only copy that was ever true. These
+    tests pin the rules; the gate's own tests pin that it acts on them.
+    """
 
-    def test_no_promo_can_still_be_running_at_the_next_promos_slot(self):
-        """Two promo runs posting at once double the account's send rate and
-        defeat the 20-60 s spacing. On 2026-10-20 fruit-trees (44 groups, 08:40)
-        was still sending when skylight-solar (then 09:17) started: from 09:27
-        to 09:30 Harare the two interleaved, with sends 2 s apart. The READMEs
-        promise each slot clears its predecessor's latest possible finish
-        (base minute + full start jitter + every gap at its max + a per-send
-        allowance); this pins that promise against today's group counts."""
-        manifest = json.loads((ROOT / "deploy/promo-crons.json").read_text(encoding="utf-8"))
-        # The 20-60 s spacing is per WhatsApp account: each line sends on its own
-        # socket, so two promo runs only double the send rate when they post to the
-        # SAME account at once. Bucket every run by the account its groups are
-        # tagged to (an untagged group is on the default line) and check spacing
-        # within each account; a promo on the second ("ads") line therefore never
-        # has to clear the default line's slots.
-        by_account = {}
-        for promo in manifest["promos"]:
-            minute, hour = promo["cron"].split()[:2]
-            start = int(hour) * 60 + int(minute)
-            data = json.loads((CRON / ("%s-promo" % promo["slug"]) / "targets.json")
-                              .read_text(encoding="utf-8"))
-            jids = set(data.get("groups", [])) | set(data.get("weekly_groups", {}))
-            accounts = data.get("accounts") or {}
-            per_account = {}
-            for jid in jids:
-                acct = accounts.get(jid, pb.DEFAULT_ACCOUNT)
-                per_account[acct] = per_account.get(acct, 0) + 1
-            for acct, count in per_account.items():
-                by_account.setdefault(acct, []).append((start, promo["slug"], count))
-        for acct, runs in by_account.items():
-            runs.sort()
-            for (start, slug, count), (next_start, next_slug, _) in zip(runs, runs[1:]):
-                latest = start * 60 + (pb.DEFAULT_START_JITTER_SECONDS
-                                       + (count - 1) * pb.DEFAULT_SEND_DELAY_MAX
-                                       + count * pb.SEND_ALLOWANCE_SECONDS)
-                with self.subTest(account=acct, promo=slug):
-                    self.assertLess(latest, next_start * 60,
-                                    "%s (%d groups on %s) can still be sending at "
-                                    "%02d:%02d when %s starts at %02d:%02d"
-                                    % (slug, count, acct, latest // 3600,
-                                       latest % 3600 // 60, next_slug,
-                                       next_start // 60, next_start % 60))
+    def row(self, slug, hour, minute, count, *, timeout=7200, accounts=None,
+            enabled=True):
+        row = {"slug": slug, "name": slug, "jobName": slug + "-promo",
+               "enabled": enabled, "hour": hour, "minute": minute,
+               "timezone": "Africa/Harare", "targetCount": count,
+               "timeoutSeconds": timeout, "source": "console"}
+        if accounts is not None:
+            row["accounts"] = accounts
+        return row
+
+    def test_the_worst_case_is_the_engines_own(self):
+        count = 20
+        self.assertEqual(
+            gateway_campaigns.worst_case_seconds(self.row("a", 9, 7, count)),
+            pb.DEFAULT_START_JITTER_SECONDS + count * pb.SEND_ALLOWANCE_SECONDS
+            + (count - 1) * pb.DEFAULT_SEND_DELAY_MAX)
+
+    def test_a_campaign_that_cannot_finish_inside_its_timeout_is_an_error(self):
+        # 51 groups needs ~75 min; the shared 3600 s timeout kills it at 60,
+        # which is the capacity ceiling the promo crons are sized against.
+        found = gateway_campaigns.problems([self.row("borehole", 7, 15, 51, timeout=3600)])
+        self.assertEqual([severity for severity, _ in found], ["error"])
+        self.assertIn("killed with groups unreached", found[0][1])
+        # The same campaign fits the raised timeout.
+        self.assertEqual(gateway_campaigns.problems(
+            [self.row("borehole", 7, 15, 51, timeout=5400)]), [])
+
+    def test_two_campaigns_overlapping_on_one_line_are_a_warning(self):
+        # The 2026-10-20 incident: fruit-trees (44 groups, 08:40) was still
+        # sending when skylight-solar started at 09:17, and from 09:27 the two
+        # interleaved with sends 2 s apart on the same account.
+        found = gateway_campaigns.problems([self.row("fruit-trees", 8, 40, 44),
+                                            self.row("skylight", 9, 17, 24)])
+        self.assertEqual([severity for severity, _ in found], ["warning"])
+        self.assertIn("send spacing is per line", found[0][1])
+
+    def test_the_spacing_is_judged_per_line_not_per_bot(self):
+        # The 20-60 s spacing is per WhatsApp account: a campaign on the second
+        # line never has to clear the first line's slots.
+        rows = [self.row("fruit-trees", 8, 40, 44, accounts={"default": 44}),
+                self.row("big-player", 9, 17, 2, accounts={"ads": 2})]
+        self.assertEqual(gateway_campaigns.problems(rows), [])
+
+    def test_a_disabled_campaign_holds_up_nothing(self):
+        rows = [self.row("fruit-trees", 8, 40, 44),
+                self.row("paused", 9, 17, 24, enabled=False)]
+        self.assertEqual(gateway_campaigns.problems(rows), [])
+
+    def test_the_shared_runner_does_not_pin_a_fixed_gap(self):
+        """Ten post scripts became one runner, and it must leave the gap to the
+        engine: a pinned ``send_delay`` would restore the metronome cadence the
+        randomised spacing exists to break."""
+        import console_campaigns
+        source = Path(console_campaigns.__file__).read_text(encoding="utf-8")
+        call = source[source.index("def run_campaign"):]
+        self.assertIn("promo_broadcast.broadcast)(", call)
+        self.assertNotIn("send_delay", call)
+        runner = Path(console_campaigns.__file__).resolve().parents[1] / "bin" / "run-console-campaign"
+        self.assertNotIn("send_delay", runner.read_text(encoding="utf-8"))
 
 
 class RunTimeoutFitTests(unittest.TestCase):

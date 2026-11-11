@@ -159,9 +159,10 @@ class GateTest(unittest.TestCase):
 
     # ------------------------------------------------------------- the wiring --
     def test_engine_timing_mirrors_match_promo_broadcast(self):
-        self.assertEqual(gate.START_JITTER_SECONDS, promo_broadcast.DEFAULT_START_JITTER_SECONDS)
-        self.assertEqual(gate.SEND_GAP_MAX_SECONDS, promo_broadcast.DEFAULT_SEND_DELAY_MAX)
-        self.assertEqual(gate.SEND_ALLOWANCE_SECONDS, promo_broadcast.SEND_ALLOWANCE_SECONDS)
+        mirror = gate.gateway_campaigns
+        self.assertEqual(mirror.START_JITTER_SECONDS, promo_broadcast.DEFAULT_START_JITTER_SECONDS)
+        self.assertEqual(mirror.SEND_GAP_MAX_SECONDS, promo_broadcast.DEFAULT_SEND_DELAY_MAX)
+        self.assertEqual(mirror.SEND_ALLOWANCE_SECONDS, promo_broadcast.SEND_ALLOWANCE_SECONDS)
 
     def test_deploy_job_gates_before_the_release(self):
         deploy = WORKFLOW[WORKFLOW.index("\n  deploy:\n"):]

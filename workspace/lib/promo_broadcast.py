@@ -245,8 +245,8 @@ def load_account_targets(source):
 def load_account_numbers(source):
     """Return {account_id: advertised_number} so the engine can render each
     group's caption + wa.me link with the selected contact account
-    (or the posting account when no contact is selected). Comes from membership.json's
-    defaults.accounts, carried into every targets.json by make-promo-targets."""
+    (or the posting account when no contact is selected). Comes from the lines
+    configured in the console, carried into every resolved target payload."""
     raw = _targets_doc(source).get("account_numbers") or {}
     out = {}
     if isinstance(raw, dict):
@@ -1029,8 +1029,8 @@ def apply_caps(promo_name, jids, day, caps=_PROBE_CAPS, record=True,
 
 
 @campaign_transport
-def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=None,
-              tracking=None, promo_name=None, variant_images=None,
+def broadcast(*, text, image, state_file, promo_name, send_delay=None, argv=None,
+              tracking=None, variant_images=None,
               send_delay_min=None, send_delay_max=None, rng=None, sleep=None,
               cron_timeout=_PROBE_CRON_TIMEOUT, start_jitter=None,
               caps=_PROBE_CAPS, account_status=None,
@@ -1064,12 +1064,12 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
     membership.json sets ``caps_enabled``. ``caps=None`` disables it outright and
     ``caps=<module>`` injects an alternative, both for tests.
 
-    Where the targeting comes from is :func:`promo_config.resolve`'s decision --
-    the generated targets file, or Firestore. It is resolved once per run, and
-    ``resolve_config`` injects an alternative resolver for tests. Where the
-    PICTURES come from is the caller's decision -- the assets
-    baked into this image, or the ones indexed in Firestore with their bytes in
-    R2 -- and it hands back local paths either way.
+    The targeting comes from :func:`promo_config.resolve`, which reads Firestore
+    and nothing else. It is resolved once per run, and ``resolve_config`` injects
+    an alternative resolver for tests. ``promo_name`` is how this run names
+    itself to that resolver and in its own messages; there used to be a
+    ``targets_file`` beside it, which was both the targeting and the name, and
+    the name was taken from the directory the file sat in.
 
     ``rng`` (anything with a ``uniform`` method, default the ``random`` module),
     ``sleep`` (default ``time.sleep``), ``cron_timeout`` (default: ask the
@@ -1083,8 +1083,6 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
     variants = _variants(text)
     if tracking and not tracking.get("prefix"):
         raise ValueError("tracking config missing: prefix")
-    if not promo_name:
-        promo_name = os.path.basename(os.path.dirname(os.path.abspath(targets_file)))
 
     # ``image`` is already local paths: the caller fetched every one of this
     # campaign's indexed pictures from R2 through the verified cache, all of
@@ -1171,18 +1169,15 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
     if contact_account is not None and (
             not isinstance(contact_account, str) or contact_account not in account_numbers):
         raise ValueError("contact_account must name an account with a number "
-                         "(%s): check defaults.accounts, and regenerate "
-                         "targets.json with make-promo-targets when the source "
-                         "is the file" % source["source"])
-    # Checked only once there is something to send, so a missing/unreadable
-    # targets file still exits quietly above (load_targets reports it) instead of
-    # being misreported here as a stale, un-regenerated one.
+                         "(%s): check the lines configured in the console"
+                         % source["source"])
+    # Checked only once there is something to send, so a campaign with nothing
+    # configured still exits quietly above instead of being misreported here.
     if bot_number_used and not account_numbers:
         raise ValueError(
             "this promo advertises a per-account number but the targets payload "
-            "(%s) has no account_numbers map; check defaults.accounts, and "
-            "regenerate targets.json with make-promo-targets when the source is "
-            "the file" % source["source"])
+            "(%s) has no account_numbers map; check the lines configured in the "
+            "console" % source["source"])
 
     st = load_state(state_file)
     jids = resolve_targets(all_entries, st, dry=dry)
