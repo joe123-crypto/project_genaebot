@@ -100,13 +100,24 @@ class RunTest(unittest.TestCase):
         rows = gc.read(runner=lambda *a, **k: Completed(stdout=reply([row("a")])))
         self.assertEqual(rows[0]["slug"], "a")
 
-    def test_a_nonzero_exit_reports_the_last_line_of_its_output(self):
+    def test_a_nonzero_exit_reports_the_last_lines_of_its_output(self):
         def runner(*args, **kwargs):
             return Completed(code=7, stderr="connecting...\nno such service\n")
         with self.assertRaises(gc.Unavailable) as caught:
             gc.read(runner=runner)
         self.assertIn("exit 7", str(caught.exception))
         self.assertIn("no such service", str(caught.exception))
+
+    def test_the_reason_survives_a_cli_that_ends_in_advice(self):
+        # The Railway CLI says what went wrong and then what to do about it, so
+        # the last line alone named neither the project nor the problem.
+        def runner(*args, **kwargs):
+            return Completed(code=1, stderr="No linked project found\n\n"
+                                            "  -> Run `railway link`.\n"
+                                            "Then run this command again.\n")
+        with self.assertRaises(gc.Unavailable) as caught:
+            gc.read(runner=runner)
+        self.assertIn("No linked project found", str(caught.exception))
 
     def test_a_silent_failure_still_says_something(self):
         with self.assertRaises(gc.Unavailable) as caught:
@@ -126,6 +137,44 @@ class RunTest(unittest.TestCase):
         with self.assertRaises(gc.Unavailable) as caught:
             gc.read(runner=runner, script="/nonexistent/gateway-campaigns.sh")
         self.assertIn("gateway-campaigns.sh", str(caught.exception))
+
+
+class ScopeTest(unittest.TestCase):
+    """`railway ssh` resolves the project from a linked directory, and a CI
+    checkout is never linked: the first release after the campaign data moved to
+    Firestore failed this gate on nothing else, with the gateway healthy."""
+
+    def test_the_wrapper_is_told_which_gateway_to_reach(self):
+        env = gc.scoped({"PATH": "/bin"})
+        self.assertEqual(env["RAILWAY_PROJECT"], gc.PROJECT)
+        self.assertEqual(env["RAILWAY_SERVICE"], gc.SERVICE)
+        self.assertEqual(env["RAILWAY_ENVIRONMENT"], gc.ENVIRONMENT)
+        self.assertEqual(env["PATH"], "/bin")
+
+    def test_a_scope_the_caller_chose_is_left_alone(self):
+        env = gc.scoped({"RAILWAY_PROJECT": "other", "RAILWAY_SERVICE": ""})
+        self.assertEqual(env["RAILWAY_PROJECT"], "other")
+        # Empty means unset to deploy/gateway-exec.sh, which tests with -n.
+        self.assertEqual(env["RAILWAY_SERVICE"], gc.SERVICE)
+
+    def test_the_wrapper_reads_the_scope_from_the_environment(self):
+        exec_sh = (ROOT / "deploy/gateway-exec.sh").read_text(encoding="utf-8")
+        for name in gc.RAILWAY_SCOPE:
+            self.assertIn(name, exec_sh)
+
+    def test_a_run_carries_the_scope(self):
+        seen = {}
+        def runner(argv, **kwargs):
+            seen.update(kwargs["env"])
+            return Completed(stdout=reply([row("a")]))
+        gc.read(runner=runner)
+        self.assertEqual(seen["RAILWAY_SERVICE"], gc.SERVICE)
+
+    def test_the_release_script_has_no_second_copy_of_the_scope(self):
+        source = (ROOT / "deploy/railway-release.py").read_text(encoding="utf-8")
+        self.assertIn("gateway_campaigns.SCOPE", source)
+        for value in (gc.PROJECT, gc.SERVICE, gc.ENVIRONMENT):
+            self.assertNotIn(value, source)
 
 
 class WrapperTest(unittest.TestCase):

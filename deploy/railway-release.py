@@ -14,9 +14,6 @@ import tempfile
 import time
 import uuid
 
-PROJECT = "a251f752-3b49-4f72-8a71-4629bf2fced0"
-SERVICE = "503baf60-c897-4a77-812a-719195705031"
-ENVIRONMENT = "2cae37a4-8e24-41db-87ed-9a3a7c9eff22"
 OWNED = ("SOURCE_COMMIT", "GENAIE_CAMPAIGN_TRANSPORT", "GENAIE_CATALOG_IDLE_RETIREMENT",
          "GENAIE_HISTORY_IDLE_RETIREMENT", "MALLOC_ARENA_MAX", "GENAIE_WHATSAPP_CACHE_CLEANUP", "GENAIE_OVERNIGHT_STANDBY")
 PROFILES = ("preserve", "baseline", "catalog-trial", "history-trial", "allocator-trial", "sender-trial", "cache-trial", "standby-trial")
@@ -32,7 +29,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import gateway_campaigns  # noqa: E402
 
-SCOPE = ["--project", PROJECT, "--service", SERVICE, "--environment", ENVIRONMENT]
+# One definition of which project, service and environment production is.
+SCOPE = gateway_campaigns.SCOPE
 
 
 def railway(*arguments, cwd=None):

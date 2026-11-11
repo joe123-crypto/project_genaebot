@@ -36,6 +36,18 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 SCRIPT = Path(__file__).resolve().parent / "gateway-campaigns.sh"
+# How to address the live gateway, in one place: deploy/railway-release.py takes
+# its own scope from here. `railway ssh` otherwise resolves the project from a
+# linked directory, and a CI checkout is never linked -- the first release after
+# the campaign data moved to Firestore failed this gate on nothing but that --
+# so the scope goes in the wrapper's environment, which is also how
+# deploy/railway/README.md tells an operator to run from an unlinked checkout.
+PROJECT = "a251f752-3b49-4f72-8a71-4629bf2fced0"
+SERVICE = "503baf60-c897-4a77-812a-719195705031"
+ENVIRONMENT = "2cae37a4-8e24-41db-87ed-9a3a7c9eff22"
+SCOPE = ["--project", PROJECT, "--service", SERVICE, "--environment", ENVIRONMENT]
+RAILWAY_SCOPE = {"RAILWAY_PROJECT": PROJECT, "RAILWAY_SERVICE": SERVICE,
+                 "RAILWAY_ENVIRONMENT": ENVIRONMENT}
 # Generous: this is one ssh round trip into a container that may be cold, and
 # the alternative to waiting is failing a release that was fine.
 TIMEOUT_SECONDS = 180
@@ -65,19 +77,35 @@ class Unavailable(Exception):
     """The live campaign list could not be read. Never means "no campaigns"."""
 
 
+def scoped(env=None):
+    """The wrapper's environment, with the gateway's address filled in.
+
+    A scope the caller set is left alone, so a run against another project or a
+    local container still works."""
+    environment = dict(os.environ if env is None else env)
+    for name, value in RAILWAY_SCOPE.items():
+        if not environment.get(name):
+            environment[name] = value
+    return environment
+
+
 def _run(script=None, timeout=TIMEOUT_SECONDS, env=None, runner=None):
     runner = runner or subprocess.run
     try:
         done = runner([str(script or SCRIPT)], capture_output=True, text=True,
-                      timeout=timeout, env=dict(os.environ if env is None else env))
+                      timeout=timeout, env=scoped(env))
     except FileNotFoundError:
         raise Unavailable("%s is missing" % (script or SCRIPT))
     except subprocess.TimeoutExpired:
         raise Unavailable("the gateway did not answer within %d seconds" % timeout)
     if done.returncode != 0:
-        detail = (done.stderr or done.stdout or "").strip().splitlines()
+        # The last few lines, not the last one: the Railway CLI's own failures
+        # end in advice ("Then run this command again."), and the line that says
+        # what went wrong is above it.
+        detail = [line for line in (done.stderr or done.stdout or "").splitlines()
+                  if line.strip()][-3:]
         raise Unavailable("asking the gateway failed (exit %d): %s"
-                          % (done.returncode, detail[-1] if detail else "no output"))
+                          % (done.returncode, " / ".join(detail) if detail else "no output"))
     return done.stdout
 
 
