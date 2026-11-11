@@ -70,6 +70,7 @@ if str(LIB) not in sys.path:
 sys.path.insert(0, str(ROOT / "deploy"))
 
 import ad_assets  # noqa: E402
+import campaign_deletion  # noqa: E402
 import console_campaigns  # noqa: E402
 import operator_config  # noqa: E402
 import operator_writer  # noqa: E402
@@ -326,6 +327,21 @@ def verify(root, *, key, directory=None, env=None, out=sys.stdout, reader=None):
     return not problems
 
 
+def _without_retired(document, retired):
+    """A group document with every assignment to a retired campaign removed."""
+    clean, stripped = dict(document), set()
+    for field in ("promos", "paused_promos"):
+        values = clean.get(field)
+        if isinstance(values, list) and set(values) & retired:
+            stripped |= set(values) & retired
+            clean[field] = [slug for slug in values if slug not in retired]
+    weekly = clean.get("weekly")
+    if isinstance(weekly, dict) and set(weekly) & retired:
+        stripped |= set(weekly) & retired
+        clean["weekly"] = {slug: days for slug, days in weekly.items() if slug not in retired}
+    return clean, stripped
+
+
 def restore(directory, collection, *, key, write, actor, env=None, store=None,
             out=sys.stdout):
     """Put one collection back, whole documents and all. Dry by default."""
@@ -339,11 +355,24 @@ def restore(directory, collection, *, key, write, actor, env=None, store=None,
     if write:
         store.begin()
     try:
-        changes = []
+        # A retirement is deliberate and irreversible to every reader, so a
+        # backup taken before it must not quietly undo it: the campaign document
+        # is left as the marker, and a restored group loses its assignments to
+        # it. This is the one thing a restore refuses to put back.
+        retired = campaign_deletion.deleted_slugs({"campaigns": store.list("campaigns")})
+        changes, held = [], []
         for doc_id in sorted(saved):
+            after = saved[doc_id]
+            if collection == "campaigns" and doc_id in retired:
+                held.append(doc_id)
+                continue
+            if collection == "groups" and retired:
+                after, stripped = _without_retired(after, retired)
+                if stripped:
+                    held.append("%s (%s)" % (doc_id, ", ".join(sorted(stripped))))
             before = store.get(collection, doc_id)
-            if before != saved[doc_id]:
-                changes.append((doc_id, before, saved[doc_id]))
+            if before != after:
+                changes.append((doc_id, before, after))
         for doc_id, before, after in changes:
             fields = sorted(name for name in set(before or {}) | set(after)
                             if (before or {}).get(name) != after.get(name))
@@ -355,8 +384,11 @@ def restore(directory, collection, *, key, write, actor, env=None, store=None,
             # likely to be wanted than to be wreckage, and deleting it is a
             # separate, deliberate act through the console.
             out.write("  %-40s %-8s left alone\n" % (doc_id, "newer"))
-        out.write("%s/%s: %d document(s) to put back, %d newer left alone\n"
-                  % (os.path.basename(directory), collection, len(changes), len(extra)))
+        for entry in held:
+            out.write("  %-40s %-8s retired; not put back\n" % (entry.split(" ")[0], "retired"))
+        out.write("%s/%s: %d document(s) to put back, %d newer left alone, "
+                  "%d held back by a retirement\n"
+                  % (os.path.basename(directory), collection, len(changes), len(extra), len(held)))
         if not write:
             out.write("dry run: nothing written (use --write)\n")
             return True

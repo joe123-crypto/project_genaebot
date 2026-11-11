@@ -21,7 +21,6 @@ import urllib.request
 import ad_assets
 import operator_config as config
 import operator_writer as writer
-import promo_config
 
 SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 R2_VARS = ("R2_ACCOUNT_ID", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY")
@@ -165,7 +164,7 @@ def delete(slug, actor, store, env=None):
                 return summary(slug, previous)
             if not campaign:
                 raise writer.WriteRefused("campaign does not exist", status=404)
-            if campaign and campaign.get("deleted"):
+            if campaign.get("deleted"):
                 raise writer.WriteRefused("deletion marker has no cleanup receipt; operator review required", status=409)
             assets = [(key, config.decode_fields(fields)) for key, fields in store.list("assets")]
             owned = []
@@ -183,27 +182,22 @@ def delete(slug, actor, store, env=None):
                         checked = ad_assets._entry(entry["id"], entry)
                         if not any(asset["key"] == checked["key"] for asset in owned):
                             owned.append(checked)
-            name = (campaign or {}).get("name") or (declared or {}).get("name") or slug
-            before = copy.deepcopy(campaign or {})
-            if declared:
-                before["manifest"] = declared
-            audit_id, audit = writer.audit_document(actor, "campaigns", slug, before, None)
+            audit_id, audit = writer.audit_document(actor, "campaigns", slug, copy.deepcopy(campaign), None)
             audit["assets"] = owned
-            operation = {"name": name, "cleanup": "pending", "assets": owned,
-                         "jobNames": list(dict.fromkeys(([declared["name"]] + declared.get("legacyNames", [])) if declared else ["console-%s-promo" % slug])),
-                         "commands": ([{"argv": ["python3", declared["script"]]}] +
-                            [{"argv": ["python3", str(Path(declared["script"]).parent.parent / legacy / Path(declared["script"]).name)]} for legacy in declared.get("legacyNames", [])])
-                            if declared else [{"argv": ["python3", str(Path(__file__).resolve().parents[1] / "bin" / "run-console-campaign"), slug]}],
+            # Every campaign is data-defined, so the job to retire is the one the
+            # document names -- which for a converted campaign is still the name
+            # its script job had -- and the only command it can be running is the
+            # shared runner. The manifest that used to supply a declared job name,
+            # its legacy names and its post script is gone with the script.
+            import console_campaigns
+            runner = ["python3", str(Path(__file__).resolve().parents[1] / "bin" / "run-console-campaign"), slug]
+            operation = {"name": campaign.get("name") or slug, "cleanup": "pending", "assets": owned,
+                         "jobNames": [console_campaigns.job_name(slug, campaign)],
+                         "commands": [{"argv": runner}],
                          "audit": audit_id, "deletedAt": audit["at"], "picturesAfter": int(time.time()) + 600}
-            if campaign and campaign.get("kind") == "console":
-                import console_campaigns
-                operation["jobNames"] = list(dict.fromkeys(operation["jobNames"] + [console_campaigns.job_name(slug, campaign)]))
-                runner = ["python3", str(Path(__file__).resolve().parents[1] / "bin" / "run-console-campaign"), slug]
-                if not any(command["argv"] == runner for command in operation["commands"]):
-                    operation["commands"].append({"argv": runner})
             marker = {"deleted": True, "enabled": False, "deletedAt": audit["at"], "deletion": slug}
             with __import__("console_config").mutation(env):
-                store.commit([("campaigns", slug, marker, campaign is not None),
+                store.commit([("campaigns", slug, marker, True),
                               ("campaign_deletions", slug, operation, False), ("audit", audit_id, audit, False)])
         finally:
             store.rollback()

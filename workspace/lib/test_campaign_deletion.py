@@ -66,10 +66,8 @@ class Retirement(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.manifest = Path(self.tmp.name) / "manifest.json"
-        self.manifest.write_text(json.dumps({"promos": [{"slug": "cv", "name": "cv-promo", "script": "/w/cron/cv-promo/post_ad.py", "legacyNames": ["old-cv-promo"]}]}))
         self.env = {**ENV, "GENAIE_CAMPAIGN_DELETION": "1", "OPENCLAW_STATE_DIR": self.tmp.name,
-                    "GENAIE_PROMO_CRONS": str(self.manifest), "R2_ACCOUNT_ID": "a" * 32,
+                    "R2_ACCOUNT_ID": "a" * 32,
                     "R2_BUCKET": "pictures", "R2_ACCESS_KEY_ID": "test-access", "R2_SECRET_ACCESS_KEY": "test-secret"}
         self.store = Store()
         self.data = payload()
@@ -97,14 +95,16 @@ class Retirement(unittest.TestCase):
         self.assertFalse(switches["demo"])
         self.assertNotIn("demo", membership["groups"][JID_A]["promos"])
         self.assertNotIn(JID_A, config.quarantine(membership)[1].get("quarantined", {}))
-    def test_manifest_campaign_is_retired_even_without_a_firestore_override(self):
+    def test_a_campaign_with_no_document_cannot_be_retired(self):
+        # There is no manifest behind the store any more, so a slug the store
+        # does not hold is not a campaign that exists somewhere else.
         self.store.docs["campaigns"].pop("cv", None)
-        self.retire("cv")
-        self.assertTrue(self.store.get("campaigns", "cv")["deleted"])
-        self.assertEqual(self.store.get("campaign_deletions", "cv")["jobNames"], ["cv-promo", "old-cv-promo"])
+        with self.assertRaises(writer.WriteRefused) as caught:
+            self.retire("cv")
+        self.assertEqual(caught.exception.status, 404)
     def test_converted_campaign_keeps_its_job_name_and_runner_owned_for_cleanup(self):
-        doc = self.store.get("campaigns", "cv") or {}
-        doc.update(kind="console", jobName="cv-promo", enabled=True)
+        doc = dict(self.store.get("campaigns", "cv") or {},
+                   kind="console", name="CV", jobName="cv-promo", enabled=True)
         self.store.docs["campaigns"]["cv"] = config.encode_fields(doc)
         self.retire("cv")
         receipt = self.store.get("campaign_deletions", "cv")
@@ -194,7 +194,6 @@ class Retirement(unittest.TestCase):
         self.assertTrue(deletion.capability(self.env)["delete"])
         for key in deletion.R2_VARS + (deletion.FLAG,):
             self.assertFalse(deletion.capability({k: v for k, v in self.env.items() if k != key})["delete"])
-        self.assertFalse(deletion.capability(dict(self.env, GENAIE_CONFIG_SOURCE="file"))["delete"])
     def test_stale_snapshot_is_never_used_with_deletion_protection(self):
         with patch.object(config, "fetch", side_effect=config.ConfigUnavailable("offline")), patch.object(config, "_from_snapshot") as fallback:
             with self.assertRaises(config.ConfigUnavailable): config.load(self.env, log=lambda _: None)
@@ -224,7 +223,7 @@ class Retirement(unittest.TestCase):
             with self.assertRaises(config.ConfigUnavailable):
                 writer.write("campaigns", "demo", {"enabled": True}, "Operator", self.env)
             self.assertEqual(before, self.store.docs)
-    def test_builtin_read_and_preview_never_reappear_from_manifest(self):
+    def test_a_retired_campaign_never_reappears_in_a_read_or_a_preview(self):
         import importlib.machinery
         import importlib.util
         loader = importlib.machinery.SourceFileLoader("deleted_read", str(Path(__file__).resolve().parents[1] / "bin" / "console-read"))
@@ -236,8 +235,12 @@ class Retirement(unittest.TestCase):
         read._RESOLVED["config"] = {"membership": membership, "switches": enabled, "storeSwitches": enabled, "deleted": ["cv"]}
         read._CATALOGUE["value"] = {"campaigns": {}}
         import datetime
-        self.assertNotIn("cv", [row["slug"] for row in read.campaign_records(datetime.date(2026, 11, 9))])
-        with self.assertRaises(read.NotFound): read.preview("cv", datetime.date(2026, 11, 9))
+        # The read builds every row from the store now, picture URLs included,
+        # so it needs the live asset origin the console API is given.
+        with patch.dict(os.environ, self.env):
+            slugs = [row["slug"] for row in read.campaign_records(datetime.date(2026, 11, 9))]
+            self.assertEqual(sorted(set(slugs) & {"cv", "demo"}), [])
+            with self.assertRaises(read.NotFound): read.preview("cv", datetime.date(2026, 11, 9))
         with patch.dict(os.environ, self.env), patch.object(config, "credentials", return_value={"project_id": "test"}), patch.object(config, "access_token", return_value="tok"), patch.object(config, "get_document", return_value={"deleted": True, "enabled": False}):
             self.assertEqual(read.campaign_edit_state("cv"), {"campaign": None})
             with self.assertRaises(read.NotFound): read.campaign_edit_state("cv", captions_only=True)
@@ -307,20 +310,10 @@ class Retirement(unittest.TestCase):
             self.store.docs["campaign_asset_uploads"][key]["expiresAt"] = config.encode_value(0)
         self.clean("cv")
         self.assertIn(entry["key"], self.objects)
-    def test_config_seed_refuses_to_overwrite_retirement_markers(self):
-        self.retire()
-        before = copy.deepcopy(self.store.docs)
-        tool = self.tool("seed-firestore.py")
-        with patch.object(tool, "load_sources", return_value=({}, {})), patch.object(tool, "documents", return_value=[]), patch.object(tool, "plan_writes", return_value=([], [], 0)), patch.object(tool, "_client", return_value={"project_id": "test"}), patch.object(tool, "_token", return_value="test-token"), patch.object(config, "list_documents", side_effect=lambda project, collection, token, **kwargs: self.store.list(collection)), patch.object(campaigns, "Store", return_value=self.store), patch("sys.stdout", io.StringIO()), patch("sys.stderr", io.StringIO()):
-            self.assertEqual(tool.main(["seed-firestore.py", "--write"]), 2)
-        self.assertEqual(before, self.store.docs)
-    def test_drift_checker_accepts_retired_job_absence_and_flags_its_return(self):
-        tool = self.tool("promo-cron-drift.py")
-        manifest = json.loads((Path(__file__).resolve().parents[2] / "deploy" / "promo-crons.json").read_text())
-        absent = tool.classify(manifest, [], deleted=["cv"])
-        self.assertNotIn("cv-promo", [job["name"] for job in absent["missing"]])
-        returned = tool.classify(manifest, [{"name": "cv-promo", "id": "stale", "payload": {"argv": ["python3", "/w/cron/cv-promo/post_ad.py"]}}], deleted=["cv"])
-        self.assertIn("cv-promo", [job["name"] for job in returned["undeclared"]])
+    # Seeding the store from the committed file and checking the gateway against
+    # the committed manifest are both gone with those files. That a recovery tool
+    # cannot undo a retirement is now pinned on the tool that replaced them, in
+    # deploy/test_backup_operator_data.py.
     def test_picture_cleanup_waits_for_preexisting_browser_upload_urls(self):
         self.retire()
         deletion.cleanup("demo", self.store, self.env, self.gateway, lambda key, env: self.objects.append(key))

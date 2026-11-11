@@ -345,6 +345,39 @@ class RestoreTests(unittest.TestCase):
             self.restore("whatever")
         self.assertIn("not a backed-up collection", str(caught.exception))
 
+    def test_a_retired_campaign_is_not_brought_back_by_a_restore(self):
+        # This is the one thing a restore will not do. Retirement removes the
+        # pictures from the bucket and the job from the gateway, so putting the
+        # campaign document back would leave a campaign that cannot post and a
+        # roster that advertises it.
+        self.saved["campaigns"] = dict(
+            (doc_id, config.decode_fields(fields))
+            for doc_id, fields in self.store.list("campaigns"))
+        _, directory = tool.backup(
+            self.root, key=None, retain=8, env=self.env, now=lambda: AT + datetime.timedelta(days=1),
+            out=io.StringIO(), reader=reader_for(self.saved), r2_reader=no_bucket)
+        self.store.docs["campaigns"]["cv"] = config.encode_fields(
+            {"deleted": True, "enabled": False})
+        out = io.StringIO()
+        tool.restore(directory, "campaigns", key=None, write=True, actor="tester",
+                     env=self.env, store=self.store, out=out)
+        self.assertIn("1 held back by a retirement", out.getvalue())
+        self.assertTrue(self.store.get("campaigns", "cv")["deleted"])
+        self.assertNotIn("captions", self.store.get("campaigns", "cv"))
+
+    def test_a_restored_group_loses_its_assignments_to_a_retired_campaign(self):
+        self.store.docs["campaigns"]["cv"] = config.encode_fields(
+            {"deleted": True, "enabled": False})
+        both = "120363000000000002@g.us"
+        self.store.docs["groups"][both] = config.encode_fields({"status": "on-hold"})
+        out = io.StringIO()
+        tool.restore(self.directory, "groups", key=None, write=True, actor="tester",
+                     env=self.env, store=self.store, out=out)
+        restored = self.store.get("groups", both)
+        self.assertEqual(restored["promos"], ["genaie"])
+        self.assertEqual(restored["weekly"], {})
+        self.assertIn("held back by a retirement", out.getvalue())
+
 
 class CommandLineTests(unittest.TestCase):
     def test_restore_needs_a_collection_and_write_needs_a_restore(self):
