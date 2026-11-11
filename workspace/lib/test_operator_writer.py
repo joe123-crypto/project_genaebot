@@ -446,15 +446,30 @@ class Deletion(Harness):
         self.assertEqual(loaded["report"]["quarantined"], {})
 
 
-class SharedWithTheSeed(Harness):
-    def test_the_seed_and_this_module_shape_documents_identically(self):
-        # One definition of a legal document: the seed mirrors the file through
-        # the same function the console writes through.
-        docs = ow.documents(*_seed_sources())
+class DocumentShape(Harness):
+    def test_documents_covers_every_collection_and_ranks_groups_in_order(self):
+        # There used to be a second caller here -- deploy/seed-firestore.py,
+        # which mirrored the committed membership file through this same
+        # function so the two could not disagree about a legal document. The
+        # file is gone and so is the seed; the shape it pinned is still the one
+        # the console writes through, so it is pinned here directly.
+        membership = {
+            "defaults": {"activity": "normal", "caps_enabled": True,
+                         "contact_account": "default",
+                         "accounts": {"default": {"number": "+26370000001"}},
+                         "bands": {"normal": [1, 3]}},
+            "promos": {"alpha": {}, "beta": {}},
+            "groups": {"120363000000000002@g.us": {"status": "active", "promos": ["alpha"]},
+                       "120363000000000001@g.us": {"status": "active", "promos": ["beta"]}},
+        }
+        docs = ow.documents(membership, {"alpha": True, "beta": False})
         self.assertEqual(sorted(docs), sorted(oc.COLLECTIONS))
         self.assertEqual([doc_id for doc_id, _ in docs["settings"]], [oc.SETTINGS_DOC])
         ranks = [data["rank"] for _, data in docs["groups"]]
         self.assertEqual(ranks, sorted(ranks))
+        # Group order is the file's, not sorted by id: rank is what preserves it.
+        self.assertEqual([doc_id for doc_id, _ in docs["groups"]],
+                         list(membership["groups"]))
 
     def test_plan_writes_reports_strays_without_touching_them(self):
         desired = {"groups": [("a@g.us", {"name": "A"})]}
@@ -462,17 +477,6 @@ class SharedWithTheSeed(Harness):
         writes, strays, unchanged = ow.plan_writes(desired, existing)
         self.assertEqual((writes, unchanged), ([], 1))
         self.assertEqual(strays, [("groups", "b@g.us")])
-
-
-def _seed_sources():
-    import importlib.util
-    from pathlib import Path
-
-    path = Path(LIB).parents[1] / "deploy" / "seed-firestore.py"
-    spec = importlib.util.spec_from_file_location("seed_firestore", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.load_sources()
 
 
 if __name__ == "__main__":

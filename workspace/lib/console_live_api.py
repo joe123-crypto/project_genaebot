@@ -93,8 +93,8 @@ class LiveViews:
         bridge = self.bridge
         bridge._RESOLVED.clear()
         bridge._RESOLVED["config"] = bridge.promo_config.resolve(
-            None, env=self.env, membership_path=bridge.MEMBERSHIP,
-            config_loader=lambda *args, **kwargs: config, err=io.StringIO())
+            None, env=self.env, config_loader=lambda *args, **kwargs: config,
+            err=io.StringIO())
         groups = bridge.group_rows(day)
         campaigns = bridge.campaign_records(day, include_assets=False)
         # No image catalogue reads. List copy is a count, not downloaded captions.
@@ -117,7 +117,7 @@ class LiveViews:
                  "context": {"accounts": bridge.accounts(config["membership"]),
                     "capSettings": bridge.cap_settings(config["membership"]),
                     "writes": bridge.write_capabilities(), "actions": bridge.action_capabilities()},
-                 "disabledPromos": sorted(bridge.disabled_promos(bridge.manifest(), day))}
+                 "disabledPromos": sorted(bridge.disabled_promos(day))}
         self.cache = (signature, model)
         self.cache_at = now
         return model

@@ -2,12 +2,11 @@
 """Print every known WhatsApp group with its name, today's ad cap and the promos
 that target it.
 
-Read-only: reads the operator config a campaign run would act on -- the repo's
-membership.json, or Firestore once GENAIE_CONFIG_SOURCE says so (see
-promo_config) -- and, when it is readable, the ad-reply counters the caps are
-derived from. The header names which store the rows came from. It never contacts
-the gateway and never writes anything, so it is safe to run locally or on the
-gateway.
+Read-only: reads the operator config a campaign run would act on -- Firestore,
+or its last-known-good snapshot (see promo_config) -- and, when it is readable,
+the ad-reply counters the caps are derived from. The header names which store
+the rows came from. It never contacts the gateway and never writes anything, so
+it is safe to run locally or on the gateway.
 
 Usage:
   list-groups            table
@@ -35,14 +34,10 @@ import promo_caps  # noqa: E402
 import promo_config  # noqa: E402
 import operator_config  # noqa: E402
 
-MEMBERSHIP = promo_membership.default_path(str(WORKSPACE))
 
 
 def source_label(config):
-    """What to print as the origin of these rows. After the cutover the file in
-    the repo is not what production reads, so naming it would mislead."""
-    if config["source"] == promo_config.FILE:
-        return os.path.relpath(MEMBERSHIP, WORKSPACE.parent)
+    """What to print as the origin of these rows."""
     if config["source"] == "snapshot":
         return "Firestore (last-known-good snapshot: Firestore was unreadable)"
     return "Firestore"
@@ -148,7 +143,7 @@ def main(argv):
     # Resolved the same way a campaign run resolves it, so this never shows the
     # file while production acts on Firestore.
     try:
-        config = promo_config.resolve(None, membership_path=MEMBERSHIP)
+        config = promo_config.resolve(None)
     except operator_config.ConfigUnavailable as ex:
         sys.stderr.write("ERROR: no operator config to read: %s\n" % ex)
         return 1
@@ -157,7 +152,7 @@ def main(argv):
         return 1
     m = config["membership"]
     if m is None:
-        sys.stderr.write("ERROR: membership file not found: %s\n" % MEMBERSHIP)
+        sys.stderr.write("ERROR: the operator config could not be read\n")
         return 1
     for e in promo_membership.validate(m):
         sys.stderr.write("WARN: %s: %s\n" % (source_label(config), e))

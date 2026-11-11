@@ -281,8 +281,7 @@ def payload_digest(data):
 
 def create(data, store, env=None, verify=verify_image, reconcile=None):
     env = os.environ if env is None else env
-    need(promo_config.mode(env)[0] == "firestore", "campaign creation requires live Firestore configuration")
-    need(ad_assets.mode(env)[0] == "r2", "campaign creation requires R2 assets")
+    need(ad_assets.base_url(env) is not None, "campaign creation requires R2 assets")
     validate(data)
     slug = data["slug"]
     digest = payload_digest(data)
@@ -311,8 +310,6 @@ def create(data, store, env=None, verify=verify_image, reconcile=None):
             if group is not None:
                 raw["groups"].append((selection["jid"], config.encode_fields(group)))
         need(slug not in dict(raw["campaigns"]), "a campaign with this ID already exists; choose a different name")
-        declared = promo_config.read_manifest(env) or {}
-        need(not any(row.get("slug") == slug for row in declared.get("promos", [])), "campaign ID is already declared in the bot")
         campaign = {"kind": "console", "name": data["name"].strip(), "enabled": data["enabled"],
                     "captions": data["captions"], "schedule": data["schedule"], "tracking": data.get("tracking", {}),
                     "comment": data.get("comment", ""), "weekly_comment": data.get("weeklyComment", ""),

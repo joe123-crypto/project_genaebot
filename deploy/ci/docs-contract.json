@@ -22,10 +22,7 @@
         "deploy/verify-staged-source.sh",
         "deploy/stage-workspace.rsync",
         "deploy/gateway-exec.sh",
-        "deploy/install-*.sh",
-        "deploy/promo-crons.json",
-        "deploy/reinstall-promo-crons.sh",
-        "deploy/promo-cron-drift.py"
+        "deploy/gateway-campaigns.sh"
       ],
       "requiredDocs": [
         "README.md",

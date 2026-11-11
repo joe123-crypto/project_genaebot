@@ -67,7 +67,6 @@ from datetime import date
 import json_store
 from gateway_campaign import active_client, campaign_transport
 import ad_assets
-import config_shadow
 import operator_config
 import promo_config
 
@@ -1030,8 +1029,6 @@ def apply_caps(promo_name, jids, day, caps=_PROBE_CAPS, membership_path=None,
 
 
 @campaign_transport
-@config_shadow.alongside
-@ad_assets.alongside
 def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=None,
               tracking=None, promo_name=None, variant_images=None,
               send_delay_min=None, send_delay_max=None, rng=None, sleep=None,
@@ -1070,7 +1067,7 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
     Where the targeting comes from is :func:`promo_config.resolve`'s decision --
     the generated targets file, or Firestore. It is resolved once per run, and
     ``resolve_config`` injects an alternative resolver for tests. Where the
-    PICTURES come from is :func:`ad_assets.resolve`'s decision -- the assets
+    PICTURES come from is the caller's decision -- the assets
     baked into this image, or the ones indexed in Firestore with their bytes in
     R2 -- and it hands back local paths either way.
 
@@ -1089,18 +1086,17 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
     if not promo_name:
         promo_name = os.path.basename(os.path.dirname(os.path.abspath(targets_file)))
 
-    # Which pictures this campaign actually has: the ones baked into the image,
-    # or the ones the operator indexed in Firestore and R2 holds the bytes for
-    # (see :mod:`ad_assets`). Either way what comes back is local paths, so the
-    # rotation below, the existence check and ``send_ad`` are unchanged -- and
-    # that existence check is what turns "no asset could be fetched" into a
-    # failed run with nothing sent, before a single group is posted to.
-    image = ad_assets.resolve(promo_name, image)
+    # ``image`` is already local paths: the caller fetched every one of this
+    # campaign's indexed pictures from R2 through the verified cache, all of
+    # them or none, before calling in (see
+    # ``console_campaigns.run_campaign``). The existence check below is what
+    # turns a picture that nonetheless is not there into a failed run with
+    # nothing sent, before a single group is posted to.
     image_path, rotating = _resolve_image(image, day)
     if not image_path or not os.path.exists(image_path):
         sys.stderr.write("ERROR: promo image missing: %s\n" % image_path)
         return 1
-    variant_images = ad_assets.resolve(promo_name, dict(variant_images or {}))
+    variant_images = dict(variant_images or {})
     for k, path in variant_images.items():
         if not 0 <= k < len(variants):
             raise ValueError("variant_images index out of range: %r" % k)
@@ -1108,27 +1104,27 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
             sys.stderr.write("ERROR: promo image missing: %s\n" % path)
             return 1
 
-    # Where this run's targeting comes from -- the generated targets file, or
-    # Firestore. Resolved ONCE: every reader below works off this one payload, so
-    # a config change landing mid-run cannot split the run across two configs.
+    # Where this run's targeting comes from. Resolved ONCE: every reader below
+    # works off this one payload, so a config change landing mid-run cannot
+    # split the run across two configs.
     try:
-        source = (resolve_config or promo_config.resolve)(
-            promo_name, targets_file=targets_file, membership_path=membership_path)
+        source = (resolve_config or promo_config.resolve)(promo_name)
     except operator_config.ConfigUnavailable as ex:
-        # Firestore is canonical and unreadable, with no usable snapshot. There is
-        # no safe targeting to fall back to -- the repo's membership.json would be
-        # stale, which is how a paused group gets advertised again. Send nothing,
-        # and exit non-zero so the cron's failure alert fires.
+        # Firestore is unreadable and there is no usable snapshot. There is
+        # nothing safe to fall back to -- the committed membership file that
+        # used to be here had drifted, which is how a paused group gets
+        # advertised again. Send nothing, and exit non-zero so the cron's
+        # failure alert fires.
         sys.stderr.write("ERROR: no operator config to act on: %s\n" % ex)
         print("NO_REPLY")
         return 1
 
     # A campaign the operator has switched off still has its cron registered on
-    # the gateway volume, so the run itself has to stand down. Only in firestore
-    # mode: there the switch is the live pause control. A hand-run or --dry-run of
-    # a paused campaign still previews, matching promo_caps, which never treats
-    # the promo being run as disabled.
-    if source["mode"] == promo_config.FIRESTORE and source["enabled"] is False:
+    # the gateway volume, so the run itself has to stand down; the store's switch
+    # is the live pause control. A hand-run or --dry-run of a paused campaign
+    # still previews, matching promo_caps, which never treats the promo being run
+    # as disabled.
+    if source["enabled"] is False:
         if dry:
             sys.stderr.write("NOTE: %s is switched off; previewing anyway.\n" % promo_name)
         else:

@@ -1,4 +1,11 @@
-"""Recurring start-time edits, audited desired state and verified gateway updates."""
+"""Recurring start-time edits, audited desired state and verified gateway updates.
+
+Every campaign is data-defined now, so a campaign's schedule is the ``schedule``
+field on its own document and there is no declaration to fall back to. What went
+with the manifest: the shipped cron and timezone a campaign without a
+``scheduleOverride`` used to inherit, and the second gateway path that edited a
+job whose argv was ``["python3", "<post script>"]``.
+"""
 import copy
 import datetime as dt
 import hashlib
@@ -12,7 +19,6 @@ import console_campaigns as campaigns
 import console_config
 import operator_config as config
 import operator_writer as writer
-import promo_config
 
 DISPLAY_ZONE = "Africa/Harare"
 TIME = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]")
@@ -23,11 +29,9 @@ def need(condition, message, status=400):
         raise writer.WriteRefused(message, status=status)
 
 
-def definition(doc, declared):
-    if doc.get("kind") == "console":
-        return {"cron": campaigns.cron_expression(doc["schedule"]), "timezone": doc["schedule"]["timezone"]}
-    need(declared is not None, "unknown campaign", 404)
-    return copy.deepcopy(doc.get("scheduleOverride") or {"cron": declared["cron"], "timezone": declared["tz"]})
+def definition(doc):
+    need(doc.get("kind") == "console", "unknown campaign", 404)
+    return {"cron": campaigns.cron_expression(doc["schedule"]), "timezone": doc["schedule"]["timezone"]}
 
 
 def parse(value):
@@ -41,8 +45,8 @@ def parse(value):
     return parts
 
 
-def revision(doc, declared):
-    return hashlib.sha256(json.dumps([definition(doc, declared), doc.get("scheduleEdit", {}).get("version")], sort_keys=True).encode()).hexdigest()
+def revision(doc):
+    return hashlib.sha256(json.dumps([definition(doc), doc.get("scheduleEdit", {}).get("version")], sort_keys=True).encode()).hexdigest()
 
 
 def occurrence(value, day):
@@ -63,8 +67,8 @@ def occurrence(value, day):
     return None
 
 
-def describe(doc, declared, day):
-    value = definition(doc, declared)
+def describe(doc, day):
+    value = definition(doc)
     state = doc.get("scheduleEdit") or {}
     try:
         parse(value)
@@ -73,14 +77,14 @@ def describe(doc, declared, day):
         confirmed_minutes = occurrence(confirmed, day)
     except (writer.WriteRefused, ValueError, KeyError):
         editable, reason, confirmed_minutes = False, "This cron does not have one editable daily or weekly start time.", None
-    return {"revision": revision(doc, declared), "editable": editable,
+    return {"revision": revision(doc), "editable": editable,
             **({"reason": reason} if reason else {}),
             "status": "pending" if state.get("pending") else "ready", "confirmedMinutes": confirmed_minutes}
 
 
-def read_fields(doc, declared, day):
-    value = definition(doc, declared)
-    edit = describe(doc, declared, day)
+def read_fields(doc, day):
+    value = definition(doc)
+    edit = describe(doc, day)
     if not edit["editable"]:
         return {"scheduleEdit": edit}
     parts = parse(value)
@@ -101,12 +105,6 @@ def move(value, time, day):
     need(occurrence(result, day) == hour * 60 + minute,
          "That time would move this run outside its existing weekdays. Choose a time on the same scheduled day.")
     return result
-
-
-def declarations(env=None):
-    manifest = promo_config.read_manifest(env)
-    need(isinstance(manifest, dict), "The campaign manifest is unavailable.", 503)
-    return {entry["slug"]: entry for entry in manifest["promos"]}
 
 
 def validate(data):
@@ -132,9 +130,7 @@ def validate(data):
 
 
 def save(data, store, env=None):
-    need(promo_config.mode(env)[0] == "firestore", "Schedule editing requires live Firestore configuration.")
     day = validate(data)
-    declared = declarations(env)
     # Shared with retirement and reconciliation, so an old retry cannot restore
     # a retired job or mark a newer edit as applied.
     with campaign_deletion.scheduler_lock(env):
@@ -145,24 +141,18 @@ def save(data, store, env=None):
                 slug = row["slug"]
                 existing = store.get("campaigns", slug)
                 need(existing is not None and not existing.get("deleted"), "Campaign is missing or deleted: %s" % slug, 409)
-                current = definition(existing, declared.get(slug))
+                current = definition(existing)
                 desired = move(current, row["time"], day)
                 # An identical desired time is a safe retry after a lost reply.
                 if desired == current:
                     continue
-                need(row["expectedRevision"] == revision(existing, declared.get(slug)),
+                need(row["expectedRevision"] == revision(existing),
                      "The schedule changed while you were editing. Reset to load the latest times.", 409)
                 after = copy.deepcopy(existing)
                 after["scheduleEdit"] = {"version": secrets.token_hex(16), "pending": True,
                                          "confirmed": (existing.get("scheduleEdit") or {}).get("confirmed") or current}
-                if after.get("kind") == "console":
-                    parts = parse(desired)
-                    after["schedule"]["time"] = "%02d:%02d" % (int(parts[1]), int(parts[0]))
-                    if slug in declared:
-                        # Conversion/revert must retain the latest operator time.
-                        after["scheduleOverride"] = desired
-                else:
-                    after["scheduleOverride"] = desired
+                parts = parse(desired)
+                after["schedule"]["time"] = "%02d:%02d" % (int(parts[1]), int(parts[0]))
                 audit_id, audit = writer.audit_document(data.get("actor"), "campaigns", slug, existing, after)
                 docs.extend([("campaigns", slug, after, True), ("audit", audit_id, audit, False)])
             if docs:
@@ -172,34 +162,16 @@ def save(data, store, env=None):
             store.rollback()
     # Desired configuration is the acceptance boundary. Gateway work is bounded
     # by the worker; the HTTP request never runs one CLI call per edited row.
-    return {"campaigns": [summary(row["slug"], store, declared, day) for row in data["changes"]]}
+    return {"campaigns": [summary(row["slug"], store, day) for row in data["changes"]]}
 
 
-def summary(slug, store, declared, day):
+def summary(slug, store, day):
     doc = store.get("campaigns", slug)
     need(doc is not None and not doc.get("deleted"), "Campaign was deleted while saving.", 409)
-    fields = read_fields(doc, declared.get(slug), day)
+    fields = read_fields(doc, day)
     minutes = fields.get("scheduleMinutes")
     need(minutes is not None, "Saved schedule has no occurrence on the displayed day.", 409)
     return {"slug": slug, "minutes": minutes, "scheduleEdit": fields["scheduleEdit"]}
-
-
-def apply_builtin(doc, declared, call):
-    # Change only the existing owned job's schedule, preserving active runs,
-    # enabled state, argv, timeout and alerts. Never call cron run.
-    need(declared is not None, "Campaign declaration is missing.", 409)
-    desired = definition(doc, declared)
-    jobs = call(["list", "--all", "--json"]).get("jobs", [])
-    matches = [job for job in jobs if job.get("name") == declared["name"]]
-    need(len(matches) == 1, "Campaign job is missing or duplicated; scheduler update is pending.", 409)
-    job = matches[0]
-    need((job.get("payload") or {}).get("argv") == ["python3", declared["script"]], "Campaign job command does not match its declaration.", 409)
-    schedule = job.get("schedule") or {}
-    if schedule.get("expr") != desired["cron"] or schedule.get("tz") != desired["timezone"]:
-        call(["edit", job["id"], "--cron", desired["cron"], "--tz", desired["timezone"], "--exact"])
-    verified = [job for job in call(["list", "--all", "--json"]).get("jobs", []) if job.get("name") == declared["name"]]
-    need(len(verified) == 1 and verified[0].get("schedule", {}).get("expr") == desired["cron"]
-         and verified[0].get("schedule", {}).get("tz") == desired["timezone"], "Gateway schedule verification is pending.", 503)
 
 
 def reconcile_one(slug, store, env=None, call=None):
@@ -208,21 +180,17 @@ def reconcile_one(slug, store, env=None, call=None):
         doc = store.get("campaigns", slug)
         if not doc or doc.get("deleted") or not (doc.get("scheduleEdit") or {}).get("pending"):
             return
-        declared = declarations(env).get(slug)
-        desired = definition(doc, declared)
-        if doc.get("kind") == "console":
-            campaigns._reconcile_one(slug, store, call)
-        else:
-            apply_builtin(doc, declared, call)
+        desired = definition(doc)
+        campaigns._reconcile_one(slug, store, call)
         jobs = call(["list", "--all", "--json"]).get("jobs", [])
-        name = campaigns.job_name(slug, doc) if doc.get("kind") == "console" else declared["name"]
+        name = campaigns.job_name(slug, doc)
         matches = [job for job in jobs if job.get("name") == name]
         need(len(matches) == 1 and matches[0].get("schedule", {}).get("expr") == desired["cron"]
              and matches[0].get("schedule", {}).get("tz") == desired["timezone"], "Gateway schedule verification is pending.", 503)
         store.begin()
         try:
             current = store.get("campaigns", slug)
-            if not current or current.get("deleted") or revision(current, declared) != revision(doc, declared):
+            if not current or current.get("deleted") or revision(current) != revision(doc):
                 return
             current["scheduleEdit"] = {**current["scheduleEdit"], "pending": False, "confirmed": desired}
             with console_config.mutation(env):

@@ -37,13 +37,11 @@ def capability(env=None):
     reason = None
     if not enabled(env):
         reason = "Campaign deletion is switched off on the bot. Set GENAIE_CAMPAIGN_DELETION=1."
-    elif promo_config.mode(env)[0] != "firestore":
-        reason = "Campaign deletion requires live Firestore configuration."
     elif not all((env.get(key) or "").strip() for key in R2_VARS):
         reason = "Campaign deletion requires bucket-scoped R2 cleanup credentials on the bot console API."
     elif not re.fullmatch(r"[a-fA-F0-9]{32}", env["R2_ACCOUNT_ID"]):
         reason = "The bot R2 account ID is invalid."
-    elif ad_assets.mode(env)[0] != "r2" or not ad_assets.base_url(env):
+    elif not ad_assets.base_url(env):
         reason = "Campaign deletion requires live R2 picture configuration."
     return {"delete": reason is None, **({"reason": reason} if reason else {})}
 
@@ -165,9 +163,7 @@ def delete(slug, actor, store, env=None):
             campaign = store.get("campaigns", slug)
             if previous:
                 return summary(slug, previous)
-            manifest = promo_config.read_manifest(env) or {}
-            declared = next((row for row in manifest.get("promos", []) if row.get("slug") == slug), None)
-            if not campaign and not declared:
+            if not campaign:
                 raise writer.WriteRefused("campaign does not exist", status=404)
             if campaign and campaign.get("deleted"):
                 raise writer.WriteRefused("deletion marker has no cleanup receipt; operator review required", status=409)

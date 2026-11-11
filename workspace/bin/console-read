@@ -5,9 +5,12 @@ per-campaign preview, or an overview of all three.
 Read-only. Every number here comes from the bot's own modules rather than a
 reimplementation, so the console can never disagree with what the cron will
 actually send: the group table, caps and rotation from promo_membership and
-promo_caps, the caption variant and ref code from promo_broadcast, the copy and
-tracking config from each campaign's own module, and the declared schedule from
-deploy/promo-crons.json.
+promo_caps, the caption variant and ref code from promo_broadcast, and each
+campaign's copy, tracking and schedule from its own Firestore document.
+
+Every campaign is data-defined. The copy that used to be read by importing a
+post script, and the schedule that used to come from a committed cron manifest,
+are fields on ``campaigns/<slug>`` like everything else.
 
 It never changes operator config or contacts the gateway. Private display caches
 and outage snapshots live on the state volume.
@@ -27,7 +30,6 @@ non-zero, so a caller never has to parse a traceback.
 Std-lib only.
 """
 
-import importlib.util
 import io
 import json
 import os
@@ -47,7 +49,6 @@ import promo_membership  # noqa: E402
 import promo_caps  # noqa: E402
 import promo_broadcast  # noqa: E402
 import ad_assets  # noqa: E402
-import config_shadow  # noqa: E402
 import promo_config  # noqa: E402
 import console_campaigns
 import console_schedule
@@ -56,16 +57,6 @@ import console_config  # noqa: E402
 import operator_writer  # noqa: E402
 import group_discovery  # noqa: E402
 import group_metrics  # noqa: E402
-
-MEMBERSHIP = promo_membership.default_path(str(WORKSPACE))
-
-# The declared cron manifest lives under deploy/, which stage-openclaw-source.sh
-# never copies into the container, so the image carries its own baked copy
-# beside the other runtime helpers. First readable candidate wins.
-MANIFEST_CANDIDATES = (
-    str(WORKSPACE.parent / "deploy" / "promo-crons.json"),
-    "/usr/local/lib/genaie/promo-crons.json",
-)
 
 COMMANDS = ("overview", "groups", "campaigns", "preview", "captions", "campaign", "campaign-state", "campaign-groups", "capabilities", "settings", "navigation", "group", "groups-by-id")
 
@@ -147,8 +138,7 @@ def resolved():
     if "config" not in _RESOLVED:
         notes = io.StringIO()
         try:
-            _RESOLVED["config"] = promo_config.resolve(None, membership_path=MEMBERSHIP,
-                                                       err=notes, config_loader=partial(
+            _RESOLVED["config"] = promo_config.resolve(None, err=notes, config_loader=partial(
                                                        console_config.load, fresh=_FRESH_CONFIG,
                                                        campaign=_CAMPAIGN_SCOPE, group_ids=_GROUP_IDS,
                                                        include_groups=_INCLUDE_GROUPS, include_campaigns=_INCLUDE_CAMPAIGNS))
@@ -159,72 +149,20 @@ def resolved():
 
 
 def membership():
+    """The operator config, in the shape the caps and targeting read. It is built
+    from the store; there is no file behind it any more."""
     loaded = resolved()["membership"]
     if loaded is None:
-        raise BridgeError("membership file not found: %s" % MEMBERSHIP)
+        raise BridgeError("the operator config could not be read")
     return loaded
 
 
-def manifest():
-    # An explicit GENAIE_PROMO_CRONS is used exactly as given. Falling back to a
-    # different manifest than the operator named would be worse than failing,
-    # because every campaign's schedule and tracking would come from it.
-    override = os.environ.get("GENAIE_PROMO_CRONS")
-    candidates = [override] if override else list(MANIFEST_CANDIDATES)
-    for candidate in candidates:
-        try:
-            with open(candidate, encoding="utf-8") as handle:
-                return json.load(handle)
-        except FileNotFoundError:
-            continue
-    raise BridgeError("no cron manifest at: %s" % ", ".join(candidates))
-
-
-def promo_enabled(entry):
-    """Whether a declared campaign actually runs. An absent key means enabled,
-    which is how install-promo.sh, railway-release.py and report-release-ready.py
-    all read it. A non-bool is a manifest error for them too, so it is one here
-    rather than a silently truthy string."""
-    value = entry.get("enabled", True)
-    if type(value) is not bool:
-        raise BridgeError("promo %r has non-boolean enabled=%r"
-                          % (entry.get("slug"), value))
-    return value
-
-
-def effective_enabled(entry):
-    """Whether a declared campaign both HAS a cron and would send if it fired.
-
-    After the cutover there are two switches and a campaign is on only if both
-    are: the manifest decides whether the gateway has a cron registered at all,
-    and the operator config decides whether a run that fires sends anything.
-    Reporting only one of them would have the console promise a send the other
-    switch cancels."""
-    if not promo_enabled(entry):
-        return False
-    switch = resolved()["switches"].get(entry["slug"])
-    return switch is not False
-
-
-def store_enabled(entry):
-    """The operator's own switch for a campaign -- the one a console toggle edits.
-
-    Reported beside the effective value because the two can differ for a reason
-    the operator cannot fix from a toggle: a campaign switched on in the store
-    still never posts if the manifest registers no cron for it. A missing switch
-    reads as on, matching how a run treats it."""
-    config = resolved()
-    switches = config.get("storeSwitches")
-    if switches is None:
-        switches = config.get("switches") or {}
-    return switches.get(entry["slug"]) is not False
-
-
-def disabled_promos(declared, day=None):
-    """Slugs that are switched off, by either switch. They stay configured on
-    their groups and their copy is still worth previewing, but nothing here may
-    predict a send for one."""
-    disabled = set(entry["slug"] for entry in declared.get("promos", []) if not effective_enabled(entry))
+def disabled_promos(day=None):
+    """Slugs that are switched off, by either switch: the operator's pause
+    control in the store, or the gateway having no verified cron to fire them.
+    They stay configured on their groups and their copy is still worth
+    previewing, but nothing here may predict a send for one."""
+    disabled = set()
     for slug, campaign in console_campaigns.definitions(membership()).items():
         if (not resolved().get("storeSwitches", resolved()["switches"]).get(slug, False)
                 or campaign.get("scheduleStatus") != "ready"
@@ -244,7 +182,7 @@ def group_rows(day):
     cap snapshot."""
     m = membership()
     groups = promo_membership.groups(m)
-    disabled = disabled_promos(manifest(), day)
+    disabled = disabled_promos(day)
     decisions = promo_caps.plan(m, list(groups), day=day, record=False,
                                 disabled=disabled)
 
@@ -297,49 +235,6 @@ def accounts(m):
 # campaigns
 # ---------------------------------------------------------------------------
 
-def script_path(script):
-    """Manifest scripts are absolute container paths. Re-root them on this
-    workspace, which is a no-op in the container and maps onto the checkout
-    when running from a clone."""
-    marker = "/workspace/"
-    index = script.find(marker)
-    if index == -1:
-        return Path(script)
-    return WORKSPACE / script[index + len(marker):]
-
-
-def import_campaign(path):
-    """Import a campaign's post script to read its copy and tracking config.
-
-    Every campaign module guards its entry point with ``if __name__ ==
-    "__main__"``, so importing one runs no sends and touches no state.
-    """
-    spec = importlib.util.spec_from_file_location("_campaign_%s" % path.parent.name, path)
-    if spec is None or spec.loader is None:
-        raise BridgeError("cannot import campaign module %s" % path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def as_list(value):
-    if value is None:
-        return []
-    if isinstance(value, (list, tuple)):
-        return list(value)
-    return [value]
-
-
-def cron_time(expression):
-    parts = (expression or "").split()
-    if len(parts) < 2:
-        return None, None
-    try:
-        return int(parts[1]), int(parts[0])
-    except ValueError:
-        return None, None
-
-
 _CATALOGUE = {}
 
 
@@ -388,80 +283,19 @@ def asset_entries(slug):
 
 
 def campaign_records(day, only_slug=None, include_assets=True):
+    """Every campaign, from the store. There is no second kind any more: the ten
+    that kept their copy in a post script and their schedule in a committed
+    manifest are data-defined like the rest, so a record is built once, from one
+    place, and ``source`` is always ``console``."""
     m = membership()
-    declared = manifest()
-    # A campaign converted to data keeps its manifest entry until the file path
-    # is retired. Its record comes from the store, once, not from both.
-    converted = console_campaigns.definitions(m)
-
-    records = []
-    for entry in declared.get("promos", []):
-        slug = entry["slug"]
-        if slug in converted or (only_slug is not None and slug != only_slug) or slug in resolved().get("deleted", []):
-            continue
-        script = script_path(entry["script"])
-        captions = []
-        tracking = {}
-        images = []
-        error = None
-        try:
-            module = import_campaign(script)
-            captions = operator_config.campaign_captions(resolved(), slug, [str(text) for text in as_list(getattr(module, "POST_TEXTS", None))])
-            tracking = dict(getattr(module, "TRACKING", {}) or {})
-            raw_images = getattr(module, "IMAGE", None)
-            if raw_images is None:
-                raw_images = getattr(module, "IMAGE_PATH", None)
-            images = [os.path.basename(str(image)) for image in as_list(raw_images)]
-        except Exception as exc:  # the console must still list a broken campaign
-            error = "%s: %s" % (type(exc).__name__, exc)
-
-        daily_jids, weekly_jids = promo_membership.groups_for_promo(m, slug)
-        all_jids = list(daily_jids) + list(weekly_jids)
-        entries = promo_membership.groups(m)
-        per_account = {}
-        for jid in all_jids:
-            account = promo_membership.account_of(entries.get(jid))
-            per_account[account] = per_account.get(account, 0) + 1
-
-        hour, minute = cron_time(entry.get("cron", ""))
-        records.append(
-            {
-                "slug": slug,
-                "name": entry.get("name"),
-                # A switched-off campaign is still declared, still has copy and
-                # still has groups configured for it. What it does not have is a
-                # cron, so the console must not present it as something that
-                # posts on its schedule.
-                "enabled": effective_enabled(entry),
-                # The two halves of ``enabled``: what the operator switched, and
-                # whether a cron exists to fire at all. Only the first is editable.
-                "storeEnabled": store_enabled(entry),
-                "cronEnabled": promo_enabled(entry),
-                "cron": entry.get("cron"),
-                "hour": hour,
-                "minute": minute,
-                "timezone": entry.get("tz"),
-                "installer": entry.get("installer"),
-                "script": str(script),
-                "failureAlertTo": entry.get("failureAlertTo"),
-                "legacyNames": list(entry.get("legacyNames") or []),
-                "timeoutSeconds": declared.get("timeoutSeconds"),
-                "captions": captions,
-                "tracking": tracking,
-                "images": images,
-                "assets": asset_entries(slug) if include_assets else [],
-                "targetCount": len(all_jids),
-                "weeklyCount": len(weekly_jids),
-                "accounts": per_account,
-                "source": "git",
-                "error": error,
-            }
-        )
-    records.extend(console_campaigns.records(m, day, resolved().get("storeSwitches"), only_slug=only_slug))
-    declared_by_slug = {row["slug"]: row for row in declared.get("promos", [])}
+    records = console_campaigns.records(m, day, resolved().get("storeSwitches"),
+                                        only_slug=only_slug)
+    deleted = resolved().get("deleted", [])
+    records = [row for row in records if row["slug"] not in deleted]
     for row in records:
         doc = (m.get("promos") or {}).get(row["slug"], {})
-        row.update(console_schedule.read_fields(doc, declared_by_slug.get(row["slug"]), day))
+        row["assets"] = asset_entries(row["slug"]) if include_assets else row.get("assets", [])
+        row.update(console_schedule.read_fields(doc, day))
     records.sort(key=lambda row: (row["hour"] if row["hour"] is not None else 99, row["minute"] or 0))
     return records
 
@@ -477,23 +311,16 @@ def preview(slug, day):
     same text the cron would send.
     """
     m = membership()
-    declared = manifest()
     if slug in resolved().get("deleted", []):
         raise NotFound("campaign has been deleted")
 
-    entry = next((row for row in declared.get("promos", []) if row["slug"] == slug), None)
     custom = console_campaigns.definitions(m).get(slug)
-    if custom is not None:
-        enabled = resolved().get("storeSwitches", resolved()["switches"]).get(slug, False) and custom.get("scheduleStatus") == "ready"
-        captions = custom["captions"]
-        tracking = custom.get("tracking", {})
-    else:
-        if entry is None:
-            raise NotFound("unknown campaign %r" % slug)
-        enabled = effective_enabled(entry)
-        module = import_campaign(script_path(entry["script"]))
-        captions = operator_config.campaign_captions(resolved(), slug, [str(text) for text in as_list(getattr(module, "POST_TEXTS", None))])
-        tracking = dict(getattr(module, "TRACKING", {}) or {})
+    if custom is None:
+        raise NotFound("unknown campaign %r" % slug)
+    enabled = (resolved().get("storeSwitches", resolved()["switches"]).get(slug, False)
+               and custom.get("scheduleStatus") == "ready")
+    captions = custom["captions"]
+    tracking = custom.get("tracking", {})
 
     occurrence = console_campaigns.schedule_occurrence(custom, day) if custom else None
     caption_day = occurrence[0] if occurrence else day
@@ -505,7 +332,7 @@ def preview(slug, day):
         m, slug, include_paused=True)
     all_jids = list(daily_jids) + list(weekly_jids)
     decisions = promo_caps.plan(m, list(promo_membership.groups(m)), day=day, record=False,
-                                disabled=disabled_promos(declared, day))
+                                disabled=disabled_promos(day))
     numbers = promo_membership.account_numbers(m) or {}
     contact_account = (m.get("defaults") or {}).get("contact_account")
     entries = promo_membership.groups(m)
@@ -568,25 +395,16 @@ def preview(slug, day):
 def config_source_status():
     """Where this read model came from, so a screen can say so rather than leave
     the operator guessing which store they are looking at. ``source`` is
-    ``"firestore"`` for a live read, ``"snapshot"`` when Firestore was
-    unreachable and the last-known-good copy was served, and ``"file"`` before
-    the cutover. ``quarantined`` lists the groups Firestore holds but no run will
-    post to, which is otherwise invisible outside the run logs."""
+    ``"firestore"`` for a live read and ``"snapshot"`` when Firestore was
+    unreachable and the last-known-good copy was served. ``quarantined`` lists
+    the groups Firestore holds but no run will post to, which is otherwise
+    invisible outside the run logs."""
     config = resolved()
     report = config.get("report") or {}
     return {"mode": config["mode"], "source": config["source"],
             "quarantined": sorted((report.get("quarantined") or {})),
             "warnings": list(report.get("warnings") or []),
             "notes": list(config.get("notes") or [])}
-
-
-def config_shadow_status():
-    """Phase 2 of the Firestore move: whether runs compare Firestore with
-    membership.json, and what the newest comparison found. ``lastCheck`` is
-    ``None`` until a run has checked; its ``checkedAt`` lets the console tell a
-    current result from one left over after shadow mode was switched off."""
-    current, warning = config_shadow.mode()
-    return {"mode": current, "warning": warning, "lastCheck": config_shadow.read_result()}
 
 
 def ad_assets_status():
@@ -722,58 +540,48 @@ def overview(day):
         "writes": write_capabilities(),
         "actions": action_capabilities(),
         "configSource": config_source_status(),
-        "configShadow": config_shadow_status(),
         "campaigns": campaigns,
     }
 
 
 def campaign_edit_state(slug, captions_only=False):
     """Save-time checks need one campaign document, no targeting or cap data."""
-    declared = next((row for row in manifest().get("promos", []) if row["slug"] == slug), None)
-    doc = None
-    if promo_config.mode()[0] == promo_config.FIRESTORE:
-        import urllib.request
-        import time
-        try:
-            creds = operator_config.credentials()
-            if creds is None:
-                raise operator_config.ConfigUnavailable("no service account configured")
-            token = operator_config.access_token(creds,
-                operator_config.token_cache_path(operator_config.state_dir()),
-                opener=urllib.request.urlopen, signer=operator_config.node_signer,
-                now=time.time, sleep=time.sleep)
-            doc = operator_config.get_document(creds["project_id"], "campaigns", slug, token,
-                opener=urllib.request.urlopen, sleep=time.sleep)
-        except operator_config.ConfigUnavailable as exc:
-            raise ConfigReadError("campaign config unavailable: %s" % exc, exc.metadata) from exc
-        except ValueError as exc:
-            raise BridgeError("campaign config cannot be decoded") from exc
-        switch = (doc or {}).get("enabled", True)
-        store_on = switch if isinstance(switch, bool) else False
-    else:
-        store_on = store_enabled(declared) if declared else False
+    import urllib.request
+    import time
+    try:
+        creds = operator_config.credentials()
+        if creds is None:
+            raise operator_config.ConfigUnavailable("no service account configured")
+        token = operator_config.access_token(creds,
+            operator_config.token_cache_path(operator_config.state_dir()),
+            opener=urllib.request.urlopen, signer=operator_config.node_signer,
+            now=time.time, sleep=time.sleep)
+        doc = operator_config.get_document(creds["project_id"], "campaigns", slug, token,
+            opener=urllib.request.urlopen, sleep=time.sleep)
+    except operator_config.ConfigUnavailable as exc:
+        raise ConfigReadError("campaign config unavailable: %s" % exc, exc.metadata) from exc
+    except ValueError as exc:
+        raise BridgeError("campaign config cannot be decoded") from exc
+    switch = (doc or {}).get("enabled", True)
+    store_on = switch if isinstance(switch, bool) else False
     if doc and doc.get("deleted") is True:
         if captions_only:
             raise NotFound("campaign has been deleted")
         return {"campaign": None}
-    if declared is None and (not doc or doc.get("kind") != "console"):
+    if not doc or doc.get("kind") != "console":
         if captions_only:
             raise NotFound("unknown campaign %r" % slug)
         return {"campaign": None}
-    cron_on = promo_enabled(declared) if declared else True
-    if doc and doc.get("kind") == "console":
-        cron_on = cron_on and doc.get("scheduleStatus") == "ready"
+    # The second switch: a campaign is only on once the reconciler has verified
+    # the gateway is running the schedule its document asks for.
+    cron_on = doc.get("scheduleStatus") == "ready"
     enabled = store_on and cron_on
     if not captions_only:
         return {"campaign": {"slug": slug, "enabled": enabled, "storeEnabled": store_on, "cronEnabled": cron_on}}
     try:
-        if doc is not None and "captions" in doc:
-            captions = operator_config.validate_captions(doc["captions"])
-        elif declared:
-            module = import_campaign(script_path(declared["script"]))
-            captions = [str(text) for text in as_list(getattr(module, "POST_TEXTS", None))]
-        else:
+        if "captions" not in doc:
             raise BridgeError("campaign has no caption variants")
+        captions = operator_config.validate_captions(doc["captions"])
     except operator_config.ConfigInvalid as exc:
         raise BridgeError(str(exc)) from exc
     return {"slug": slug, "enabled": enabled, "captions": captions, "tracking": {}, "groups": []}
@@ -782,39 +590,31 @@ def campaign_edit_state(slug, captions_only=False):
 def navigation():
     """Sidebar counts do not need group records, previews, captions or assets."""
     def read():
-        if promo_config.mode()[0] != promo_config.FIRESTORE:
-            m = membership()
-            review = sum(1 for row in m["groups"].values() if promo_membership.status_of(row) != "active")
-            total = len(set(row["slug"] for row in manifest().get("promos", []))
-                        | set(console_campaigns.definitions(m)))
-        else:
-            import urllib.request
-            import time
-            creds = operator_config.credentials()
-            if creds is None:
-                raise operator_config.ConfigUnavailable("no service account configured")
-            token = operator_config.access_token(creds,
-                operator_config.token_cache_path(operator_config.state_dir()),
-                opener=urllib.request.urlopen, signer=operator_config.node_signer,
-                now=time.time, sleep=time.sleep)
-            def count(collection, field, value):
-                return operator_config.count_documents(creds["project_id"], collection, token,
-                    where={"fieldFilter": {"field": {"fieldPath": field}, "op": "IN" if isinstance(value, list) else "EQUAL",
-                                           "value": operator_config.encode_value(value)}},
-                    opener=urllib.request.urlopen, sleep=time.sleep)
-            review = count("groups", "status", ["on-hold", "admin-only", "not-a-member"])
-            builtins = {entry["slug"] for entry in manifest().get("promos", [])}
-            retired = []
-            if __import__("campaign_deletion").enabled():
-                retired = operator_config.query_documents(creds["project_id"], "campaigns",
-                    {"fieldFilter": {"field": {"fieldPath": "deleted"}, "op": "EQUAL", "value": {"booleanValue": True}}},
-                    token, opener=urllib.request.urlopen, sleep=time.sleep)
-            retired_slugs = {slug for slug, fields in retired}
-            names = [row["name"] for row in manifest().get("promos", [])
-                     if row.get("name") and row["slug"] not in retired_slugs]
-            total = (len(builtins - retired_slugs) + count("campaigns", "kind", "console")
-                     - (count("campaigns", "jobName", names) if names else 0))
-        return {"campaignTotal": total, "groupsNeedingReview": review}
+        import urllib.request
+        import time
+        creds = operator_config.credentials()
+        if creds is None:
+            raise operator_config.ConfigUnavailable("no service account configured")
+        token = operator_config.access_token(creds,
+            operator_config.token_cache_path(operator_config.state_dir()),
+            opener=urllib.request.urlopen, signer=operator_config.node_signer,
+            now=time.time, sleep=time.sleep)
+        def count(collection, field, value):
+            return operator_config.count_documents(creds["project_id"], collection, token,
+                where={"fieldFilter": {"field": {"fieldPath": field}, "op": "IN" if isinstance(value, list) else "EQUAL",
+                                       "value": operator_config.encode_value(value)}},
+                opener=urllib.request.urlopen, sleep=time.sleep)
+        review = count("groups", "status", ["on-hold", "admin-only", "not-a-member"])
+        # Every campaign is data-defined, so this is one count and no
+        # subtraction: there is no committed list to add in and no converted
+        # campaign appearing in both.
+        total = count("campaigns", "kind", "console")
+        if __import__("campaign_deletion").enabled():
+            retired = operator_config.query_documents(creds["project_id"], "campaigns",
+                {"fieldFilter": {"field": {"fieldPath": "deleted"}, "op": "EQUAL", "value": {"booleanValue": True}}},
+                token, opener=urllib.request.urlopen, sleep=time.sleep)
+            total -= len({slug for slug, fields in retired})
+        return {"campaignTotal": max(total, 0), "groupsNeedingReview": review}
     try:
         return console_config.cached_summary("navigation", read)
     except operator_config.ConfigUnavailable as exc:
@@ -848,7 +648,7 @@ def main(argv):
             # Without it a disabled campaign is indistinguishable from one the
             # daily cap held back.
             payload = {"date": day.isoformat(),
-                       "disabledPromos": sorted(disabled_promos(manifest(), day)),
+                       "disabledPromos": sorted(disabled_promos(day)),
                        "groups": [row for row in group_rows(day)
                                   if (_GROUP_IDS is None or row["jid"] in _GROUP_IDS)
                                   and (_CAMPAIGN_SCOPE is None or _CAMPAIGN_SCOPE in row["promos"]
@@ -860,15 +660,12 @@ def main(argv):
             if command in ("groups", "group"):
                 # All of this comes from the config already read for the rows;
                 # no overview, preview or asset catalogue is needed by a picker.
-                declared = manifest().get("promos", [])
-                converted = console_campaigns.definitions(membership())
-                choices = [{"slug": row["slug"], "name": row.get("name"),
-                            "enabled": effective_enabled(row)} for row in declared
-                           if row["slug"] not in converted and row["slug"] not in resolved().get("deleted", [])]
-                choices.extend({"slug": slug, "name": row.get("name"),
-                                "enabled": bool(resolved().get("storeSwitches", {}).get(slug))
-                                           and row.get("scheduleStatus") == "ready"}
-                               for slug, row in converted.items())
+                deleted = resolved().get("deleted", [])
+                choices = [{"slug": slug, "name": row.get("name"),
+                            "enabled": bool(resolved().get("storeSwitches", {}).get(slug))
+                                       and row.get("scheduleStatus") == "ready"}
+                           for slug, row in console_campaigns.definitions(membership()).items()
+                           if slug not in deleted]
                 payload["context"] = {"writes": write_capabilities(), "actions": action_capabilities(),
                                       "accounts": accounts(membership()), "capSettings": cap_settings(membership()),
                                       "campaigns": choices}

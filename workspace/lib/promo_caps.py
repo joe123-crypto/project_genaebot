@@ -7,7 +7,7 @@ and decides, for one day, which campaigns may use it.
 
 Two inputs:
 
-* The **activity tier** the operator sets per group in membership.json
+* The **activity tier** the operator sets per group in the store
   (``busy`` / ``normal`` / ``quiet``) picks a band, e.g. ``busy -> 6..10``.
 * The **ad-reply signal** the bot already records moves the cap inside that
   band. ``runtime/public-service-gate/ad-refs.json`` counts inbound DMs carrying
@@ -38,7 +38,6 @@ it stays importable from the OpenClaw ``--command`` cron scripts.
 """
 
 import os
-import json
 from datetime import date, timedelta
 
 import json_store
@@ -58,20 +57,6 @@ AD_REFS_PATH = os.environ.get(
 HISTORY_PATH = os.environ.get(
     "PROMO_CAPS_HISTORY",
     "/home/joseph/.openclaw/runtime/promo-caps/ad-ref-history.json",
-)
-
-# The declared cron manifest (deploy/promo-crons.json). A campaign it switches
-# off (``"enabled": false``) never runs, so it must not win a group's daily turn:
-# otherwise a paused campaign silently burns slots the running ones could use.
-# GENAIE_PROMO_CRONS, when set, is the only path read (as in console-read); the
-# repo copy serves CI and local runs, the image copy serves the gateway.
-_MANIFEST_OVERRIDE = os.environ.get("GENAIE_PROMO_CRONS")
-MANIFEST_CANDIDATES = (
-    (_MANIFEST_OVERRIDE,) if _MANIFEST_OVERRIDE else (
-        os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                     "..", "..", "deploy", "promo-crons.json"),
-        "/usr/local/lib/genaie/promo-crons.json",
-    )
 )
 
 # A reply is worth one extra ad per day above the band floor...
@@ -102,28 +87,6 @@ def load_ad_refs(path=None):
     raw = json_store.load_json(path or AD_REFS_PATH, {})
     refs = raw.get("refs") if isinstance(raw, dict) else None
     return dict(refs) if isinstance(refs, dict) else {}
-
-
-def disabled_promos(paths=None):
-    """Membership keys of the campaigns the cron manifest switches off.
-
-    Fail-open: no manifest, unreadable JSON or a non-boolean ``enabled`` yields an
-    empty set, i.e. the old behaviour where every listed campaign takes turns.
-    Only an explicit ``false`` removes a campaign from the rotation."""
-    for path in (paths if paths is not None else MANIFEST_CANDIDATES):
-        if not path:
-            continue
-        try:
-            with open(path, encoding="utf-8") as handle:
-                declared = json.load(handle)
-        except FileNotFoundError:
-            continue
-        except (OSError, ValueError):
-            return set()
-        rows = declared.get("promos") if isinstance(declared, dict) else None
-        return set(str(row.get("slug")) for row in (rows or [])
-                   if isinstance(row, dict) and row.get("enabled") is False)
-    return set()
 
 
 def recency_weight(last_seen, today):
@@ -284,8 +247,7 @@ def plan(m, jids, day=None, refs=None, history=None, record=False,
     """``{jid: info}`` for one day, where info is
     ``{"tier", "score", "cap", "promos", "allowed"}``.
 
-    ``promos`` leaves out campaigns the cron manifest switches off (``disabled``,
-    read via :func:`disabled_promos` when not given), so the rotation only hands
+    ``promos`` leaves out the campaigns in ``disabled``, so the rotation only hands
     a group's allowance to campaigns that will actually post.
 
     ``allowed`` is the promos that may post to that group today. Groups absent
@@ -299,8 +261,10 @@ def plan(m, jids, day=None, refs=None, history=None, record=False,
         snapshot_ad_refs(refs, today=day)
     scores = ad_ref_scores(jids, refs=refs, today=day)
     prior = previous_scores(jids, day, history=history)
-    if disabled is None:
-        disabled = disabled_promos()
+    # The caller supplies the off list. A campaign's switches live in Firestore
+    # and only promo_config.resolve has read them; this module is handed the
+    # membership, not a credential, so it must not guess -- and guessing
+    # "nothing is off" would hand a paused campaign a group's daily turn.
     disabled = set(disabled or ())
 
     out = {}
@@ -337,8 +301,6 @@ def filter_for_promo(m, promo, jids, day=None, refs=None, history=None, record=F
     ``promo`` itself is never treated as disabled here: whoever is running it
     (an operator's manual run or ``--dry-run`` of a paused campaign) gets the
     rotation it would have if it were switched on."""
-    if disabled is None:
-        disabled = disabled_promos()
     disabled = set(disabled or ()) - {promo}
     decisions = plan(m, jids, day=day, refs=refs, history=history, record=record,
                      disabled=disabled)
