@@ -164,7 +164,10 @@ class SchedulerReads(unittest.TestCase):
 
     def test_repeated_pending_failures_do_not_rewrite_status(self):
         store = MemoryStore()
-        store.docs["campaigns"]["demo"] = config.encode_fields({"kind": "console", "scheduleStatus": "pending"})
+        # One campaign, so the count is about the retry and not about how many
+        # campaigns the shared fixture happens to carry.
+        store.docs["campaigns"] = {
+            "demo": config.encode_fields({"kind": "console", "scheduleStatus": "pending"})}
         listing = store.list
         store.list = Mock(side_effect=lambda collection, where=None: listing(collection))
         store.request = Mock()
