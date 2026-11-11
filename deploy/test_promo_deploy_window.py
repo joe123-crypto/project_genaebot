@@ -171,11 +171,22 @@ class GateTest(unittest.TestCase):
         self.assertIn("inputs.ignore_promo_window", deploy)
 
     def test_the_gate_step_is_given_the_token_it_now_needs(self):
-        # Reading the live campaigns means `railway ssh`, which needs the token
-        # the release step already has; without it the gate refuses every release.
+        # Reading the live campaigns from CI means the console API and its
+        # read-scoped token; without it the gate refuses every release. It is
+        # deliberately NOT RAILWAY_TOKEN: `railway ssh` needs a registered SSH
+        # key a runner cannot have, which is how this gate first failed.
         deploy = WORKFLOW[WORKFLOW.index("\n  deploy:\n"):]
         step = deploy[deploy.index("- name: Wait for a quiet promo window"):]
         step = step[:step.index("      - name: Release or restore")]
+        self.assertIn("CONSOLE_API_GATE_TOKEN: ${{ secrets.CONSOLE_API_GATE_TOKEN }}", step)
+        self.assertIn('test -n "$CONSOLE_API_GATE_TOKEN"', step)
+
+    def test_the_release_step_can_read_the_campaigns_too(self):
+        # It makes the same read, for which crons must come back up, and still
+        # needs RAILWAY_TOKEN for the release itself.
+        deploy = WORKFLOW[WORKFLOW.index("\n  deploy:\n"):]
+        step = deploy[deploy.index("- name: Release or restore"):]
+        self.assertIn("CONSOLE_API_GATE_TOKEN: ${{ secrets.CONSOLE_API_GATE_TOKEN }}", step)
         self.assertIn("RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}", step)
 
 

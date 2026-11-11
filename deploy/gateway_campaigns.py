@@ -6,11 +6,19 @@ enabled campaign's cron job. Both used to work entirely from the checkout: the
 schedule and timeout from ``deploy/promo-crons.json``, the group count from each
 campaign's ``targets.json``, the job name from the manifest entry.
 
-That is operator data and it now lives only in Firestore, which CI has no
-credentials for. So both gates ask the gateway, over the ``railway ssh`` the
-deploy job is already authenticated for (see ``deploy/gateway-campaigns.sh``),
-and read ``console-read campaigns`` -- the same read the console uses, which
+That is operator data and it now lives only in Firestore. So both gates ask the
+gateway for ``console-read campaigns`` -- the same read the console uses, which
 reports every campaign whatever kind it is.
+
+There are two ways in, because the two callers are in different places. An
+operator runs ``deploy/gateway-campaigns.sh``, which goes in over ``railway
+ssh``. CI cannot: ``railway ssh`` needs an SSH key registered with the Railway
+account and a runner has none, while ``RAILWAY_TOKEN`` authenticates only the
+HTTP API -- which is how the first release after this migration failed its own
+gate with the gateway perfectly healthy. So CI fetches the same read over HTTPS
+from the console API, holding ``CONSOLE_API_GATE_TOKEN``: a second bearer token
+the API accepts on this one route and refuses everywhere else, so a gate that
+only reads cannot carry the authority to write.
 
 Two things improve by asking rather than reading files. The gate now sees
 campaigns created in the console, which were invisible to it before and whose
@@ -32,6 +40,8 @@ import json
 import os
 import re
 import subprocess
+import urllib.error
+import urllib.request
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -48,6 +58,15 @@ ENVIRONMENT = "2cae37a4-8e24-41db-87ed-9a3a7c9eff22"
 SCOPE = ["--project", PROJECT, "--service", SERVICE, "--environment", ENVIRONMENT]
 RAILWAY_SCOPE = {"RAILWAY_PROJECT": PROJECT, "RAILWAY_SERVICE": SERVICE,
                  "RAILWAY_ENVIRONMENT": ENVIRONMENT}
+# The console API, reached over the Railway service domain that targets its port
+# (see deploy/railway/README.md). GENAIE_CONSOLE_URL overrides it for a staging
+# gateway; the token's presence is what decides which way in is used.
+CONSOLE_URL = "https://gateway-production-feba.up.railway.app"
+CONSOLE_URL_VAR = "GENAIE_CONSOLE_URL"
+GATE_TOKEN_VAR = "CONSOLE_API_GATE_TOKEN"
+READ_PATH = "/internal/console/campaigns"
+# A campaign list is tens of kilobytes; a megabyte means something else answered.
+MAX_REPLY_BYTES = 1 << 20
 # Generous: this is one ssh round trip into a container that may be cold, and
 # the alternative to waiting is failing a release that was fine.
 TIMEOUT_SECONDS = 180
@@ -143,9 +162,46 @@ def parse(text):
     return out
 
 
-def read(**inject):
-    """Every campaign the gateway knows, as ``console-read`` reports them."""
-    return parse(_run(**inject))
+def console_url(env=None):
+    """Where the console API is, without a trailing slash."""
+    environment = os.environ if env is None else env
+    return (environment.get(CONSOLE_URL_VAR) or CONSOLE_URL).rstrip("/")
+
+
+def _fetch(url, token, timeout=TIMEOUT_SECONDS, opener=None):
+    """The campaigns read over HTTPS, as text.
+
+    Nothing here may carry the token into a message: a gate's failure is read
+    from a public build log."""
+    request = urllib.request.Request(url, headers={"Authorization": "Bearer " + token})
+    try:
+        with (opener or urllib.request.urlopen)(request, timeout=timeout) as reply:
+            return reply.read(MAX_REPLY_BYTES).decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:
+        hint = {401: " (is CONSOLE_API_GATE_TOKEN the one the gateway has?)",
+                404: " (is the gateway deployed with the console API's gate route?)"}
+        raise Unavailable("the console API answered %d for %s%s"
+                          % (exc.code, READ_PATH, hint.get(exc.code, "")))
+    except (urllib.error.URLError, OSError) as exc:
+        raise Unavailable("cannot reach the console API at %s (%s)"
+                          % (url.split(READ_PATH)[0], exc))
+    except UnicodeError as exc:
+        raise Unavailable("the console API's answer is not text (%s)" % exc)
+
+
+def read(env=None, **inject):
+    """Every campaign the gateway knows, as ``console-read`` reports them.
+
+    Over HTTPS when a gate token is configured, which is how CI reads it, and
+    otherwise through the ``railway ssh`` wrapper, which is how an operator
+    does. Either way a read that did not complete raises, never returns less."""
+    environment = os.environ if env is None else env
+    token = (environment.get(GATE_TOKEN_VAR) or "").strip()
+    if token:
+        return parse(_fetch(console_url(environment) + READ_PATH, token,
+                            **{name: inject[name] for name in ("timeout", "opener")
+                               if name in inject}))
+    return parse(_run(env=environment, **inject))
 
 
 def enabled(rows):

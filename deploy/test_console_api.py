@@ -26,6 +26,7 @@ API = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(API)
 
 TOKEN = "t" * API.MIN_TOKEN_LENGTH
+GATE = "g" * API.MIN_TOKEN_LENGTH
 
 # Echoes its own arguments, so a response proves which bridge call a route made.
 ECHO = """import json, sys
@@ -150,6 +151,65 @@ class ConsoleApiTests(unittest.TestCase):
             self.assertEqual(run.call_args.args, ({"action": "link", "accountId": "sales", "create": True},))
             self.assertEqual(post("/accounts/ads/pause", b"{}"), 200)
             self.assertEqual(run.call_args.args, ({"action": "pause", "accountId": "ads"},))
+
+    # -- the release gates' read-scoped token -----------------------------
+
+    def test_gate_token_reads_campaigns_and_nothing_else(self):
+        """CI holds this token, so what it cannot reach matters more than what it can."""
+        base = self.serve(gate_token=GATE)
+        self.assertEqual(self.fetch(base + "/campaigns", token=GATE)[0], 200)
+        self.assertEqual(self.fetch(base + "/campaigns?date=2026-11-11", token=GATE)[0], 200)
+        for route in ("/overview", "/groups", "/settings", "/navigation",
+                      "/preview/genaie", "/accounts", "/accounts/link-sessions/x"):
+            self.assertEqual(self.fetch(base + route, token=GATE)[0], 401,
+                             "%s must refuse the gate token" % route)
+
+    def test_gate_token_cannot_reach_the_live_views_either(self):
+        base = self.serve(gate_token=GATE)
+        live = unittest.mock.Mock()
+        live.handle.return_value = {"rows": [], "sync": {"stale": False}, "revision": "1"}
+        self.server.console["live"] = live
+        self.assertEqual(self.fetch(base + "/live/campaigns", token=GATE)[0], 401)
+        self.assertFalse(live.handle.called)
+
+    def test_gate_token_writes_nothing(self):
+        base = self.serve(gate_token=GATE)
+        writes, actions = self.server.console["writes"], self.server.console["actions"]
+        with unittest.mock.patch.object(writes, "run") as write, \
+                unittest.mock.patch.object(actions, "run") as action:
+            for route, payload in (("/config/campaigns/genaie", b'{"fields":{"enabled":false}}'),
+                                   ("/config/groups/1@g.us", b'{"delete":true}'),
+                                   ("/campaigns/genaie/delete", b"{}"),
+                                   ("/campaigns/create", b"{}"),
+                                   ("/groups/1@g.us/leave", b"{}"),
+                                   ("/accounts/ads/pause", b"{}")):
+                request = urllib.request.Request(
+                    base + route, data=payload, method="POST",
+                    headers={"Content-Type": "application/json",
+                             "Authorization": "Bearer %s" % GATE})
+                try:
+                    with urllib.request.urlopen(request, timeout=10) as reply:
+                        status = reply.status
+                except urllib.error.HTTPError as error:
+                    with error:
+                        status = error.code
+                self.assertEqual(status, 401, "%s must refuse the gate token" % route)
+            self.assertFalse(write.called)
+            self.assertFalse(action.called)
+
+    def test_the_operator_token_is_unaffected_and_absent_gate_changes_nothing(self):
+        base = self.serve(gate_token=GATE)
+        for route in ("/campaigns", "/overview", "/groups"):
+            self.assertEqual(self.fetch(base + route)[0], 200)
+        plain = self.serve()
+        self.assertEqual(self.fetch(plain + "/campaigns")[0], 200)
+        self.assertEqual(self.fetch(plain + "/campaigns", token=GATE)[0], 401)
+        self.assertEqual(self.fetch(plain + "/health", token=None)[0], 200)
+
+    def test_refuses_a_gate_token_that_is_short_or_the_operator_token(self):
+        for gate in ("short", "g" * (API.MIN_TOKEN_LENGTH - 1), TOKEN):
+            with self.assertRaises(ValueError):
+                API.build_server("127.0.0.1", 0, TOKEN, self.echo, gate_token=gate)
 
     # -- starting up ------------------------------------------------------
 

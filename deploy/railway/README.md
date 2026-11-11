@@ -220,13 +220,15 @@ source and startup; it does not acquire a pre-deployment cron lock.
 
 As a backstop, the deploy job's *Wait for a quiet promo window* step
 (`deploy/promo-deploy-window.py`) asks the gateway for its live campaign list
-(`deploy/gateway-campaigns.sh`, over the `railway ssh` the deploy job is already
-authenticated for) and holds the release while any enabled campaign may still be
-sending or starts within 20 minutes. `railway ssh` otherwise resolves the
-project from a linked directory and a CI checkout is never linked, so
-`deploy/gateway_campaigns.py` names the project, service and environment itself
--- the same three ids `deploy/railway-release.py` releases with, defined once
-there and read from the environment by `deploy/gateway-exec.sh`. "May still be sending" is the engine's
+and holds the release while any enabled campaign may still be sending or starts
+within 20 minutes. CI reads that list over the console API with
+`CONSOLE_API_GATE_TOKEN` (below), not over `railway ssh`, which needs an SSH key
+registered with the Railway account that a GitHub runner cannot have --
+`RAILWAY_TOKEN` authenticates only the HTTP API. An operator runs
+`./deploy/gateway-campaigns.sh` instead, which goes in over `railway ssh` and
+names the project, service and environment explicitly (the same three ids
+`deploy/railway-release.py` releases with, defined once in
+`deploy/gateway_campaigns.py`), because a checkout need not be linked to one. "May still be sending" is the engine's
 worst case for that campaign's current group count (full start jitter, the
 longest gap between every send and the per-send allowance), capped at its job
 timeout: about 69 minutes for a 46-group campaign. Reading the live list is also
@@ -773,6 +775,36 @@ railway ssh -- python3 -c 'import urllib.request as u; print(u.urlopen("http://1
 
 Reaching it from outside needs a Railway domain whose target port is
 `CONSOLE_API_PORT`. That exposes only this API; 18789 stays private.
+
+### The release gates' read-scoped token
+
+The two release gates need one read -- the campaign list -- and must not be able
+to change anything, while `CONSOLE_API_TOKEN` authorizes every route including
+the writes and the account controls. So CI holds a second token instead:
+
+```sh
+railway variable set CONSOLE_API_GATE_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')" \
+  --skip-deploys && railway redeploy --yes                     # gate reads on
+railway variable delete CONSOLE_API_GATE_TOKEN                  # gate reads off
+```
+
+Add the same value as the GitHub repository secret `CONSOLE_API_GATE_TOKEN`;
+both deploy steps in `.github/workflows/deploy-main.yml` read it from there, and
+each refuses to run without it rather than falling back to a path that cannot
+work.
+
+The API accepts it on `GET`/`HEAD /internal/console/campaigns` and refuses it
+everywhere else: the other read routes, the `live/` views, every write and the
+`accounts` routes, which matter most because a link session carries pairing QR
+data. `GATE_ROUTES` in `console-api.py` is that list. It must be at least 32
+characters and must differ from `CONSOLE_API_TOKEN`; the server refuses to start
+otherwise, so a copy-paste cannot quietly hand the read-scoped holder every
+write route. Rotate by setting a new value in both places, in either order --
+the old token stops working when the gateway restarts.
+
+Unlike `CONSOLE_API_TOKEN` it is not in the entrypoint's `SECRET_KEYS`: like the
+write key it is handed to the console API child alone, so the gateway and the
+campaign runs it spawns never see it.
 
 ### Enabling operator-config writes
 
