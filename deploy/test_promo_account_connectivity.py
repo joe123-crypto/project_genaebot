@@ -8,48 +8,37 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "workspace/lib"))
+for _path in (str(ROOT / "workspace/lib"), str(ROOT / "deploy")):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
 import promo_broadcast as pb
+import promo_fixture
 
 
 class ConnectivityTests(unittest.TestCase):
+    """Which line each group is advertised from used to be asserted here against
+    the committed roster -- how many groups the second line carried, which
+    campaigns each of them was in. That is operator data in Firestore now and
+    there is no repository copy to check, so what is left is the behaviour: a
+    line that is offline must cost its own groups their ad and nothing else.
+    """
+
     def setUp(self):
         self.naps = []
-
-    def test_ads_group_campaign_coverage(self):
-        membership = json.loads((ROOT / "workspace/cron/membership.json").read_text())
-        active = {jid: g for jid, g in membership["groups"].items()
-                  if g.get("account", "default") == "ads" and g["status"] == "active"}
-        self.assertEqual(len(active), 16)
-        self.assertEqual(sum(bool(g["promos"]) for g in active.values()), 16)
-        self.assertEqual(sum(len(g["promos"]) for g in active.values()), 48)
-        expected = {
-            "120363046894354726@g.us": {"fruit-trees", "building-materials", "genaie-advertisers"},
-            "120363433121439254@g.us": {"fruit-trees", "building-materials", "genaie-advertisers"},
-            "120363407345824911@g.us": {"building-materials", "genaie-advertisers"},
-        }
-        for jid, promos in expected.items():
-            self.assertIn(jid, active)
-            self.assertEqual(set(active[jid]["promos"]), promos)
-            for targets in (ROOT / "workspace/cron").glob("*-promo/targets.json"):
-                payload = json.loads(targets.read_text())
-                if targets.parent.name.removesuffix("-promo") in promos:
-                    self.assertIn(jid, payload["groups"])
-                    self.assertEqual(payload["accounts"][jid], "ads")
-                else:
-                    self.assertNotIn(jid, targets.read_text())
 
     def run_campaign(self, status, sender, cron_timeout=None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "image.jpg").write_bytes(b"fixture")
-            (root / "targets.json").write_text(json.dumps({"groups": ["1@g.us", "2@g.us", "3@g.us"],
-                "accounts": {"1@g.us": "ads", "2@g.us": "ads"}}))
+            resolve = promo_fixture.resolver_for(
+                ["1@g.us", "2@g.us", "3@g.us"],
+                accounts={"1@g.us": "ads", "2@g.us": "ads"},
+                numbers={"default": "+26370000001", "ads": "+26370000002"})
             with patch.object(pb, "send_ad", side_effect=sender) as send:
                 result = pb.broadcast(text="fixture", image=str(root / "image.jpg"),
-                    targets_file=str(root / "targets.json"), state_file=str(root / "state.json"),
+                    state_file=str(root / "state.json"), promo_name="alpha-promo",
                     argv=[], start_jitter=0, cron_timeout=cron_timeout, caps=None, send_delay=0,
-                    account_status=status, sleep=self.naps.append)
+                    account_status=status, sleep=self.naps.append, resolve_config=resolve)
             return result, json.loads((root / "state.json").read_text())["sent"], send.call_args_list
 
     def test_offline_ads_not_submitted_or_receipted_and_default_continues(self):
@@ -93,7 +82,7 @@ class ConnectivityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "image.jpg").write_bytes(b"fixture")
-            (root / "targets.json").write_text(json.dumps({"groups": ["1@g.us", "2@g.us"]}))
+            resolve = promo_fixture.resolver_for(["1@g.us", "2@g.us"])
             state = root / "state.json"
             seen = []
             def status(accounts):
@@ -104,9 +93,9 @@ class ConnectivityTests(unittest.TestCase):
                           (True, '{"messageId":"m"}')])
             with patch.object(pb, "send_ad", side_effect=lambda *a, **k: next(sends)):
                 pb.broadcast(text="fixture", image=str(root / "image.jpg"),
-                    targets_file=str(root / "targets.json"), state_file=str(state),
+                    state_file=str(state), promo_name="alpha-promo",
                     argv=[], start_jitter=0, cron_timeout=None, caps=None, send_delay=0,
-                    account_status=status, sleep=self.naps.append)
+                    account_status=status, sleep=self.naps.append, resolve_config=resolve)
             self.assertIn("1@g.us", seen[0])
 
     def test_grace_is_wall_clock_bounded_when_status_reads_are_slow(self):

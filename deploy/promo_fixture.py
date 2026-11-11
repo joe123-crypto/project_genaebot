@@ -143,7 +143,7 @@ def targets_payload(promo, config=None):
 
 def config_for(groups, *, promo="alpha", enabled=True, caps_enabled=False,
                entries=None, weekly=None, accounts=None, numbers=None,
-               contact_account="default"):
+               contact_account="default", captions=None):
     """A ``promo_config.resolve`` result for a bare list of group JIDs.
 
     The engine takes its targeting, membership and switches from one resolve, so
@@ -156,12 +156,16 @@ def config_for(groups, *, promo="alpha", enabled=True, caps_enabled=False,
     a test about allowances. ``weekly`` is ``{jid: [weekday, ...]}`` for groups
     posted to only on certain days, ``accounts`` is ``{jid: line}`` and
     ``numbers`` is ``{line: number}``; ``contact_account=None`` leaves the
-    advertised number to each group's own posting line.
+    advertised number to each group's own posting line. ``captions`` is the
+    campaign's copy, which the engine takes from this document and not from its
+    own argument, exactly as a real run does.
     """
     jids = list(groups)
     weekly = dict(weekly or {})
     accounts = dict(accounts or {})
-    numbers = dict(numbers or {"default": LINES["default"]})
+    # ``{}`` is a config with no line configured at all, which is a real and
+    # distinct case from "give me the usual one".
+    numbers = dict({"default": LINES["default"]} if numbers is None else numbers)
 
     def record(jid):
         entry = {"name": None, "status": "active", "activity": "normal",
@@ -182,7 +186,8 @@ def config_for(groups, *, promo="alpha", enabled=True, caps_enabled=False,
                      "accounts": dict((line, {"number": number})
                                       for line, number in numbers.items()),
                      "bands": {"normal": [1, 3]}},
-        "promos": {promo: campaign(promo, "09:07", enabled=enabled)},
+        "promos": {promo: campaign(promo, "09:07", enabled=enabled,
+                                   captions=captions)},
         "groups": records,
     }
     doc = {"groups": jids, "accounts": accounts, "account_numbers": numbers}

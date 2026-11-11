@@ -30,6 +30,7 @@ Std-lib only, like everything else the deploy job runs.
 import datetime as dt
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -53,6 +54,11 @@ SEND_GAP_MAX_SECONDS = 60.0
 SEND_ALLOWANCE_SECONDS = 12.0
 DEFAULT_TIMEOUT_SECONDS = 7200.0
 DEFAULT_ACCOUNT = "default"
+# The reply recorder only counts a ref code whose prefix it knows, and that list
+# is code, in this repository, while the prefixes themselves are campaign data in
+# Firestore. So the two can only be compared here, at gate time.
+AD_REFS = (Path(__file__).resolve().parent.parent / "workspace" / "plugins"
+           / "public-service-gate" / "lib" / "ad-refs.js")
 
 
 class Unavailable(Exception):
@@ -158,7 +164,19 @@ def _per_account(row):
     return {DEFAULT_ACCOUNT: int(row["targetCount"])}
 
 
-def problems(rows):
+def recorder_prefixes(path=None):
+    """The ref-code prefixes the reply recorder counts, or ``None`` if unreadable."""
+    try:
+        source = (path or AD_REFS).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    found = re.search(r"AD_REF_PREFIXES = \[([^\]]*)\]", source)
+    if not found:
+        return None
+    return set(re.findall(r'"([A-Z]+)"', found.group(1)))
+
+
+def problems(rows, *, prefixes=None):
     """``[(severity, message)]`` for schedules that cannot do what they promise.
 
     Two guardrails that used to be repository tests, because every input was a
@@ -214,4 +232,20 @@ def problems(rows):
                               "%.0f min after %s starts, and the send spacing is per "
                               "line: move one of them."
                               % (slug, count, line, (latest - next_at) / 60.0, next_slug)))
+    known = recorder_prefixes() if prefixes is None else prefixes
+    if known is not None:
+        for row in sorted(live, key=lambda row: row["slug"]):
+            tracking = row.get("tracking") or {}
+            prefix = tracking.get("prefix")
+            # A campaign that advertises someone else's number is meant to be
+            # absent: its replies never reach the bot, so nothing could count
+            # them. Only an unknown prefix on a bot-line campaign is a problem.
+            if not prefix or tracking.get("number") or prefix in known:
+                continue
+            found.append(("warning",
+                          "%s tracks replies as %s-xxx but the reply recorder only "
+                          "counts %s, so its leads go uncounted: add %r to "
+                          "AD_REF_PREFIXES in %s."
+                          % (row["slug"], prefix, ", ".join(sorted(known)), prefix,
+                             AD_REFS.name)))
     return found
