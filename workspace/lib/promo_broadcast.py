@@ -49,8 +49,8 @@ Std-lib only (plus the sibling :mod:`json_store` helper), so it stays importable
 from the OpenClaw ``--command`` cron scripts, which are std-lib only by contract.
 Set ``GENAIE_CAMPAIGN_TRANSPORT=rpc`` to use one lazy Node SDK client per campaign;
 the image defaults to the transient CLI while net billing savings are unproven.
-Set ``GENAIE_AD_ASSETS_SOURCE=r2`` to take the ad images from R2 instead of the
-ones baked into the container (see :mod:`ad_assets`).
+The ad images come from Cloudflare R2, fetched and verified before the first
+send; the caller hands this module local paths (see :mod:`ad_assets`).
 """
 
 import os

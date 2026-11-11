@@ -46,21 +46,19 @@ R2_WRITE_VARS = ("R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_ACCOUNT_ID",
 
 
 class SwitchTest(unittest.TestCase):
-    def test_releases_neither_set_nor_clear_the_asset_source(self):
-        # Like GENAIE_CONFIG_SOURCE: an operator switch, not a release setting.
-        # A release profile that owned it would silently flip the images back.
+    def test_releases_neither_set_nor_clear_the_asset_origin(self):
+        # An operator setting, not a release setting. A release profile that
+        # owned it could point every campaign's pictures somewhere else.
         owned = RELEASE.split("OWNED = (", 1)[1].split(")", 1)[0]
-        for name in (ad_assets.BASE_VAR, ad_assets.DIR_VAR,
-                     "GENAIE_AD_ASSETS_SOURCE"):
+        for name in (ad_assets.BASE_VAR, ad_assets.DIR_VAR):
             self.assertNotIn(name, owned)
 
-    def test_the_switch_does_not_need_the_sanitised_secret_env(self):
-        # GENAIE_CONFIG_SOURCE is not in SECRET_KEYS either: Railway service
-        # variables are already in the gateway's environment and crons inherit
-        # it. SECRET_KEYS exists for values openclaw's own config interpolates.
+    def test_the_origin_does_not_need_the_sanitised_secret_env(self):
+        # Railway service variables are already in the gateway's environment and
+        # the cron runs inherit it. SECRET_KEYS exists for values openclaw's own
+        # config interpolates, and a public bucket origin is not a secret.
         secrets = ENTRYPOINT.split("SECRET_KEYS=(", 1)[1].split(")", 1)[0].split()
-        self.assertNotIn("GENAIE_CONFIG_SOURCE", secrets)
-        self.assertNotIn("GENAIE_AD_ASSETS_SOURCE", secrets)
+        self.assertNotIn(ad_assets.BASE_VAR, secrets)
 
     def test_the_index_read_uses_the_key_the_runtime_already_has(self):
         self.assertIn("GCP_SERVICE_ACCOUNT_B64",

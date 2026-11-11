@@ -205,11 +205,11 @@ class Retirement(unittest.TestCase):
             return broadcast.broadcast(text="offer", image=str(image),
                 state_file=str(Path(self.tmp.name) / "state.json"), promo_name="demo-promo", send_delay=0, start_jitter=0,
                 caps=None, resolve_config=lambda *args, **kwargs: {"mode": "firestore", "source": "firestore", "enabled": True, "membership": {}, "switches": {}, "doc": {"groups": ["1@g.us", "2@g.us"]}}, sleep=lambda _: None, account_status=lambda accounts: {a: True for a in accounts}, argv=[])
-        with patch.dict(os.environ, dict(self.env, GENAIE_AD_ASSETS_SOURCE="repo")), patch("sys.stdout", io.StringIO()), patch.object(deletion, "live_campaign", side_effect=[{}, {"deleted": True}]), patch.object(broadcast, "send_ad", return_value=(True, "sent")) as send:
+        with patch.dict(os.environ, dict(self.env)), patch("sys.stdout", io.StringIO()), patch.object(deletion, "live_campaign", side_effect=[{}, {"deleted": True}]), patch.object(broadcast, "send_ad", return_value=(True, "sent")) as send:
             self.assertEqual(run(), 0)
             self.assertEqual(send.call_count, 1)
         # A different state file isn't needed: the one remaining group is still pending.
-        with patch.dict(os.environ, dict(self.env, GENAIE_AD_ASSETS_SOURCE="repo")), patch.object(deletion, "live_campaign", side_effect=config.ConfigUnavailable("offline")), patch.object(broadcast, "send_ad") as send:
+        with patch.dict(os.environ, dict(self.env)), patch.object(deletion, "live_campaign", side_effect=config.ConfigUnavailable("offline")), patch.object(broadcast, "send_ad") as send:
             with self.assertRaises(config.ConfigUnavailable): run()
             send.assert_not_called()
     def test_live_group_edits_use_transaction_and_preserve_atomic_failure(self):
