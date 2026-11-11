@@ -720,19 +720,6 @@ def _by_document(membership, enabled):
 
 
 
-def manifest_switches(manifest):
-    """``{slug: bool}`` from deploy/promo-crons.json, read the way the rest of
-    the repo reads it: an absent ``enabled`` means on, a non-boolean is an error."""
-    out = {}
-    for row in (manifest or {}).get("promos") or []:
-        value = row.get("enabled", True)
-        if not isinstance(value, bool):
-            raise ConfigInvalid("promo-crons.json: %s has non-boolean enabled=%r"
-                                % (row.get("slug"), value))
-        out[row["slug"]] = value
-    return out
-
-
 def parity_diff(expected, expected_switches, got, got_switches):
     """Human-readable differences; empty means the copy is exact. Content is
     compared field by field, then order (which decides who a short run reaches),
