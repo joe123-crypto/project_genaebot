@@ -192,20 +192,23 @@ jobs:
         if: ${{ !inputs.ignore_promo_window }}
         timeout-minutes: 50
         # The campaign schedules are operator data in Firestore now, so this
-        # gate asks the gateway over `railway ssh` instead of reading the
-        # checkout. Same token the release step uses; it reads and changes
-        # nothing.
+        # gate asks the gateway for them instead of reading the checkout. It
+        # goes over the console API with a read-scoped token: `railway ssh`
+        # needs a registered SSH key, which a runner cannot have.
         env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          CONSOLE_API_GATE_TOKEN: ${{ secrets.CONSOLE_API_GATE_TOKEN }}
         run: |
-          test -n "$RAILWAY_TOKEN"
+          test -n "$CONSOLE_API_GATE_TOKEN"
           python3 deploy/promo-deploy-window.py --max-wait-minutes 45
       - name: Release or restore the exact previous image
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          # The same read the window gate makes: which crons must come back.
+          CONSOLE_API_GATE_TOKEN: ${{ secrets.CONSOLE_API_GATE_TOKEN }}
           RELEASE_PROFILE: ${{ inputs.profile || 'preserve' }}
         run: |
           test -n "$RAILWAY_TOKEN"
+          test -n "$CONSOLE_API_GATE_TOKEN"
           python3 deploy/railway-release.py --sha "$GITHUB_SHA" \
             --profile "$RELEASE_PROFILE" --report "$RUNNER_TEMP/railway-release.json"
       - name: Retain release provenance and rollback result

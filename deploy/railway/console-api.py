@@ -120,6 +120,14 @@ WRITE_KEY_VAR = "GCP_SERVICE_ACCOUNT_WRITE_B64"
 GROUP_ACTION_KEYS = frozenset(("leave", "clearRecords", "account", "actor"))
 GROUP_ACTIONS_VAR = "GENAIE_GROUP_ACTIONS"
 
+# A second bearer token, for the release gates. They need one read and must not
+# be able to change anything, while CONSOLE_API_TOKEN authorizes every route
+# including the writes and the account controls -- so CI holds this one instead.
+# GATE_ROUTES is deliberately the single read the gates make: the account routes
+# in particular stay out of it, because a link session carries pairing QR data.
+GATE_TOKEN_VAR = "CONSOLE_API_GATE_TOKEN"
+GATE_ROUTES = ("campaigns",)
+
 MIN_TOKEN_LENGTH = 32
 MAX_CONCURRENCY = 2
 CACHE_TTL_SECONDS = 30.0
@@ -695,7 +703,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_any(200, b'{"ok": true}', with_body)
             return
 
-        if not authorized(self.headers.get("Authorization"), config["token"]):
+        if not authorized_read(self.headers.get("Authorization"), config, route):
             self.send_any(401, b'{"error": "unauthorized"}', with_body,
                           headers=(("WWW-Authenticate", "Bearer"),))
             return
@@ -792,11 +800,27 @@ def authorized(header, token):
     return hmac.compare_digest(presented.encode("utf-8"), token.encode("utf-8"))
 
 
+def authorized_read(header, config, route):
+    """The full token on any read, or the gate token on a route it is scoped to."""
+    if authorized(header, config["token"]):
+        return True
+    gate = config.get("gateToken") or ""
+    return bool(gate) and route in GATE_ROUTES and authorized(header, gate)
+
+
 def build_server(bind, port, token, bridge_path, write_path=None,
-                 action_path=None, **kwargs):
+                 action_path=None, gate_token=None, **kwargs):
     if len(token or "") < MIN_TOKEN_LENGTH:
         raise ValueError(
             "CONSOLE_API_TOKEN must be at least %d characters" % MIN_TOKEN_LENGTH)
+    if gate_token:
+        if len(gate_token) < MIN_TOKEN_LENGTH:
+            raise ValueError(
+                "%s must be at least %d characters" % (GATE_TOKEN_VAR, MIN_TOKEN_LENGTH))
+        if hmac.compare_digest(gate_token.encode("utf-8"), token.encode("utf-8")):
+            # Copying CONSOLE_API_TOKEN into the gate variable would hand the
+            # read-scoped holder every write route; refuse rather than pretend.
+            raise ValueError("%s must differ from CONSOLE_API_TOKEN" % GATE_TOKEN_VAR)
     server = ThreadingHTTPServer((bind, port), Handler)
     server.daemon_threads = True
     close_server = server.server_close
@@ -806,7 +830,8 @@ def build_server(bind, port, token, bridge_path, write_path=None,
             server.console["live"].close()
         close_server()
     server.server_close = close
-    server.console = {"live": None, "liveLock": threading.Lock(), "token": token, "bridge": Bridge(bridge_path, **kwargs),
+    server.console = {"live": None, "liveLock": threading.Lock(), "token": token,
+                      "gateToken": gate_token or "", "bridge": Bridge(bridge_path, **kwargs),
                       "accounts": AccountControls(),
                       "writes": WriteBridge(write_path or default_write_bridge()),
                       "schedules": WriteBridge(_volume_bin("console-schedule"), timeout=30),
@@ -833,7 +858,8 @@ def main():
         server = build_server(
             bind, port, token, bridge_path,
             os.environ.get("CONSOLE_WRITE_BIN") or default_write_bridge(),
-            os.environ.get("CONSOLE_GROUP_ACTION_BIN") or default_action_bridge())
+            os.environ.get("CONSOLE_GROUP_ACTION_BIN") or default_action_bridge(),
+            gate_token=os.environ.get(GATE_TOKEN_VAR) or "")
     except ValueError as exc:
         log("%s; refusing to start" % exc)
         return 78

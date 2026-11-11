@@ -324,11 +324,16 @@ campaign its whole day (which is what #184 did to fruit-trees on 2026-11-09).
 It reads the same live list, so a campaign created in the console is visible to
 it -- which it was not while the gate read committed files. If the gateway
 cannot be reached the gate refuses rather than guesses, and the workflow's
-`ignore_promo_window` input is the deliberate override. Which gateway to reach
-is `deploy/gateway_campaigns.py`'s `SCOPE` -- the project, service and
-environment `deploy/railway-release.py` also releases with -- because
-`railway ssh` otherwise wants a directory linked to a Railway project and a CI
-checkout is not one.
+`ignore_promo_window` input is the deliberate override.
+
+How it reads the list depends on who is asking. CI fetches it over the console
+API with `CONSOLE_API_GATE_TOKEN`, a bearer token the API accepts on that one
+route and refuses on every write -- a gate that only reads should not carry the
+authority to change anything. `railway ssh`, which `./deploy/gateway-campaigns.sh`
+uses, is the operator path: it needs an SSH key registered with the Railway
+account, which a GitHub runner has no way to have, and that is why the first
+release after this migration failed its own gate with the gateway healthy. See
+*The release gates' read-scoped token* in `deploy/railway/README.md`.
 
 ### Send spacing and the start jitter
 

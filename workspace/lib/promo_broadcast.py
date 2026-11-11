@@ -707,8 +707,8 @@ def _print_dry_run(jids, weekly, weekday, sent_map, today, image_path, rotating,
         print("\n[dry-run] resolved=%d pending=%d%s"
               % (len(jids), len(pending), suffix))
     if cap_decisions:
-        print("[dry-run] per-group caps are ON for %s (membership.json "
-              "caps_enabled)" % (promo or "this promo"))
+        print("[dry-run] per-group caps are ON for %s (capsEnabled on its "
+              "campaign record)" % (promo or "this promo"))
 
 
 # ----------------------------------------------------------- send spacing ----

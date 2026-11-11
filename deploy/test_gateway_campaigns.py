@@ -13,6 +13,8 @@ import json
 import subprocess
 import sys
 import unittest
+import unittest.mock
+import urllib.error
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -137,6 +139,96 @@ class RunTest(unittest.TestCase):
         with self.assertRaises(gc.Unavailable) as caught:
             gc.read(runner=runner, script="/nonexistent/gateway-campaigns.sh")
         self.assertIn("gateway-campaigns.sh", str(caught.exception))
+
+
+class ConsoleReadTest(unittest.TestCase):
+    """How CI reads the list. `railway ssh` wants an SSH key a runner cannot
+    have, so CI goes over the console API with a read-scoped token instead."""
+
+    TOKEN = "g" * 32
+
+    class Reply:
+        def __init__(self, body):
+            self.body = body.encode("utf-8") if isinstance(body, str) else body
+        def read(self, limit=None):
+            return self.body[:limit] if limit else self.body
+        def __enter__(self):
+            return self
+        def __exit__(self, *rest):
+            return False
+
+    def opener(self, body=None, error=None):
+        self.seen = {}
+        def open_it(request, timeout=None):
+            self.seen = {"url": request.full_url, "timeout": timeout,
+                         "auth": request.get_header("Authorization")}
+            if error is not None:
+                raise error
+            return self.Reply(body)
+        return open_it
+
+    def read(self, **kwargs):
+        return gc.read(env={gc.GATE_TOKEN_VAR: self.TOKEN}, **kwargs)
+
+    def test_it_asks_the_console_api_with_a_bearer_token(self):
+        rows = self.read(opener=self.opener(reply([row("a")])))
+        self.assertEqual(rows[0]["slug"], "a")
+        self.assertEqual(self.seen["url"], gc.CONSOLE_URL + gc.READ_PATH)
+        self.assertEqual(self.seen["auth"], "Bearer " + self.TOKEN)
+
+    def test_the_base_url_can_be_pointed_elsewhere(self):
+        gc.read(env={gc.GATE_TOKEN_VAR: self.TOKEN,
+                     gc.CONSOLE_URL_VAR: "https://staging.example.com/"},
+                opener=self.opener(reply([row("a")])))
+        self.assertEqual(self.seen["url"], "https://staging.example.com" + gc.READ_PATH)
+
+    def test_a_refusal_names_the_status_and_not_the_token(self):
+        for code, word in ((401, "token"), (404, "console api"), (502, "502")):
+            error = urllib.error.HTTPError(gc.CONSOLE_URL, code, "no", {}, None)
+            with self.assertRaises(gc.Unavailable) as caught:
+                self.read(opener=self.opener(error=error))
+            message = str(caught.exception)
+            self.assertIn(str(code), message)
+            self.assertIn(word, message.lower())
+            self.assertNotIn(self.TOKEN, message)
+
+    def test_an_unreachable_console_api_is_named_without_the_token(self):
+        for error in (urllib.error.URLError("no route"), TimeoutError("timed out")):
+            with self.assertRaises(gc.Unavailable) as caught:
+                self.read(opener=self.opener(error=error))
+            self.assertNotIn(self.TOKEN, str(caught.exception))
+            self.assertNotIn(gc.READ_PATH, str(caught.exception))
+
+    def test_junk_over_http_is_not_mistaken_for_an_answer(self):
+        for body in ("not json", "[]", '{"error": "nope"}', "null"):
+            with self.assertRaises(gc.Unavailable):
+                self.read(opener=self.opener(body))
+
+    def test_an_oversized_reply_is_refused_rather_than_half_read(self):
+        # Something other than the console API answered. Truncating the JSON
+        # must fail the read, never yield the campaigns it happened to contain.
+        padded = json.dumps({"date": "2026-11-11", "campaigns": [row("a")],
+                             "pad": "x" * (2 * gc.MAX_REPLY_BYTES)})
+        with self.assertRaises(gc.Unavailable):
+            self.read(opener=self.opener(padded))
+
+    def test_without_a_token_it_uses_the_ssh_wrapper_and_opens_no_socket(self):
+        # The operator path: deploy/gateway-campaigns.sh, which needs no secret.
+        def refuse(*args, **kwargs):
+            raise AssertionError("must not reach the console API")
+        with unittest.mock.patch.object(gc.urllib.request, "urlopen", refuse):
+            rows = gc.read(env={}, runner=lambda *a, **k: Completed(stdout=reply([row("a")])))
+        self.assertEqual(rows[0]["slug"], "a")
+
+    def test_a_blank_token_is_not_a_token(self):
+        rows = gc.read(env={gc.GATE_TOKEN_VAR: "   "},
+                       runner=lambda *a, **k: Completed(stdout=reply([row("a")])))
+        self.assertEqual(rows[0]["slug"], "a")
+
+    def test_the_workflow_hands_both_deploy_steps_the_token(self):
+        workflow = (ROOT / ".github/workflows/deploy-main.yml").read_text(encoding="utf-8")
+        self.assertEqual(workflow.count("CONSOLE_API_GATE_TOKEN: ${{ secrets.CONSOLE_API_GATE_TOKEN }}"), 2)
+        self.assertIn(gc.GATE_TOKEN_VAR, workflow)
 
 
 class ScopeTest(unittest.TestCase):

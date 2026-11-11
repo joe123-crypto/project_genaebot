@@ -21,6 +21,17 @@ export OPENCLAW_TRAJECTORY="${OPENCLAW_TRAJECTORY:-0}"
 export PYTHONDONTWRITEBYTECODE="${PYTHONDONTWRITEBYTECODE:-1}"
 
 log() { echo "[entrypoint] $*"; }
+# A Railway variable can carry surrounding whitespace or one layer of quotes,
+# which a token comparison would simply never match. Same trimming the
+# SECRET_KEYS loop below does inline.
+trimmed() {
+  local val="$1"
+  val="${val#"${val%%[![:space:]]*}"}"
+  val="${val%"${val##*[![:space:]]}"}"
+  val="${val#\"}"; val="${val%\"}"
+  val="${val#\'}"; val="${val%\'}"
+  printf '%s' "$val"
+}
 
 # 0. Seed mode: keep the container alive with an empty/unseeded volume so state
 #    can be pushed in via `railway ssh`. Skips ALL setup and the openclaw.json
@@ -421,6 +432,10 @@ if [ "${GENAIE_CONSOLE_API:-0}" = "1" ]; then
   # about to act on. Capture it, remove it from this environment, and hand it to
   # this one child. Sanitised the same way SECRET_KEYS values are, because a
   # Railway variable can carry surrounding whitespace or quotes.
+  # The release gates' read-scoped token goes the same way: only this child ever
+  # needs it, so it is not in SECRET_KEYS and no campaign run inherits it.
+  console_gate_token="$(trimmed "${CONSOLE_API_GATE_TOKEN:-}")"
+  unset CONSOLE_API_GATE_TOKEN
   console_write_key="${GCP_SERVICE_ACCOUNT_WRITE_B64:-}"
   unset GCP_SERVICE_ACCOUNT_WRITE_B64
   console_write_key="${console_write_key#"${console_write_key%%[![:space:]]*}"}"
@@ -430,13 +445,17 @@ if [ "${GENAIE_CONSOLE_API:-0}" = "1" ]; then
   R2_ACCOUNT_ID="$console_r2_account" R2_BUCKET="$console_r2_bucket" \
   R2_ACCESS_KEY_ID="$console_r2_access" R2_SECRET_ACCESS_KEY="$console_r2_secret" \
   GCP_SERVICE_ACCOUNT_WRITE_B64="$console_write_key" \
+  CONSOLE_API_GATE_TOKEN="$console_gate_token" \
     runuser -u joseph -- python3 /usr/local/bin/console-api.py &
   if [ -n "$console_write_key" ]; then
     log "console api enabled on port ${CONSOLE_API_PORT:-18790} (config writes on)"
   else
     log "console api enabled on port ${CONSOLE_API_PORT:-18790} (read-only: no write key)"
   fi
-  unset console_write_key console_r2_account console_r2_bucket console_r2_access console_r2_secret
+  if [ -n "$console_gate_token" ]; then
+    log "console api accepts the release gates' read-scoped token"
+  fi
+  unset console_write_key console_gate_token console_r2_account console_r2_bucket console_r2_access console_r2_secret
 fi
 unset console_r2_account console_r2_bucket console_r2_access console_r2_secret
 runuser -u joseph -- python3 /usr/local/bin/report-release-ready.py &
