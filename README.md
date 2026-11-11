@@ -324,7 +324,11 @@ campaign its whole day (which is what #184 did to fruit-trees on 2026-11-09).
 It reads the same live list, so a campaign created in the console is visible to
 it -- which it was not while the gate read committed files. If the gateway
 cannot be reached the gate refuses rather than guesses, and the workflow's
-`ignore_promo_window` input is the deliberate override.
+`ignore_promo_window` input is the deliberate override. Which gateway to reach
+is `deploy/gateway_campaigns.py`'s `SCOPE` -- the project, service and
+environment `deploy/railway-release.py` also releases with -- because
+`railway ssh` otherwise wants a directory linked to a Railway project and a CI
+checkout is not one.
 
 ### Send spacing and the start jitter
 

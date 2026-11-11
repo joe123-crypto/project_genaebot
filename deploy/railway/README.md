@@ -222,7 +222,11 @@ As a backstop, the deploy job's *Wait for a quiet promo window* step
 (`deploy/promo-deploy-window.py`) asks the gateway for its live campaign list
 (`deploy/gateway-campaigns.sh`, over the `railway ssh` the deploy job is already
 authenticated for) and holds the release while any enabled campaign may still be
-sending or starts within 20 minutes. "May still be sending" is the engine's
+sending or starts within 20 minutes. `railway ssh` otherwise resolves the
+project from a linked directory and a CI checkout is never linked, so
+`deploy/gateway_campaigns.py` names the project, service and environment itself
+-- the same three ids `deploy/railway-release.py` releases with, defined once
+there and read from the environment by `deploy/gateway-exec.sh`. "May still be sending" is the engine's
 worst case for that campaign's current group count (full start jitter, the
 longest gap between every send and the per-send allowance), capped at its job
 timeout: about 69 minutes for a 46-group campaign. Reading the live list is also
