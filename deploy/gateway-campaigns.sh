@@ -16,6 +16,7 @@
 
 set -euo pipefail
 
+# shellcheck source=deploy/gateway-exec.sh disable=SC1091 # computed path, not followed
 source "$(dirname "${BASH_SOURCE[0]}")/gateway-exec.sh"
 
 # console-read lives on the volume with the rest of the deployed workspace, runs
