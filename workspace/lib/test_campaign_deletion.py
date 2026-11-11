@@ -1,5 +1,6 @@
 """Campaign retirement is irreversible to readers, resumable to workers and safe to retry."""
 import copy
+import hashlib
 import io
 import json
 import os
@@ -267,47 +268,66 @@ class Retirement(unittest.TestCase):
         tool = importlib.util.module_from_spec(spec); spec.loader.exec_module(tool)
         return tool
     def run_upload(self, put):
+        """One ``upload-ad-image.py --write`` against the fake store.
+
+        The tool reads the campaign list and the current index from Firestore
+        now: there is no cron manifest to name the campaigns and no committed
+        mirror of the index to start from, so the only things stubbed are the
+        credentials, the HTTP reads and the bucket itself.
+        """
         from contextlib import ExitStack
         tool = self.tool("upload-ad-image.py")
-        entry = dict(self.store.get("assets", "demo-1"), id="cv-new", campaign="cv", key="ads/cv/%s.png" % SHA)
+        # cv as a data-defined campaign with one picture, which is what this
+        # upload replaces.
+        # Distinct bytes from the demo campaign's picture: keys are content
+        # addressed, so identical bytes would be one object for both campaigns
+        # and this would be a test about deduplication instead.
+        body = BODY + b"-cv"
+        picture = Path(self.tmp.name) / "cv-ad.png"
+        picture.write_bytes(body)
+        self.store.docs["campaigns"]["cv"] = config.encode_fields(
+            {"kind": "console", "name": "CV", "enabled": True, "captions": ["hi"],
+             "schedule": {"time": "11:39", "timezone": "Africa/Harare",
+                          "weekdays": list(range(7))},
+             "timeoutSeconds": 7200, "failureAlertTo": "", "scheduleStatus": "ready",
+             "images": []})
+        key = "ads/cv/%s.png" % hashlib.sha256(body).hexdigest()
         with ExitStack() as stack:
-            stack.enter_context(patch.object(tool, "read_mirror", return_value={"campaigns": {"cv": [entry]}}))
-            stack.enter_context(patch.object(tool, "campaign_dirs", return_value={"cv": Path(self.tmp.name)}))
-            stack.enter_context(patch.object(tool, "from_repo", return_value={"cv": [entry]}))
             stack.enter_context(patch.object(tool, "firestore_credentials", return_value={"project_id": "test"}))
             stack.enter_context(patch.object(tool, "token_for", return_value="test-token"))
             stack.enter_context(patch.object(tool.operator_config, "list_documents", side_effect=lambda project, collection, token, **kwargs: self.store.list(collection)))
-            stack.enter_context(patch.object(tool, "bodies_for", return_value={entry["key"]: BODY}))
             stack.enter_context(patch.object(tool.r2_sigv4, "settings", return_value=("https://r2.example", "pictures", "access", "secret")))
             stack.enter_context(patch.object(tool.r2_sigv4, "put_object", side_effect=put))
             stack.enter_context(patch.object(campaigns, "Store", return_value=self.store))
-            mirror = stack.enter_context(patch.object(tool, "write_mirror"))
             stack.enter_context(patch("sys.stdout", io.StringIO()))
             stack.enter_context(patch("sys.stderr", io.StringIO()))
-            result = tool.main(["upload-ad-image.py", "--seed-from-repo", "--no-env-file", "--write"])
-        return result, entry, mirror
+            result = tool.main(["upload-ad-image.py", "cv", str(picture),
+                                "--no-env-file", "--write"])
+        return result, key
     def test_upload_tool_reserves_keys_and_removes_receipt_after_index_commit(self):
         observed = []
         def put(*args, **kwargs):
             observed.extend(self.store.list("campaign_asset_uploads"))
-        result, entry, mirror = self.run_upload(put)
+        result, key = self.run_upload(put)
         self.assertEqual(result, 0)
         self.assertEqual(len(observed), 1)
-        self.assertEqual(self.store.get("assets", "cv-new")["key"], entry["key"])
+        self.assertEqual(self.store.get("assets", "cv-1")["key"], key)
         self.assertEqual(self.store.list("campaign_asset_uploads"), [])
-        mirror.assert_called_once()
+        # The campaign's own images list is what a run attaches, so indexing a
+        # picture without updating it would upload a swap that never goes out.
+        self.assertEqual([image["key"] for image
+                          in self.store.get("campaigns", "cv")["images"]], [key])
     def test_deletion_during_upload_captures_unindexed_key_and_refuses_index_write(self):
-        result, entry, mirror = self.run_upload(lambda *args, **kwargs: self.retire("cv"))
+        result, key = self.run_upload(lambda *args, **kwargs: self.retire("cv"))
         self.assertEqual(result, 2)
-        self.assertIsNone(self.store.get("assets", "cv-new"))
-        self.assertIn(entry["key"], [asset["key"] for asset in self.store.get("campaign_deletions", "cv")["assets"]])
-        mirror.assert_not_called()
+        self.assertIsNone(self.store.get("assets", "cv-1"))
+        self.assertIn(key, [asset["key"] for asset in self.store.get("campaign_deletions", "cv")["assets"]])
         self.clean("cv")
         self.assertEqual(self.objects, [])
-        for key in self.store.docs["campaign_asset_uploads"]:
-            self.store.docs["campaign_asset_uploads"][key]["expiresAt"] = config.encode_value(0)
+        for receipt in self.store.docs["campaign_asset_uploads"]:
+            self.store.docs["campaign_asset_uploads"][receipt]["expiresAt"] = config.encode_value(0)
         self.clean("cv")
-        self.assertIn(entry["key"], self.objects)
+        self.assertIn(key, self.objects)
     # Seeding the store from the committed file and checking the gateway against
     # the committed manifest are both gone with those files. That a recovery tool
     # cannot undo a retirement is now pinned on the tool that replaced them, in

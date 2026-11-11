@@ -340,7 +340,7 @@ class RunTimeoutFitTests(unittest.TestCase):
         self.assertGreater(lo, 0.0)
         worst = (20 - 1) * hi + 20 * pb.SEND_ALLOWANCE_SECONDS
         self.assertLessEqual(worst, 600)
-        self.assertIn("install-", err.getvalue())  # names the remedy
+        self.assertIn("in the console", err.getvalue())  # names the remedy
 
     def test_every_promo_size_fits_the_legacy_timeout_when_tightened(self):
         for count in range(2, 26):
@@ -575,78 +575,29 @@ class StartJitterTests(unittest.TestCase):
             self.assertLessEqual(worst, 3600, count)
 
 
-class CronTimeoutLookupTests(unittest.TestCase):
-    JOBS = {"jobs": [
-        {"name": "other-promo", "payload": {
-            "argv": ["python3", "/w/cron/other-promo/post_ad.py"],
-            "timeoutSeconds": 123}},
-        {"name": "cv-promo", "payload": {
-            "argv": ["python3", "/home/joseph/.openclaw/workspace/cron/cv-promo/post_cv_ad.py"],
-            "timeoutSeconds": 600}},
-    ]}
+class RunTimeoutSourceTests(unittest.TestCase):
+    """Where the run learns the timeout it has to fit inside.
 
-    def setUp(self):
-        self._saved_run = pb.subprocess.run
-        self._saved_env = os.environ.pop("PROMO_RUN_TIMEOUT_SECONDS", None)
+    It used to ask the gateway, because the timeout lived only in the gateway's
+    cron state: merging a longer one into an installer changed nothing until the
+    installer was re-run. It is a field on the campaign document now, which the
+    run has already read, so there is no lookup left -- and the campaign's own
+    runner has to pass it, or every run would plan as if it had forever.
+    """
 
-    def tearDown(self):
-        pb.subprocess.run = self._saved_run
-        if self._saved_env is None:
-            os.environ.pop("PROMO_RUN_TIMEOUT_SECONDS", None)
-        else:
-            os.environ["PROMO_RUN_TIMEOUT_SECONDS"] = self._saved_env
+    def test_the_runner_passes_the_campaigns_own_timeout(self):
+        import console_campaigns
+        source = Path(console_campaigns.__file__).read_text(encoding="utf-8")
+        call = source[source.index("def run_campaign"):]
+        self.assertIn('cron_timeout=campaign["timeoutSeconds"]', call)
 
-    def _stub(self, stdout="", returncode=0, raises=None):
-        def run(cmd, **kwargs):
-            if raises:
-                raise raises
-            return type("P", (), {"returncode": returncode, "stdout": stdout,
-                                  "stderr": ""})()
-        pb.subprocess.run = run
+    def test_nothing_asks_the_gateway_for_a_timeout_any_more(self):
+        self.assertFalse(hasattr(pb, "cron_timeout_seconds"))
+        source = Path(pb.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("PROMO_RUN_TIMEOUT_SECONDS", source)
 
-    def test_reads_the_timeout_of_this_script_s_own_job(self):
-        self._stub(json.dumps(self.JOBS))
-        with redirect_stderr(io.StringIO()):
-            self.assertEqual(
-                pb.cron_timeout_seconds("/any/where/cv-promo/post_cv_ad.py"), 600.0)
-
-    def test_no_matching_job_means_no_limit(self):
-        self._stub(json.dumps(self.JOBS))
-        with redirect_stderr(io.StringIO()):
-            self.assertIsNone(
-                pb.cron_timeout_seconds("/any/where/manual-run/post_ad.py"))
-
-    def test_lookup_failures_are_not_fatal(self):
-        for stub in ({"stdout": "not json"}, {"returncode": 1},
-                     {"raises": OSError("boom")}, {"stdout": "{}"}):
-            self._stub(**stub)
-            with redirect_stderr(io.StringIO()):
-                self.assertIsNone(
-                    pb.cron_timeout_seconds("/w/cv-promo/post_cv_ad.py"), stub)
-
-    def test_job_without_a_timeout_is_unbounded(self):
-        self._stub(json.dumps({"jobs": [{"name": "cv-promo", "payload": {
-            "argv": ["python3", "/w/cron/cv-promo/post_cv_ad.py"]}}]}))
-        with redirect_stderr(io.StringIO()) as err:
-            self.assertIsNone(pb.cron_timeout_seconds("/w/cv-promo/post_cv_ad.py"))
-        self.assertNotIn("timeoutSeconds", err.getvalue())  # absent, not invalid
-
-    def test_a_bare_script_name_matches_nothing(self):
-        """Four promos share the file name post_ad.py, so a path with no promo
-        directory must not match one of them by accident."""
-        self._stub(json.dumps(self.JOBS))
-        self.assertIsNone(pb.cron_timeout_seconds("/post_cv_ad.py"))
-
-    def test_env_override_wins_and_zero_means_unlimited(self):
-        self._stub(json.dumps(self.JOBS))
-        os.environ["PROMO_RUN_TIMEOUT_SECONDS"] = "1200"
-        self.assertEqual(pb.cron_timeout_seconds("/w/cv-promo/post_cv_ad.py"), 1200.0)
-        os.environ["PROMO_RUN_TIMEOUT_SECONDS"] = "0"
-        self.assertIsNone(pb.cron_timeout_seconds("/w/cv-promo/post_cv_ad.py"))
-        os.environ["PROMO_RUN_TIMEOUT_SECONDS"] = "later"
-        with redirect_stderr(io.StringIO()):  # rejected -> falls back to lookup
-            self.assertEqual(pb.cron_timeout_seconds("/w/cv-promo/post_cv_ad.py"),
-                             600.0)
+    def test_no_timeout_leaves_the_configured_gaps_alone(self):
+        self.assertEqual(pb.fit_gap_bounds(20.0, 60.0, 20, None), (20.0, 60.0))
 
 
 if __name__ == "__main__":

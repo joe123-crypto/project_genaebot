@@ -11,15 +11,18 @@ import { getServiceStatePath } from "./state.js";
 // code such as "BH-7K2" in a wa.me click-to-chat link whose prefilled text reads
 // "Hi, I saw your borehole ad (ref BH-7K2)". When such a DM reaches the bot this
 // module counts the ref so Joe can see which ads/groups drive replies. Decode a
-// code to its promo + group with `post_ad.py --refs`.
+// code to its campaign + group with `run-console-campaign <slug> --refs`.
 //
 // Observe-only: it never replies, never claims the message, and never throws, so
 // the reply flow (intake, CV order, seller referral, agent) is unchanged.
 //
-// Only the promo prefixes below are matched (a bare "AB-123" in a message is not
-// counted). Keep this list in sync with the TRACKING prefixes in
-// workspace/cron/*-promo/post_*.py. The suffix uses promo_broadcast's REF_ALPHABET
-// (Crockford base32: no I, L, O, U) and REF_CODE_LEN (3).
+// Only the campaign prefixes below are matched (a bare "AB-123" in a message is
+// not counted). Each campaign's prefix is operator data, on its own Firestore
+// document under `tracking.prefix`, so the two can only be compared against the
+// live store: deploy/gateway_campaigns.py does that on every release and warns
+// about a campaign whose prefix is missing here, because its leads would go
+// uncounted. The suffix uses promo_broadcast's REF_ALPHABET (Crockford base32:
+// no I, L, O, U) and REF_CODE_LEN (3).
 // ---------------------------------------------------------------------------
 
 export const AD_REF_PREFIXES = ["BH", "BM", "BP", "CV", "FT", "GA", "GL", "GN", "IL", "PB", "SK"];

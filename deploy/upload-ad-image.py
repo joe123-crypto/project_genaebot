@@ -7,28 +7,36 @@ HTTPS (see workspace/lib/ad_assets.py). This script is the only thing that
 writes either, and it runs on the operator's machine: the R2 write credentials
 never go into the container or into Railway's service variables.
 
-Three modes, and the default writes nothing:
+Two modes, and the default writes nothing:
 
-    upload-ad-image.py --seed-from-repo         show what the baked images imply
-    upload-ad-image.py --seed-from-repo --write  upload + index all of them
-    upload-ad-image.py cv ~/new-cv-ad.png --write     replace one campaign's art
-    upload-ad-image.py --verify                 read Firestore back, diff the mirror
+    upload-ad-image.py cv ~/new-cv-ad.png            show what it would do
+    upload-ad-image.py cv ~/new-cv-ad.png --write    upload + index it
+    upload-ad-image.py --verify                      index vs bucket
 
-``--verify`` is the parity gate. deploy/ad-assets.json is a mirror, and a mirror
-that is allowed to drift is worse than none, so this reads the index back
-through the same code production uses and fails unless the two agree.
+``--verify`` is the parity gate. It used to diff the index against a committed
+mirror of it, deploy/ad-assets.json; both the mirror and the baked
+``workspace/cron/*/assets`` the mirror was seeded from are gone, so there is
+nothing in the repository left to compare. What matters now is the pair that is
+actually load-bearing: every picture the index names must be an object in the
+bucket, or a run fetches a 404 and posts nothing. So --verify lists the bucket
+and reports an index entry with no object (which breaks a campaign) and an
+object no entry names (which only wastes space).
 
 Keys are content-addressed -- ``ads/<slug>/<sha256>.<ext>`` -- so an object is
 immutable, no CDN or edge cache can serve stale bytes, and a cached file's name
 proves its contents. Replacing a picture writes a new object and repoints the
 index; it never overwrites one.
 
+Every campaign is data-defined, so its own document carries the ``images`` a run
+attaches. Indexing a picture therefore updates both the index and that list, in
+one transaction: writing only the index would upload a swap that never goes out.
+
 Credentials:
   Firestore  a key with Cloud Datastore User, via --key or GCP_SERVICE_ACCOUNT_FILE.
              Use the seed key, not the production runtime key, which is read-only.
   R2         R2_ACCOUNT_ID (or --endpoint), R2_BUCKET, R2_ACCESS_KEY_ID,
              R2_SECRET_ACCESS_KEY. An S3 API token scoped to the one bucket is
-             enough; it needs object write, not bucket admin.
+             enough; --verify needs list as well as object write.
 
 Both are read from ~/.config/genaie/r2-upload.env when it exists (override with
 --env-file, skip with --no-env-file); anything already in the environment wins.
@@ -61,20 +69,12 @@ import ad_assets  # noqa: E402
 import console_campaigns  # noqa: E402
 import operator_config  # noqa: E402
 import operator_writer  # noqa: E402
-import promo_config  # noqa: E402
 import r2_sigv4  # noqa: E402
 
-MIRROR = ROOT / "deploy" / "ad-assets.json"
-MANIFEST = ROOT / "deploy" / "promo-crons.json"
-CRON = ROOT / "workspace" / "cron"
 RANK_STEP = operator_writer.RANK_STEP
-MIRROR_VERSION = 1
-MIRROR_COMMENT = (
-    "Mirror of the Firestore 'assets' collection: which image each campaign "
-    "rotates, its R2 key and its digest. Firestore is canonical; this file is "
-    "the seed input, the record of what went live when, and what "
-    "deploy/upload-ad-image.py --verify checks the store against. Generated -- "
-    "edit by running that script, not by hand.")
+# Every key this script writes lives under here, so it is also what --verify
+# lists: an object outside it is not an ad picture and is none of our business.
+KEY_PREFIX = "ads/"
 # Magic bytes, because content_type decides how the gateway treats the file and
 # a mislabelled image is refused at send time, long after the upload.
 MAGIC = ((b"\xff\xd8\xff", "image/jpeg"), (b"\x89PNG\r\n\x1a\n", "image/png"))
@@ -85,35 +85,10 @@ class UploadError(Exception):
 
 
 # -------------------------------------------------------------------- read ----
-def campaign_dirs():
-    """``{slug: Path}`` for every campaign the cron manifest declares."""
-    try:
-        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        raise UploadError("%s is missing" % MANIFEST)
-    except ValueError as ex:
-        raise UploadError("%s is not valid JSON: %s" % (MANIFEST, ex))
-    out = {}
-    for job in manifest.get("promos") or []:
-        name = job.get("name")
-        slug = job.get("slug") or promo_config.promo_key(name or "")
-        if name and slug:
-            out[slug] = CRON / name
-    if not out:
-        raise UploadError("%s declares no campaigns" % MANIFEST)
-    return out
-
-
-def read_mirror():
-    try:
-        data = json.loads(MIRROR.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return {"campaigns": {}}
-    except ValueError as ex:
-        raise UploadError("%s is not valid JSON: %s" % (MIRROR, ex))
-    if not isinstance(data.get("campaigns"), dict):
-        raise UploadError("%s has no campaigns map" % MIRROR)
-    return data
+# What the campaigns are, and what each one's pictures are, both come from
+# Firestore now. The two readers that used to be here -- the cron manifest for
+# the campaign list and deploy/ad-assets.json for the index -- are gone with
+# those files.
 
 
 def allocate_id(slug, taken):
@@ -137,10 +112,10 @@ def validate_campaign(slug, entries):
     """Refuse an index this tool should never produce, before anything is written.
 
     Firestore writes are keyed by document id, so two entries sharing one would
-    collapse into a single write and lose a picture while the mirror kept both.
-    Duplicate ranks and filenames are refused for the same reason the mirror test
-    in CI refuses them: the rotation order and the shadow comparison both key on
-    them."""
+    collapse into a single write and lose a picture. Duplicate ranks and
+    filenames are refused for the same reason: the rotation order keys on rank,
+    and a campaign's own ``images`` list keys on filename, so two entries
+    sharing either make the rotation a coin toss."""
     for field in ("id", "rank", "filename"):
         seen = {}
         for entry in entries:
@@ -184,60 +159,13 @@ def describe(slug, path, rank, doc_id):
     return entry, body
 
 
-def declared_order(directory):
-    """The image filenames the campaign's post script names, in the order it
-    names them.
-
-    Rotation is ``assets[date.today().toordinal() % len(assets)]``, so the order
-    decides which picture goes out on which day. Two campaigns declare an order
-    that is not alphabetical (``cv-ad.png`` before ``cv-ad-2.png``,
-    ``genaie-leads.png`` before ``genaie-leads-2.png``), and seeding them sorted
-    would silently shift their rotation by a day. So the order comes from the
-    script, read as text rather than imported: the seed must not depend on ten
-    cron modules being importable."""
-    order = []
-    for script in sorted(directory.glob("post*.py")):
-        for name in ad_assets.SOURCE_IMAGE_RE.findall(
-                script.read_text(encoding="utf-8")):
-            if name not in order:
-                order.append(name)
-    return order
-
-
-def from_repo(dirs):
-    """The index the baked assets imply: every campaign's own ``assets/``,
-    ranked so the rotation order matches what its post script lists today."""
-    campaigns = {}
-    for slug, directory in sorted(dirs.items()):
-        assets = directory / ad_assets.ASSETS_DIRNAME
-        if not assets.is_dir():
-            continue
-        present = dict((p.name, p) for p in assets.iterdir()
-                       if p.is_file() and ad_assets.FILENAME_RE.match(p.name))
-        order = [n for n in declared_order(directory) if n in present]
-        # A file in assets/ the script never names is not in the rotation today,
-        # so it must not be ranked ahead of one that is -- but it is still an
-        # asset the campaign ships, so it is indexed after them.
-        order += sorted(n for n in present if n not in order)
-        entries, taken = [], set()
-        for position, name in enumerate(order, start=1):
-            doc_id = allocate_id(slug, taken)
-            taken.add(doc_id)
-            entry, _body = describe(slug, present[name], position * RANK_STEP,
-                                    doc_id)
-            entries.append(entry)
-        if entries:
-            validate_campaign(slug, entries)
-            campaigns[slug] = entries
-    return campaigns
-
-
 def with_files(campaigns, slug, paths, rank=None, replace=None, disable=None,
                comment=None):
     """``campaigns`` with ``paths`` added to ``slug``, as a new campaigns map.
 
-    Takes and returns the same shape -- the ``{slug: [entry]}`` map, not the
-    whole mirror document -- so calls compose. The argument is never mutated."""
+    Takes and returns the same shape -- the ``{slug: [entry]}`` map that
+    ``ad_assets._assemble`` hands back -- so calls compose. The argument is
+    never mutated."""
     campaigns = dict((k, [dict(e) for e in v]) for k, v in campaigns.items())
     entries = campaigns.get(slug, [])
     for name in disable or []:
@@ -280,27 +208,28 @@ def with_files(campaigns, slug, paths, rank=None, replace=None, disable=None,
     return campaigns
 
 
-def bodies_for(dirs, campaigns, extra_paths):
-    """``{key: body}`` for every entry whose bytes this run can actually find.
+def bodies_for(campaigns, paths):
+    """``{key: body}`` for every entry this run has the bytes of.
 
-    An entry already in the mirror whose file has left the repo has nothing to
-    upload -- its object is in R2 already, which ``--verify`` is there to
-    confirm."""
+    Only the files named on the command line: an entry already in the index has
+    its object in the bucket, which is what ``--verify`` is there to confirm.
+    There used to be a second source here -- each campaign's committed
+    ``assets/`` directory -- and seeding from it is what first filled the bucket.
+    """
     found = {}
-    for path in extra_paths:
+    for path in paths:
         body = Path(path).read_bytes()
         found[hashlib.sha256(body).hexdigest()] = body
-    for slug, directory in dirs.items():
-        assets = directory / ad_assets.ASSETS_DIRNAME
-        if not assets.is_dir():
-            continue
-        for path in assets.iterdir():
-            if path.is_file() and ad_assets.FILENAME_RE.match(path.name):
-                body = path.read_bytes()
-                found.setdefault(hashlib.sha256(body).hexdigest(), body)
     return dict((e["key"], found[e["sha256"]])
                 for entries in campaigns.values() for e in entries
                 if e["sha256"] in found)
+
+
+def bucket_keys(endpoint, bucket, *, access_key, secret_key, opener=None):
+    """``{key: size}`` for every ad object in the bucket."""
+    return dict((obj["key"], obj["bytes"]) for obj in r2_sigv4.list_objects(
+        endpoint, bucket, prefix=KEY_PREFIX, access_key=access_key,
+        secret_key=secret_key, opener=opener))
 
 
 # ------------------------------------------------------------------- write ----
@@ -347,13 +276,13 @@ def plan(campaigns, existing):
     return writes, strays
 
 
-def converted_rotations(campaigns, data_defined):
-    """``{slug: images}`` for every data-defined campaign whose own ``images``
-    list no longer matches the index being written.
+def rotations(campaigns, data_defined):
+    """``{slug: images}`` for every campaign whose own ``images`` list no longer
+    matches the index being written.
 
-    A campaign converted from this repo runs from the ``images`` on its own
-    document, not from the index, so indexing a new picture has to update both
-    or the swap would be uploaded, mirrored and never sent."""
+    A run attaches the pictures on the campaign's own document, not the ones in
+    the index, so indexing a new picture has to update both or the swap would be
+    uploaded, indexed and never sent."""
     out = {}
     for slug, entries in campaigns.items():
         if slug not in data_defined:
@@ -367,31 +296,30 @@ def converted_rotations(campaigns, data_defined):
     return out
 
 
-def write_mirror(campaigns):
-    payload = {"_comment": MIRROR_COMMENT, "version": MIRROR_VERSION,
-               "campaigns": dict(sorted(campaigns.items()))}
-    MIRROR.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
-                      encoding="utf-8")
+def bucket_diff(indexed, present):
+    """Lines naming every way the index and the bucket disagree.
 
-
-def mirror_diff(campaigns, got):
-    """Lines naming every way the store and the mirror disagree."""
-    problems = []
-    for slug in sorted(set(campaigns) | set(got)):
-        want = dict((e["id"], fields_of(e)) for e in campaigns.get(slug) or [])
-        have = dict((e["id"], fields_of(e)) for e in got.get(slug) or [])
-        for doc_id in sorted(set(want) | set(have)):
-            if doc_id not in have:
-                problems.append("%s is in the mirror and not in Firestore" % doc_id)
-            elif doc_id not in want:
-                problems.append("%s is in Firestore and not in the mirror" % doc_id)
-            elif want[doc_id] != have[doc_id]:
-                for field in sorted(set(want[doc_id]) | set(have[doc_id])):
-                    if want[doc_id].get(field) != have[doc_id].get(field):
-                        problems.append("%s.%s: mirror %r, Firestore %r"
-                                        % (doc_id, field, want[doc_id].get(field),
-                                           have[doc_id].get(field)))
-    return problems
+    An index entry with no object is the one that breaks a campaign: the run
+    fetches its bytes before it posts anything, so a missing object costs that
+    campaign its whole day. An object nothing names is only wasted space, and is
+    expected for a short while after a picture is replaced, so it is reported
+    separately and does not fail the gate on its own."""
+    problems, orphans = [], []
+    named = {}
+    for slug in sorted(indexed):
+        for entry in indexed[slug]:
+            named[entry["key"]] = entry
+            if entry["key"] not in present:
+                problems.append("%s names %s, which is not in the bucket"
+                                % (entry["id"], entry["key"]))
+            elif present[entry["key"]] != entry["bytes"]:
+                problems.append("%s says %s is %d bytes; the bucket has %d"
+                                % (entry["id"], entry["key"], entry["bytes"],
+                                   present[entry["key"]]))
+    for key in sorted(present):
+        if key not in named:
+            orphans.append("%s is in the bucket and no index entry names it" % key)
+    return problems, orphans
 
 
 # -------------------------------------------------------------------- main ----
@@ -399,14 +327,13 @@ def main(argv):
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("campaign", nargs="?", help="campaign slug, e.g. cv")
     parser.add_argument("files", nargs="*", help="image files to upload")
-    parser.add_argument("--seed-from-repo", action="store_true",
-                        help="index every image baked into workspace/cron/*/assets")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--write", action="store_true", help="apply the changes")
     mode.add_argument("--verify", action="store_true",
-                      help="read Firestore back and diff the mirror")
+                      help="check every indexed picture against the bucket")
     parser.add_argument("--prune", action="store_true",
-                        help="with --write, delete index documents the mirror lacks")
+                        help="with --write, delete index documents this change "
+                             "drops")
     parser.add_argument("--rank", type=int, help="rotation slot for the first file")
     parser.add_argument("--replace", metavar="FILENAME",
                         help="take over this indexed image's rotation slot")
@@ -425,10 +352,10 @@ def main(argv):
 
     if args.prune and not args.write:
         parser.error("--prune only makes sense with --write")
-    if args.seed_from_repo and (args.campaign or args.files):
-        parser.error("--seed-from-repo takes the whole repo; name no campaign")
-    if not args.seed_from_repo and not args.verify and not args.campaign:
-        parser.error("name a campaign and its files, or pass --seed-from-repo")
+    if args.verify and (args.campaign or args.files):
+        parser.error("--verify checks the whole index; name no campaign")
+    if not args.verify and not args.campaign:
+        parser.error("name a campaign and its files, or pass --verify")
 
     try:
         if not args.no_env_file:
@@ -436,65 +363,63 @@ def main(argv):
                                             required=bool(args.env_file))
             if loaded:
                 print("credentials from %s" % loaded)
-        dirs = campaign_dirs()
-        mirror = read_mirror()
-        if args.seed_from_repo:
-            campaigns = from_repo(dirs)
-        elif args.campaign:
-            if args.campaign not in dirs:
-                raise UploadError("%r is not a campaign in %s (try: %s)"
-                                  % (args.campaign, MANIFEST.name,
-                                     ", ".join(sorted(dirs))))
-            if not args.files and not args.disable:
-                raise UploadError("name at least one image file, or use --disable")
-            campaigns = with_files(mirror.get("campaigns") or {}, args.campaign,
-                                   args.files, rank=args.rank,
-                                   replace=args.replace, disable=args.disable,
-                                   comment=args.comment)
-        else:
-            campaigns = mirror.get("campaigns") or {}
-
-        for slug, entries in sorted(campaigns.items()):
-            validate_campaign(slug, entries)
         creds = firestore_credentials(args.key)
         with tempfile.TemporaryDirectory() as cache:
             token = token_for(creds, cache)
             rows = operator_config.list_documents(
                 creds["project_id"], ad_assets.COLLECTION, token,
                 opener=urllib.request.urlopen, sleep=time.sleep)
-            # Console-created campaigns are canonical in Firestore, not mirrored
-            # in this repo. Never flag or prune their assets as repo drift.
             campaigns_raw = operator_config.list_documents(
                 creds["project_id"], "campaigns", token,
                 opener=urllib.request.urlopen, sleep=time.sleep)
-            data_defined = {slug: operator_config.decode_fields(fields) for slug, fields in campaigns_raw}
-            deleted = {slug for slug, doc in data_defined.items() if doc.get("deleted") is True}
+            everything = {slug: operator_config.decode_fields(fields)
+                          for slug, fields in campaigns_raw}
+            deleted = {slug for slug, doc in everything.items() if doc.get("deleted") is True}
             if args.campaign in deleted:
                 raise UploadError("this campaign has been deleted")
-            campaigns = {slug: entries for slug, entries in campaigns.items() if slug not in deleted}
-            data_defined = {slug: doc for slug, doc in data_defined.items()
+            data_defined = {slug: doc for slug, doc in everything.items()
                             if doc.get("kind") == "console" and slug not in deleted}
-            # Converted repo campaigns remain part of the picture mirror.
-            console_slugs = set(data_defined) - set(dirs)
+            # A retired campaign's pictures belong to the deletion's own cleanup,
+            # which removes them on its own schedule. Never plan around them.
             rows = [(doc_id, fields) for doc_id, fields in rows
-                    if operator_config.decode_fields(fields).get("campaign") not in console_slugs | deleted]
+                    if operator_config.decode_fields(fields).get("campaign") not in deleted]
             indexed, quarantined = ad_assets._assemble(rows)
 
             if args.verify:
                 problems = ["%s is not a usable index document: %s" % (doc_id, why)
                             for doc_id, why in sorted(quarantined.items())]
-                problems += mirror_diff(campaigns, indexed)
+                endpoint, bucket, access, secret = r2_sigv4.settings(
+                    endpoint=args.endpoint, bucket=args.bucket)
+                print("R2 target: %s" % r2_sigv4.target(endpoint, bucket))
+                present = bucket_keys(endpoint, bucket, access_key=access,
+                                      secret_key=secret)
+                missing, orphans = bucket_diff(indexed, present)
+                problems += missing
                 for problem in problems:
                     print("DRIFT  %s" % problem)
-                print("parity: %s (%d campaigns, %d images)" % (
-                    "FAILED" if problems else "exact", len(indexed),
-                    sum(len(v) for v in indexed.values())))
+                for orphan in orphans:
+                    print("SPARE  %s" % orphan)
+                print("parity: %s (%d campaigns, %d images, %d object(s), %d spare)"
+                      % ("FAILED" if problems else "exact", len(indexed),
+                         sum(len(v) for v in indexed.values()), len(present),
+                         len(orphans)))
                 return 1 if problems else 0
+
+            if args.campaign not in data_defined:
+                raise UploadError("%r is not a campaign in the store (try: %s)"
+                                  % (args.campaign, ", ".join(sorted(data_defined))))
+            if not args.files and not args.disable:
+                raise UploadError("name at least one image file, or use --disable")
+            campaigns = with_files(indexed, args.campaign, args.files,
+                                   rank=args.rank, replace=args.replace,
+                                   disable=args.disable, comment=args.comment)
+            for slug, entries in sorted(campaigns.items()):
+                validate_campaign(slug, entries)
 
             existing = dict((e["id"], fields_of(e))
                             for entries in indexed.values() for e in entries)
             writes, strays = plan(campaigns, existing)
-            bodies = bodies_for(dirs, campaigns, args.files)
+            bodies = bodies_for(campaigns, args.files)
             uploads = [(e["key"], e["filename"], e["bytes"], e["content_type"])
                        for entries in sorted(campaigns.items())
                        for e in entries[1] if e["key"] in bodies]
@@ -506,10 +431,10 @@ def main(argv):
             for _collection, doc_id in strays:
                 print("%s %s/%s" % ("DELETE " if args.prune else "STRAY  ",
                                     ad_assets.COLLECTION, doc_id))
-            rotations = converted_rotations(campaigns, data_defined)
-            for slug in sorted(rotations):
+            needed = rotations(campaigns, data_defined)
+            for slug in sorted(needed):
                 print("UPDATE  campaigns/%s.images (%d picture(s))"
-                      % (slug, len(rotations[slug])))
+                      % (slug, len(needed[slug])))
             print("%d object(s) to upload, %d document(s) to write, %d stray%s"
                   % (len(uploads), len(writes), len(strays),
                      "" if args.prune or not strays else " (kept; --prune deletes them)"))
@@ -569,7 +494,7 @@ def main(argv):
                                "currentDocument": {"exists": exists}}
                               for collection, key, fields, exists in writes]
                 operations += [{"delete": "%s/%s/%s" % (store.base, collection, key)} for collection, key in (strays if args.prune else [])]
-                for slug, images in rotations.items():
+                for slug, images in needed.items():
                     if current.get(slug, {}).get("kind") != "console":
                         raise UploadError("campaign conversion changed during upload; refresh the plan")
                     operations.append({"update": {"name": "%s/campaigns/%s" % (store.base, slug),
@@ -583,9 +508,9 @@ def main(argv):
                 store.transaction = None
             finally:
                 store.rollback()
-            write_mirror({**{slug: entries for slug, entries in mirror.get("campaigns", {}).items() if slug in deleted}, **campaigns})
-            print("indexed in project %s; %s rewritten -- commit it"
-                  % (creds["project_id"], MIRROR.relative_to(ROOT)))
+            print("indexed in project %s; nothing to commit -- the index and "
+                  "the bytes both live outside this repository now"
+                  % creds["project_id"])
             return 0
     except (UploadError, r2_sigv4.R2Error) as ex:
         sys.stderr.write("upload-ad-image: %s\n" % ex)

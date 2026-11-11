@@ -64,7 +64,7 @@ case "$_gateway_mode" in
     ;;
 esac
 
-# Exported so a nested installer (install-promo.sh sourcing, pair scripts) sees
-# the same resolved mechanism rather than re-deriving it.
+# Exported so a script that sources this one (the pair scripts, the campaign
+# read) sees the same resolved mechanism rather than re-deriving it.
 GATEWAY_EXEC_MODE="$_gateway_mode"
 unset _gateway_mode _gateway_docker _gateway_container _gateway_railway

@@ -18,8 +18,11 @@
 Admin failure alerts go to the admin WhatsApp: **+213563719936** (Joe's day-to-day admin number; +263785632943 is the Zimbabwe number and is NOT in WhatsApp allowFrom).
 
 The live jobs are the promo ad crons (cv-promo, genaie-promo, fruit-trees-promo
-and the rest in `deploy/promo-crons.json`). Each has an installer under `deploy/`
-and is documented in the repo README. The Vacancy Lamp and Hustlers Marketplace
+and the rest). Every campaign is one `campaigns/<slug>` document in Firestore --
+its copy, pictures, schedule, group list and switch -- and every job runs the one
+shared `workspace/bin/run-console-campaign <slug>`. There are no per-campaign
+scripts or installers in the repository any more; campaigns are created and
+edited in the console. The Vacancy Lamp and Hustlers Marketplace
 job feeds, their scrapers and cache refresh are retired. Both groups remain
 available for their configured promotions. Job Scout (per-user job hunting and
 applications) is no longer a service: do not offer it or answer as if it runs.
