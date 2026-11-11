@@ -115,20 +115,30 @@ await d.scan(); d.stop();''' % (json.dumps(helper), json.dumps(STAMP))
         self.assertEqual((row["jid"], row["name"]), ("9@g.us", "Live subject"))
         self.assertNotIn("private", json.dumps(row))
 
-    def test_console_uses_the_effective_membership_for_all_config_modes(self):
+    def test_the_console_leaves_out_groups_the_config_already_knows(self):
+        """A configured group is not "unassigned", whatever its status.
+
+        This used to be asserted once per config source, when the console could
+        be reading the committed membership file instead of the store. There is
+        one source now, so what is left to pin is the thing that actually
+        matters: an on-hold, admin-only or deliberately cleared record still
+        suppresses the group, which is what keeps the Unassigned list a list of
+        genuinely new groups."""
         loader = importlib.machinery.SourceFileLoader("discovery_console_test", str(ROOT / "workspace/bin/console-read"))
         spec = importlib.util.spec_from_loader(loader.name, loader)
         console = importlib.util.module_from_spec(spec)
         loader.exec_module(console)
         self.save(groups={"1@g.us": {"name": "Known", "firstSeenAt": STAMP, "lastSeenAt": STAMP},
                           "2@g.us": {"name": "New", "firstSeenAt": STAMP, "lastSeenAt": STAMP}})
-        membership = copy.deepcopy(console.membership())
-        membership["groups"]["1@g.us"] = {"name": "Configured", "status": "on-hold", "promos": []}
-        for mode in ("file", "shadow", "firestore"):
-            with self.subTest(mode=mode), patch.dict(os.environ, self.env), \
+        sys.path.insert(0, str(ROOT / "deploy"))
+        import promo_fixture
+        membership = copy.deepcopy(promo_fixture.membership())
+        for status in ("on-hold", "admin-only", "not-a-member"):
+            membership["groups"]["1@g.us"] = {"name": "Configured", "status": status, "promos": []}
+            with self.subTest(status=status), patch.dict(os.environ, self.env), \
                  patch.object(console.promo_config, "resolve", return_value={
-                     "membership": membership, "mode": mode, "source": "file" if mode != "firestore" else "firestore",
-                     "switches": {}, "report": {}, "notes": []}), \
+                     "membership": membership, "mode": "firestore", "source": "firestore",
+                     "switches": {}, "storeSwitches": {}, "report": {}, "notes": []}), \
                  patch.object(console.sys, "stdout") as output:
                 console._RESOLVED.clear()
                 self.assertEqual(console.main(["groups", "--date", "2026-11-08"]), 0)

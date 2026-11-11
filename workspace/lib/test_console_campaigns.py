@@ -279,13 +279,13 @@ class Creation(unittest.TestCase):
         loader = importlib.machinery.SourceFileLoader("campaign_preview_test", str(Path(__file__).resolve().parents[1] / "bin/console-read"))
         spec = importlib.util.spec_from_loader(loader.name, loader)
         bridge = importlib.util.module_from_spec(spec); loader.exec_module(bridge)
-        with patch.object(bridge, "resolved", return_value=source), patch.object(bridge, "manifest", return_value={"promos": []}):
+        with patch.object(bridge, "resolved", return_value=source):
             preview = bridge.preview("demo", dt.date(2026, 11, 10))
         self.assertTrue(preview["enabled"])
         self.assertTrue(all(row["sendsToday"] for row in preview["groups"]))
         self.assertEqual({row["account"] for row in preview["groups"]}, {"default", "ads"})
 
-    def test_a_converted_campaign_is_listed_once_from_the_store(self):
+    def test_a_campaign_is_listed_once_from_the_store(self):
         self.data["enabled"] = True
         self.create()
         self.store.docs["campaigns"]["demo"].update(config.encode_fields({"scheduleStatus": "ready", "jobName": "demo-promo"}))
@@ -295,10 +295,9 @@ class Creation(unittest.TestCase):
         loader = importlib.machinery.SourceFileLoader("campaign_records_test", str(Path(__file__).resolve().parents[1] / "bin/console-read"))
         spec = importlib.util.spec_from_loader(loader.name, loader)
         bridge = importlib.util.module_from_spec(spec); loader.exec_module(bridge)
-        # Still declared, with a script that no longer needs to exist.
-        declared = {"promos": [{"slug": "demo", "name": "demo-promo", "cron": "5 9 * * *", "tz": "Africa/Harare",
-                                "script": "/home/joseph/.openclaw/workspace/cron/demo-promo/post_ad.py"}]}
-        with patch.object(bridge, "resolved", return_value=source), patch.object(bridge, "manifest", return_value=declared):
+        # A campaign carrying a jobName -- one converted from a post script --
+        # is listed from the store like any other, under the job it kept.
+        with patch.object(bridge, "resolved", return_value=source):
             rows = [row for row in bridge.campaign_records(dt.date(2026, 11, 9)) if row["slug"] == "demo"]
         self.assertEqual([(row["source"], row["jobName"], row["error"]) for row in rows], [("console", "demo-promo", None)])
         self.assertEqual(rows[0]["captions"], ["Hello {bot_number}"])

@@ -416,17 +416,15 @@ def ad_assets_status():
     ran last. Its ``campaign`` field says which, and ``checkedAt`` tells a
     current result from one left over after the mode was switched back.
 
-    ``mode`` is what a RUN attaches; ``source``, ``fetchedAt`` and ``note``
-    describe the index, which is read whatever the mode is. The two are
-    deliberately not tied together: the index is accurate before the cutover as
-    well as after, and a console that showed no pictures until ``r2`` was
-    switched on would be hiding exactly the thing the cutover is about. ``note``
-    is the one place an index that could not be read is explained, so a screen
-    can say why rather than imply a campaign has no picture."""
-    current, warning = ad_assets.mode()
+    ``source``, ``fetchedAt`` and ``note`` describe the index. ``note`` is the
+    one place an index that could not be read is explained, so a screen can say
+    why rather than imply a campaign has no picture.
+
+    ``mode`` is kept, and is now always ``r2``: the pictures baked into the
+    image are gone, so there is no other source for a run to attach."""
     catalogue = asset_catalogue()
-    return {"mode": current, "warning": warning,
-            "lastCheck": ad_assets.read_result(),
+    return {"mode": "r2", "warning": None,
+            "lastCheck": None,
             "source": catalogue["source"],
             "fetchedAt": catalogue["fetchedAt"],
             "note": catalogue["note"]}
@@ -461,20 +459,19 @@ def write_capabilities():
     ``enabled`` is whether this process holds the write key. The console API is
     the only process the entrypoint hands it to, and this runs as its child, so
     that is exactly whether a write would be accepted; only the variable's
-    presence is checked, never its value. ``affectsProduction`` says whether a
-    saved change reaches the campaigns: before the cutover a write lands in
-    Firestore while runs still act on membership.json."""
-    current, _ = promo_config.mode()
+    presence is checked, never its value. ``affectsProduction`` stays in the
+    payload, and is now always true: a saved change lands in the store the runs
+    act on, because there is no longer anywhere else for them to read."""
     return {
         "enabled": bool((os.environ.get("GCP_SERVICE_ACCOUNT_WRITE_B64") or "").strip()),
-        "affectsProduction": current == promo_config.FIRESTORE,
+        "affectsProduction": True,
         "fields": dict((collection, list(names))
                        for collection, names in operator_writer.EDITABLE.items()),
         "delete": list(operator_writer.DELETABLE),
         "campaignDeletion": __import__("campaign_deletion").capability(),
-        "scheduleEditing": {"edit": current == promo_config.FIRESTORE and os.path.isfile(str(Path(__file__).with_name("console-schedule")))},
-        "campaignCreation": {"create": current == promo_config.FIRESTORE,
-                             "images": ad_assets.mode()[0] == "r2" and bool(ad_assets.base_url()),
+        "scheduleEditing": {"edit": os.path.isfile(str(Path(__file__).with_name("console-schedule")))},
+        "campaignCreation": {"create": True,
+                             "images": bool(ad_assets.base_url()),
                              "scheduling": True},
     }
 
