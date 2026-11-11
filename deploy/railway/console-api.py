@@ -72,8 +72,6 @@ Environment:
   GENAIE_GROUP_ACTIONS
                       set to 0 to switch group actions off; the route then
                       answers 503 and the monitor's helper stays inactive
-  GENAIE_PROMO_CRONS  passed through to the bridge, which needs the declared
-                      cron manifest that deploy/ never stages into the image
 
 SIGTERM is not forwarded here (tini runs without -g), so this process is killed
 outright at container teardown. The gateway owns persisted state; pairing

@@ -348,20 +348,17 @@ class PausedCampaignTests(unittest.TestCase):
 
 
 class DisabledCampaignTests(unittest.TestCase):
-    """A campaign the cron manifest switches off never posts, so it must not
-    take a group's daily turn (the CV pause of 2026-11-04 cost ~20 slots/day)."""
+    """A campaign that is switched off never posts, so it must not take a
+    group's daily turn (the CV pause of 2026-11-04 cost ~20 slots/day).
+
+    Which campaigns are off is the caller's to say -- the switches live in the
+    store and only promo_config.resolve has read them -- so these pass the set
+    in, exactly as the engine and the console do."""
 
     def setUp(self):
         self.m = membership({
             "1@g.us": {"promos": ["a", "b", "c", "d"], "activity": "quiet"},
         }, bands={"busy": [6, 10], "normal": [4, 6], "quiet": [2, 2]})
-
-    def manifest(self, rows):
-        handle = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
-        self.addCleanup(os.unlink, handle.name)
-        json.dump({"version": 1, "promos": rows}, handle)
-        handle.close()
-        return handle.name
 
     def test_disabled_campaign_never_wins_a_turn(self):
         for offset in range(8):
@@ -397,29 +394,6 @@ class DisabledCampaignTests(unittest.TestCase):
             enabled_kept, _ = pc.filter_for_promo(self.m, "a", ["1@g.us"], day=day,
                                                   refs={}, disabled=set())
             self.assertEqual(kept, enabled_kept, day)
-
-    def test_disabled_promos_reads_only_explicit_false(self):
-        path = self.manifest([
-            {"slug": "a", "enabled": False},
-            {"slug": "b", "enabled": True},
-            {"slug": "c"},
-            {"slug": "d", "enabled": "false"},
-        ])
-        self.assertEqual(pc.disabled_promos([path]), {"a"})
-
-    def test_disabled_promos_fails_open(self):
-        missing = os.path.join(tempfile.gettempdir(), "no-such-promo-crons.json")
-        self.assertEqual(pc.disabled_promos([missing]), set())
-        bad = self.manifest([])
-        with open(bad, "w") as handle:
-            handle.write("{not json")
-        self.assertEqual(pc.disabled_promos([bad]), set())
-
-    def test_repo_manifest_is_found_and_matches_it(self):
-        declared = json.loads((ROOT / "deploy/promo-crons.json").read_text())
-        expected = set(row["slug"] for row in declared["promos"]
-                       if row.get("enabled") is False)
-        self.assertEqual(pc.disabled_promos(), expected)
 
 
 class SnapshotTests(unittest.TestCase):
@@ -478,13 +452,6 @@ class EngineWiringTests(unittest.TestCase):
     """promo_broadcast must stay inert until membership.json turns caps on, and
     must never let a caps problem stop a day's ads."""
 
-    def setUp(self):
-        # Hermetic: these fixtures use real campaign names (cv, genaie), so the
-        # repo's cron manifest -- which may pause one of them -- must not leak in.
-        saved = pc.MANIFEST_CANDIDATES
-        pc.MANIFEST_CANDIDATES = ()
-        self.addCleanup(setattr, pc, "MANIFEST_CANDIDATES", saved)
-
     def test_promo_key_strips_the_directory_suffix(self):
         self.assertEqual(pb.promo_key("cv-promo"), "cv")
         self.assertEqual(pb.promo_key("genaie-leads-promo"), "genaie-leads")
@@ -495,39 +462,33 @@ class EngineWiringTests(unittest.TestCase):
         self.assertEqual(kept, ["1@g.us"])
         self.assertEqual(decisions, {})
 
-    def test_missing_membership_file_leaves_every_group(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            kept, decisions = pb.apply_caps(
-                "cv-promo", ["1@g.us"], DAY,
-                membership_path=str(Path(tmp, "nope.json")))
+    def test_an_unresolved_membership_leaves_every_group(self):
+        # A caller that resolved nothing has nothing to apply caps from, and a
+        # capacity nicety must never be why a day's ads do not go out.
+        for membership_arg in ({}, {"membership": None}):
+            kept, decisions = pb.apply_caps("cv-promo", ["1@g.us"], DAY,
+                                            **membership_arg)
             self.assertEqual(kept, ["1@g.us"])
             self.assertEqual(decisions, {})
 
-    def test_caps_disabled_in_membership_leaves_every_group(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp, "membership.json")
-            path.write_text(json.dumps(membership(
-                {"1@g.us": {"promos": ["cv"], "activity": "quiet"}},
-                caps_enabled=False, promos=("cv",))), encoding="utf-8")
-            kept, decisions = pb.apply_caps("cv-promo", ["1@g.us"], DAY,
-                                            membership_path=str(path))
-            self.assertEqual(kept, ["1@g.us"])
-            self.assertEqual(decisions, {})
+    def test_caps_disabled_in_the_config_leaves_every_group(self):
+        m = membership({"1@g.us": {"promos": ["cv"], "activity": "quiet"}},
+                       caps_enabled=False, promos=("cv",))
+        kept, decisions = pb.apply_caps("cv-promo", ["1@g.us"], DAY, membership=m)
+        self.assertEqual(kept, ["1@g.us"])
+        self.assertEqual(decisions, {})
 
     def test_caps_enabled_filters(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp, "membership.json")
-            path.write_text(json.dumps(membership(
-                {"1@g.us": {"promos": ["cv", "genaie"], "daily_cap": 1}},
-                caps_enabled=True, promos=("cv", "genaie"))), encoding="utf-8")
-            allowed = []
-            with redirect_stderr(io.StringIO()):
-                for promo in ("cv-promo", "genaie-promo"):
-                    kept, _ = pb.apply_caps(promo, ["1@g.us"], DAY,
-                                            membership_path=str(path), record=False)
-                    allowed.extend(kept and [promo] or [])
-            self.assertEqual(len(allowed), 1,
-                             "a cap of 1 must let exactly one campaign through")
+        m = membership({"1@g.us": {"promos": ["cv", "genaie"], "daily_cap": 1}},
+                       caps_enabled=True, promos=("cv", "genaie"))
+        allowed = []
+        with redirect_stderr(io.StringIO()):
+            for promo in ("cv-promo", "genaie-promo"):
+                kept, _ = pb.apply_caps(promo, ["1@g.us"], DAY, membership=m,
+                                        record=False)
+                allowed.extend(kept and [promo] or [])
+        self.assertEqual(len(allowed), 1,
+                         "a cap of 1 must let exactly one campaign through")
 
     def test_a_broken_caps_module_fails_open(self):
         class Boom:
@@ -535,17 +496,14 @@ class EngineWiringTests(unittest.TestCase):
             def filter_for_promo(*a, **k):
                 raise RuntimeError("nope")
 
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp, "membership.json")
-            path.write_text(json.dumps(membership(
-                {"1@g.us": {"promos": ["cv"]}}, promos=("cv",))), encoding="utf-8")
-            err = io.StringIO()
-            with redirect_stderr(err):
-                kept, decisions = pb.apply_caps("cv-promo", ["1@g.us"], DAY,
-                                                caps=Boom,
-                                                membership_path=str(path))
-            self.assertEqual(kept, ["1@g.us"])
-            self.assertIn("WARN", err.getvalue())
+        m = membership({"1@g.us": {"promos": ["cv"]}}, promos=("cv",))
+        err = io.StringIO()
+        with redirect_stderr(err):
+            kept, decisions = pb.apply_caps("cv-promo", ["1@g.us"], DAY,
+                                            caps=Boom, membership=m)
+        self.assertEqual(kept, ["1@g.us"])
+        self.assertEqual(decisions, {})
+        self.assertIn("WARN", err.getvalue())
 
 
 if __name__ == "__main__":

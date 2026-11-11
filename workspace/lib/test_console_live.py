@@ -21,6 +21,13 @@ class LiveIndexTests(Harness):
     def setUp(self):
         super().setUp()
         self.env["GENAIE_CONFIG_SOURCE"] = "firestore"
+        # console_campaigns.image_url addresses a campaign's pictures from the
+        # process environment, as it does in the gateway, so listing a campaign
+        # needs the origin set there and not only in the harness dict.
+        origin = patch.dict(os.environ, {
+            "GENAIE_AD_ASSETS_BASE_URL": self.env["GENAIE_AD_ASSETS_BASE_URL"]})
+        origin.start()
+        self.addCleanup(origin.stop)
         self.index = live.Index(self.env, clock=lambda: self.clock[0])
         self.addCleanup(self.index.close)
         self.index.touch = Mock()

@@ -58,9 +58,8 @@ class Harness(unittest.TestCase):
         return path
 
     def seeded(self):
-        """A campaign with two pictures, as --seed-from-repo would leave it."""
-        mirror = {"campaigns": {}}
-        return TOOL.with_files(mirror, "cv",
+        """A campaign with two pictures already in the index."""
+        return TOOL.with_files({}, "cv",
                                [self.image("cv-ad.png", PNG),
                                 self.image("cv-ad-2.png", PNG2)])
 
@@ -122,7 +121,7 @@ class SameFilenameTest(Harness):
         self.assertEqual(strays, [])
         self.assertEqual([doc_id for _c, doc_id, _f, _e in writes], ["cv-1"])
 
-    def test_the_original_mirror_is_not_mutated(self):
+    def test_the_original_index_is_not_mutated(self):
         before = self.seeded()
         snapshot = [dict(e) for e in before["cv"]]
         TOOL.with_files(before, "cv", [self.image("cv-ad.png", PNG3)])
@@ -208,9 +207,10 @@ class DescribeTest(Harness):
             TOOL.describe("cv", self.image("cv-ad.png", b""), 10, "cv-1")
 
 
-class ConvertedCampaigns(unittest.TestCase):
-    """A campaign converted from this repo runs from the ``images`` on its own
-    document, so indexing a picture has to refresh that list too."""
+class RotationTests(unittest.TestCase):
+    """A run attaches the ``images`` on the campaign's own document, not the
+    entries in the index, so indexing a picture has to refresh that list too --
+    otherwise the swap is uploaded, indexed and never sent."""
 
     def entry(self, index, filename, enabled=True):
         digest = "%064x" % index
@@ -227,11 +227,79 @@ class ConvertedCampaigns(unittest.TestCase):
                  "bytes": 11, "contentType": "image/png"},
                 {"filename": "two.png", "key": second["key"], "sha256": second["sha256"],
                  "bytes": 12, "contentType": "image/png"}]
-        # genaie is still a script campaign: the index alone decides its pictures.
-        self.assertEqual(TOOL.converted_rotations(campaigns, {"cv": {"images": want[:1]}}),
+        # Only cv is named, so genaie's list is left alone -- this run has not
+        # read its document and must not guess at it.
+        self.assertEqual(TOOL.rotations(campaigns, {"cv": {"images": want[:1]}}),
                          {"cv": want})
-        self.assertEqual(TOOL.converted_rotations(campaigns, {"cv": {"images": want}}), {})
-        self.assertEqual(TOOL.converted_rotations(campaigns, {}), {})
+        self.assertEqual(TOOL.rotations(campaigns, {"cv": {"images": want}}), {})
+        self.assertEqual(TOOL.rotations(campaigns, {}), {})
+
+
+class BucketParityTests(unittest.TestCase):
+    """What ``--verify`` compares now.
+
+    It used to diff the index against deploy/ad-assets.json, a committed mirror
+    of it. Both the mirror and the baked pictures it was seeded from are gone,
+    so there is nothing in the repository to compare against -- and the pair
+    that actually breaks a campaign is the index and the bucket: a run fetches
+    every indexed picture before it posts anything, so one missing object costs
+    that campaign its whole day.
+    """
+
+    def entry(self, index, filename, size=None):
+        digest = "%064x" % index
+        return {"id": "cv-%d" % index, "campaign": "cv", "filename": filename,
+                "key": "ads/cv/%s.png" % digest, "sha256": digest,
+                "bytes": size if size is not None else 10 + index,
+                "content_type": "image/png", "rank": index * 10, "enabled": True,
+                "comment": None}
+
+    def test_an_index_that_matches_the_bucket_is_exact(self):
+        entries = [self.entry(1, "one.png"), self.entry(2, "two.png")]
+        present = dict((entry["key"], entry["bytes"]) for entry in entries)
+        self.assertEqual(TOOL.bucket_diff({"cv": entries}, present), ([], []))
+
+    def test_an_indexed_picture_with_no_object_is_reported(self):
+        entries = [self.entry(1, "one.png"), self.entry(2, "two.png")]
+        present = {entries[0]["key"]: entries[0]["bytes"]}
+        missing, orphans = TOOL.bucket_diff({"cv": entries}, present)
+        self.assertEqual(orphans, [])
+        self.assertEqual(len(missing), 1)
+        self.assertIn("cv-2", missing[0])
+        self.assertIn("not in the bucket", missing[0])
+
+    def test_an_object_of_a_different_size_is_reported(self):
+        entry = self.entry(1, "one.png")
+        missing, orphans = TOOL.bucket_diff({"cv": [entry]}, {entry["key"]: 999})
+        self.assertEqual(orphans, [])
+        self.assertIn("the bucket has 999", missing[0])
+
+    def test_an_object_nothing_names_is_spare_rather_than_drift(self):
+        entry = self.entry(1, "one.png")
+        missing, orphans = TOOL.bucket_diff(
+            {"cv": [entry]}, {entry["key"]: entry["bytes"], "ads/cv/old.png": 7})
+        # Expected for a while after a picture is replaced, so it must not fail
+        # the gate on its own -- only waste space until cleanup catches up.
+        self.assertEqual(missing, [])
+        self.assertEqual(len(orphans), 1)
+        self.assertIn("ads/cv/old.png", orphans[0])
+
+    def test_only_ad_objects_are_listed(self):
+        seen = {}
+        def fake(endpoint, bucket, *, access_key, secret_key, prefix=None,
+                 opener=None):
+            seen["prefix"] = prefix
+            return [{"key": "ads/cv/a.png", "bytes": 5, "etag": "x",
+                     "modified": None}]
+        saved = TOOL.r2_sigv4.list_objects
+        TOOL.r2_sigv4.list_objects = fake
+        try:
+            keys = TOOL.bucket_keys("https://r2.example", "pictures",
+                                    access_key="a", secret_key="b")
+        finally:
+            TOOL.r2_sigv4.list_objects = saved
+        self.assertEqual(seen["prefix"], TOOL.KEY_PREFIX)
+        self.assertEqual(keys, {"ads/cv/a.png": 5})
 
 
 if __name__ == "__main__":

@@ -1,27 +1,28 @@
 #!/usr/bin/env python3
-"""Where a campaign's ad images come from: the repo's baked assets, or R2.
+"""Where a campaign's ad images come from: Cloudflare R2, through a verified cache.
 
 The images used to be the one thing in ``workspace/`` that only a deploy could
 change. They shipped inside the container and were rsynced onto the volume on
 every boot, so swapping a picture cost a commit, a PR, CI, a Docker build and a
-gateway restart. This module moves the bytes to Cloudflare R2 and the index of
-them to Firestore, so a swap is an upload plus a Console edit.
+gateway restart. The bytes now live in Cloudflare R2 and the index of them in
+Firestore, so a swap is an upload plus a console edit.
 
-One variable decides, and this module is the only thing that reads it::
+There used to be a choice here, behind ``GENAIE_AD_ASSETS_SOURCE``: the baked
+assets, the baked assets plus a background comparison, or R2. The baked assets
+are gone -- they were operator data in a code repository -- so the variable
+selects nothing and is no longer read, and with them went the committed mirror
+of the index, the shadow comparison, and every path that answered a failed read
+by sending the picture inside the container.
 
-    GENAIE_AD_ASSETS_SOURCE   unset or "repo"   the baked assets, as it has
-                                                always been -- no network at all
-                              "shadow"          the same, plus a background
-                                                comparison with the index, which
-                                                also warms the cache
-                              "r2"              Firestore says which images the
-                                                campaign rotates; the bytes come
-                                                from R2 through a verified cache
+What is left is one fallback and it is a real one: a failed live read serves the
+last-known-good snapshot from ``runtime/firestore/``, bounded by
+:data:`INDEX_MAX_AGE_SECONDS`. Past that there is nothing to send, and the
+campaign stands down loudly rather than posting an advert nobody chose.
 
-:func:`resolve` is the whole surface a run touches. It is handed the ``image``
-argument the campaign's post script declared and hands back what the engine
-should actually send, so rotation, the pre-flight existence check, the caption
-machinery and ``send_ad`` are all untouched.
+:func:`ensure` is the whole surface a run touches: it is handed one index entry
+and hands back a verified local path. ``workspace/lib/console_campaigns.py``
+calls it once per picture, all of them or none, before a single group is posted
+to.
 
 **The cache is the point, not an optimization.** ``openclaw message send``
 accepts an ``https://`` URL for ``--media`` and would fetch it itself, and that
@@ -78,26 +79,21 @@ if LIB not in sys.path:
 import operator_config  # noqa: E402
 import promo_config  # noqa: E402
 
-MODE_VAR = "GENAIE_AD_ASSETS_SOURCE"
 BASE_VAR = "GENAIE_AD_ASSETS_BASE_URL"
 DIR_VAR = "GENAIE_AD_ASSETS_DIR"
-REPO, SHADOW, R2 = "repo", "shadow", "r2"
-MODES = (REPO, SHADOW, R2)
 
 COLLECTION = "assets"
 PREFIX = "[ad-assets]"
-# The index snapshot and the shadow report are small, must outlive a media
-# sweep, and belong with the other Firestore state -- so they go in the runtime
-# tier beside operator-config.json, not in the byte cache under media/.
+# The index snapshot is small, must outlive a media sweep, and belongs with the
+# other Firestore state -- so it goes in the runtime tier beside
+# operator-config.json, not in the byte cache under media/.
 INDEX_FILE = "ad-assets-index.json"
-RESULT_FILE = "ad-assets-shadow.json"
 CACHE_SUBDIR = os.path.join("media", "ad-assets")
 
 # openclaw's MAX_IMAGE_BYTES. An image over this is refused rather than sent and
 # silently re-encoded, because the ad's legibility is the ad.
 MAX_BYTES = 6 * 1024 * 1024
 CONTENT_TYPES = {"image/jpeg": ".jpg", "image/png": ".png"}
-ASSETS_DIRNAME = "assets"
 
 # ``key`` arrives from Firestore and goes into a URL, so it is pinned rather
 # than trusted: without this a row reading "//elsewhere.example/x.jpg" would
@@ -107,11 +103,6 @@ KEY_RE = re.compile(r"^ads/[a-z0-9][a-z0-9-]*/([0-9a-f]{64})\.(jpg|png)$")
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 FILENAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.(jpg|jpeg|png)$")
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
-# Image names as a post script spells them, so the seed can read a campaign's
-# rotation order out of its own source rather than guessing it from the
-# filesystem. Used by deploy/upload-ad-image.py and by the tests that pin the
-# order; the runtime never needs it.
-SOURCE_IMAGE_RE = re.compile(r"\"([A-Za-z0-9][A-Za-z0-9._-]*\.(?:jpg|jpeg|png))\"")
 
 # How stale the index snapshot may be before it stops counting as an index. The
 # same bound operator_config puts on its own snapshot, for the same reason: a
@@ -128,16 +119,6 @@ INDEX_MAX_AGE_SECONDS = operator_config.SNAPSHOT_MAX_AGE_SECONDS
 # that rate-limits the thing it is monitoring costs the monitoring.
 CATALOGUE_MAX_AGE_SECONDS = 300
 
-# Where the committed mirror of the index lives. `deploy/` is not staged onto
-# the volume, so the container gets a baked copy at the second path, exactly as
-# the cron manifest does. The variable is for tests.
-MIRROR_VAR = "GENAIE_AD_ASSETS_MIRROR"
-MIRROR_FILE = "ad-assets.json"
-MIRROR_CANDIDATES = (
-    os.path.join(os.path.dirname(os.path.dirname(LIB)), "deploy", MIRROR_FILE),
-    os.path.join("/usr/local/lib/genaie", MIRROR_FILE),
-)
-
 # How long a failed live read suppresses the next one. Without it every console
 # refresh retries a Firestore that has already said no -- and the failure this
 # exists for is a project whose daily quota is exhausted, where retrying on a
@@ -150,23 +131,12 @@ FAILURE_FILE = "ad-assets-unreadable.json"
 # is urllib's default "Python-urllib/3.x" -- and 200 to any other value, an empty
 # one included. Measured against the live bucket on 2026-11-08: curl, a named
 # agent and no agent at all all succeed, "Python-urllib/3.13" does not. Without
-# this header every fetch fails and every campaign silently falls back to its
-# baked image, which is the quietest possible way for this whole module to do
-# nothing. Name the bot rather than impersonate a browser.
+# this header every fetch fails, which with nothing baked to fall back to means
+# the campaign stands down. Name the bot rather than impersonate a browser.
 USER_AGENT = "genaebot-ad-assets/1"
 HTTP_TIMEOUT_SECONDS = 20
 RETRY_BACKOFF_SECONDS = 1.0
 RETRYABLE_STATUS = operator_config.RETRYABLE_STATUS
-# The whole resolve, index read included. It runs BEFORE the engine computes its
-# run deadline, so every second spent here is a second taken off the margin
-# that keeps a run inside its cron timeout. A campaign's four assets at one
-# attempt and one retry each fit this comfortably; a hung R2 does not get to
-# eat the run.
-RESOLVE_BUDGET_SECONDS = 90.0
-# How long a finished run waits for a shadow check still in flight.
-JOIN_SECONDS = 20.0
-
-
 class AssetsUnavailable(Exception):
     """No live index and no usable snapshot: nothing says what to send."""
 
@@ -176,20 +146,6 @@ class AssetUnusable(Exception):
 
 
 # ------------------------------------------------------------------- setup ----
-def mode(env=None):
-    """``(mode, warning)``: one of :data:`MODES`, plus a message when the
-    variable holds something this code does not know. An unreadable setting must
-    not silently change which pictures go out, so it reads as ``repo``."""
-    env = os.environ if env is None else env
-    raw = (env.get(MODE_VAR) or "").strip().lower()
-    if raw == "":
-        return REPO, None
-    if raw in MODES:
-        return raw, None
-    return REPO, ("%s=%r is not one of %s; sending the images baked into the image"
-                  % (MODE_VAR, env.get(MODE_VAR), ", ".join(MODES)))
-
-
 def cache_dir(env=None):
     """The verified byte cache. Durable across deploys, and inside the set of
     roots openclaw will read local media from."""
@@ -237,29 +193,6 @@ def index_path(env=None):
         return os.path.join(operator_config.state_dir(env), "asset-scopes",
                             hashlib.sha256(slug.encode()).hexdigest(), INDEX_FILE)
     return os.path.join(operator_config.state_dir(env), INDEX_FILE)
-
-
-def result_path(env=None):
-    return os.path.join(operator_config.state_dir(env), RESULT_FILE)
-
-
-def is_baked(path, promo_name):
-    """Whether ``path`` is one of the campaign's own baked assets.
-
-    Every post script resolves its image as ``os.environ.get("X_IMAGE") or
-    <baked path>``, so by the time :func:`resolve` sees a string it cannot tell
-    an operator's deliberate override from the default. This is how: only a path
-    sitting in this campaign's ``assets/`` directory is substituted, and
-    anything else -- an override, a test's temp file -- passes through
-    untouched."""
-    if not isinstance(path, str) or not path:
-        return False
-    parent, tail = os.path.split(os.path.normpath(path))
-    if tail == "" or os.path.basename(parent) != ASSETS_DIRNAME:
-        return False
-    campaign_dir = os.path.basename(os.path.dirname(parent))
-    return campaign_dir in (str(promo_name or ""),
-                            "%s-promo" % promo_config.promo_key(promo_name or ""))
 
 
 def _log(message, err=None):
@@ -366,7 +299,8 @@ def index(env=None, *, opener=None, signer=None, now=None, sleep=None, log=None)
 
     A live read refreshes the snapshot; a failed one falls back to it, bounded by
     :data:`INDEX_MAX_AGE_SECONDS`. Raises :class:`AssetsUnavailable` when neither
-    is usable -- the caller then has nothing to serve but the baked assets."""
+    is usable -- and the caller then has nothing to send at all, which is why
+    a run treats it as a failure rather than posting something unchosen."""
     env = os.environ if env is None else env
     now = now or time.time
     sleep = sleep or time.sleep
@@ -445,9 +379,8 @@ def _from_snapshot(env, why, now=None):
 def _from_json(campaigns_json, quarantined=None):
     """``({slug: [entry]}, {id: problem})`` out of plain JSON.
 
-    The snapshot and the committed mirror have the same shape and are both
-    files that something other than this process last wrote, so neither is
-    trusted: every row goes back through :func:`_entry`."""
+    The snapshot is a file that something other than this process last wrote,
+    so it is not trusted: every row goes back through :func:`_entry`."""
     campaigns, quarantined = {}, dict(quarantined or {})
     for slug, entries in (campaigns_json or {}).items():
         kept = []
@@ -459,40 +392,6 @@ def _from_json(campaigns_json, quarantined=None):
         if kept:
             campaigns[slug] = kept
     return campaigns, quarantined
-
-
-def mirror_path(env=None):
-    """The committed mirror of the index, or ``None`` when there is none here."""
-    env = os.environ if env is None else env
-    override = env.get(MIRROR_VAR)
-    for candidate in [override] if override else list(MIRROR_CANDIDATES):
-        if candidate and os.path.exists(candidate):
-            return candidate
-    return None
-
-
-def mirror_index(env=None):
-    """``deploy/ad-assets.json``, the index as it stood when this was deployed,
-    or ``None`` when it is absent or unusable.
-
-    Deploy-time truth, not live truth: an operator's edit in the Firebase
-    Console is not in it, which is why callers report ``source: "mirror"``
-    rather than passing it off as the index. It exists because the alternative
-    when Firestore cannot be reached and no snapshot has been written yet is
-    showing nothing at all -- and the bytes it names are the very bytes baked
-    into the running container, which ``deploy/test_ad_assets_mirror.py``
-    pins."""
-    path = mirror_path(env)
-    if path is None:
-        return None
-    document = operator_config._read_json(path)
-    if not isinstance(document, dict) or not isinstance(document.get("campaigns"), dict):
-        return None
-    campaigns, quarantined = _from_json(document["campaigns"])
-    if not campaigns:
-        return None
-    return {"source": "mirror", "fetchedAt": None, "degraded": None,
-            "campaigns": _enabled_only(campaigns), "quarantined": quarantined}
 
 
 def failure_path(env=None):
@@ -552,8 +451,8 @@ def _recent_snapshot(env, max_age, now):
 def _stale_snapshot(env, why, now):
     """The last-known-good index with no age limit but
     :data:`INDEX_MAX_AGE_SECONDS`, for a window in which no live read is
-    attempted. ``None`` when no snapshot is usable, which hands the answer to
-    the mirror.
+    attempted. ``None`` when no snapshot is usable, which is the one case with
+    genuinely nothing to show.
 
     This is the other half of :data:`RETRY_AFTER_SECONDS`: suppressing the read
     must not also throw away the snapshot that read would have fallen back to,
@@ -562,14 +461,6 @@ def _stale_snapshot(env, why, now):
         return _from_snapshot(env, why, now=now)
     except AssetsUnavailable:
         return None
-
-
-def _fallback(env, why):
-    """The committed mirror, marked as standing in for a read that did not
-    happen. ``None`` when there is no mirror either, which is the one case with
-    genuinely nothing to show."""
-    found = mirror_index(env)
-    return None if found is None else dict(found, degraded=why)
 
 
 def catalogue(env=None, *, max_age=CATALOGUE_MAX_AGE_SECONDS, now=None, log=None,
@@ -591,8 +482,7 @@ def catalogue(env=None, *, max_age=CATALOGUE_MAX_AGE_SECONDS, now=None, log=None
       load.
     * **It prefers a recent snapshot to a live read**, see
       :data:`CATALOGUE_MAX_AGE_SECONDS`. :func:`index` writes that snapshot as a
-      side effect, so the window keeps refilling itself; in ``repo`` mode, where
-      no run ever touches the index, the first console read is what creates it.
+      side effect, so the window keeps refilling itself.
 
     ``url`` is ``None`` on every entry when :data:`BASE_VAR` is unset, which is
     a different thing from having no pictures -- the index still names them --
@@ -626,8 +516,6 @@ def catalogue(env=None, *, max_age=CATALOGUE_MAX_AGE_SECONDS, now=None, log=None
                 _note_failure(env, why, now, log)
         else:
             current = _stale_snapshot(env, why, now)
-        if current is None:
-            current = _fallback(env, why)
         if current is None:
             return {"campaigns": {}, "source": None, "fetchedAt": None, "note": why}
 
@@ -729,7 +617,7 @@ def _write_bytes(path, body):
 
 
 def ensure(entry, env=None, *, opener=None, sleep=None, log=None):
-    # Serialize cache fills with retirement, including stale mirror lookups.
+    # Serialize cache fills with retirement.
     import campaign_deletion
     with campaign_deletion.submission(entry["campaign"], env) as active:
         if not active:
@@ -806,312 +694,3 @@ def prune(index_, env=None, log=None):
     if removed:
         log("removed %d cached file(s) the index no longer references" % removed)
     return removed
-
-
-# ----------------------------------------------------------------- resolve ----
-def _entries_for(promo_name, env, deadline, log, inject):
-    """``(entries, index_or_None)`` for this campaign, or ``([], None)``."""
-    slug = promo_config.promo_key(promo_name)
-    found = index(dict(env, GENAIE_AD_ASSETS_SCOPE=slug), log=log, **inject)
-    entries = (found.get("campaigns") or {}).get(slug) or []
-    if not entries:
-        # Nothing indexed for this campaign is "not migrated yet", not an error:
-        # the baked assets are still the answer. It is deliberately
-        # indistinguishable from an operator disabling every asset, which takes
-        # the campaign dark with a daily alert once the baked files are gone --
-        # loud is the right failure for "the index says send nothing".
-        log("no enabled assets indexed for %s; using the baked image" % slug)
-    return entries, found
-
-
-def resolve(promo_name, image, env=None, *, err=None, **inject):
-    """What this run should actually send, from the ``image`` the post script
-    declared. ``image`` is a path, a list of paths that rotate daily, or the
-    ``{variant: path}`` mapping that pins an image to a caption variant.
-
-    In ``repo`` and ``shadow`` modes this returns ``image`` unchanged and opens
-    no socket. In ``r2`` mode a baked path is replaced by its cached counterpart
-    and a single baked path becomes the campaign's whole rotation list -- so
-    adding a second picture to a campaign is an index edit, not a code change.
-
-    Never returns ``None`` or an empty list: the engine turns those into
-    ``promo image missing: None``, which tells an operator nothing. When nothing
-    can be served it returns the path the asset *would* have had, so the error
-    names the picture that is missing."""
-    env = os.environ if env is None else env
-    err = err or sys.stderr
-    current, warning = mode(env)
-    if warning:
-        _log(warning, err)
-    if current != R2 or not image:
-        return image
-
-    def log(message):
-        _log(message, err)
-
-    deadline = time.monotonic() + RESOLVE_BUDGET_SECONDS
-    try:
-        if isinstance(image, dict):
-            return _resolve_variants(promo_name, image, env, deadline, log, inject)
-        return _resolve_rotation(promo_name, image, env, deadline, log, inject)
-    except AssetsUnavailable as ex:
-        log("%s; using the baked image" % ex)
-        return image
-    except Exception as ex:  # never let this module decide a run cannot post
-        log("could not resolve assets (%s: %s); using the baked image"
-            % (type(ex).__name__, ex))
-        return image
-
-
-def _resolve_rotation(promo_name, image, env, deadline, log, inject):
-    baked = [image] if isinstance(image, str) else [p for p in image if p]
-    if not baked or not all(is_baked(path, promo_name) for path in baked):
-        # An operator's *_IMAGE override, or a test's temp file. Not ours.
-        return image
-    entries, _found = _entries_for(promo_name, env, deadline, log, inject)
-    if not entries:
-        return image
-    paths = []
-    for entry in entries:
-        if time.monotonic() > deadline:
-            log("gave up resolving after %.0f s with %d of %d asset(s) ready"
-                % (RESOLVE_BUDGET_SECONDS, len(paths), len(entries)))
-            break
-        try:
-            paths.append(ensure(entry, env, log=log, **_sendable(inject)))
-        except AssetUnusable as ex:
-            # One dead object must cost one picture, not the campaign. Dropping
-            # it does change which asset today's date picks out of the list.
-            log("dropping %s from the rotation: %s" % (entry["filename"], ex))
-    if paths:
-        return paths
-    if any(os.path.exists(path) for path in baked):
-        log("no asset could be fetched; using the baked image")
-        return image
-    # Nothing to send, and nothing baked to fall back to. Hand back the path the
-    # first asset should have had so the engine's own error names it.
-    return cache_path(entries[0], env)
-
-
-def _resolve_variants(promo_name, variants, env, deadline, log, inject):
-    """``{variant: path}`` mapped by filename.
-
-    Rotation order cannot express "this picture goes with that caption", so a
-    pinned variant image is matched on its filename instead. No campaign pins
-    one today, and a CI test keeps it that way, so this is here to stop the
-    mapping being silently skipped the day one does."""
-    baked = dict((k, v) for k, v in variants.items() if is_baked(v, promo_name))
-    if not baked:
-        return variants
-    entries, _found = _entries_for(promo_name, env, deadline, log, inject)
-    by_name = dict((entry["filename"], entry) for entry in entries)
-    out = dict(variants)
-    for key, path in baked.items():
-        entry = by_name.get(os.path.basename(path))
-        if entry is None:
-            log("variant %s keeps the baked %s: no asset indexed under that name"
-                % (key, os.path.basename(path)))
-            continue
-        try:
-            out[key] = ensure(entry, env, log=log, **_sendable(inject))
-        except AssetUnusable as ex:
-            log("variant %s keeps the baked %s: %s" % (key, os.path.basename(path), ex))
-    return out
-
-
-def _sendable(inject):
-    """``ensure`` takes no signer or clock; ``index`` does."""
-    return dict((k, v) for k, v in inject.items() if k in ("opener", "sleep"))
-
-
-# ------------------------------------------------------------------ shadow ----
-def check(promo_name, image, env=None, *, now=None, **inject):
-    """Compare the index with the baked assets once, and warm the cache.
-
-    Never raises for anything Firestore, R2 or the data does; returns the result
-    it also writes to ``ad-assets-shadow.json``::
-
-        {"checkedAt": ISO-8601 UTC, "campaign": slug,
-         "status": "exact" | "drift" | "unavailable" | "error",
-         "source": "firestore" | "snapshot" | None,
-         "degraded": None | why Firestore itself was not read,
-         "cached": [filename], "problems": [...]}
-
-    ``exact`` means every baked picture this campaign would send is in the index
-    under the same name with the same digest, and every indexed picture could be
-    fetched from R2 and verified. That is the whole of what flipping to ``r2``
-    changes, checked without Firestore or R2 deciding anything."""
-    env = os.environ if env is None else env
-    now = now or time.time
-    notes = []
-    result = {"checkedAt": _stamp(now), "campaign": promo_config.promo_key(promo_name),
-              "status": "error", "source": None, "degraded": None, "cached": [],
-              "problems": notes}
-    try:
-        baked = [image] if isinstance(image, str) else [p for p in (image or []) if p]
-        baked = [p for p in baked if is_baked(p, promo_name)]
-        try:
-            found = index(env, now=now, log=notes.append, **inject)
-        except AssetsUnavailable as ex:
-            result.update(status="unavailable", degraded=str(ex))
-            return result
-        result["source"] = found["source"]
-        result["degraded"] = found["degraded"]
-        entries, problems = found["campaigns"].get(result["campaign"]) or [], []
-        indexed = dict((entry["filename"], entry) for entry in entries)
-        for path in baked:
-            name = os.path.basename(path)
-            entry = indexed.get(name)
-            if entry is None:
-                problems.append("%s is not in the index" % name)
-                continue
-            try:
-                if _digest(path) != entry["sha256"]:
-                    problems.append("%s differs from the indexed copy" % name)
-            except OSError as ex:
-                problems.append("%s unreadable: %s" % (name, ex))
-        for name in sorted(set(indexed) - set(os.path.basename(p) for p in baked)):
-            problems.append("%s is indexed but not baked into this image" % name)
-        for entry in entries:
-            try:
-                ensure(entry, env, log=notes.append, **_sendable(inject))
-                result["cached"].append(entry["filename"])
-            except AssetUnusable as ex:
-                problems.append("%s cannot be fetched: %s" % (entry["filename"], ex))
-        if not baked and not entries:
-            problems.append("nothing baked and nothing indexed")
-        result["problems"] = problems + notes
-        result["status"] = "drift" if problems else "exact"
-    except Exception as ex:  # a shadow check must never take a run down
-        result["problems"] = notes + ["shadow check failed: %s: %s"
-                                      % (type(ex).__name__, ex)]
-    try:
-        operator_config._write_private_json(result_path(env), result)
-    except OSError as ex:
-        result["problems"].append("could not write %s: %s" % (result_path(env), ex))
-    return result
-
-
-def read_result(env=None):
-    """The newest check, or ``None`` when shadow mode has never run here."""
-    data = operator_config._read_json(result_path(env))
-    return data if isinstance(data, dict) else None
-
-
-def summary(result):
-    """Lines for a run log: one headline, then each difference."""
-    status, source = result.get("status"), result.get("source")
-    campaign = result.get("campaign") or "?"
-    if status == "exact":
-        head = "the index matches the baked images for %s" % campaign
-        if source != "firestore":
-            head += " (compared with the %s: %s)" % (source, result.get("degraded"))
-    elif status == "drift":
-        head = "the index differs from the baked images for %s in %d place(s)" % (
-            campaign, len([p for p in result.get("problems") or [] if p]))
-    elif status == "unavailable":
-        head = "no index and no snapshot: %s" % result.get("degraded")
-    else:
-        head = "the asset check could not run"
-    lines = ["%s %s; this run used the baked images" % (PREFIX, head)]
-    lines += ["%s   %s" % (PREFIX, p) for p in result.get("problems") or []]
-    return lines
-
-
-class _Check:
-    def __init__(self, thread, box):
-        self.thread = thread
-        self.box = box
-
-
-def start(promo_name, image, env=None, err=None, **inject):
-    """Begin a background check when shadow mode is on; ``None`` otherwise.
-
-    It runs in a thread for the same reason the config shadow does: a slow or
-    unreachable store must cost the run nothing, and the check has no say in
-    what gets sent. It also leaves the cache warm, so flipping to ``r2`` is
-    never a cold start."""
-    env = os.environ if env is None else env
-    err = err or sys.stderr
-    try:
-        current, warning = mode(env)
-        if warning:
-            _log(warning, err)
-        if current != SHADOW:
-            return None
-        box = {}
-
-        def run():
-            box["result"] = check(promo_name, image, env, **inject)
-
-        thread = threading.Thread(target=run, name="ad-assets-shadow", daemon=True)
-        thread.start()
-        return _Check(thread, box)
-    except Exception as ex:
-        _log("could not start: %s: %s" % (type(ex).__name__, ex), err)
-        return None
-
-
-def finish(handle, timeout=JOIN_SECONDS, err=None):
-    """Report a check started by :func:`start`. Never raises."""
-    if handle is None:
-        return None
-    err = err or sys.stderr
-    try:
-        handle.thread.join(timeout)
-        result = handle.box.get("result")
-        if result is None:
-            _log("check still running after %.0f s; not waiting for it. This run "
-                 "used the baked images." % timeout, err)
-            return None
-        for line in summary(result):
-            err.write(line + "\n")
-        return result
-    except Exception as ex:
-        _log("could not report: %s: %s" % (type(ex).__name__, ex), err)
-        return None
-
-
-def alongside(function):
-    """Run an asset check beside a campaign run. The run's own result, return
-    value and exceptions pass through untouched."""
-    @functools.wraps(function)
-    def wrapped(*args, **kwargs):
-        promo_name = kwargs.get("promo_name")
-        if not promo_name and kwargs.get("targets_file"):
-            promo_name = os.path.basename(
-                os.path.dirname(os.path.abspath(kwargs["targets_file"])))
-        handle = start(promo_name, kwargs.get("image"))
-        try:
-            return function(*args, **kwargs)
-        finally:
-            finish(handle)
-    return wrapped
-
-
-def main(argv):
-    """Check every declared campaign. Exits 1 if any of them drifts."""
-    import json
-
-    manifest = promo_config.read_manifest() or {}
-    worst = 0
-    for job in manifest.get("promos") or []:
-        name = job.get("dir") or job.get("name")
-        if not name:
-            continue
-        directory = os.path.join(os.path.dirname(LIB), "cron", name)
-        baked = sorted(os.path.join(directory, ASSETS_DIRNAME, f)
-                       for f in os.listdir(os.path.join(directory, ASSETS_DIRNAME))
-                       if FILENAME_RE.match(f)) \
-            if os.path.isdir(os.path.join(directory, ASSETS_DIRNAME)) else []
-        result = check(name, baked)
-        for line in summary(result):
-            print(line)
-        if result["status"] != "exact":
-            worst = 1
-    print(json.dumps({"lastCheck": read_result()}, indent=2))
-    return worst
-
-
-if __name__ == "__main__":
-    raise SystemExit(main(sys.argv[1:]))

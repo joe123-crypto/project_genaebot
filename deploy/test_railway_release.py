@@ -23,15 +23,39 @@ READY = module("ready", ROOT / "deploy/railway/report-release-ready.py")
 SHA = "a" * 40
 
 
+def campaign(job, *, enabled=True):
+    """One campaign as the gateway reports it; only the job name and switch
+    matter to the release's startup check."""
+    return {"slug": job.removesuffix("-promo"), "jobName": job, "enabled": enabled,
+            "hour": 9, "minute": 5, "timezone": "Africa/Harare",
+            "targetCount": 1, "timeoutSeconds": 7200}
+
+
+def live(rows=None):
+    """Patch the gateway read every release path makes before deploying."""
+    return patch.object(RELEASE.gateway_campaigns, "read",
+                        return_value=rows or [campaign("fixture-promo")])
+
+
 class ReleaseTests(unittest.TestCase):
     def test_intentionally_paused_campaigns_are_not_required_for_release(self):
-        entries = [{"name": "cv-promo", "enabled": False}, {"name": "fixture-promo"}]
-        jobs = RELEASE.required_campaigns(entries)
+        rows = [campaign("cv-promo", enabled=False), campaign("fixture-promo")]
+        jobs = RELEASE.required_campaigns(rows)
         self.assertEqual(jobs, {"fixture-promo"})
         RELEASE.validate_readiness(self.report(), "new", SHA, "0", jobs)
-        for enabled in ("false", None, 0):
-            with self.assertRaises(ValueError):
-                RELEASE.required_campaigns([{"name": "cv-promo", "enabled": enabled}])
+
+    def test_a_console_created_campaign_is_required_too(self):
+        # The manifest could never name one of these, so a release used to pass
+        # its startup check without the job ever having come back up.
+        rows = [campaign("console-web-design-promo")]
+        self.assertEqual(RELEASE.required_campaigns(rows), {"console-web-design-promo"})
+
+    def test_an_unreachable_gateway_fails_the_release_before_it_starts(self):
+        def explode():
+            raise RELEASE.gateway_campaigns.Unavailable("railway ssh: no such service")
+        with patch.object(RELEASE.gateway_campaigns, "read", side_effect=explode):
+            with self.assertRaises(RELEASE.gateway_campaigns.Unavailable):
+                RELEASE.required_campaigns(RELEASE.gateway_campaigns.read())
 
     def test_preserve_and_explicit_profiles_reach_the_release_and_readiness_check(self):
         for requested, current, expected in [("preserve", "1", "1"),
@@ -43,7 +67,6 @@ class ReleaseTests(unittest.TestCase):
                 calls = []
                 def archive(source, sha, destination):
                     (Path(destination) / "deploy").mkdir()
-                    (Path(destination) / "deploy/promo-crons.json").write_text('{"promos":[{"name":"fixture-promo"}]}')
                 def railway(*args, **kwargs):
                     calls.append(args)
                     if args[:2] == ("variable", "list"):
@@ -54,7 +77,7 @@ class ReleaseTests(unittest.TestCase):
                 report = {}
                 with patch.object(RELEASE.subprocess, "check_output", side_effect=[SHA+"\n", SHA+"\trefs/heads/main\n"]), \
                      patch.object(RELEASE, "deployments", return_value=[previous]), \
-                     patch.object(RELEASE, "archive_commit", side_effect=archive), \
+                     patch.object(RELEASE, "archive_commit", side_effect=archive), live(), \
                      patch.object(RELEASE, "railway", side_effect=railway), \
                      patch.object(RELEASE, "wait_for", return_value={"meta": {"imageDigest": "new"}}), \
                      patch.object(RELEASE, "startup_result", return_value={"ready": True}) as startup:
@@ -249,7 +272,6 @@ class ReleaseTests(unittest.TestCase):
 
             def archive(source, sha, destination):
                 (Path(destination) / "deploy").mkdir()
-                (Path(destination) / "deploy/promo-crons.json").write_text('{"promos":[{"name":"fixture-promo"}]}')
 
             def railway(*args, **kwargs):
                 if args[:2] == ("variable", "list"):
@@ -263,7 +285,7 @@ class ReleaseTests(unittest.TestCase):
             report = {}
             with patch.object(RELEASE.subprocess, "check_output", side_effect=[SHA+"\n", SHA+"\trefs/heads/main\n"]), \
                  patch.object(RELEASE, "deployments", return_value=[previous]), \
-                 patch.object(RELEASE, "archive_commit", side_effect=archive), \
+                 patch.object(RELEASE, "archive_commit", side_effect=archive), live(), \
                  patch.object(RELEASE, "railway", side_effect=railway), \
                  patch.object(RELEASE, "wait_for", return_value={"meta": {"imageDigest": "new"}}), \
                  patch.object(RELEASE, "startup_result", side_effect=ValueError("wrong source SHA")), \
@@ -285,14 +307,13 @@ class ReleaseTests(unittest.TestCase):
         previous = {"id": "previous", "status": "SUCCESS", "meta": {"imageDigest": "old"}}
         def archive(source, sha, destination):
             (Path(destination) / "deploy").mkdir()
-            (Path(destination) / "deploy/promo-crons.json").write_text('{"promos":[]}')
         def railway(*args, **kwargs):
             if args[0] == "up": raise TimeoutError("upload timed out")
             return {}
         with tempfile.TemporaryDirectory() as temp, \
              patch.object(RELEASE.subprocess, "check_output", side_effect=[SHA+"\n", SHA+"\trefs/heads/main\n"]), \
              patch.object(RELEASE, "deployments", return_value=[previous]), \
-             patch.object(RELEASE, "archive_commit", side_effect=archive), \
+             patch.object(RELEASE, "archive_commit", side_effect=archive), live(), \
              patch.object(RELEASE, "railway", side_effect=railway), \
              patch.object(RELEASE, "restore", return_value={"startupVerified": True}):
             report = {}

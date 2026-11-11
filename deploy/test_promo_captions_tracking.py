@@ -1,15 +1,21 @@
-"""Caption rotation + per-group tracking links in the shared promo engine
-(workspace/lib/promo_broadcast.py) and their wiring in the eight promo crons.
+"""Caption rotation and per-group tracking links in the shared promo engine
+(workspace/lib/promo_broadcast.py).
+
+The engine behaviour is unchanged; what the tests are handed is not. Each
+campaign used to be a ``post_ad.py`` in this repository with its captions and
+tracking in it and a generated ``targets.json`` beside it, so these tests
+asserted on real copy and the real roster. Every campaign is one Firestore
+document now, so the engine is driven from ``deploy/promo_fixture`` instead, and
+the checks that were really about the operator's copy are gone with the copy --
+noted where they were.
 
 unittest-style (not pytest fixtures) so deploy/ci-check.sh, which runs each test
 file with plain ``python3``, actually executes these.
 """
 
-import importlib.util
 import io
 import json
 import os
-import re
 import subprocess
 import sys
 import tempfile
@@ -22,11 +28,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 LIB_DIR = ROOT / "workspace/lib"
-CRON = ROOT / "workspace/cron"
-if str(LIB_DIR) not in sys.path:
-    sys.path.insert(0, str(LIB_DIR))
+for _path in (str(LIB_DIR), str(ROOT / "deploy")):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
 import promo_broadcast as pb  # noqa: E402
 import json_store  # noqa: E402
+import gateway_campaigns  # noqa: E402
+import promo_fixture  # noqa: E402
 
 BOT_NUMBER = "+263785632943"
 # The bot's second WhatsApp line (the "ads" account). A promo posted only to
@@ -47,46 +55,9 @@ CONTACT_NUMBER = BOT_NUMBER
 # go to the bot, so its replies never reach the plugin's ad-ref recorder.
 APPLIANCE_REPAIRS_NUMBER = "+263713911390"
 
-# promo dir -> (script, expected tracking prefix, expected link target)
-PROMOS = {
-    "appliance-repairs-promo": ("post_ad.py", "AR", APPLIANCE_REPAIRS_NUMBER),
-    "borehole-drilling-promo": ("post_ad.py", "BH", CONTACT_NUMBER),
-    "building-materials-promo": ("post_ad.py", "BM", CONTACT_NUMBER),
-    "cv-promo": ("post_cv_ad.py", "CV", CONTACT_NUMBER),
-    "fruit-trees-promo": ("post_ad.py", "FT", CONTACT_NUMBER),
-    "genaie-advertisers-promo": ("post_ad.py", "GA", CONTACT_NUMBER),
-    "genaie-leads-promo": ("post_ad.py", "GL", CONTACT_NUMBER),
-    "genaie-promo": ("post_ad.py", "GN", CONTACT_NUMBER),
-    "industrial-lighting-promo": ("post_ad.py", "IL", CONTACT_NUMBER),
-    "skylight-solar-promo": ("post_ad.py", "SK", CONTACT_NUMBER),
-}
-
+# The reply recorder's prefix list, which is still code in this repository while
+# the prefixes themselves are campaign data in Firestore.
 PLUGIN_AD_REFS = ROOT / "workspace/plugins/public-service-gate/lib/ad-refs.js"
-
-
-def load_promo(name):
-    script, _, _ = PROMOS[name]
-    spec = importlib.util.spec_from_file_location(
-        "promo_" + name.replace("-", "_"), CRON / name / script)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def all_target_jids(name):
-    data = json.loads((CRON / name / "targets.json").read_text(encoding="utf-8"))
-    jids = [g for g in data.get("groups", []) if g.endswith("@g.us")]
-    return jids + [j for j in data.get("weekly_groups", {}) if j not in jids]
-
-
-def facts(text):
-    """Every number (prices, HP, sizes, quantities, phone digits, 24/7), dollar
-    amount, %, link and the ``{bot_number}`` placeholder -- the facts that must
-    not drift between caption variants. Spaces inside phone numbers
-    ("+263 775 489 417") are collapsed first."""
-    flat = re.sub(r"(?<=\d) (?=\d)", "", text)
-    return set(re.findall(r"\$\d+|\+?\d+(?:\.\d+)?|%|genaie\.site|\{bot_number\}",
-                          flat))
 
 
 class _PinnedDate(date):
@@ -160,17 +131,14 @@ class VariantRotationTests(unittest.TestCase):
                     day += timedelta(days=1)
 
     def test_groups_are_spread_across_variants_on_a_day(self):
-        for name in PROMOS:
-            jids = all_target_jids(name)
-            # A promo with fewer groups than variants can legitimately land them
-            # all on one variant on a given day (big-player posts to only two
-            # ads-line groups); the per-group daily rotation and no-consecutive-
-            # repeat guarantees are pinned separately. Spread across variants is
-            # only expected once a promo has at least as many groups as variants.
-            if len(jids) < 3:
-                continue
+        # A campaign with fewer groups than variants can legitimately land them
+        # all on one variant on a given day; the per-group daily rotation and
+        # the no-consecutive-repeat guarantee are pinned separately. Spread is
+        # only expected once there are at least as many groups as variants.
+        for size in (3, 5, 14, 24, 40):
+            jids = self.JIDS[:size]
             used = {pb.variant_index(j, 3, day=date(2026, 10, 9)) for j in jids}
-            self.assertGreater(len(used), 1, "%s: every group got the same variant" % name)
+            self.assertGreater(len(used), 1, "%d groups all got one variant" % size)
 
     def test_send_loop_sends_per_group_variant(self):
         sent = {}
@@ -182,11 +150,11 @@ class VariantRotationTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmp:
                 img = Path(tmp, "ad.png")
                 img.write_bytes(b"img")
-                targets = Path(tmp, "targets.json")
-                targets.write_text(json.dumps({"groups": self.JIDS[:6]}))
                 state = Path(tmp, "state.json")
                 rc = pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, text=self.VARIANTS, image=str(img),
-                                  targets_file=str(targets), state_file=str(state),
+                                  state_file=str(state), promo_name="alpha-promo",
+                                  resolve_config=promo_fixture.resolver_for(
+                                      self.JIDS[:6], captions=self.VARIANTS),
                                   send_delay=0, argv=[], start_jitter=0, caps=None)
                 self.assertEqual(rc, 0)
                 for jid in self.JIDS[:6]:
@@ -208,10 +176,10 @@ class VariantRotationTests(unittest.TestCase):
                 img, pinned = Path(tmp, "ad.png"), Path(tmp, "pinned.png")
                 img.write_bytes(b"img")
                 pinned.write_bytes(b"img")
-                targets = Path(tmp, "targets.json")
-                targets.write_text(json.dumps({"groups": self.JIDS[:12]}))
                 rc = pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, text=self.VARIANTS, image=str(img),
-                                  targets_file=str(targets),
+                                  promo_name="alpha-promo",
+                                  resolve_config=promo_fixture.resolver_for(
+                                      self.JIDS[:12], captions=self.VARIANTS),
                                   state_file=str(Path(tmp, "state.json")),
                                   send_delay=0, argv=[], start_jitter=0, caps=None,
                                   variant_images={1: str(pinned)})
@@ -232,10 +200,11 @@ class VariantRotationTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmp:
                 img = Path(tmp, "ad.png")
                 img.write_bytes(b"img")
-                Path(tmp, "t.json").write_text(json.dumps({"groups": self.JIDS[:3]}))
                 with redirect_stdout(io.StringIO()):
                     rc = pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, text=self.VARIANTS, image=str(img),
-                                      targets_file=str(Path(tmp, "t.json")),
+                                      promo_name="alpha-promo",
+                                      resolve_config=promo_fixture.resolver_for(
+                                          self.JIDS[:3], captions=self.VARIANTS),
                                       state_file=str(Path(tmp, "s.json")),
                                       send_delay=0, argv=[], start_jitter=0, caps=None,
                                       variant_images={2: str(Path(tmp, "nope.png"))})
@@ -251,10 +220,11 @@ class VariantRotationTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmp:
                 img = Path(tmp, "ad.png")
                 img.write_bytes(b"img")
-                targets = Path(tmp, "targets.json")
-                targets.write_text(json.dumps({"groups": ["1@g.us", "2@g.us"]}))
                 text = "Fixed {not a placeholder} caption"
-                pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, text=text, image=str(img), targets_file=str(targets),
+                pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, text=text, image=str(img),
+                             promo_name="alpha-promo",
+                             resolve_config=promo_fixture.resolver_for(
+                                 ["1@g.us", "2@g.us"], captions=[text]),
                              state_file=str(Path(tmp, "s.json")), send_delay=0, argv=[], start_jitter=0, caps=None)
                 self.assertEqual(sent, [text, text])
         finally:
@@ -273,27 +243,49 @@ class RefCodeTests(unittest.TestCase):
         self.assertEqual(pb.ref_code("BH", "120363275485319265@g.us")[3:],
                          pb.ref_code("GN", "120363275485319265@g.us")[3:])
 
-    def test_unique_across_current_targets(self):
-        for name, (_, prefix, _) in PROMOS.items():
-            jids = all_target_jids(name)
-            refs = [pb.ref_code(prefix, j) for j in jids]
-            self.assertEqual(len(set(refs)), len(refs), "%s: ref collision" % name)
-        # Also unique across the union of every group the bot posts to, so one
-        # suffix always identifies one group whichever promo it came from.
-        union = sorted({j for name in PROMOS for j in all_target_jids(name)})
-        suffixes = [pb.ref_code("X", j)[2:] for j in union]
-        self.assertEqual(len(set(suffixes)), len(suffixes), "suffix collision across groups")
+    def test_a_suffix_identifies_one_group_at_the_scale_the_bot_runs_at(self):
+        """One suffix must mean one group, whichever campaign printed it.
 
-    def test_plugin_prefix_list_matches_promos(self):
+        This used to run over the committed roster -- every JID in every
+        ``targets.json`` -- so it caught a real collision in the real group set.
+        The roster is in Firestore now and no repository test can see it, so what
+        is pinned here is that the scheme is adequate at the bot's scale: three
+        characters of a 32-letter alphabet is 32768 suffixes, comfortable for
+        around a hundred groups and NOT for thousands, where the birthday bound
+        makes a collision likely. Growing far past this needs a longer code.
+        """
+        groups = 150                       # the bot is in ~91 today
+        space = 32 ** pb.REF_CODE_LEN      # 32768 three-character suffixes
+        # The birthday bound: fewer than one expected collision at this size.
+        self.assertLess(groups ** 2 / (2 * space), 1.0)
+        jids = ["1203630000%08d@g.us" % n for n in range(groups)]
+        jids += ["26377%07d-15%08d@g.us" % (n, n) for n in range(groups)]
+        for sample in (jids[:groups], jids[groups:]):
+            suffixes = [pb.ref_code("X", jid)[2:] for jid in sample]
+            self.assertEqual(len(set(suffixes)), len(suffixes), "suffix collision")
+        # And the prefix never changes the suffix, so two campaigns in one group
+        # print the same group identity.
+        for jid in jids[:20]:
+            self.assertEqual(pb.ref_code("BH", jid)[3:], pb.ref_code("GN", jid)[3:])
+
+    def test_the_reply_recorder_reads_as_one_list_of_known_prefixes(self):
+        """The recorder's half of the pair.
+
+        Which prefixes exist is campaign data in Firestore, so comparing the two
+        is a live check and belongs to the release gate
+        (``gateway_campaigns.problems``, pinned in
+        ``deploy/test_promo_send_spacing.py``). What is still checkable here is
+        that the list the gate reads is the list the plugin matches on, and that
+        both agree on the shape of a ref code.
+        """
         src = PLUGIN_AD_REFS.read_text(encoding="utf-8")
-        m = re.search(r"AD_REF_PREFIXES = \[([^\]]*)\]", src)
-        self.assertIsNotNone(m)
-        plugin_prefixes = set(re.findall(r'"([A-Z]+)"', m.group(1)))
-        # Only replies sent to the bot can be counted by the plugin, so a promo
-        # that links to a third party's number stays out of its prefix list.
-        self.assertEqual(plugin_prefixes,
-                         {p for _, p, n in PROMOS.values() if n in BOT_LINES} | {"BP", "PB"})
+        prefixes = gateway_campaigns.recorder_prefixes(PLUGIN_AD_REFS)
+        self.assertTrue(prefixes)
+        for prefix in prefixes:
+            self.assertRegex(prefix, r"^[A-Z]{2,}$")
+            self.assertRegex(pb.ref_code(prefix, "1@g.us"), r"^%s-[0-9A-HJKMNP-TV-Z]+$" % prefix)
         self.assertIn("[0-9A-HJKMNP-TV-Z]{%d}" % pb.REF_CODE_LEN, src)
+        self.assertEqual(gateway_campaigns.AD_REFS, PLUGIN_AD_REFS)
 
 
 class LinkAndPlaceholderTests(unittest.TestCase):
@@ -330,24 +322,31 @@ class LinkAndPlaceholderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(ValueError):
                 pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, text="x", image=str(Path(tmp, "a.png")),
-                             targets_file=str(Path(tmp, "t.json")),
-                             state_file=str(Path(tmp, "s.json")),
+                             state_file=str(Path(tmp, "s.json")), promo_name="alpha-promo",
+                             resolve_config=promo_fixture.resolver_for(["1@g.us"]),
                              argv=[], tracking={"number": "+263785632943"})
 
     def test_bot_number_promo_requires_account_numbers(self):
         # A promo whose copy uses {bot_number} (or whose tracking pins no number)
         # must have an account_numbers map to resolve each group's advertised
-        # number; an un-regenerated targets.json that lacks it fails loudly.
-        with tempfile.TemporaryDirectory() as tmp:
-            img = Path(tmp, "a.png")
-            img.write_bytes(b"img")
-            targets = Path(tmp, "t.json")
-            targets.write_text(json.dumps({"groups": ["1@g.us"]}))
-            with self.assertRaises(ValueError):
-                pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, text="Call {bot_number}", image=str(img),
-                             targets_file=str(targets),
-                             state_file=str(Path(tmp, "s.json")),
-                             argv=[], start_jitter=0, caps=None)
+        # number; a config with no line configured fails loudly rather than
+        # posting an advert with a hole in it.
+        saved = pb.send_ad
+        pb.send_ad = lambda *a, **k: self.fail("must not send")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                img = Path(tmp, "a.png")
+                img.write_bytes(b"img")
+                resolve = promo_fixture.resolver_for(["1@g.us"], numbers={},
+                                                     contact_account=None,
+                                                     captions=["Call {bot_number}"])
+                with self.assertRaises(ValueError):
+                    pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, text="Call {bot_number}", image=str(img),
+                                 state_file=str(Path(tmp, "s.json")), promo_name="alpha-promo",
+                                 resolve_config=resolve,
+                                 argv=[], start_jitter=0, caps=None)
+        finally:
+            pb.send_ad = saved
 
 
 class AccountRoutingTests(unittest.TestCase):
@@ -359,17 +358,11 @@ class AccountRoutingTests(unittest.TestCase):
     # A bot promo pins no number: the link target comes from the posting account.
     TRACK = {"prefix": "GN", "label": "Genaie"}
 
-    def _targets(self, tmp, contact_account=None):
-        targets = Path(tmp, "targets.json")
-        payload = {
-            "groups": ["1@g.us", "2@g.us"],
-            "accounts": {"2@g.us": "ads"},
-            "account_numbers": {"default": self.DEFAULT_NUM, "ads": self.ADS_NUM},
-        }
-        if contact_account is not None:
-            payload["contact_account"] = contact_account
-        targets.write_text(json.dumps(payload))
-        return targets
+    def _resolver(self, contact_account=None, captions=None, promo="alpha"):
+        return promo_fixture.resolver_for(
+            ["1@g.us", "2@g.us"], accounts={"2@g.us": "ads"},
+            numbers={"default": self.DEFAULT_NUM, "ads": self.ADS_NUM},
+            contact_account=contact_account, captions=captions, promo=promo)
 
     def _run(self, tmp, contact_account=None, **kwargs):
         sent = {}
@@ -379,8 +372,12 @@ class AccountRoutingTests(unittest.TestCase):
         try:
             img = Path(tmp, "ad.png")
             img.write_bytes(b"img")
-            rc = pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, image=str(img), targets_file=str(self._targets(tmp, contact_account)),
+            kwargs.setdefault("promo_name", "alpha-promo")
+            rc = pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, image=str(img),
                               state_file=str(Path(tmp, "s.json")),
+                              resolve_config=self._resolver(
+                                  contact_account, pb._variants(kwargs["text"]),
+                                  promo=pb.promo_key(kwargs["promo_name"])),
                               send_delay=0, argv=[], start_jitter=0, caps=None,
                               **kwargs)
         finally:
@@ -480,9 +477,9 @@ class AccountRoutingTests(unittest.TestCase):
         self.assertIn("wa.me/%s?" % pb.wa_digits(shop), ads_text)
         self.assertNotIn("wa.me/%s?" % pb.wa_digits(self.ADS_NUM), ads_text)
 
-    def test_missing_targets_file_stays_a_quiet_no_op(self):
-        # A missing/unreadable targets file has nothing to send and must not be
-        # misreported as a stale, un-regenerated one.
+    def test_a_campaign_with_no_groups_stays_a_quiet_no_op(self):
+        # A campaign nobody has assigned a group to has nothing to send, and
+        # must not be misreported as a configuration that failed to resolve.
         saved = pb.send_ad
         pb.send_ad = lambda *a, **k: self.fail("must not send")
         try:
@@ -491,8 +488,8 @@ class AccountRoutingTests(unittest.TestCase):
                 img.write_bytes(b"img")
                 with redirect_stdout(io.StringIO()) as buf:
                     rc = pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, text="Call {bot_number}", image=str(img),
-                                      targets_file=str(Path(tmp, "missing.json")),
                                       state_file=str(Path(tmp, "s.json")),
+                                      resolve_config=promo_fixture.resolver_for([], promo="genaie"),
                                       tracking=self.TRACK, promo_name="genaie-promo",
                                       send_delay=0, argv=[], start_jitter=0, caps=None)
                 self.assertEqual(rc, 0)
@@ -501,180 +498,95 @@ class AccountRoutingTests(unittest.TestCase):
             pb.send_ad = saved
 
 
-class PromoWiringTests(unittest.TestCase):
-    def test_each_promo_keeps_original_first_and_expected_variant_count(self):
-        for name in PROMOS:
-            m = load_promo(name)
-            if name == "genaie-advertisers-promo":
-                self.assertEqual(len(m.POST_TEXTS), 1, name)
-            else:
-                self.assertGreaterEqual(len(m.POST_TEXTS), 3, name)
-            self.assertIs(m.POST_TEXTS[0], m.POST_TEXT, name)
-            self.assertEqual(len(set(m.POST_TEXTS)), len(m.POST_TEXTS),
-                             "%s: duplicate variants" % name)
+class EngineOutputTests(unittest.TestCase):
+    """``--dry-run`` and ``--refs``, which an operator uses to check a campaign
+    before letting it post.
 
-    def test_variants_keep_every_fact(self):
-        for name in PROMOS:
-            m = load_promo(name)
-            base = facts(m.POST_TEXT)
-            if name != "genaie-advertisers-promo":
-                self.assertTrue(base, name)
-            for k, v in enumerate(m.POST_TEXTS[1:], start=2):
-                # Cited source links (e.g. the borehole El Nino variant's forecast
-                # URL) are the only extra content a variant may carry.
-                for url in getattr(m, "SOURCE_URLS", ()):
-                    v = v.replace(url, "")
-                self.assertEqual(facts(v), base, "%s variant %d facts drifted" % (name, k))
+    This class used to import the ten ``post_ad.py`` scripts and assert on their
+    copy: how many variants each kept, that every price and phone number in the
+    first variant reappeared in the rest, which number each advertised, and the
+    whole dry-run output for the real roster. All of that was operator data in
+    the repository and it is in Firestore now, so what is left here is the
+    engine's own output, over a fixture. The copy itself is checked where it is
+    now written -- the console's caption editor and
+    ``operator_config.validate_captions`` -- which does NOT check that facts
+    stay the same across variants; nothing does any more.
+    """
 
-    def test_advertiser_campaign_sends_selected_groups_once_daily_on_their_accounts(self):
-        m = load_promo("genaie-advertisers-promo")
-        expected = {
-            "263782033305-1606361015@g.us": "ads",
-            "120363412236304347@g.us": "ads",
-            "263713611554-1588562864@g.us": "ads",
-            "120363415810487005@g.us": "ads",
-            "263779541998-1547060119@g.us": "ads",
-            "120363412512900877@g.us": "default",
-            "263773491386-1531974442@g.us": "ads",
-            "263773491386-1578547813@g.us": "ads",
-            "263773491386-1578547921@g.us": "ads",
-            "263776554037-1383758077@g.us": "ads",
-            "120363046894354726@g.us": "ads",
-            "120363433121439254@g.us": "ads",
-            "120363305467568735@g.us": "ads",
-            "120363407345824911@g.us": "ads",
-        }
-        sent = []
-        saved = pb.send_ad
-        pb.send_ad = lambda target, text, image, account=None: (
-            sent.append((target, text, image, account)) or (True, '{"messageId":"m"}'))
-        try:
-            with tempfile.TemporaryDirectory() as tmp, redirect_stdout(io.StringIO()):
-                kwargs = dict(text=m.POST_TEXTS, image=m.IMAGE,
-                              targets_file=m.TARGETS_FILE,
-                              state_file=str(Path(tmp, "state.json")),
-                              tracking=m.TRACKING, promo_name="genaie-advertisers-promo",
-                              send_delay=0, start_jitter=0, cron_timeout=None,
-                              caps=None, argv=[])
-                self.assertEqual(pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, **kwargs), 0)
-                self.assertEqual(pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, **kwargs), 0)
-            self.assertEqual(len(sent), len(expected))
-            self.assertEqual({target for target, *_ in sent}, set(expected))
-            for target, text, image, account in sent:
-                self.assertEqual(account, expected[target])
-                self.assertEqual(image, m.IMAGE)
-                self.assertTrue(text.startswith(m.POST_TEXT + "\n\n"))
-                self.assertIn("wa.me/%s?text=" % pb.wa_digits(CONTACT_NUMBER), text)
-                self.assertIn(pb.ref_code("GA", target), text)
-        finally:
-            pb.send_ad = saved
+    JIDS = ["12036300000000%04d@g.us" % n for n in range(1, 8)]
+    TRACK = {"prefix": "GN", "label": "Genaie"}
+    VARIANTS = ["First, call {bot_number}", "Second, call {bot_number}",
+                "Third, call {bot_number}"]
 
-    def test_borehole_general_caption_and_four_photos(self):
-        m = load_promo("borehole-drilling-promo")
-        self.assertEqual(len(m.POST_TEXTS), 3)
-        self.assertEqual(len(m._IMAGE_ASSETS), 4)
-        for caption in m.POST_TEXTS:
-            self.assertNotIn("$", caption)
-            self.assertIn("Zimbabwe", caption)
-            self.assertIn("{bot_number}", caption)
-            self.assertNotIn("El Nino", caption)
-        self.assertFalse(hasattr(m, "VARIANT_IMAGES"))
-
-    def test_tracking_targets(self):
-        for name, (_, prefix, number) in PROMOS.items():
-            m = load_promo(name)
-            self.assertEqual(m.TRACKING["prefix"], prefix, name)
-            if number in BOT_LINES:
-                # Bot promos use the configured contact account, substituted
-                # into the {bot_number} placeholder in the copy.
-                self.assertIsNone(m.TRACKING.get("number"), name)
-                if name != "genaie-advertisers-promo":
-                    self.assertIn("{bot_number}", m.POST_TEXT, name)
-            else:
-                # A promo that pins its own contact (appliance-repairs -> shop)
-                # keeps that number, and it must be printed in the ad copy.
-                self.assertEqual(m.TRACKING["number"], number, name)
-                digits = pb.wa_digits(number)
-                printed = pb.wa_digits(m.POST_TEXT)
-                self.assertTrue(
-                    digits in printed
-                    or (digits.startswith("263") and "0" + digits[3:] in printed),
-                    "%s: link number is not in the ad" % name)
-
-    def _run(self, name, args, day=date(2026, 10, 9)):
-        m = load_promo(name)
-        saved_argv, saved_date = sys.argv, pb.date
+    def run_engine(self, args):
+        saved_date = pb.date
         with tempfile.TemporaryDirectory() as tmp:
-            state_env = {
-                "appliance-repairs-promo": "APPLIANCE_REPAIRS_STATE",
-                "borehole-drilling-promo": "BOREHOLE_STATE",
-                "building-materials-promo": "BUILDING_MATERIALS_STATE",
-                "cv-promo": "CV_PROMO_STATE",
-                "fruit-trees-promo": "FRUIT_TREES_STATE",
-                "genaie-leads-promo": "GENAIE_LEADS_PROMO_STATE",
-                "genaie-advertisers-promo": "GENAIE_ADVERTISERS_PROMO_STATE",
-                "genaie-promo": "GENAIE_PROMO_STATE",
-                "industrial-lighting-promo": "INDUSTRIAL_LIGHTING_PROMO_STATE",
-                "skylight-solar-promo": "SKYLIGHT_STATE",
-            }[name]
-            m.STATE_FILE = str(Path(tmp, "state.json"))
-            sys.argv = [name] + args
-            pb.date = pin(day)
+            image = Path(tmp, "ad.png")
+            image.write_bytes(b"img")
+            state = Path(tmp, "state.json")
             buf = io.StringIO()
+            pb.date = pin(date(2026, 10, 9))
             try:
                 with redirect_stdout(buf):
-                    rc = m.main()
+                    rc = pb.broadcast(
+                        text=self.VARIANTS, image=str(image), state_file=str(state),
+                        promo_name="genaie-promo", tracking=self.TRACK,
+                        resolve_config=promo_fixture.resolver_for(
+                            self.JIDS, promo="genaie", captions=self.VARIANTS,
+                            numbers={"default": CONTACT_NUMBER}),
+                        account_status=lambda accounts: {a: True for a in accounts},
+                        send_delay=0, start_jitter=0, cron_timeout=None, caps=None,
+                        argv=args)
             finally:
-                sys.argv, pb.date = saved_argv, saved_date
-            self.assertFalse(Path(m.STATE_FILE).exists(), "%s wrote state" % state_env)
+                pb.date = saved_date
+            # Neither flag may leave a receipt behind: a dry run that recorded a
+            # send would silence the real one.
+            self.assertFalse(state.exists(), "%r wrote state" % args)
         return rc, buf.getvalue()
 
     def test_dry_run_shows_variant_and_ref_per_group(self):
-        for name, (_, prefix, number) in PROMOS.items():
-            rc, out = self._run(name, ["--dry-run"])
-            self.assertEqual(rc, 0, name)
-            n = len(load_promo(name).POST_TEXTS)
-            for jid in all_target_jids(name):
-                line = next(l for l in out.splitlines() if jid in l)
-                if n > 1:
-                    self.assertRegex(line, r"variant \d+/%d" % n, name)
-                self.assertIn("ref %s" % pb.ref_code(prefix, jid), line)
-                self.assertIn("contact %s" % number, line)
-            self.assertIn("message (variant %d/%d)" % (n, n) if n > 1 else "----- message -----", out)
-            self.assertIn("<ref_link>", out)
-
-    def test_all_production_caption_variants_use_the_expected_contact(self):
-        for name, (_, prefix, number) in PROMOS.items():
-            m = load_promo(name)
-            targets = json.loads(Path(m.TARGETS_FILE).read_text())
-            self.assertEqual(targets["contact_account"], CONTACT_ACCOUNT, name)
-            selected = m.TRACKING.get("number") or targets["account_numbers"][targets["contact_account"]]
-            self.assertEqual(selected, number, name)
-            for jid in all_target_jids(name):
-                ref, link = pb.tracking_for(m.TRACKING, jid, bot_number=selected)
-                for variant in m.POST_TEXTS:
-                    caption = pb.render_caption(variant, ref, link, pb.DEFAULT_LINK_LINE,
-                                                bot_number=selected)
-                    self.assertIn("wa.me/%s?" % pb.wa_digits(number), caption, name)
-                    for other in BOT_LINES - {number}:
-                        self.assertNotIn(pb.wa_digits(other), caption, name)
-                    self.assertNotIn("{bot_number}", caption, name)
+        saved = pb.send_ad
+        pb.send_ad = lambda *a, **k: self.fail("--dry-run must not send")
+        try:
+            rc, out = self.run_engine(["--dry-run"])
+        finally:
+            pb.send_ad = saved
+        self.assertEqual(rc, 0)
+        count = len(self.VARIANTS)
+        for jid in self.JIDS:
+            line = next(l for l in out.splitlines() if jid in l)
+            self.assertRegex(line, r"variant \d+/%d" % count)
+            self.assertIn("ref %s" % pb.ref_code(self.TRACK["prefix"], jid), line)
+            self.assertIn("contact %s" % CONTACT_NUMBER, line)
+        self.assertIn("message (variant %d/%d)" % (count, count), out)
+        self.assertIn("<ref_link>", out)
 
     def test_refs_flag_prints_mapping_without_sending(self):
         saved = pb.send_ad
-        pb.send_ad = lambda *a: self.fail("--refs must not send")
+        pb.send_ad = lambda *a, **k: self.fail("--refs must not send")
         try:
-            for name, (_, prefix, number) in PROMOS.items():
-                rc, out = self._run(name, ["--refs"])
-                self.assertEqual(rc, 0)
-                rows = [l.split("\t") for l in out.splitlines()[1:] if l.strip()]
-                self.assertEqual({r[2] for r in rows}, set(all_target_jids(name)))
-                for ref, promo, jid, link in rows:
-                    self.assertEqual(promo, name)
-                    self.assertEqual(ref, pb.ref_code(prefix, jid))
-                    self.assertTrue(link.startswith("https://wa.me/%s?text=" % pb.wa_digits(number)))
+            rc, out = self.run_engine(["--refs"])
         finally:
             pb.send_ad = saved
+        self.assertEqual(rc, 0)
+        rows = [l.split("\t") for l in out.splitlines()[1:] if l.strip()]
+        self.assertEqual({row[2] for row in rows}, set(self.JIDS))
+        for ref, promo, jid, link in rows:
+            self.assertEqual(promo, "genaie-promo")
+            self.assertEqual(ref, pb.ref_code(self.TRACK["prefix"], jid))
+            self.assertTrue(link.startswith(
+                "https://wa.me/%s?text=" % pb.wa_digits(CONTACT_NUMBER)))
+
+    def test_every_caption_variant_advertises_the_contact_line_and_no_other(self):
+        for jid in self.JIDS:
+            ref, link = pb.tracking_for(self.TRACK, jid, bot_number=CONTACT_NUMBER)
+            for variant in self.VARIANTS:
+                caption = pb.render_caption(variant, ref, link, pb.DEFAULT_LINK_LINE,
+                                            bot_number=CONTACT_NUMBER)
+                self.assertIn("wa.me/%s?" % pb.wa_digits(CONTACT_NUMBER), caption)
+                for other in BOT_LINES - {CONTACT_NUMBER}:
+                    self.assertNotIn(pb.wa_digits(other), caption)
+                self.assertNotIn("{bot_number}", caption)
 
 
 if __name__ == "__main__":

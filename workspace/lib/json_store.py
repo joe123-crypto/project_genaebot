@@ -7,7 +7,7 @@ never leaves a half-written state file. That primitive was copy-pasted into each
 job; it now lives here.
 
 Std-lib only, so it is importable from the OpenClaw ``--command`` cron scripts
-under ``workspace/cron/`` (which are std-lib only by contract).
+under ``workspace/bin/`` (which are std-lib only by contract).
 
 This is deliberately minimal: it owns the read + atomic-write primitive, not any
 particular state *shape*.

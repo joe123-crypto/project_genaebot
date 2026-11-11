@@ -82,8 +82,9 @@ This is the repository tree. Paths are relative to the repo root.
 │   ├── ci-check.sh                # Portable repository validation and tests
 │   ├── ci/                        # Structure/docs policy and mappings
 │   ├── patch-openclaw-config.py   # Applies the template to a live openclaw.json (NOT wired into the Railway boot)
-│   ├── gateway-exec.sh            # How installers reach the live gateway
-│   ├── install-*.sh               # Cron registration (promos)
+│   ├── gateway-exec.sh            # How a deploy script reaches the live gateway
+│   ├── gateway-campaigns.sh       # The live campaign list, for the release gates
+│   ├── backup-operator-data.py    # The dated copy of the operator's Firestore/R2 data
 │   ├── agent-workspace-admin/     # Private administrator context template
 │   ├── retire-job-scout-crons.sh  # One-off removal of the retired Job Scout crons
 │   └── agent-workspace-public/    # Restricted public context template
@@ -119,7 +120,6 @@ Tracked categories:
 - `workspace/bin/**`
 - `workspace/lib/*.py`
 - `workspace/plugins/**`
-- `workspace/cron/**/*.py` and `workspace/cron/**/*.sh`
 - `workspace/docs/**`
 - the service folder `cv-maker/` (including its internal packages). It is
   staged whole by a per-service recursive glob in
@@ -136,6 +136,16 @@ Tracked categories:
   listed explicitly in `deploy/stage-workspace.rsync` (e.g. `+ /skills/cv-maker/`
   and `+ /skills/cv-maker/SKILL.md`) ahead of the closing `- /**` rule, so a new
   skill must be added there or it will not ship.
+
+**Not tracked, and deliberately not trackable: the operator's own data.** The
+groups the bot advertises in, their names and numbers, every campaign's copy,
+prices and pictures, and each campaign's schedule and switch used to be files
+here -- `workspace/cron/membership.json`, ten `targets.json` generated from it,
+ten `post_ad.py`, their `assets/` directories, `deploy/promo-crons.json` and a
+mirror of the picture index. They live in Firestore and Cloudflare R2 now and
+are edited in the console. What replaced git as the copy of record is
+`deploy/backup-operator-data.py` (see "Backups of the operator data"); git
+history still holds every one of those files up to the commit that deleted them.
 
 Ignored categories:
 
@@ -167,9 +177,9 @@ Require zero active runs and choose a gap that allows CI, deployment, startup
 verification and recovery to finish before the next campaign. The main workflow
 spends about ten minutes testing the runtime before it can begin deployment.
 The deploy job also waits (up to 45 minutes) for a quiet window computed from
-`deploy/promo-crons.json` and each campaign's `targets.json`, and fails with
-the next quiet time rather than restart the gateway mid-run; see the preflight
-section for the override.
+the live campaign list it reads off the gateway, and fails with the next quiet
+time rather than restart the gateway mid-run; see the preflight section for the
+override.
 
 After the [one-time cutover](deploy/railway/README.md#one-time-wiring), the
 serialized `Deploy verified production commit` job is the production gate even
@@ -242,170 +252,131 @@ them from the live config first, then from the manifest.
 ### Scheduled jobs
 
 Cron jobs live in the gateway's own state on the Railway volume, so they survive
-deploys. Each has an idempotent installer under `deploy/` that registers or
-updates it; run one only when its schedule or command changes. All times are
-`Africa/Harare`. The ten promo crons are declared together in
-`deploy/promo-crons.json` and reconciled with `./deploy/reinstall-promo-crons.sh`
-(see *Reconciling the promo crons* below).
+deploys. All times are `Africa/Harare`.
 
-- **`cv-promo`** (`install-cv-promo.sh`, 11:39) runs
-  `workspace/cron/cv-promo/post_cv_ad.py`, a deterministic (no-agent) job that
-  posts the fixed CV-service ad to the WhatsApp group JIDs in
-  `workspace/cron/cv-promo/targets.json` (generated from `membership.json`, see
-  *Group membership* below). Most groups get the ad daily; groups
-  under the file's `weekly_groups` map are posted to only on their configured
-  weekdays (the cron still runs daily and simply skips them on other days), which
-  is how Vacancy Lamp advertises CV making twice a week (Mon and Thu)
-- **`building-materials-promo`** (`install-building-materials-promo.sh`, 12:50)
-  runs `workspace/cron/building-materials-promo/post_ad.py`, a deterministic
-  (no-agent) job that posts the fixed building-materials for-sale ad to the WhatsApp group
-  JIDs listed in `workspace/cron/building-materials-promo/targets.json`
-- **`genaie-promo`** (`install-genaie-promo.sh`, 14:26) runs
-  `workspace/cron/genaie-promo/post_ad.py`, a deterministic (no-agent) job that
-  posts the fixed Genaie-services ad (lead generation and WhatsApp group
-  advertising) to the WhatsApp group JIDs listed in
-  `workspace/cron/genaie-promo/targets.json` (every group the bot is in except
-  Vacancy Lamp)
-- **`genaie-leads-promo`** (`install-genaie-leads-promo.sh`, 17:06) runs
-  `workspace/cron/genaie-leads-promo/post_ad.py`, a deterministic (no-agent) job
-  that posts the fixed Genaie lead-generation ad ("we generate potential customers;
-  you choose how you pay" — pay per lead, fixed monthly, or a % of revenue) to the
-  WhatsApp group JIDs listed in `workspace/cron/genaie-leads-promo/targets.json`.
-  This is a separate campaign from `genaie-promo` above (later slot, own image and
-  copy), reusing the same shared `promo_broadcast` delivery engine
-- **`fruit-trees-promo`** (`install-fruit-trees-promo.sh`, 08:40) runs
-  `workspace/cron/fruit-trees-promo/post_ad.py`, a deterministic (no-agent) job that
-  posts the fixed grafted-fruit-tree for-sale ad (mango, pawpaw, orange, naartjie,
-  lemon; retail/wholesale pricing) to the WhatsApp group JIDs listed in
-  `workspace/cron/fruit-trees-promo/targets.json`, reusing the same shared
-  `promo_broadcast` delivery engine
-- **`appliance-repairs-promo`** (`install-appliance-repairs-promo.sh`, 10:35) runs
-  `workspace/cron/appliance-repairs-promo/post_ad.py`, a deterministic (no-agent) job
-  that posts the fixed APPLIANCE REPAIRS PL ad (a Harare repair shop: TVs, inverters,
-  batteries, welding machines, borehole drives, microwaves, PA systems) to the
-  WhatsApp group JIDs listed in `workspace/cron/appliance-repairs-promo/targets.json`,
-  reusing the same shared `promo_broadcast` delivery engine
-- **`borehole-drilling-promo`** (`install-borehole-drilling-promo.sh`, 07:15)
-  posts a general drilling and solar borehole installation advert with four
-  rotating photos to 44 active groups. It consolidates Same Age Projects,
-  Big Player and Baltic Sea Drilling's previous campaign groups. Packages and
-  prices live in the private provider catalog rather than the captions.
-  MUTANDIRI VILLAGE RESIDENTS remains Mon/Wed/Fri only. The installer verifies
-  this retained job before running `retire-borehole-promos.sh` to remove the
-  old borehole-paid and Big Player registrations. Runtime history is retained.
-- **`skylight-solar-promo`** (`install-skylight-solar-promo.sh`, 13:21) runs
-  `workspace/cron/skylight-solar-promo/post_ad.py`, a deterministic (no-agent) job
-  that posts the fixed Skylight Solar ad (solar system packages and complete
-  water/borehole solutions: survey, drilling, flushing, installation) to the WhatsApp
-  group JIDs listed in `workspace/cron/skylight-solar-promo/targets.json`, rotating
-  through two bundled posters daily and reusing the same shared `promo_broadcast`
-  delivery engine. The posters carry the prices, so the captions stay price-free and
-  route replies to the bot's own number
-- **`industrial-lighting-promo`** (`install-industrial-lighting-promo.sh`, 10:05)
-  posts the fixed paid advert for Industrial Lighting Pvt Ltd with tracking prefix
-  `IL`. Its bundled poster carries the packages and prices.
-- **`genaie-advertisers-promo`** (`install-genaie-advertisers-promo.sh`, 14:05)
-  posts the fixed advertiser recruitment copy and operator-supplied photo daily,
-  with tracking prefix `GA`.
+**Every campaign is one Firestore document and every job runs one shared
+runner.** There is no per-campaign script, installer or manifest in this
+repository any more. `campaigns/<slug>` carries the campaign's copy, its
+pictures, its schedule, its run timeout, its failure-alert number and its
+on/off switch; the groups it posts to are the `promos` lists on the
+`groups/<jid>` documents; and the job's command is always
+`workspace/bin/run-console-campaign <slug>`. All of that is edited in the
+console (see *Operator Console API*), which writes Firestore and lets the
+campaign reconciler bring the gateway's cron into line.
 
-These campaigns use the per-group accounts in their generated target files:
-CHIREDZI BUSINESS FORUM and CHIREDZI MARKETPLACE use the **ads** account, while
-BULAWAYO ADVERTISEMENT uses the **default** account. Existing campaign groups
-remain on the ads account. The shared advertised contact is the ads number.
-Their slots allow preceding campaigns on both accounts to finish before sending.
+Ask the gateway what the campaigns actually are rather than reading a list here:
 
-### Reconciling the promo crons
+```bash
+./deploy/gateway-campaigns.sh | python3 -m json.tool   # every campaign, as the console sees it
+railway ssh -- openclaw cron list --all --json         # the jobs themselves
+```
 
-A promo cron's schedule, timezone and job timeout live in the gateway's cron state
-on the Railway volume, not in this repo, so merging a change to any of them ships
-nothing on its own. `deploy/promo-crons.json` declares what the ten should be;
-`./deploy/reinstall-promo-crons.sh --check` reports what the gateway actually has,
-and `./deploy/reinstall-promo-crons.sh` applies the manifest by re-running the
-installers and re-checking. Both need `railway` (or a local container) and run from
-a checkout, not from CI — CI does not install cron definitions, so it enforces that the
-manifest, the ten wrappers, `install-promo.sh`'s timeout default and these READMEs
-all agree. Run `--check` first and remove anything it reports as undeclared before
-reinstalling, or that campaign posts twice a day. Full procedure, including when in
-the day it is safe to run, is in `deploy/railway/README.md`.
+A campaign converted from a repository script **keeps the job name it always
+had** -- `<slug>-promo` rather than `console-<slug>-promo` -- recorded as
+`jobName` on its document. That is deliberate: the job name is also the
+`runtime/cron-state/<jobName>/` directory holding which groups were sent to
+today and where the caption rotation stands, so keeping the name carried that
+state across the conversion instead of re-posting to every group.
 
-Verified `console-<campaign-id>-promo` jobs invoking the matching shared
-`bin/run-console-campaign` runner are reported separately as `CONSOLE-OWNED`
-(`consoleOwned` in JSON). They do not fail the manifest check or need removal;
-the console campaign reconciler manages their schedules from Firestore.
+Two switches, and a campaign posts only if both are on: `enabled` on the
+document is the operator's live pause control, and `scheduleStatus == "ready"`
+is the reconciler's confirmation that the gateway really has the cron. The
+console reports them separately (`storeEnabled`, `cronEnabled`) so a screen
+never offers a toggle for a campaign that cannot post either way.
 
-The nine existing promo crons rotate between caption variants (the original
-operator copy plus rewordings with identical facts; three each). Advertiser recruitment keeps one fixed caption. All ten
-carry a per-group tracking link. See *Promo caption rotation and ad ref tracking*
-below.
+A campaign's captions rotate between variants carrying a per-group tracking
+link; see *Promo caption rotation and ad ref tracking* below. The group load is
+split across the bot's two WhatsApp lines per group, so a campaign can post from
+either or both.
 
-The shared engine spaces consecutive group sends by a **random 20–60 s gap**
+### Two things a campaign's schedule has to be able to deliver
+
+Both used to be repository tests, because every input was a committed file: the
+group counts from ten `targets.json`, the times and timeouts from
+`deploy/promo-crons.json`. They are operator data now, so they are checked
+against the live list instead -- by `deploy/gateway_campaigns.py`'s `problems()`,
+which `deploy/promo-deploy-window.py` runs on **every release**:
+
+- **A campaign must finish inside its own job timeout.** The engine's worst case
+  is the full start jitter plus every gap at the top of its range plus a
+  per-send allowance, which at 20-60 s gaps is roughly `900 + 72n` seconds for
+  `n` groups. Past the timeout the gateway kills the run with groups unreached,
+  every day, and no deploy changes that -- so this **fails the release gate**.
+  The fix is to raise that campaign's run timeout in the console or to split it.
+- **Two campaigns must not overlap on one WhatsApp line.** The 20-60 s spacing
+  is per account: two runs posting to the same line at once double its send rate
+  and defeat the spacing, which is what happened on 2026-10-20 when fruit-trees
+  (44 groups, 08:40) was still sending as skylight-solar started and the two
+  interleaved two seconds apart. A campaign on the second line therefore never
+  has to clear the first line's slots. Spacing degrades rather than breaks, so
+  this is a **warning**, not a refusal.
+
+A third warning comes from the same place: a campaign whose `tracking.prefix`
+is not in `AD_REF_PREFIXES` in
+`workspace/plugins/public-service-gate/lib/ad-refs.js` still posts, but the
+reply recorder cannot count a single lead it brings in. That list is code and
+the prefixes are data, so the gate is the only place the two can be compared.
+
+Separately, `deploy/promo-deploy-window.py` holds a release until no campaign
+may be sending: a gateway restart stops an in-flight run after the 315 s drain
+and there is no catch-up, so a release inside a campaign's window costs that
+campaign its whole day (which is what #184 did to fruit-trees on 2026-11-09).
+It reads the same live list, so a campaign created in the console is visible to
+it -- which it was not while the gate read committed files. If the gateway
+cannot be reached the gate refuses rather than guesses, and the workflow's
+`ignore_promo_window` input is the deliberate override.
+
+### Send spacing and the start jitter
+
+The shared engine spaces consecutive group sends by a **random 20-60 s gap**
 (uniform), not a fixed delay, because WhatsApp spam detection reportedly flags
 machine-regular send intervals (before this change the logs showed one send every
 ~10 s, like a metronome). The gap is only taken between two send attempts: not
-before the first or after the last, not for groups already sent today or off their
-weekly day, and never on `--dry-run` / `--refs`. Override the bounds with
-`PROMO_SEND_DELAY_MIN` / `PROMO_SEND_DELAY_MAX` (seconds) in the gateway env. A
-~50-group promo therefore runs for ~45 min typically and ~99 min at worst, so
-`install-promo.sh` registers every promo cron with a 7200 s job timeout
-(`PROMO_CRON_TIMEOUT_SECONDS`; it was 600 s, which would kill a long run). That
-timeout is cron state on the volume: it only changes in production when the eight
-`install-*-promo.sh` installers are re-run, and no deploy step runs them —
-`./deploy/reinstall-promo-crons.sh` is the one command that does, and `--check`
-says whether it needs running. So the
-engine does not assume it: at run time it asks the gateway for its own job's
-timeout and, if the run would not fit, tightens the gaps proportionally (keeping
-them random, never below 5 s) and logs a warning naming the installer to re-run.
-A stale timeout therefore delays groups instead of dropping them; re-running the
-installers restores the full 20-60 s gaps and verifies the new timeout landed. A
-timeout too short to fit the group count even at the 5 s floor (under ~370 s for
-a 20-group promo) is the one case that can still be cut short: the warning then
-says so and names the minimum the job needs, and because each delivered group is
-committed immediately, a re-run the same day resumes where it stopped.
-`PROMO_RUN_TIMEOUT_SECONDS` overrides the lookup (`0` = no limit). Each delivered
-group is committed to the promo's state file immediately, so a run that is killed
-part-way and re-run the same day skips the groups it already reached.
+before the first or after the last, not for groups already sent today or off
+their weekly day, and never on `--dry-run` / `--refs`. Override the bounds with
+`PROMO_SEND_DELAY_MIN` / `PROMO_SEND_DELAY_MAX` (seconds) in the gateway env.
+
+The run is planned to fit the job timeout it is given, which is the
+`timeoutSeconds` on the campaign's own document -- the run has already read it,
+so nothing has to ask the gateway for it. If the run would not fit, the engine
+tightens the gaps proportionally (keeping them random, never below 5 s) and logs
+a warning naming the remedy. A timeout too short to fit the group count even at
+the 5 s floor (under ~370 s for a 20-group campaign) is the one case that can
+still be cut short: the warning then says so and names the minimum the job
+needs. Because each delivered group is committed to the campaign's state file
+immediately, a run killed part-way and re-run the same day skips the groups it
+already reached.
+
+Each campaign also waits a **random 0-900 s before its first send**
+(`PROMO_START_JITTER_SECONDS`; `0` disables it). The gaps inside a run were
+already random, but every cron fires at one fixed minute, so without it the
+account's day-to-day pattern stays perfectly periodic. Schedules are also kept
+off the hour (minute != 0). The wait is charged against the timeout budget, so
+the gap planning above sees only what is left, and it is capped at a quarter of
+the job timeout so a short timeout clamps the wait instead of burning the run
+before its first send. It is never taken on `--dry-run` / `--refs` or when no
+group is pending.
 
 The job feeds are retired; see *Retired job feeds* above.
 
-Each promo also waits a **random 0-900 s before its first send**
-(`PROMO_START_JITTER_SECONDS`; `0` disables it). The gaps inside a run were
-already random, but every cron used to fire exactly on the hour, so the
-account's day-to-day pattern stayed perfectly periodic. The ten schedules are
-now spread off the hour as well (07:15, 08:40, 10:05, 10:35, 11:39, 12:50,
-13:21, 14:05, 14:26, 17:06 — declared in `deploy/promo-crons.json`, which CI checks these times
-against), chosen so a campaign's latest possible finish -- base minute plus the
-full jitter plus a worst-case run -- never reaches the next campaign's slot. The
-wait is charged against the job's timeout budget, so the gap planning above sees
-only what is left; at today's largest promo (20 groups) that still leaves room
-for the full 20-60 s gaps, and it only starts tightening them past ~37 groups.
-It is capped at a quarter of the job timeout, so a stale short timeout clamps the
-wait instead of burning the run before its first send, and it is never taken on
-`--dry-run` / `--refs` or when no group is pending.
+### Group membership
 
-### Group membership (one file, generated targets)
+Every group the bot knows about is one `groups/<jid>` document in Firestore:
+its name, `source`, `status`, activity tier, posting account, daily-cap override
+and the campaigns that target it. There is no committed roster and no generated
+per-campaign target file; a run derives its target list from these documents in
+one read (`promo_config.resolve`), and the console is where they are edited.
 
-`workspace/cron/membership.json` is the **single source of truth** for the groups
-the bot advertises in: one entry per group with its name, `source`, `status`,
-activity tier and the promos that target it. The eight
-`workspace/cron/*-promo/targets.json` files are **generated** from it by
-`workspace/bin/make-promo-targets`, and `deploy/test_promo_targets_generated.py`
-fails CI if they drift. So:
+`status` does the work the prose exclusion lists used to: only `active` groups
+are posted to, so an `admin-only` (sends return `forbidden`), `not-a-member`
+(`item-not-found`) or `on-hold` group is excluded by its record while
+**keeping** its `promos` list -- which is what makes resuming one a status flip
+rather than a rediscovery. A single assignment can be paused on its own
+(`paused_promos`), which the console shows so it can be resumed.
 
-```sh
-# edit workspace/cron/membership.json, then
-./workspace/bin/make-promo-targets --write   # rewrite the targets files
-./workspace/bin/make-promo-targets --check   # what CI runs; 1 on drift
-```
-
-This replaces the old `group-names.json` and the prose exclusion lists that each
-`targets.json` carried in its `_comment`. `status` now does that work: only
-`active` groups reach a targets file, so an `admin-only` (sends return
-`forbidden`), `not-a-member` (`item-not-found`) or `on-hold` group is excluded by
-its record while **keeping** its `promos` list, which is what makes resuming one
-a status flip rather than a rediscovery. Keep the chosen group names in the
-repo. **Never hand-edit the gateway's session database to add names** (doing so
-took the bot down on 2026-10-14). The supported gateway discovery API below
-handles its own conversation records.
+**Never hand-edit the gateway's session database to add names** (doing so took
+the bot down on 2026-10-14). The supported gateway discovery API below handles
+its own conversation records.
 
 `workspace/bin/list-groups` prints the configured advertising roster
 (`--caps` adds today's allowance, `--json` one object per group); it never
@@ -443,10 +414,8 @@ meaning. Observations older than two hours are shown as stale; saved history is
 not proof of current membership. Failed scans and disabled discovery remain
 visible beside the retained observations.
 
-**Discovery never assigns campaigns or writes membership.json, generated targets
-or Firestore.** It works in file, shadow and Firestore modes without a write key
-or a configuration cutover. Choose campaigns separately through the operator
-workflow. `GENAIE_GROUP_DISCOVERY=0` disables scanning while retaining saved data.
+**Discovery never assigns campaigns and never writes the operator config.** It
+needs no write key. Choose campaigns separately through the operator workflow. `GENAIE_GROUP_DISCOVERY=0` disables scanning while retaining saved data.
 The console can also run against an older bot that omits the new fields.
 
 The scanner is integrated through the existing version-checked WhatsApp loader.
@@ -483,11 +452,12 @@ routes belong to that agent. The result's `conversations` array includes:
 
 - `accountId`: the joined line, such as `ads` or `default`.
 - `kind`: select `group`, excluding direct conversations.
-- `target`: the WhatsApp group JID to record in membership.json.
+- `target`: the WhatsApp group JID to record as a `groups/<jid>` document.
 - `label`: the group name returned from WhatsApp metadata when available.
 
 Filter the result to the intended account and compare its group JIDs with the
-**local** `membership.json`. There is no account selector in this RPC request;
+configured roster (`workspace/bin/list-groups --json`). There is no account
+selector in this RPC request;
 discovery runs across the configured accounts. `limit` must be at most **100**.
 If needed, add a `query` string to narrow discovery and results, for example:
 
@@ -519,60 +489,43 @@ Earlier approaches missed this:
   ownership limitation, not evidence that the group is absent. Use the gateway
   RPC above; do not bypass the ownership guard or restart the account to list it.
 
-After identifying a group, get the intended campaigns from the operator, edit
-the local roster and regenerate targets. Discovery itself does not authorize
-adding campaigns, committing, pushing, merging or deploying.
+After identifying a group, get the intended campaigns from the operator and add
+the group in the console. Discovery itself does not authorize adding campaigns,
+committing, pushing, merging or deploying.
 
-### Moving membership to Firestore
+### Where the operator config lives
 
-membership.json cannot be edited at runtime: `entrypoint.sh` rsyncs
-`workspace/` from the image with `--delete` on every boot, so any change to it
-needs a deploy. Operator config is moving to Firestore, edited in the Firebase
-Console. **One variable decides what a run acts on**, and
-`workspace/lib/promo_config.py` is the only thing that reads it:
+Every group, campaign, line and picture index is a Firestore document, and
+`workspace/lib/operator_config.py` is what reads them: `settings/defaults`,
+`lines/<id>`, `campaigns/<slug>` and `groups/<jid>`, assembled into one
+in-memory config. Each document also carries `rank`, because Firestore lists by
+ID while send order decides which groups a short run reaches.
 
-| `GENAIE_CONFIG_SOURCE` | A campaign run acts on | Also |
-|---|---|---|
-| unset or `file` | membership.json + the generated `targets.json` | — |
-| `shadow` | the same | compares Firestore with the file on every run |
-| `firestore` | **Firestore** | reports what it read; nothing to shadow |
+This replaced a committed `membership.json` with ten generated `targets.json`
+files beside it. Those could not be edited at runtime at all -- `entrypoint.sh`
+rsyncs `workspace/` from the image with `--delete` on every boot, so changing a
+caption or pausing a group cost a commit, a PR, CI, a build and a gateway
+restart. `GENAIE_CONFIG_SOURCE` used to choose between the file, the store, and
+a shadow mode that read both and compared them; the files are gone and the
+variable selects nothing. Setting it anyway is harmless and says so in the
+resolver's notes rather than failing the read.
 
 `promo_config.resolve` answers the question **once per run** and hands back the
-targets payload, the membership the caps derive from, and each campaign's
-on/off switch. One read matters beyond the cutover: the engine used to open the
-targets file five times, so a config change landing mid-run could split one run
-across two configs.
+targets payload, the config the caps derive from, and each campaign's on/off
+switch. One read matters: the engine used to open the targets file five times,
+so a config change landing mid-run could split one run across two configs.
 
-The two sources fail differently on purpose. The file cannot fail closed -- it
-ships inside the image, so if it is missing the build is wrong, not the data --
-and that path keeps its old behaviour down to the stderr wording, which is what
-makes flipping the variable back a true rollback. Firestore fails closed; see
-below.
-
-With `firestore`, a campaign whose `campaigns/<slug>.enabled` is false **sends
-nothing even though its cron is still registered** on the volume. That is the
-point: pausing a campaign becomes a config edit rather than an installer run.
-A `--dry-run` of a paused campaign still previews, matching `promo_caps`, which
-never treats the campaign being run as disabled. Note that after the cutover
-there are two switches and a campaign is on only if both are: `promo-crons.json`
-decides whether a cron exists at all, Firestore decides whether a run that fires
-sends. `console-read` reports the **effective** switch for that reason.
-
-What exists now:
-
-- `workspace/lib/operator_config.py` reads four collections (`settings/defaults`,
-  `lines/<id>`, `campaigns/<slug>`, `groups/<jid>`) back into exactly the
-  membership.json shape, using field names identical to the file. Each document
-  also carries `rank`, because Firestore lists by ID but send order decides
-  which groups a short run reaches.
 - **Targeting fails closed.** If Firestore is unreachable, the last-known-good
   snapshot in `runtime/firestore/` is used -- but only while it is younger than
   `operator_config.SNAPSHOT_MAX_AGE_SECONDS` (48 h). With no snapshot, or one
   past that age, `load()` raises, the run sends nothing and exits non-zero so
   the cron's failure alert fires. "Fail closed" has to mean closed rather than
   stale: a snapshot served indefinitely would keep advertising to a group an
-  operator had paused days ago. The repo's membership.json is deliberately never
-  a fallback either: after cutover it would be stale targeting.
+  operator had paused days ago. **There is deliberately no second source.** The
+  file that used to sit here was kept as a rollback and, by the time it was
+  deleted, had drifted 58 fields from the store -- so falling back to it would
+  have re-posted into groups someone had paused and advertised to groups that
+  had been removed.
 - **Validation is per document.** A malformed group is quarantined (excluded
   and reported) without touching the rest. A malformed settings, line or
   campaign document falls back to the snapshot. Deleting a campaign drops it
@@ -583,111 +536,49 @@ What exists now:
   with Node's built-in `node:crypto`, the one thing the standard library cannot
   do. The key reaches it over stdin, never argv.
 - Each read diffs against the previous snapshot and appends what changed to
-  `runtime/firestore/changes-YYYY-MM.jsonl`, since Console edits keep no
-  history of their own.
+  `runtime/firestore/changes-YYYY-MM.jsonl`, since console edits keep no
+  history of their own. The `audit` collection is the fuller record; see
+  *Backups of the operator data*.
 
-Seeding and the parity gate:
+A campaign whose `campaigns/<slug>.enabled` is false **sends nothing even though
+its cron is still registered** on the volume: pausing a campaign is a config
+edit, not a deploy. A `--dry-run` of a paused campaign still previews, matching
+`promo_caps`, which never treats the campaign being run as disabled.
 
-```sh
-deploy/seed-firestore.py --key seed-key.json            # dry run: what would change
-deploy/seed-firestore.py --key seed-key.json --write    # mirror membership.json
-deploy/seed-firestore.py --key seed-key.json --verify   # 0 only if Firestore == file
-```
+The gateway's key is the read-only runtime key (Cloud Datastore Viewer),
+base64-encoded in `GCP_SERVICE_ACCOUNT_B64` because the entrypoint's variable
+sanitiser would mangle a multi-line JSON value; it is in the entrypoint's
+`SECRET_KEYS`, so it lands in the volume `.env` at 0600. Writes need Cloud
+Datastore User and go through the console API's own
+`GCP_SERVICE_ACCOUNT_WRITE_B64`, or, from the operator's machine, the seed key.
+Neither variable is release-managed, so a deploy neither sets nor clears them.
 
-`--verify` reads back through the same `operator_config` code production will
-use, and passes only if every field, the order of groups, lines and campaigns,
-and every campaign's generated targets.json match the file exactly.
-`deploy/test_operator_config_parity.py` runs the same check offline in CI
-against the real membership, and against the live project with
-`GENAIE_FIRESTORE_INTEGRATION=1`. Use a seed key (Cloud Datastore User) on your
-own machine only. The runtime key is read-only.
+`console-read overview` carries `configSource` -- whether the read was live or
+came from the snapshot, and any quarantined groups -- and `list-groups` names
+the store it read in its header.
 
-Shadow mode checks the copy against real runs before anything acts on it. Off by
-default; two Railway variables turn it on, and a third value cuts over:
+### The ad images in Cloudflare R2
 
-```sh
-base64 -w0 runtime-key.json | railway variable set GCP_SERVICE_ACCOUNT_B64 --stdin --skip-deploys
-railway variable set GENAIE_CONFIG_SOURCE=shadow --skip-deploys && railway redeploy --yes     # shadow on
-railway variable set GENAIE_CONFIG_SOURCE=firestore --skip-deploys && railway redeploy --yes  # cut over
-railway variable set GENAIE_CONFIG_SOURCE=shadow --skip-deploys && railway redeploy --yes     # roll back
-railway variable set GENAIE_CONFIG_SOURCE=file --skip-deploys && railway redeploy --yes       # shadow off
-```
-
-Why this form, and why there is no `--unset`, is in
-[Changing a Railway variable](deploy/railway/README.md#changing-a-railway-variable).
-**Run `deploy/seed-firestore.py --export` before rolling back**: once the console
-edits Firestore, the file falls behind, and a rollback to it would undo every one of
-those edits.
-
-**Do not cut over without checking parity first.** The gate is
-`deploy/seed-firestore.py --key seed-key.json --verify` (exit 0) plus several
-consecutive days of `status: "exact"` with `source: "firestore"` from shadow
-mode. Pick a window with no promo run due (see
-[deploy/railway/README.md](deploy/railway/README.md)), since the flip needs a
-redeploy. While membership.json and the targets files are still in the repo and
-still CI-verified against each other, rolling back is one variable and no code
-deploy -- so keep editing the file alongside Firestore until the file is retired.
-
-With `GENAIE_CONFIG_SOURCE=shadow`, every campaign run reads Firestore in a
-background thread while it sends from membership.json as usual, then logs
-`[config-shadow] ...` lines to stderr: a match, or each difference. A missing
-key, an outage, a hang or a bug in the check changes nothing about the run;
-a check still in flight when the run ends is abandoned after 10 s. The newest
-result is kept in `runtime/firestore/shadow.json` and reported by
-`console-read overview` as `configShadow`, so drift reaches the Genaie
-console rather than only the run logs. The read also keeps the fail-closed
-snapshot and the change log current, so by cutover the path an outage depends on
-has been exercised for days.
-
-With `GENAIE_CONFIG_SOURCE=firestore` there is nothing left to shadow: the run
-reads Firestore for real and reports what it found itself, as
-`[operator-source]` and `[operator-config]` lines. `console-read overview` then
-carries `configSource` -- the mode, whether the read was live or came from the
-snapshot, and any quarantined groups -- and `list-groups` names the store in its
-header, so neither can show the file while production acts on Firestore.
-
-The key is the read-only runtime key (Cloud Datastore Viewer), base64-encoded
-because the entrypoint's variable sanitiser would mangle a multi-line JSON
-value. `GCP_SERVICE_ACCOUNT_B64` is in the entrypoint's `SECRET_KEYS`, so it
-lands in the volume `.env` at 0600. Neither variable is release-managed, so a
-deploy neither sets nor clears them. For a one-off check from a shell on the
-gateway: `runuser -u joseph -- python3 workspace/lib/config_shadow.py` (exit 1 on any
-difference; as joseph, so the files it writes stay writable by the cron runs).
-
-### Moving the ad images to Cloudflare R2
-
-The images the campaigns post used to be the one thing in `workspace/` that only
-a deploy could change: 17 files, 11 MB, baked into the Docker image and rsynced
+The images the campaigns post were the one thing in `workspace/` that only a
+deploy could change: 17 files, 11 MB, baked into the Docker image and rsynced
 onto the volume on every boot. Swapping a picture cost a commit, a PR, CI, a
-build and a gateway restart -- the riskiest routine operation this bot has.
+build and a gateway restart -- the riskiest routine operation this bot had.
 
-The bytes now live in a Cloudflare R2 bucket, read over plain public HTTPS, and
-the index of them lives in a Firestore `assets` collection beside the operator
-config. **One variable decides where a run's pictures come from**, and
-`workspace/lib/ad_assets.py` is the only thing that reads it:
-
-| `GENAIE_AD_ASSETS_SOURCE` | A campaign run attaches | Also |
-|---|---|---|
-| unset or `repo` | the images baked into the container | no network at all |
-| `shadow` | the same | compares the index with the baked images, and warms the cache |
-| `r2` | **the cached copy of what the index names** | falls back to the baked image while one exists |
-
-```bash
-railway variable set \
-  GENAIE_AD_ASSETS_BASE_URL=https://pub-63be390258b5461e931301ca810b7a86.r2.dev \
-  GENAIE_AD_ASSETS_SOURCE=shadow --skip-deploys && railway redeploy --yes   # shadow on
-railway variable set GENAIE_AD_ASSETS_SOURCE=r2 --skip-deploys && railway redeploy --yes      # cut over
-railway variable set GENAIE_AD_ASSETS_SOURCE=shadow --skip-deploys && railway redeploy --yes  # roll back
-```
+The bytes live in a Cloudflare R2 bucket, read over plain public HTTPS, and the
+index of them lives in a Firestore `assets` collection beside the operator
+config. `workspace/lib/ad_assets.py` is the only thing that reads either, and
+R2 is the only source: nothing is baked any more, so a picture that cannot be
+fetched is a failed run rather than a silent fallback to stale artwork.
+`GENAIE_AD_ASSETS_BASE_URL` is the bucket's public origin and
+`GENAIE_AD_ASSETS_SOURCE` selects nothing (it was the cutover switch).
 
 One hard-won detail about that endpoint: **`r2.dev` answers `403` to a request
 whose `User-Agent` is urllib's default `Python-urllib/3.x`**, and `200` to any
 other value, an empty one included. Measured against the live bucket: `curl`, a
 named agent and no agent at all all succeed; `Python-urllib/3.13` does not. So
 `ad_assets` sends `User-Agent: genaebot-ad-assets/1`. Without it every fetch
-fails, every campaign falls back to its baked image, and the only trace is
-`[ad-assets] dropping ... 403` in a run log -- the quietest possible way for this
-module to do nothing at all. A test pins the header.
+fails and, now that there is no baked image to fall back to, the run exits
+non-zero with nothing sent. A test pins the header.
 
 That base URL is the bucket's `r2.dev` public development URL. Cloudflare
 rate-limits those and says they are not for production traffic, which is
@@ -703,15 +594,16 @@ read that describes the pictures instead of fetching them, never raises, and
 prefers a recent snapshot so the console cannot put a Firestore round trip
 behind every page refresh. It is the only other caller, and the URL it hands out
 is built by `ad_assets.public_url`, the same function `ensure` fetches with, so
-a console cannot show one object while a run sends another. See *Operator
-Console API*.
+a console cannot show one object while a run sends another. An unset
+`GENAIE_AD_ASSETS_BASE_URL` costs the picture tiles and nothing else -- a
+campaigns screen that will not load is worse than one that says why it has no
+thumbnails. See *Operator Console API*.
 
-`ad_assets.resolve` is called once per run, immediately before the daily
-rotation, and hands back **local paths** either way -- so the rotation, the
-pre-flight existence check, the caption machinery and `send_ad` are all
-unchanged. A single baked path becomes the campaign's whole rotation list in
-`r2` mode, which is what makes *adding* a picture an index edit rather than a
-change to a post script.
+`ad_assets.ensure` is called once per picture, before the first send, and hands
+back a **local path** -- so the rotation, the pre-flight existence check, the
+caption machinery and `send_ad` all work on files. The campaign's own `images`
+list decides which pictures a run fetches and in what order, which is what makes
+*adding* one an index edit rather than a code change.
 
 `openclaw message send` would accept an `https://` URL for `--media` and fetch
 it itself. It is deliberately not used that way. `send_ad` runs **once per
@@ -732,13 +624,14 @@ is immutable, no edge cache can serve stale bytes, and a cached file's name
 proves its contents. The digest is re-checked on every run; a few milliseconds
 against broadcasting a corrupt image to thirty groups.
 
-Failure is fail-open to the cache, not fail-closed, because the fallback only
-engages when the targeting is good and R2 is not -- and posting a valid cached
-ad beats posting nothing. Firestore unreachable serves the last-known-good
-index snapshot, bounded at 48 h like `operator_config`'s own. One dead object
-drops one picture from the rotation and the others still go out. Only when
-*nothing* can be served does the run exit non-zero with nothing sent, naming the
-missing picture so the cron's failure alert is useful.
+Failure falls back to the cache, not closed, because the cache only engages when
+the targeting is good and R2 is not -- and posting a valid cached ad beats
+posting nothing. Firestore unreachable serves the last-known-good index
+snapshot, bounded at 48 h like `operator_config`'s own. A data-defined campaign
+fetches **every** picture its document names before it sends anything, all or
+none, so a dead object costs that campaign the day rather than silently changing
+its rotation: the run exits non-zero naming the missing picture, and the cron's
+failure alert fires.
 
 To put a new picture live, from a checkout, with R2 credentials in the
 environment and a Firestore key with Cloud Datastore User:
@@ -746,7 +639,7 @@ environment and a Firestore key with Cloud Datastore User:
 ```bash
 deploy/upload-ad-image.py cv ~/new-cv-ad.png --replace cv-ad.png   # dry run
 deploy/upload-ad-image.py cv ~/new-cv-ad.png --replace cv-ad.png --write
-deploy/upload-ad-image.py --verify                        # store vs the mirror
+deploy/upload-ad-image.py --verify                        # index vs the bucket
 ```
 
 Credentials come from `~/.config/genaie/r2-upload.env` (`--env-file` points
@@ -760,21 +653,22 @@ and parses it as plain `KEY=VALUE` rather than sourcing it, so a credentials fil
 can never run anything.
 
 It validates the file (JPEG or PNG by magic bytes, inside the gateway's 6 MB
-image limit), uploads it, writes the index document, and rewrites
-`deploy/ad-assets.json` -- a generated mirror that is the seed input, the record
-of which picture went live when, and what `--verify` checks the store against.
-Commit it; CI asserts every entry's digest and size against the baked file while
-those still exist. The R2 **write** credentials never enter the container and are
+image limit), uploads it, and writes the index document **and** the campaign's
+own `images` list in one transaction -- a run attaches the pictures the campaign
+document names, so writing only the index would upload a swap that never went
+out. Nothing in the repository changes: the index and the bytes both live
+outside it now. The R2 **write** credentials never enter the container and are
 not Railway service variables: only the operator's machine signs anything, and
 the gateway only ever makes unauthenticated GETs.
 
-In `shadow` mode each run compares the index with its baked images in a
-background thread, logs `[ad-assets] ...` lines, and leaves the result in
-`runtime/firestore/ad-assets-shadow.json`, reported by `console-read overview`
-as `adAssets`. A hang, an outage or a bug in the check changes nothing about the
-run; a check still in flight when the run ends is abandoned after 20 s. For a
-one-off check of every campaign from a shell on the gateway:
-`runuser -u joseph -- python3 workspace/lib/ad_assets.py` (exit 1 on any drift).
+`--verify` is the parity gate. It used to diff the index against
+`deploy/ad-assets.json`, a committed mirror of it, and against the baked
+pictures the mirror was seeded from; all of that is gone, so it now checks the
+pair that is actually load-bearing -- every picture the index names must be an
+object in the bucket, because a run fetches all of them before it posts
+anything. An entry with no object is reported as `DRIFT` and fails; an object no
+entry names is reported as `SPARE` and does not, since that is expected for a
+while after a picture is replaced.
 
 ### Per-group daily ad caps
 
@@ -807,16 +701,16 @@ so across one cycle every campaign gets exactly `cap` turns and none starves. It
 is a pure function of `(day, jid, promo set, cap)` -- identical in every cron
 process, needing no shared state and no lock, which matters because
 `json_store` is last-writer-wins and the eight crons can overlap.
-A campaign switched off in `deploy/promo-crons.json` (`"enabled": false`, read
-from the image copy at `/usr/local/lib/genaie/promo-crons.json` on the gateway)
-takes no turns, so pausing one hands its slots to the campaigns still running
-instead of leaving them empty; a manual run or `--dry-run` of the paused
-campaign still sees its own rotation. A missing or unreadable manifest fails
-open to the old behaviour.
+A switched-off campaign takes no turns, so pausing one hands its slots to the
+campaigns still running instead of leaving them empty; a manual run or
+`--dry-run` of the paused campaign still sees its own rotation. Which campaigns
+are switched off comes from the resolved config the run has already read, so the
+caps never guess at it -- and `promo_caps` deliberately has no way to work it
+out for itself.
 
-Caps are **on** (`defaults.caps_enabled` is `true` in membership.json), and
-the engine fails open: a missing or broken membership file logs a warning and
-sends to every eligible group. Preview the allowances with
+Caps are **on** (`defaults.caps_enabled` is `true` in `settings/defaults`), and
+the engine fails open: a config it cannot read logs a warning and sends to every
+eligible group. Preview the allowances with
 `./workspace/bin/list-groups --caps` (and `--date YYYY-MM-DD` for another day) or
 a promo's `--dry-run`, which prints each group's tier, cap, reply score and the
 campaigns today's rotation gives the allowance to. With every group left at the
@@ -859,8 +753,8 @@ may instead place the link itself with the `{ref_link}` / `{ref}` placeholders.
 | skylight-solar-promo | SK | the contact account (bot) |
 
 The bot advertises from two WhatsApp lines so neither account is a member of a
-suspiciously large number of groups. `membership.json` maps each account to the
-number it advertises (`defaults.accounts`) and tags each group with the account
+suspiciously large number of groups. The `lines/<id>` documents map each account
+to the number it advertises and each group document names the account
 that joined it (`account`, absent means the `default` line); a group can only be
 posted to by the line that is actually a member of it. Public enquiries use
 `defaults.contact_account` (`default`): both `{bot_number}` in the copy and the
@@ -872,8 +766,8 @@ The account-number map still records each line's actual identity. An explicit
 third-party `TRACKING.number` (appliance-repairs) takes precedence. Without
 `contact_account`, the engine retains the original per-sender contact behavior.
 Default-line conversations, admin/self-chat, alerts and payment details are
-unchanged. Regenerate targets with `workspace/bin/make-promo-targets --write`
-after changing contact routing.
+unchanged. Contact routing is `settings/defaults.contact_account`, so changing
+it takes effect on the next run with no deploy.
 
 | Account | Number | Role |
 |---|---|---|
@@ -1035,7 +929,8 @@ Decode refs with `--refs`, which prints `ref  promo  group_jid  link` for every
 target and exits without sending or touching state:
 
 ```bash
-python3 workspace/cron/borehole-drilling-promo/post_ad.py --refs
+railway ssh -- runuser -u joseph -- \
+  /home/joseph/.openclaw/workspace/bin/run-console-campaign borehole-drilling --refs
 ```
 
 When a DM carrying a ref reaches the bot, the public-service-gate plugin counts it
@@ -1230,10 +1125,10 @@ allocation, and validation of shared changes that can affect other groups.
 
 `deploy/railway/console-api.py` serves the operator console's read model over
 HTTP beside the gateway. Campaign and membership responses come from
-`workspace/bin/console-read`, which reads `workspace/cron/membership.json`,
-the ad-reply counters the caps derive from, and each campaign's own module. It
-never writes to the repository, never contacts the gateway, and never records a
-cap snapshot, so reading it cannot move the rotation on. The one thing a read
+`workspace/bin/console-read`, which reads the Firestore operator config, the
+picture index, and the ad-reply counters the caps derive from. It never writes
+to the repository, never contacts the gateway, and never records a cap snapshot,
+so reading it cannot move the rotation on. The one thing a read
 does leave behind is the last-known-good Firestore snapshot on the state volume,
 refreshed exactly as a campaign run refreshes it. Separate account endpoints contact the
 running gateway for live status and account controls, and one write route
@@ -1268,31 +1163,29 @@ where their bytes are**, so the console can show them rather than name them:
                             "contentType": "image/jpeg", "rank": 10}]}]}
 ```
 
-`images` is what the campaign's own `post_ad.py` declares; `assets` is what the
-Firestore index says, in rotation order, joined by `filename`. They are reported
-separately rather than merged because they are two different claims, and the day
-they disagree is worth seeing. `url` is `null` when `GENAIE_AD_ASSETS_BASE_URL`
+`images` is what the campaign's own document declares, which is what a run
+attaches; `assets` is what the Firestore picture index says, in rotation order,
+joined by `filename`. They are reported separately rather than merged because
+they are two different claims, and the day they disagree is worth seeing --
+`deploy/upload-ad-image.py` writes both in one transaction precisely so they
+cannot. `url` is `null` when `GENAIE_AD_ASSETS_BASE_URL`
 is unset, which is not the same as having no pictures.
 
-The index is read **whatever `GENAIE_AD_ASSETS_SOURCE` says** -- it is accurate
-before the cutover as well as after, and a console that showed nothing until
-`r2` was switched on would be hiding the thing the cutover is about. `adAssets`
-reports `mode` beside the index so a screen can say plainly that a run still
-attaches the baked copy. An index that cannot be read costs the pictures and
-nothing else: `assets` is `[]`, `adAssets.note` says why, and the campaigns
-payload is otherwise complete.
+An index that cannot be read costs the pictures and nothing else: `assets` is
+`[]`, `adAssets.note` says why, and the campaigns payload is otherwise complete.
+`adAssets.mode` is now always `r2`, since there is no other source for a run to
+attach, and `adAssets.source` says whether the index came from Firestore or from
+the snapshot.
 
-When neither a snapshot nor Firestore can answer, the console falls back to
-**`deploy/ad-assets.json`**, the committed mirror, baked into the image at
-`/usr/local/lib/genaie/ad-assets.json` because `deploy/` is never staged onto
-the volume. That rung is not theoretical: the first deploy of this feature
-showed every tile blank, because the project's Firestore quota was exhausted
-(`429 RESOURCE_EXHAUSTED`) **and** `repo` mode means no run had ever written a
-snapshot — so there was nothing anywhere to say where the pictures were, while
-the bytes sat in the bucket. The mirror is deploy-time truth: an operator's
-edit in the Firebase Console is not in it, so `adAssets.source` reports
-`mirror` rather than passing it off as the index, and `note` still says why the
-live read did not happen.
+There used to be one more rung: `deploy/ad-assets.json`, a committed mirror of
+the index, baked into the image. It is gone with the rest of the operator data
+in this repository, and it was not theoretical -- the first deploy of this
+feature showed every tile blank, because the project's Firestore quota was
+exhausted (`429 RESOURCE_EXHAUSTED`) **and** no run had yet written a snapshot,
+so nothing anywhere said where the pictures were while the bytes sat in the
+bucket. What covers that case now is the index snapshot, which every run and
+every console read refreshes, plus `deploy/backup-operator-data.py` as the
+copy of record.
 
 A live read that fails also writes `runtime/firestore/ad-assets-unreadable.json`
 and is not retried for `RETRY_AFTER_SECONDS`. A console tab refreshes every 60
@@ -1509,25 +1402,21 @@ carry stays Cloud Datastore Viewer.
 Because `console-read` imports the bot's own `promo_membership`, `promo_caps`
 and `promo_broadcast` rather than reimplementing them, a preview is the same
 text the cron would send. The variant index it reports is 0-based, exactly as
-`caption_for` returns it; `post_ad.py --dry-run` and the console both add one
-only when displaying it.
+`caption_for` returns it; `run-console-campaign --dry-run` and the console both
+add one only when displaying it.
 
-A campaign the manifest switches off (`"enabled": false` in
-`deploy/promo-crons.json`) is still declared, still has copy and still has
-groups configured for it, but installs no cron and therefore never posts. Every
-payload says so rather than leaving the console to guess: `campaigns` and
-`preview/<slug>` carry `enabled`, `groups` carries a `disabledPromos` list so a
-screen can tell "campaign is off" from "held back by today's cap", and neither
-`allowedToday` nor `overview`'s `plannedSendsToday` counts a send for one.
-Since the cutover there are two switches, and `campaigns` reports both beside the
-effective `enabled`: `storeEnabled`, the operator's own switch in Firestore and
-the one a console toggle edits, and `cronEnabled`, whether the manifest registers a
-cron at all. A toggle cannot fix the second, so a console must not pretend it can.
-`preview/<slug>` lists paused assignments too, marked `paused` with `sendsToday`
-false -- it is the list a pause is resumed from. An
-absent `enabled` key means enabled, matching `install-promo.sh`,
-`railway-release.py` and `report-release-ready.py`; a non-boolean one is a
-manifest error and the bridge refuses rather than treat it as truthy.
+A campaign that is switched off still has copy and still has groups configured
+for it, but never posts. Every payload says so rather than leaving the console
+to guess: `campaigns` and `preview/<slug>` carry `enabled`, `groups` carries a
+`disabledPromos` list so a screen can tell "campaign is off" from "held back by
+today's cap", and neither `allowedToday` nor `overview`'s `plannedSendsToday`
+counts a send for one. There are two switches, and `campaigns` reports both
+beside the effective `enabled`: `storeEnabled`, the operator's own switch in
+Firestore and the one a console toggle edits, and `cronEnabled`, whether the
+reconciler has confirmed the gateway actually has the cron
+(`scheduleStatus == "ready"`). A toggle cannot fix the second, so a console must
+not pretend it can. `preview/<slug>` lists paused assignments too, marked
+`paused` with `sendsToday` false -- it is the list a pause is resumed from.
 
 It ships disabled. Enabling it is environment only, and
 `deploy/railway/README.md` has the recipe:
@@ -1836,32 +1725,30 @@ provider names, base locations and direct contacts are never sent to customers.
 Missing information requires a handoff; travel charges and final site quotes
 are never assumed. Existing `PB`/`BP` tracking references remain recognized.
 
-After deploying the source in a quiet window, run
-`./deploy/retire-borehole-promos.sh --dry-run`, then
-`./deploy/reinstall-promo-crons.sh --only borehole-drilling` and finally
-`./deploy/reinstall-promo-crons.sh --check`. The installer migrates the retained
-schedule and retires only the two superseded registrations. Keep a live cron
-snapshot for recovery before migration; do not clear runtime delivery history.
+The two superseded registrations (borehole-paid and Big Player) were retired
+when this consolidation shipped, and the retained `borehole-drilling-promo` job
+kept its schedule and its runtime delivery history.
 
 ### Temporary CV promotion pause
 
-The `cv-promo` cron is intentionally disabled via `enabled: false` in
-`deploy/promo-crons.json`. Customer CV requests remain available during normal
-gateway hours. Cron installers preserve this pause; release checks require only
-campaigns declared enabled. The original CV poster still contains the offline
-ads contact number and must be corrected before re-enabling this campaign.
-Restore `enabled: true` and run the CV installer to resume; a merge alone does
-not change the live cron state.
+The `cv` campaign is intentionally switched off: `enabled: false` on
+`campaigns/cv`, which also leaves its `cv-promo` cron job disabled on the
+gateway. Customer CV requests remain available during normal gateway hours, and
+release checks only require the campaigns that are enabled. The original CV
+poster still carries the offline ads contact number and must be corrected before
+this campaign is turned back on. Switching it on is a console edit; the
+reconciler enables the job.
 
 
 ### Console-created campaigns
 
 The console API accepts authenticated `POST /internal/console/campaigns/create`
-requests when its existing write key is installed. This requires
-`GENAIE_CONFIG_SOURCE=firestore` and `GENAIE_AD_ASSETS_SOURCE=r2`, with
-`GENAIE_AD_ASSETS_BASE_URL` configured. Campaigns, group assignments, image index,
-audit and idempotency receipt save in one Firestore transaction. Existing
-manifest campaigns retain their installers and scripts.
+requests when its existing write key is installed, with
+`GENAIE_AD_ASSETS_BASE_URL` configured. Campaigns, group assignments, image
+index, audit and idempotency receipt save in one Firestore transaction. Every
+campaign is data-defined now, so a campaign created here is the same kind of
+thing as one converted from a repository script -- the only difference is the
+job name it runs under.
 
 The console signs direct, immutable R2 picture uploads using its own bucket-scoped
 write token. The gateway needs no R2 write credentials. `console-campaign-create`
@@ -1881,51 +1768,39 @@ writer, broadcast, read bridge and console API test suites before deploying.
 Deploy bot support before enabling the console creation controls. Keep
 `GCP_SERVICE_ACCOUNT_WRITE_B64` isolated to the console API as before.
 
-### Converting a repository campaign to data
+### How the repository campaigns were converted (historical)
 
-Ten campaigns still keep their captions in `workspace/cron/<name>/post_ad.py`,
-their schedule in `deploy/promo-crons.json` and their picture order in the post
-script. `deploy/migrate-campaigns-to-firestore.py` moves all of that onto the
-campaign's existing Firestore document, one campaign at a time, so it runs
-through `run-console-campaign` exactly like a console-created campaign. This is
-the step that lets the files be deleted; nothing is deleted yet.
+Ten campaigns kept their captions in `workspace/cron/<name>/post_ad.py`, their
+roster in a generated `targets.json`, their pictures in an `assets/` directory
+and their schedule in `deploy/promo-crons.json`.
+`deploy/migrate-campaigns-to-firestore.py` moved all of that onto each
+campaign's own Firestore document, one campaign at a time, so every one runs
+through `run-console-campaign` exactly like a console-created campaign. All ten
+were converted on 2026-11-11 and the files were deleted in the same change; the
+conversion tool went with them, having nothing left to read.
 
-```bash
-deploy/migrate-campaigns-to-firestore.py --only cv --key seed-key.json           # dry run
-deploy/migrate-campaigns-to-firestore.py --only cv --key seed-key.json --write   # convert
-deploy/migrate-campaigns-to-firestore.py --all --key seed-key.json --verify      # 0 when all are done
-deploy/migrate-campaigns-to-firestore.py --only cv --key seed-key.json --revert --write
-```
+What a conversion wrote, and what is therefore true of those campaigns now:
+`kind: console`, `captions`, `tracking`, `schedule`, `timeoutSeconds`,
+`failureAlertTo`, `images` and `jobName`, with an audit document in the same
+commit.
 
-A conversion writes `kind: console`, `captions` (an override already saved from
-the console wins), `tracking`, `schedule`, `timeoutSeconds`, `failureAlertTo`,
-`images` and `jobName`, with an audit document in the same commit. `enabled`
-becomes the store switch AND the manifest switch, so a campaign paused in the
-manifest stays paused.
+`jobName` is the campaign's original cron job name, kept rather than renamed to
+`console-<slug>-promo`. That is load-bearing: the run keeps using
+`runtime/cron-state/<jobName>/state.json`, so sent-today state and
+caption-rotation counters carried across the conversion instead of every group
+getting the day's ad a second time.
 
-`jobName` is the campaign's existing cron job name. The console API's
-reconciler finds that job within five minutes and edits it in place, and the
-run keeps using `runtime/cron-state/<jobName>/state.json`, so sent-today state
-and caption-rotation counters carry over and nothing moves on the volume.
+Two rules the conversion enforced apply to every campaign the console creates
+too (`console_campaigns.validate_definition` and `spacing_problem`): a schedule
+must not be on the hour, and a campaign must not have more groups than its
+timeout reaches at full spacing -- at most 30 groups per hour of timeout, 60 for
+the 7200 second job. The live schedules are checked against the same arithmetic
+on every release; see *Two things a campaign's schedule has to be able to
+deliver*.
 
-The conversion changes where a run reads its inputs, not the inputs. The dry
-run refuses anything that would make them differ: a picture the script names
-that the index lacks, a different picture order, a schedule on the hour, or
-more groups than the timeout reaches at full spacing. Those last two rules now
-also apply when a campaign is created from the console
-(`console_campaigns.validate_definition` and `spacing_problem`): at most 30
-groups per hour of timeout, 60 for the 7200 second job.
-
-Convert in a quiet window at least ten minutes before the campaign's slot and
-wait for `--verify` to pass. Do not re-run a converted campaign's
-`deploy/install-*-promo.sh`; the reconciler would repoint the job again.
-`--revert` followed by that installer is the way back while the script exists.
-`reinstall-promo-crons.sh --check` reports a converted campaign's command as
-drift, which is expected until the manifest is retired.
-
-After conversion a run attaches the `images` on the campaign document.
-`deploy/upload-ad-image.py --write` therefore refreshes that list whenever it
-changes a converted campaign's index entries, and prints the update in its dry run.
+A run attaches the `images` on the campaign document, so
+`deploy/upload-ad-image.py --write` refreshes that list whenever it changes a
+campaign's index entries, and prints the update in its dry run.
 
 ## Campaign retirement from the console
 
@@ -2005,3 +1880,70 @@ protocol tests. Existing CLI config readers, campaign runners and all writer
 validation remain authoritative and independent of this display index. Deploy the
 bot endpoints before the updated console; it intentionally has no full-directory
 fallback when a live endpoint is missing. Roll back the console before the bot.
+
+## Backups of the operator data
+
+Git used to be the backup and the history for this data: the groups, the
+campaigns, their copy and their pictures sat in the repository, so any mistake
+was one `git revert` away. Once they live only in Firestore and R2 that is gone,
+and the last-known-good snapshot in `runtime/firestore/` is not a substitute --
+it holds one generation, it is overwritten by the next healthy read, and it
+expires after 48 hours. `deploy/backup-operator-data.py` is what replaces git.
+
+```bash
+deploy/backup-operator-data.py --key seed-key.json                  # write today's backup
+deploy/backup-operator-data.py --key seed-key.json --verify         # newest backup vs. live
+deploy/backup-operator-data.py --key seed-key.json \
+    --restore runtime/backups/2026-11-11 --collection groups        # what it would put back
+```
+
+A backup is a directory named for the day under `runtime/backups/` on the
+volume, holding one JSON file per collection plus `manifest.json` with each
+file's document count and sha256. Documents are decoded exactly as a campaign
+run decodes them, so a backup is readable by a person and can be written
+straight back. The directory is assembled under a temporary name and renamed
+into place, so a half-written backup is never mistaken for a whole one, and
+every file is `0600` inside a `0700` directory.
+
+Nine collections are copied: the four config collections, the `assets` picture
+index, the `audit` trail -- which is the real change history, with the before and
+after of every console write -- and the three that record that an operation
+already happened (`campaign_creations`, `campaign_deletions`,
+`campaign_asset_uploads`), because restoring the config without them would let a
+replayed request run a second time. The console's live index is deliberately not
+copied: it is a derived SQLite cache, rebuilt from these.
+
+R2 holds the picture bytes, which are far too large to copy and are already
+content-addressed, so what is recorded is the object list: every key, its size
+and R2's own etag. Listing the bucket needs the S3 credentials the entrypoint
+deliberately strips from the gateway environment, so the weekly cron records the
+Firestore side and says in the manifest that the bucket was not listed; a run on
+the operator's machine, which has `~/.config/genaie/r2-upload.env`, records both.
+`--no-r2` skips the listing even where it is configured.
+
+`--retain N` keeps the newest N backups and deletes the rest (default 8, `0`
+keeps everything). Anything that is not a dated directory with a manifest is
+left alone, so an operator's own copy beside them is never pruned.
+
+`--restore` writes whole documents, not the field patches `console-write` is
+limited to, because a restore has to be able to put back a field no console
+screen can edit. That is also why it is one collection per run, dry by default,
+and prints every document it would change; `--write` applies it and commits one
+audit document of its own. A document created since the backup is listed and
+left alone -- deleting it is a separate, deliberate act through the console.
+
+A backup needs only read access, so the gateway's read-only runtime key is
+enough; a restore needs Cloud Datastore User, so it needs the seed key. Register
+the weekly run by hand, as every other cron on this gateway is registered --
+merging this repository schedules nothing:
+
+```bash
+railway ssh -- env -u OPENCLAW_HOME HOME=/home/joseph \
+  OPENCLAW_GATEWAY_TOKEN="$GATEWAY_AUTH_TOKEN" openclaw cron add \
+  --name operator-data-backup --schedule "40 3 * * 0" --tz Africa/Harare \
+  --command "python3 /home/joseph/.openclaw/deploy/backup-operator-data.py"
+```
+
+Pull a backup to your own machine with `railway ssh -- tar cz -C
+/home/joseph/.openclaw/runtime/backups .` and keep at least one copy off the
+volume: a backup that only exists beside the thing it is backing up is not one.

@@ -44,8 +44,24 @@ def read(path):
         return json.load(f)
 
 
+def campaign(slug, time, *, weekdays=None, timezone="Africa/Harare"):
+    """One data-defined campaign document, as the store holds it."""
+    return {
+        "kind": "console", "name": slug.replace("-", " ").title(),
+        "captions": ["%s caption one" % slug, "%s caption two" % slug],
+        "tracking": {"label": slug, "prefix": slug[:2].upper()},
+        "schedule": {"time": time, "timezone": timezone,
+                     "weekdays": list(range(7)) if weekdays is None else list(weekdays)},
+        "timeoutSeconds": 7200, "failureAlertTo": "+26370000001",
+        "images": [{"filename": "%s-1.jpg" % slug,
+                    "key": "ads/%s/%s.jpg" % (slug, "1" * 64),
+                    "sha256": "1" * 64, "bytes": 101, "contentType": "image/jpeg"}],
+        "scheduleStatus": "ready",
+    }
+
+
 def membership():
-    """A small membership in the exact shape of the real file."""
+    """A small config in the shape the store holds and a run reads."""
     return {
         "_comment": "test",
         "version": 1,
@@ -54,8 +70,12 @@ def membership():
                      "accounts": {"default": {"number": "+10000000001"},
                                   "ads": {"number": "+10000000002"}},
                      "bands": {"busy": [6, 10], "normal": [4, 6], "quiet": [1, 3]}},
-        "promos": {"genaie": {"comment": "g"},
-                   "cv": {"comment": "c", "weekly_comment": "w"}},
+        # Every campaign is data-defined: its copy, schedule, pictures and
+        # timeout are fields on its own document, not a post script and a
+        # committed cron manifest.
+        "promos": {"genaie": dict(campaign("genaie", "09:07"), comment="g"),
+                   "cv": dict(campaign("cv", "11:39"), comment="c",
+                              weekly_comment="w")},
         "groups": {
             JID_B: {"name": "Bravo", "source": "operator", "status": "active",
                     "daily_cap": None, "promos": ["genaie", "cv"],
@@ -183,7 +203,10 @@ class Harness(unittest.TestCase):
         self.dir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.dir, True)
         self.env = {"GENAIE_FIRESTORE_DIR": os.path.join(self.dir, "fs"),
-                    "GCP_SERVICE_ACCOUNT_B64": creds_b64()}
+                    "GCP_SERVICE_ACCOUNT_B64": creds_b64(),
+                    # Every campaign is data-defined, so listing one means
+                    # addressing its pictures; the gateway always has this set.
+                    "GENAIE_AD_ASSETS_BASE_URL": "https://assets.example.test"}
         self.firestore = FakeFirestore()
         self.signed = []
         self.clock = [1_800_000_000.0]

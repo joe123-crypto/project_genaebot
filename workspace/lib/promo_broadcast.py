@@ -49,8 +49,8 @@ Std-lib only (plus the sibling :mod:`json_store` helper), so it stays importable
 from the OpenClaw ``--command`` cron scripts, which are std-lib only by contract.
 Set ``GENAIE_CAMPAIGN_TRANSPORT=rpc`` to use one lazy Node SDK client per campaign;
 the image defaults to the transient CLI while net billing savings are unproven.
-Set ``GENAIE_AD_ASSETS_SOURCE=r2`` to take the ad images from R2 instead of the
-ones baked into the container (see :mod:`ad_assets`).
+The ad images come from Cloudflare R2, fetched and verified before the first
+send; the caller hands this module local paths (see :mod:`ad_assets`).
 """
 
 import os
@@ -67,7 +67,6 @@ from datetime import date
 import json_store
 from gateway_campaign import active_client, campaign_transport
 import ad_assets
-import config_shadow
 import operator_config
 import promo_config
 
@@ -246,8 +245,8 @@ def load_account_targets(source):
 def load_account_numbers(source):
     """Return {account_id: advertised_number} so the engine can render each
     group's caption + wa.me link with the selected contact account
-    (or the posting account when no contact is selected). Comes from membership.json's
-    defaults.accounts, carried into every targets.json by make-promo-targets."""
+    (or the posting account when no contact is selected). Comes from the lines
+    configured in the console, carried into every resolved target payload."""
     raw = _targets_doc(source).get("account_numbers") or {}
     out = {}
     if isinstance(raw, dict):
@@ -835,7 +834,6 @@ def send_gap_bounds(send_delay=None, send_delay_min=None, send_delay_max=None):
     return (lo, hi)
 
 
-_PROBE_CRON_TIMEOUT = object()
 
 
 def start_jitter_bound(start_jitter=None):
@@ -848,59 +846,12 @@ def start_jitter_bound(start_jitter=None):
                     "PROMO_START_JITTER_SECONDS", DEFAULT_START_JITTER_SECONDS)
 
 
-def cron_timeout_seconds(script=None):
-    """Seconds the gateway allows this run, or None when that is unknowable.
-
-    A promo cron's job timeout lives in the gateway's cron state on the volume,
-    NOT in this repo: merging a longer ``--timeout-seconds`` into
-    deploy/install-promo.sh changes nothing live until the ten
-    ``deploy/install-*-promo.sh`` installers are re-run, and no deploy step runs
-    them. A run that plans for the merged timeout would therefore be killed
-    part-way by the stale one, and the groups it had not reached yet would miss
-    the day's ad. So ask the gateway what this job's limit actually is and plan
-    inside it (see :func:`fit_gap_bounds`).
-
-    Matches the job whose command argv ends with this script's ``<promo>/<file>``
-    path. Returns None when the lookup fails or no job matches (e.g. a manual
-    run), which leaves the configured gaps untouched.
-    ``PROMO_RUN_TIMEOUT_SECONDS`` overrides the lookup; 0 means "no limit"."""
-    raw = os.environ.get("PROMO_RUN_TIMEOUT_SECONDS")
-    if raw and raw.strip():
-        override = _env_seconds("PROMO_RUN_TIMEOUT_SECONDS", None)
-        if override is not None:  # a rejected value falls through to the lookup
-            return override or None  # 0 -> no limit
-    script = os.path.abspath(script or sys.argv[0] or "")
-    promo_dir = os.path.basename(os.path.dirname(script))
-    if not promo_dir or not os.path.basename(script):
-        return None  # nothing specific enough to match a single job against
-    tail = os.path.join(promo_dir, os.path.basename(script))
-    try:
-        p = subprocess.run(["openclaw", "cron", "list", "--all", "--json"],
-                           capture_output=True, text=True, timeout=60,
-                           env=gateway_env())
-    except Exception as ex:
-        sys.stderr.write("WARN: could not read this job's cron timeout: %s\n" % ex)
-        return None
-    if p.returncode != 0:
-        sys.stderr.write("WARN: could not read this job's cron timeout: %s\n"
-                         % ((p.stderr or p.stdout or "").strip()[:200]))
-        return None
-    try:
-        jobs = (json.loads(p.stdout or "{}") or {}).get("jobs") or []
-    except ValueError as ex:
-        sys.stderr.write("WARN: could not parse cron list output: %s\n" % ex)
-        return None
-    for job in jobs:
-        payload = (job or {}).get("payload") or {}
-        argv = payload.get("argv") or []
-        if not any(isinstance(a, str) and a.replace("\\", "/").endswith(tail)
-                   for a in argv):
-            continue
-        raw_timeout = payload.get("timeoutSeconds")
-        if raw_timeout is None:
-            return None  # job runs unbounded; nothing to fit the run inside
-        return _seconds(raw_timeout, "timeoutSeconds", None) or None
-    return None
+# There used to be a gateway lookup here: a campaign's job timeout lived only in
+# the gateway's cron state on the volume, so merging a longer --timeout-seconds
+# into an installer changed nothing until the installer was re-run, and a run
+# that planned for the merged value was killed part-way by the stale one. The
+# timeout is now a field on the campaign document the run has already read, and
+# ``console_campaigns.run_campaign`` passes it in, so there is nothing to ask.
 
 
 def min_timeout_seconds(count):
@@ -944,16 +895,16 @@ def fit_gap_bounds(lo, hi, count, timeout):
         sys.stderr.write(
             "WARN: this cron job's timeout is %.0f s, too short for %d groups at "
             "%.0f-%.0f s gaps; spacing them %.0f-%.0f s instead so every group "
-            "still gets today's ad. Re-run deploy/install-*-promo.sh to apply the "
-            "longer timeout and restore the full gaps.\n"
+            "still gets today's ad. Raise this campaign's run timeout in the "
+            "console to restore the full gaps.\n"
             % (timeout, count, lo, hi, new_lo, allowed))
     else:
         sys.stderr.write(
             "WARN: this cron job's timeout is %.0f s, too short for %d groups "
             "even at the %.0f s gap floor; spacing them %.0f-%.0f s and the run "
             "may still be killed before the last groups (a re-run today resumes "
-            "where it stopped). Give the job at least %.0f s "
-            "(PROMO_CRON_TIMEOUT_SECONDS) and re-run deploy/install-*-promo.sh.\n"
+            "where it stopped). Give this campaign a run timeout of at least "
+            "%.0f s in the console.\n"
             % (timeout, count, MIN_SEND_DELAY, new_lo, allowed,
                min_timeout_seconds(count)))
     return (new_lo, allowed)
@@ -974,28 +925,28 @@ def promo_key(promo_name):
     return name
 
 
-def apply_caps(promo_name, jids, day, caps=_PROBE_CAPS, membership_path=None,
-               record=True, membership=_PROBE_MEMBERSHIP, switches=None):
+def apply_caps(promo_name, jids, day, caps=_PROBE_CAPS, record=True,
+               membership=_PROBE_MEMBERSHIP, switches=None):
     """Drop the groups whose daily ad allowance is spoken for by other campaigns
     today (see :mod:`promo_caps`). Returns ``(kept, decisions)``, with
     ``decisions`` empty when caps are off.
 
     ``membership`` and ``switches`` come from the run's single
     ``promo_config.resolve``, so the caps read the same config the targeting did
-    rather than re-reading the file (or Firestore) for themselves. Explicit
-    ``membership=None`` means resolution found no usable membership. Without them
-    the membership file and the cron manifest are read, as before.
+    rather than reading it again for themselves. They are the only source: there
+    used to be a fallback that read the committed membership file and the cron
+    manifest, and with those gone a caller that resolved nothing has nothing to
+    apply caps from. Explicit ``membership=None`` means the same thing.
 
-    Deliberately fail-open: a missing membership file, bad data or an import
-    problem leaves every group in place and logs a warning. A capacity nicety
-    must never be the reason a day's ads do not go out."""
+    Deliberately fail-open: no membership, bad data or an import problem leaves
+    every group in place and logs a warning. A capacity nicety must never be the
+    reason a day's ads do not go out."""
     if caps is None or not jids:
         return list(jids), {}
     try:
         import promo_membership
 
-        m = (promo_membership.load(membership_path)
-             if membership is _PROBE_MEMBERSHIP else membership)
+        m = None if membership is _PROBE_MEMBERSHIP else membership
         if m is None:
             return list(jids), {}
         if caps is _PROBE_CAPS:
@@ -1030,13 +981,11 @@ def apply_caps(promo_name, jids, day, caps=_PROBE_CAPS, membership_path=None,
 
 
 @campaign_transport
-@config_shadow.alongside
-@ad_assets.alongside
-def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=None,
-              tracking=None, promo_name=None, variant_images=None,
+def broadcast(*, text, image, state_file, promo_name, send_delay=None, argv=None,
+              tracking=None, variant_images=None,
               send_delay_min=None, send_delay_max=None, rng=None, sleep=None,
-              cron_timeout=_PROBE_CRON_TIMEOUT, start_jitter=None,
-              caps=_PROBE_CAPS, membership_path=None, account_status=None,
+              cron_timeout=None, start_jitter=None,
+              caps=_PROBE_CAPS, account_status=None,
               resolve_config=None, run_day=None, cap_day=None):
     """Resolve targets, skip groups already sent today (and weekly-limited groups
     off their configured weekday), then send the advert to each pending group,
@@ -1054,8 +1003,8 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
 
     Consecutive send attempts are spaced by ``rng.uniform(min, max)`` seconds
     (see :func:`send_gap_bounds`; default 20-60 s), tightened if needed to fit
-    this cron job's live timeout (see :func:`cron_timeout_seconds` and
-    :func:`fit_gap_bounds`) so a run is never killed with groups unreached.
+    this cron job's timeout (``cron_timeout``, which the caller takes from the
+    campaign document; see :func:`fit_gap_bounds`) so a run is never killed with groups unreached.
     ``send_delay`` is the legacy fixed gap and, when given, overrides the range.
     A run also waits ``rng.uniform(0, start_jitter_bound())`` before its FIRST
     send (default up to 900 s, ``PROMO_START_JITTER_SECONDS``), charged against
@@ -1067,17 +1016,17 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
     membership.json sets ``caps_enabled``. ``caps=None`` disables it outright and
     ``caps=<module>`` injects an alternative, both for tests.
 
-    Where the targeting comes from is :func:`promo_config.resolve`'s decision --
-    the generated targets file, or Firestore. It is resolved once per run, and
-    ``resolve_config`` injects an alternative resolver for tests. Where the
-    PICTURES come from is :func:`ad_assets.resolve`'s decision -- the assets
-    baked into this image, or the ones indexed in Firestore with their bytes in
-    R2 -- and it hands back local paths either way.
+    The targeting comes from :func:`promo_config.resolve`, which reads Firestore
+    and nothing else. It is resolved once per run, and ``resolve_config`` injects
+    an alternative resolver for tests. ``promo_name`` is how this run names
+    itself to that resolver and in its own messages; there used to be a
+    ``targets_file`` beside it, which was both the targeting and the name, and
+    the name was taken from the directory the file sat in.
 
-    ``rng`` (anything with a ``uniform`` method, default the ``random`` module),
-    ``sleep`` (default ``time.sleep``), ``cron_timeout`` (default: ask the
-    gateway; None disables the fit) and ``membership_path`` are injectable for
-    tests."""
+    ``rng`` (anything with a ``uniform`` method, default the ``random`` module)
+    and ``sleep`` (default ``time.sleep``) are injectable for tests.
+    ``cron_timeout`` is the job timeout to fit the run inside; None disables the
+    fit."""
     args = sys.argv[1:] if argv is None else argv
     show_refs = "--refs" in args
     dry = "--dry-run" in args or show_refs
@@ -1086,21 +1035,18 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
     variants = _variants(text)
     if tracking and not tracking.get("prefix"):
         raise ValueError("tracking config missing: prefix")
-    if not promo_name:
-        promo_name = os.path.basename(os.path.dirname(os.path.abspath(targets_file)))
 
-    # Which pictures this campaign actually has: the ones baked into the image,
-    # or the ones the operator indexed in Firestore and R2 holds the bytes for
-    # (see :mod:`ad_assets`). Either way what comes back is local paths, so the
-    # rotation below, the existence check and ``send_ad`` are unchanged -- and
-    # that existence check is what turns "no asset could be fetched" into a
-    # failed run with nothing sent, before a single group is posted to.
-    image = ad_assets.resolve(promo_name, image)
+    # ``image`` is already local paths: the caller fetched every one of this
+    # campaign's indexed pictures from R2 through the verified cache, all of
+    # them or none, before calling in (see
+    # ``console_campaigns.run_campaign``). The existence check below is what
+    # turns a picture that nonetheless is not there into a failed run with
+    # nothing sent, before a single group is posted to.
     image_path, rotating = _resolve_image(image, day)
     if not image_path or not os.path.exists(image_path):
         sys.stderr.write("ERROR: promo image missing: %s\n" % image_path)
         return 1
-    variant_images = ad_assets.resolve(promo_name, dict(variant_images or {}))
+    variant_images = dict(variant_images or {})
     for k, path in variant_images.items():
         if not 0 <= k < len(variants):
             raise ValueError("variant_images index out of range: %r" % k)
@@ -1108,27 +1054,27 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
             sys.stderr.write("ERROR: promo image missing: %s\n" % path)
             return 1
 
-    # Where this run's targeting comes from -- the generated targets file, or
-    # Firestore. Resolved ONCE: every reader below works off this one payload, so
-    # a config change landing mid-run cannot split the run across two configs.
+    # Where this run's targeting comes from. Resolved ONCE: every reader below
+    # works off this one payload, so a config change landing mid-run cannot
+    # split the run across two configs.
     try:
-        source = (resolve_config or promo_config.resolve)(
-            promo_name, targets_file=targets_file, membership_path=membership_path)
+        source = (resolve_config or promo_config.resolve)(promo_name)
     except operator_config.ConfigUnavailable as ex:
-        # Firestore is canonical and unreadable, with no usable snapshot. There is
-        # no safe targeting to fall back to -- the repo's membership.json would be
-        # stale, which is how a paused group gets advertised again. Send nothing,
-        # and exit non-zero so the cron's failure alert fires.
+        # Firestore is unreadable and there is no usable snapshot. There is
+        # nothing safe to fall back to -- the committed membership file that
+        # used to be here had drifted, which is how a paused group gets
+        # advertised again. Send nothing, and exit non-zero so the cron's
+        # failure alert fires.
         sys.stderr.write("ERROR: no operator config to act on: %s\n" % ex)
         print("NO_REPLY")
         return 1
 
     # A campaign the operator has switched off still has its cron registered on
-    # the gateway volume, so the run itself has to stand down. Only in firestore
-    # mode: there the switch is the live pause control. A hand-run or --dry-run of
-    # a paused campaign still previews, matching promo_caps, which never treats
-    # the promo being run as disabled.
-    if source["mode"] == promo_config.FIRESTORE and source["enabled"] is False:
+    # the gateway volume, so the run itself has to stand down; the store's switch
+    # is the live pause control. A hand-run or --dry-run of a paused campaign
+    # still previews, matching promo_caps, which never treats the promo being run
+    # as disabled.
+    if source["enabled"] is False:
         if dry:
             sys.stderr.write("NOTE: %s is switched off; previewing anyway.\n" % promo_name)
         else:
@@ -1175,18 +1121,15 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
     if contact_account is not None and (
             not isinstance(contact_account, str) or contact_account not in account_numbers):
         raise ValueError("contact_account must name an account with a number "
-                         "(%s): check defaults.accounts, and regenerate "
-                         "targets.json with make-promo-targets when the source "
-                         "is the file" % source["source"])
-    # Checked only once there is something to send, so a missing/unreadable
-    # targets file still exits quietly above (load_targets reports it) instead of
-    # being misreported here as a stale, un-regenerated one.
+                         "(%s): check the lines configured in the console"
+                         % source["source"])
+    # Checked only once there is something to send, so a campaign with nothing
+    # configured still exits quietly above instead of being misreported here.
     if bot_number_used and not account_numbers:
         raise ValueError(
             "this promo advertises a per-account number but the targets payload "
-            "(%s) has no account_numbers map; check defaults.accounts, and "
-            "regenerate targets.json with make-promo-targets when the source is "
-            "the file" % source["source"])
+            "(%s) has no account_numbers map; check the lines configured in the "
+            "console" % source["source"])
 
     st = load_state(state_file)
     jids = resolve_targets(all_entries, st, dry=dry)
@@ -1208,7 +1151,6 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
     # ads a day. Rotation decides which campaigns use today's allowance, so this
     # promo may be asked to stand down for a group it still targets.
     eligible, cap_decisions = apply_caps(promo_name, eligible, cap_day or day, caps=caps,
-                                         membership_path=membership_path,
                                          record=not dry,
                                          membership=source["membership"],
                                          switches=source["switches"])
@@ -1236,11 +1178,6 @@ def broadcast(*, text, image, targets_file, state_file, send_delay=None, argv=No
     jitter_bound = start_jitter_bound(start_jitter)
 
     gap_min, gap_max = send_gap_bounds(send_delay, send_delay_min, send_delay_max)
-    if cron_timeout is _PROBE_CRON_TIMEOUT:
-        # Worth asking whenever this run plans to wait at all: to space sends,
-        # or before the first one.
-        wants_timeout = (gap_max > 0 and len(pending) > 1) or jitter_bound > 0
-        cron_timeout = cron_timeout_seconds() if wants_timeout else None
     if cron_timeout and jitter_bound > 0:
         # Never wait away the whole job: against a stale (short) timeout a full
         # 15-minute head start could burn the run before its first send. Shrink

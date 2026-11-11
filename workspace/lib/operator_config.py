@@ -553,9 +553,11 @@ def validate_captions(captions):
 
 
 def campaign_captions(source, slug, fallback):
-    """Copy from the same resolved config as targeting; file mode is a rollback."""
-    if source.get("mode") != "firestore":
-        return list(fallback)
+    """The campaign's copy, from the same resolved config its targeting came
+    from, so one run cannot post this week's caption to last week's roster.
+
+    ``fallback`` is what the caller brought; it is used only for a campaign the
+    config has no document for."""
     meta = ((source.get("membership") or {}).get("promos") or {}).get(slug) or {}
     return validate_captions(meta["captions"]) if "captions" in meta else list(fallback)
 
@@ -716,19 +718,6 @@ def _by_document(membership, enabled):
         docs[("groups", jid)] = data
     return docs
 
-
-
-def manifest_switches(manifest):
-    """``{slug: bool}`` from deploy/promo-crons.json, read the way the rest of
-    the repo reads it: an absent ``enabled`` means on, a non-boolean is an error."""
-    out = {}
-    for row in (manifest or {}).get("promos") or []:
-        value = row.get("enabled", True)
-        if not isinstance(value, bool):
-            raise ConfigInvalid("promo-crons.json: %s has non-boolean enabled=%r"
-                                % (row.get("slug"), value))
-        out[row["slug"]] = value
-    return out
 
 
 def parity_diff(expected, expected_switches, got, got_switches):

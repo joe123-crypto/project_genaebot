@@ -22,6 +22,7 @@ for path in (str(ROOT / "workspace/lib"), str(ROOT / "deploy")):
         sys.path.insert(0, path)
 
 import ad_assets  # noqa: E402
+import r2_sigv4  # noqa: E402
 
 
 def upload_module():
@@ -40,26 +41,24 @@ RELEASE = (ROOT / "deploy/railway-release.py").read_text(encoding="utf-8")
 UPLOAD = (ROOT / "deploy/upload-ad-image.py").read_text(encoding="utf-8")
 SIGNER = (ROOT / "deploy/r2_sigv4.py").read_text(encoding="utf-8")
 MODULE = (ROOT / "workspace/lib/ad_assets.py").read_text(encoding="utf-8")
-CRON = ROOT / "workspace/cron"
 R2_WRITE_VARS = ("R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_ACCOUNT_ID",
                  "R2_BUCKET", "R2_ENDPOINT")
 
 
 class SwitchTest(unittest.TestCase):
-    def test_releases_neither_set_nor_clear_the_asset_source(self):
-        # Like GENAIE_CONFIG_SOURCE: an operator switch, not a release setting.
-        # A release profile that owned it would silently flip the images back.
+    def test_releases_neither_set_nor_clear_the_asset_origin(self):
+        # An operator setting, not a release setting. A release profile that
+        # owned it could point every campaign's pictures somewhere else.
         owned = RELEASE.split("OWNED = (", 1)[1].split(")", 1)[0]
-        for name in (ad_assets.MODE_VAR, ad_assets.BASE_VAR, ad_assets.DIR_VAR):
+        for name in (ad_assets.BASE_VAR, ad_assets.DIR_VAR):
             self.assertNotIn(name, owned)
 
-    def test_the_switch_does_not_need_the_sanitised_secret_env(self):
-        # GENAIE_CONFIG_SOURCE is not in SECRET_KEYS either: Railway service
-        # variables are already in the gateway's environment and crons inherit
-        # it. SECRET_KEYS exists for values openclaw's own config interpolates.
+    def test_the_origin_does_not_need_the_sanitised_secret_env(self):
+        # Railway service variables are already in the gateway's environment and
+        # the cron runs inherit it. SECRET_KEYS exists for values openclaw's own
+        # config interpolates, and a public bucket origin is not a secret.
         secrets = ENTRYPOINT.split("SECRET_KEYS=(", 1)[1].split(")", 1)[0].split()
-        self.assertNotIn("GENAIE_CONFIG_SOURCE", secrets)
-        self.assertNotIn(ad_assets.MODE_VAR, secrets)
+        self.assertNotIn(ad_assets.BASE_VAR, secrets)
 
     def test_the_index_read_uses_the_key_the_runtime_already_has(self):
         self.assertIn("GCP_SERVICE_ACCOUNT_B64",
@@ -99,29 +98,27 @@ class CredentialTest(unittest.TestCase):
 
 
 class VariantImageTest(unittest.TestCase):
-    def test_no_production_post_script_pins_a_variant_image(self):
-        # resolve() maps a pinned variant image by filename, which cannot express
-        # "add a picture to the rotation". Nothing uses it today; the day a
-        # campaign does, this fails and whoever added it has to index it.
-        pinned = []
-        for script in sorted(CRON.glob("*-promo/post*.py")):
-            body = script.read_text(encoding="utf-8")
-            if re.search(r"^\s*(VARIANT_IMAGES|variant_images)\s*=", body, re.M):
-                pinned.append(script.relative_to(ROOT))
-        self.assertEqual(pinned, [])
+    """A picture pinned to a caption variant.
 
-    def test_every_post_script_still_has_an_image_override(self):
-        # is_baked() only substitutes a path inside the campaign's own assets
-        # directory, which is what keeps these overrides working in r2 mode.
-        for directory in sorted(CRON.glob("*-promo")):
-            scripts = sorted(directory.glob("post*.py"))
-            self.assertTrue(scripts, directory)
-            body = "".join(s.read_text(encoding="utf-8") for s in scripts)
-            # The call is spelled across one or two lines depending on the
-            # script, so match the opening of it rather than the whole call.
-            self.assertTrue(
-                re.search(r'os\.environ\.get\(\s*"[A-Z_]*IMAGE"', body),
-                "%s declares no *_IMAGE override" % directory.name)
+    Rotation order cannot express "this picture goes with that caption", so
+    ``console_campaigns`` has no way to record one and nothing uses it. These
+    used to check the post scripts for a ``VARIANT_IMAGES`` mapping and for the
+    ``*_IMAGE`` override that let an operator swap one picture by hand; both
+    lived in the scripts, and the scripts are gone. The engine still accepts a
+    mapping, so what is left is that no campaign document carries one."""
+
+    def test_no_campaign_pins_a_picture_to_a_caption_variant(self):
+        import promo_fixture
+        for slug, doc in promo_fixture.membership()["promos"].items():
+            self.assertNotIn("variantImages", doc, slug)
+        self.assertNotIn("variantImages", console_fields())
+
+
+def console_fields():
+    """The fields console campaign creation accepts, as a flat string."""
+    import console_campaigns
+    return " ".join(sorted(console_campaigns.ALLOWED)) if hasattr(
+        console_campaigns, "ALLOWED") else ""
 
 
 class CredentialFileTest(unittest.TestCase):
@@ -142,17 +139,17 @@ class CredentialFileTest(unittest.TestCase):
         # deploy/** is un-ignored wholesale, so a credentials file in the repo
         # would be staged by `git add -A`, and ci/check.py only refuses tracked
         # names BEGINNING with ".env" -- so "deploy/r2.env" would slip through.
-        self.assertNotIn(str(ROOT), TOOL.DEFAULT_ENV_FILE)
-        self.assertTrue(TOOL.DEFAULT_ENV_FILE.endswith("genaie/r2-upload.env"))
+        self.assertNotIn(str(ROOT), r2_sigv4.DEFAULT_ENV_FILE)
+        self.assertTrue(r2_sigv4.DEFAULT_ENV_FILE.endswith("genaie/r2-upload.env"))
 
     def test_a_file_readable_by_other_accounts_is_refused(self):
         for mode in (0o644, 0o640, 0o604):
             self.write("R2_BUCKET=ads\n", mode)
-            with self.assertRaisesRegex(TOOL.UploadError, "readable by other"):
-                TOOL.load_env_file(self.path, required=True, env={})
+            with self.assertRaisesRegex(r2_sigv4.R2Error, "readable by other"):
+                r2_sigv4.load_env_file(self.path, required=True, env={})
 
     def test_comments_blank_lines_export_and_quotes_are_handled(self):
-        values = TOOL.parse_env_file(
+        values = r2_sigv4.parse_env_file(
             '# a comment\n\n'
             'R2_BUCKET=genaie-ads\n'
             'export R2_ACCOUNT_ID=abc123\n'
@@ -165,29 +162,29 @@ class CredentialFileTest(unittest.TestCase):
 
     def test_it_is_not_a_shell(self):
         # A file of credentials must not be able to run anything or interpolate.
-        values = TOOL.parse_env_file("R2_BUCKET=$(whoami)\nR2_ACCOUNT_ID=${HOME}\n")
+        values = r2_sigv4.parse_env_file("R2_BUCKET=$(whoami)\nR2_ACCOUNT_ID=${HOME}\n")
         self.assertEqual(values["R2_BUCKET"], "$(whoami)")
         self.assertEqual(values["R2_ACCOUNT_ID"], "${HOME}")
 
     def test_a_malformed_line_names_its_number(self):
         self.write("R2_BUCKET=ads\nthis is not an assignment\n")
-        with self.assertRaisesRegex(TOOL.UploadError, "line 2"):
-            TOOL.load_env_file(self.path, required=True, env={})
+        with self.assertRaisesRegex(r2_sigv4.R2Error, "line 2"):
+            r2_sigv4.load_env_file(self.path, required=True, env={})
 
     def test_the_environment_wins_over_the_file(self):
         self.write("R2_BUCKET=from-file\nR2_ACCOUNT_ID=from-file\n")
         env = {"R2_BUCKET": "from-the-shell"}
-        TOOL.load_env_file(self.path, required=True, env=env)
+        r2_sigv4.load_env_file(self.path, required=True, env=env)
         self.assertEqual(env["R2_BUCKET"], "from-the-shell")
         self.assertEqual(env["R2_ACCOUNT_ID"], "from-file")
 
     def test_a_missing_default_file_is_not_an_error(self):
-        self.assertIsNone(TOOL.load_env_file(
+        self.assertIsNone(r2_sigv4.load_env_file(
             os.path.join(self.dir, "absent.env"), required=False, env={}))
 
     def test_a_missing_named_file_is_an_error(self):
-        with self.assertRaisesRegex(TOOL.UploadError, "no such env file"):
-            TOOL.load_env_file(os.path.join(self.dir, "absent.env"),
+        with self.assertRaisesRegex(r2_sigv4.R2Error, "no such env file"):
+            r2_sigv4.load_env_file(os.path.join(self.dir, "absent.env"),
                                required=True, env={})
 
     def test_no_credential_value_is_committed_anywhere_in_the_repo(self):
@@ -203,13 +200,13 @@ class CredentialFileTest(unittest.TestCase):
 class R2TargetTest(unittest.TestCase):
     def test_the_account_id_is_shortened_in_the_log_line(self):
         account = "0123456789abcdef0123456789abcdef"
-        line = TOOL.r2_target("https://%s.r2.cloudflarestorage.com" % account, "ads")
+        line = r2_sigv4.target("https://%s.r2.cloudflarestorage.com" % account, "ads")
         self.assertNotIn(account, line)
         self.assertTrue(line.startswith("012345...ef."))
         self.assertTrue(line.endswith("r2.cloudflarestorage.com/ads"))
 
     def test_a_short_host_is_left_alone(self):
-        self.assertEqual(TOOL.r2_target("https://r2.example", "ads"),
+        self.assertEqual(r2_sigv4.target("https://r2.example", "ads"),
                          "r2.example/ads")
 
 

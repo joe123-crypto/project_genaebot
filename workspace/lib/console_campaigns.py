@@ -182,9 +182,24 @@ def images_from_assets(entries):
 
 
 def image_url(image, env=None):
+    """Where a picture's bytes are served from. Refuses when the origin is not
+    configured, because a write that cannot address the bytes it just stored has
+    nothing to verify. A read wants :func:`described_image_url` instead."""
     origin = ad_assets.base_url(env)
     need(origin is not None, "the bot asset origin is not configured")
     return origin + "/" + image["key"]
+
+
+def described_image_url(image, env=None):
+    """The same address for a screen that is only describing the picture, or
+    ``None`` when the origin is not configured.
+
+    An unconfigured origin must cost the picture tiles and nothing else: the
+    campaigns screen still has to load and say what it cannot show, the same
+    way ``ad_assets.catalogue`` reports an index it could not read. Refusing
+    here instead would take the whole screen down over a display detail."""
+    origin = ad_assets.base_url(env)
+    return None if origin is None else origin + "/" + image["key"]
 
 
 def verify_image(image, env=None, opener=None):
@@ -281,8 +296,7 @@ def payload_digest(data):
 
 def create(data, store, env=None, verify=verify_image, reconcile=None):
     env = os.environ if env is None else env
-    need(promo_config.mode(env)[0] == "firestore", "campaign creation requires live Firestore configuration")
-    need(ad_assets.mode(env)[0] == "r2", "campaign creation requires R2 assets")
+    need(ad_assets.base_url(env) is not None, "campaign creation requires R2 assets")
     validate(data)
     slug = data["slug"]
     digest = payload_digest(data)
@@ -311,8 +325,6 @@ def create(data, store, env=None, verify=verify_image, reconcile=None):
             if group is not None:
                 raw["groups"].append((selection["jid"], config.encode_fields(group)))
         need(slug not in dict(raw["campaigns"]), "a campaign with this ID already exists; choose a different name")
-        declared = promo_config.read_manifest(env) or {}
-        need(not any(row.get("slug") == slug for row in declared.get("promos", [])), "campaign ID is already declared in the bot")
         campaign = {"kind": "console", "name": data["name"].strip(), "enabled": data["enabled"],
                     "captions": data["captions"], "schedule": data["schedule"], "tracking": data.get("tracking", {}),
                     "comment": data.get("comment", ""), "weekly_comment": data.get("weeklyComment", ""),
@@ -518,10 +530,10 @@ def records(membership, day, switches=None, only_slug=None):
                        "storeEnabled": bool((switches or {}).get(slug)), "cronEnabled": campaign.get("scheduleStatus") == "ready",
                        "cron": cron_expression(campaign["schedule"]), "hour": hour, "minute": minute,
                        "scheduleMinutes": schedule_minutes(campaign, day), "timezone": campaign["schedule"]["timezone"],
-                       "installer": "", "script": "", "failureAlertTo": campaign.get("failureAlertTo", ""), "legacyNames": [],
+                       "failureAlertTo": campaign.get("failureAlertTo", ""),
                        "timeoutSeconds": campaign["timeoutSeconds"], "captions": campaign["captions"], "tracking": campaign.get("tracking", {}),
                        "images": [image["filename"] for image in campaign["images"]],
-                       "assets": [{"filename": image["filename"], "url": image_url(image),
+                       "assets": [{"filename": image["filename"], "url": described_image_url(image),
                                    "sha256": image["sha256"], "bytes": image["bytes"],
                                    "contentType": image["contentType"], "rank": (index + 1) * 10}
                                   for index, image in enumerate(campaign["images"])],
@@ -560,6 +572,6 @@ def run_campaign(slug, argv=None, now=None, resolve=None, broadcast=None, ensure
         except BlockingIOError:
             return 0
         return (broadcast or promo_broadcast.broadcast)(text=campaign["captions"], image=paths,
-                    targets_file=str(state / "targets.json"), state_file=str(state / "state.json"),
+                    state_file=str(state / "state.json"),
                     tracking=campaign.get("tracking") or None, promo_name=slug + "-promo", argv=argv or [],
                     cron_timeout=campaign["timeoutSeconds"], run_day=day, cap_day=now.astimezone(ZoneInfo("Africa/Harare")).date(), resolve_config=lambda *args, **kwargs: source)

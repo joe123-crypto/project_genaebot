@@ -191,7 +191,15 @@ jobs:
       - name: Wait for a quiet promo window
         if: ${{ !inputs.ignore_promo_window }}
         timeout-minutes: 50
-        run: python3 deploy/promo-deploy-window.py --max-wait-minutes 45
+        # The campaign schedules are operator data in Firestore now, so this
+        # gate asks the gateway over `railway ssh` instead of reading the
+        # checkout. Same token the release step uses; it reads and changes
+        # nothing.
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          test -n "$RAILWAY_TOKEN"
+          python3 deploy/promo-deploy-window.py --max-wait-minutes 45
       - name: Release or restore the exact previous image
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}

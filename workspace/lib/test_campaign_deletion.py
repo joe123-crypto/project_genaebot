@@ -1,5 +1,6 @@
 """Campaign retirement is irreversible to readers, resumable to workers and safe to retry."""
 import copy
+import hashlib
 import io
 import json
 import os
@@ -66,10 +67,8 @@ class Retirement(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.manifest = Path(self.tmp.name) / "manifest.json"
-        self.manifest.write_text(json.dumps({"promos": [{"slug": "cv", "name": "cv-promo", "script": "/w/cron/cv-promo/post_ad.py", "legacyNames": ["old-cv-promo"]}]}))
         self.env = {**ENV, "GENAIE_CAMPAIGN_DELETION": "1", "OPENCLAW_STATE_DIR": self.tmp.name,
-                    "GENAIE_PROMO_CRONS": str(self.manifest), "R2_ACCOUNT_ID": "a" * 32,
+                    "R2_ACCOUNT_ID": "a" * 32,
                     "R2_BUCKET": "pictures", "R2_ACCESS_KEY_ID": "test-access", "R2_SECRET_ACCESS_KEY": "test-secret"}
         self.store = Store()
         self.data = payload()
@@ -97,14 +96,16 @@ class Retirement(unittest.TestCase):
         self.assertFalse(switches["demo"])
         self.assertNotIn("demo", membership["groups"][JID_A]["promos"])
         self.assertNotIn(JID_A, config.quarantine(membership)[1].get("quarantined", {}))
-    def test_manifest_campaign_is_retired_even_without_a_firestore_override(self):
+    def test_a_campaign_with_no_document_cannot_be_retired(self):
+        # There is no manifest behind the store any more, so a slug the store
+        # does not hold is not a campaign that exists somewhere else.
         self.store.docs["campaigns"].pop("cv", None)
-        self.retire("cv")
-        self.assertTrue(self.store.get("campaigns", "cv")["deleted"])
-        self.assertEqual(self.store.get("campaign_deletions", "cv")["jobNames"], ["cv-promo", "old-cv-promo"])
+        with self.assertRaises(writer.WriteRefused) as caught:
+            self.retire("cv")
+        self.assertEqual(caught.exception.status, 404)
     def test_converted_campaign_keeps_its_job_name_and_runner_owned_for_cleanup(self):
-        doc = self.store.get("campaigns", "cv") or {}
-        doc.update(kind="console", jobName="cv-promo", enabled=True)
+        doc = dict(self.store.get("campaigns", "cv") or {},
+                   kind="console", name="CV", jobName="cv-promo", enabled=True)
         self.store.docs["campaigns"]["cv"] = config.encode_fields(doc)
         self.retire("cv")
         receipt = self.store.get("campaign_deletions", "cv")
@@ -194,24 +195,21 @@ class Retirement(unittest.TestCase):
         self.assertTrue(deletion.capability(self.env)["delete"])
         for key in deletion.R2_VARS + (deletion.FLAG,):
             self.assertFalse(deletion.capability({k: v for k, v in self.env.items() if k != key})["delete"])
-        self.assertFalse(deletion.capability(dict(self.env, GENAIE_CONFIG_SOURCE="file"))["delete"])
     def test_stale_snapshot_is_never_used_with_deletion_protection(self):
         with patch.object(config, "fetch", side_effect=config.ConfigUnavailable("offline")), patch.object(config, "_from_snapshot") as fallback:
             with self.assertRaises(config.ConfigUnavailable): config.load(self.env, log=lambda _: None)
             fallback.assert_not_called()
     def test_live_guard_stops_the_second_group_and_fails_closed(self):
-        target_file = Path(self.tmp.name) / "targets.json"
-        target_file.write_text(json.dumps({"groups": ["1@g.us", "2@g.us"]}))
         image = Path(self.tmp.name) / "image.png"; image.write_bytes(BODY)
         def run():
-            return broadcast.broadcast(text="offer", image=str(image), targets_file=str(target_file),
+            return broadcast.broadcast(text="offer", image=str(image),
                 state_file=str(Path(self.tmp.name) / "state.json"), promo_name="demo-promo", send_delay=0, start_jitter=0,
                 caps=None, resolve_config=lambda *args, **kwargs: {"mode": "firestore", "source": "firestore", "enabled": True, "membership": {}, "switches": {}, "doc": {"groups": ["1@g.us", "2@g.us"]}}, sleep=lambda _: None, account_status=lambda accounts: {a: True for a in accounts}, argv=[])
-        with patch.dict(os.environ, dict(self.env, GENAIE_AD_ASSETS_SOURCE="repo")), patch("sys.stdout", io.StringIO()), patch.object(deletion, "live_campaign", side_effect=[{}, {"deleted": True}]), patch.object(broadcast, "send_ad", return_value=(True, "sent")) as send:
+        with patch.dict(os.environ, dict(self.env)), patch("sys.stdout", io.StringIO()), patch.object(deletion, "live_campaign", side_effect=[{}, {"deleted": True}]), patch.object(broadcast, "send_ad", return_value=(True, "sent")) as send:
             self.assertEqual(run(), 0)
             self.assertEqual(send.call_count, 1)
         # A different state file isn't needed: the one remaining group is still pending.
-        with patch.dict(os.environ, dict(self.env, GENAIE_AD_ASSETS_SOURCE="repo")), patch.object(deletion, "live_campaign", side_effect=config.ConfigUnavailable("offline")), patch.object(broadcast, "send_ad") as send:
+        with patch.dict(os.environ, dict(self.env)), patch.object(deletion, "live_campaign", side_effect=config.ConfigUnavailable("offline")), patch.object(broadcast, "send_ad") as send:
             with self.assertRaises(config.ConfigUnavailable): run()
             send.assert_not_called()
     def test_live_group_edits_use_transaction_and_preserve_atomic_failure(self):
@@ -224,7 +222,7 @@ class Retirement(unittest.TestCase):
             with self.assertRaises(config.ConfigUnavailable):
                 writer.write("campaigns", "demo", {"enabled": True}, "Operator", self.env)
             self.assertEqual(before, self.store.docs)
-    def test_builtin_read_and_preview_never_reappear_from_manifest(self):
+    def test_a_retired_campaign_never_reappears_in_a_read_or_a_preview(self):
         import importlib.machinery
         import importlib.util
         loader = importlib.machinery.SourceFileLoader("deleted_read", str(Path(__file__).resolve().parents[1] / "bin" / "console-read"))
@@ -236,8 +234,12 @@ class Retirement(unittest.TestCase):
         read._RESOLVED["config"] = {"membership": membership, "switches": enabled, "storeSwitches": enabled, "deleted": ["cv"]}
         read._CATALOGUE["value"] = {"campaigns": {}}
         import datetime
-        self.assertNotIn("cv", [row["slug"] for row in read.campaign_records(datetime.date(2026, 11, 9))])
-        with self.assertRaises(read.NotFound): read.preview("cv", datetime.date(2026, 11, 9))
+        # The read builds every row from the store now, picture URLs included,
+        # so it needs the live asset origin the console API is given.
+        with patch.dict(os.environ, self.env):
+            slugs = [row["slug"] for row in read.campaign_records(datetime.date(2026, 11, 9))]
+            self.assertEqual(sorted(set(slugs) & {"cv", "demo"}), [])
+            with self.assertRaises(read.NotFound): read.preview("cv", datetime.date(2026, 11, 9))
         with patch.dict(os.environ, self.env), patch.object(config, "credentials", return_value={"project_id": "test"}), patch.object(config, "access_token", return_value="tok"), patch.object(config, "get_document", return_value={"deleted": True, "enabled": False}):
             self.assertEqual(read.campaign_edit_state("cv"), {"campaign": None})
             with self.assertRaises(read.NotFound): read.campaign_edit_state("cv", captions_only=True)
@@ -266,61 +268,70 @@ class Retirement(unittest.TestCase):
         tool = importlib.util.module_from_spec(spec); spec.loader.exec_module(tool)
         return tool
     def run_upload(self, put):
+        """One ``upload-ad-image.py --write`` against the fake store.
+
+        The tool reads the campaign list and the current index from Firestore
+        now: there is no cron manifest to name the campaigns and no committed
+        mirror of the index to start from, so the only things stubbed are the
+        credentials, the HTTP reads and the bucket itself.
+        """
         from contextlib import ExitStack
         tool = self.tool("upload-ad-image.py")
-        entry = dict(self.store.get("assets", "demo-1"), id="cv-new", campaign="cv", key="ads/cv/%s.png" % SHA)
+        # cv as a data-defined campaign with one picture, which is what this
+        # upload replaces.
+        # Distinct bytes from the demo campaign's picture: keys are content
+        # addressed, so identical bytes would be one object for both campaigns
+        # and this would be a test about deduplication instead.
+        body = BODY + b"-cv"
+        picture = Path(self.tmp.name) / "cv-ad.png"
+        picture.write_bytes(body)
+        self.store.docs["campaigns"]["cv"] = config.encode_fields(
+            {"kind": "console", "name": "CV", "enabled": True, "captions": ["hi"],
+             "schedule": {"time": "11:39", "timezone": "Africa/Harare",
+                          "weekdays": list(range(7))},
+             "timeoutSeconds": 7200, "failureAlertTo": "", "scheduleStatus": "ready",
+             "images": []})
+        key = "ads/cv/%s.png" % hashlib.sha256(body).hexdigest()
         with ExitStack() as stack:
-            stack.enter_context(patch.object(tool, "read_mirror", return_value={"campaigns": {"cv": [entry]}}))
-            stack.enter_context(patch.object(tool, "campaign_dirs", return_value={"cv": Path(self.tmp.name)}))
-            stack.enter_context(patch.object(tool, "from_repo", return_value={"cv": [entry]}))
             stack.enter_context(patch.object(tool, "firestore_credentials", return_value={"project_id": "test"}))
             stack.enter_context(patch.object(tool, "token_for", return_value="test-token"))
             stack.enter_context(patch.object(tool.operator_config, "list_documents", side_effect=lambda project, collection, token, **kwargs: self.store.list(collection)))
-            stack.enter_context(patch.object(tool, "bodies_for", return_value={entry["key"]: BODY}))
-            stack.enter_context(patch.object(tool, "r2_settings", return_value=("https://r2.example", "pictures", "access", "secret")))
+            stack.enter_context(patch.object(tool.r2_sigv4, "settings", return_value=("https://r2.example", "pictures", "access", "secret")))
             stack.enter_context(patch.object(tool.r2_sigv4, "put_object", side_effect=put))
             stack.enter_context(patch.object(campaigns, "Store", return_value=self.store))
-            mirror = stack.enter_context(patch.object(tool, "write_mirror"))
             stack.enter_context(patch("sys.stdout", io.StringIO()))
             stack.enter_context(patch("sys.stderr", io.StringIO()))
-            result = tool.main(["upload-ad-image.py", "--seed-from-repo", "--no-env-file", "--write"])
-        return result, entry, mirror
+            result = tool.main(["upload-ad-image.py", "cv", str(picture),
+                                "--no-env-file", "--write"])
+        return result, key
     def test_upload_tool_reserves_keys_and_removes_receipt_after_index_commit(self):
         observed = []
         def put(*args, **kwargs):
             observed.extend(self.store.list("campaign_asset_uploads"))
-        result, entry, mirror = self.run_upload(put)
+        result, key = self.run_upload(put)
         self.assertEqual(result, 0)
         self.assertEqual(len(observed), 1)
-        self.assertEqual(self.store.get("assets", "cv-new")["key"], entry["key"])
+        self.assertEqual(self.store.get("assets", "cv-1")["key"], key)
         self.assertEqual(self.store.list("campaign_asset_uploads"), [])
-        mirror.assert_called_once()
+        # The campaign's own images list is what a run attaches, so indexing a
+        # picture without updating it would upload a swap that never goes out.
+        self.assertEqual([image["key"] for image
+                          in self.store.get("campaigns", "cv")["images"]], [key])
     def test_deletion_during_upload_captures_unindexed_key_and_refuses_index_write(self):
-        result, entry, mirror = self.run_upload(lambda *args, **kwargs: self.retire("cv"))
+        result, key = self.run_upload(lambda *args, **kwargs: self.retire("cv"))
         self.assertEqual(result, 2)
-        self.assertIsNone(self.store.get("assets", "cv-new"))
-        self.assertIn(entry["key"], [asset["key"] for asset in self.store.get("campaign_deletions", "cv")["assets"]])
-        mirror.assert_not_called()
+        self.assertIsNone(self.store.get("assets", "cv-1"))
+        self.assertIn(key, [asset["key"] for asset in self.store.get("campaign_deletions", "cv")["assets"]])
         self.clean("cv")
         self.assertEqual(self.objects, [])
-        for key in self.store.docs["campaign_asset_uploads"]:
-            self.store.docs["campaign_asset_uploads"][key]["expiresAt"] = config.encode_value(0)
+        for receipt in self.store.docs["campaign_asset_uploads"]:
+            self.store.docs["campaign_asset_uploads"][receipt]["expiresAt"] = config.encode_value(0)
         self.clean("cv")
-        self.assertIn(entry["key"], self.objects)
-    def test_config_seed_refuses_to_overwrite_retirement_markers(self):
-        self.retire()
-        before = copy.deepcopy(self.store.docs)
-        tool = self.tool("seed-firestore.py")
-        with patch.object(tool, "load_sources", return_value=({}, {})), patch.object(tool, "documents", return_value=[]), patch.object(tool, "plan_writes", return_value=([], [], 0)), patch.object(tool, "_client", return_value={"project_id": "test"}), patch.object(tool, "_token", return_value="test-token"), patch.object(config, "list_documents", side_effect=lambda project, collection, token, **kwargs: self.store.list(collection)), patch.object(campaigns, "Store", return_value=self.store), patch("sys.stdout", io.StringIO()), patch("sys.stderr", io.StringIO()):
-            self.assertEqual(tool.main(["seed-firestore.py", "--write"]), 2)
-        self.assertEqual(before, self.store.docs)
-    def test_drift_checker_accepts_retired_job_absence_and_flags_its_return(self):
-        tool = self.tool("promo-cron-drift.py")
-        manifest = json.loads((Path(__file__).resolve().parents[2] / "deploy" / "promo-crons.json").read_text())
-        absent = tool.classify(manifest, [], deleted=["cv"])
-        self.assertNotIn("cv-promo", [job["name"] for job in absent["missing"]])
-        returned = tool.classify(manifest, [{"name": "cv-promo", "id": "stale", "payload": {"argv": ["python3", "/w/cron/cv-promo/post_ad.py"]}}], deleted=["cv"])
-        self.assertIn("cv-promo", [job["name"] for job in returned["undeclared"]])
+        self.assertIn(key, self.objects)
+    # Seeding the store from the committed file and checking the gateway against
+    # the committed manifest are both gone with those files. That a recovery tool
+    # cannot undo a retirement is now pinned on the tool that replaced them, in
+    # deploy/test_backup_operator_data.py.
     def test_picture_cleanup_waits_for_preexisting_browser_upload_urls(self):
         self.retire()
         deletion.cleanup("demo", self.store, self.env, self.gateway, lambda key, env: self.objects.append(key))

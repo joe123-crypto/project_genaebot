@@ -33,9 +33,8 @@ def main():
                     schedule.reconcile_one(row["slug"], store)
                 except Exception:
                     pass
-            declared = schedule.declarations()
             day = schedule.validate(data)
-            result = {"campaigns": [schedule.summary(row["slug"], store, declared, day) for row in data["changes"]]}
+            result = {"campaigns": [schedule.summary(row["slug"], store, day) for row in data["changes"]]}
         print(json.dumps({"ok": True, "status": 200, **result}))
         return 0
     except (operator_writer.WriteRefused, operator_config.ConfigUnavailable, ValueError) as ex:

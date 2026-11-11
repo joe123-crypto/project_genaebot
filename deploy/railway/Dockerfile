@@ -104,13 +104,10 @@ COPY deploy/railway/report-release-ready.py /usr/local/bin/report-release-ready.
 COPY deploy/railway/gateway-standby.py /usr/local/bin/gateway-standby.py
 COPY deploy/railway/console-api.py /usr/local/bin/console-api.py
 COPY deploy/railway/console_accounts.py /usr/local/bin/console_accounts.py
-# console-read resolves the declared cron manifest from deploy/, which
-# stage-openclaw-source.sh never stages, so bake a copy beside the helpers.
-COPY deploy/promo-crons.json /usr/local/lib/genaie/promo-crons.json
-# And the committed mirror of the ad-asset index, for the same reason: it is
-# what the console falls back to when Firestore cannot be read and no snapshot
-# has been written yet, which in `repo` mode is every container's first hours.
-COPY deploy/ad-assets.json /usr/local/lib/genaie/ad-assets.json
+# The R2 signer, which deploy/ holds and stage-openclaw-source.sh never stages.
+# Nothing else from deploy/ is baked any more: the cron manifest and the mirror
+# of the ad-asset index were operator data and are gone, so the campaigns and
+# their pictures are read from Firestore or not at all.
 COPY deploy/r2_sigv4.py /usr/local/lib/genaie/r2_sigv4.py
 RUN python3 -c 'from zoneinfo import ZoneInfo; ZoneInfo("Africa/Algiers")'
 COPY deploy/railway/wait-gateway-lease.py /usr/local/bin/wait-gateway-lease.py

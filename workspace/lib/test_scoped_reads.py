@@ -164,7 +164,10 @@ class SchedulerReads(unittest.TestCase):
 
     def test_repeated_pending_failures_do_not_rewrite_status(self):
         store = MemoryStore()
-        store.docs["campaigns"]["demo"] = config.encode_fields({"kind": "console", "scheduleStatus": "pending"})
+        # One campaign, so the count is about the retry and not about how many
+        # campaigns the shared fixture happens to carry.
+        store.docs["campaigns"] = {
+            "demo": config.encode_fields({"kind": "console", "scheduleStatus": "pending"})}
         listing = store.list
         store.list = Mock(side_effect=lambda collection, where=None: listing(collection))
         store.request = Mock()
@@ -182,11 +185,11 @@ class CampaignPreflightReads(unittest.TestCase):
         spec = importlib.util.spec_from_loader(loader.name, loader)
         bridge = importlib.util.module_from_spec(spec)
         loader.exec_module(bridge)
-        with patch.object(bridge, "manifest", return_value={"promos": [{"slug": "demo", "enabled": True}]}), \
-             patch.object(bridge.promo_config, "mode", return_value=("firestore", None)), \
-             patch.object(config, "credentials", return_value={"project_id": "test"}), \
+        with patch.object(config, "credentials", return_value={"project_id": "test"}), \
              patch.object(config, "access_token", return_value="tok"), \
-             patch.object(config, "get_document", return_value={"enabled": False, "captions": ["Saved text"]}) as get, \
+             patch.object(config, "get_document", return_value={
+                 "kind": "console", "scheduleStatus": "ready",
+                 "enabled": False, "captions": ["Saved text"]}) as get, \
              patch.object(bridge, "resolved", side_effect=AssertionError("full config read")):
             self.assertFalse(bridge.campaign_edit_state("demo")["campaign"]["storeEnabled"])
             self.assertEqual(bridge.campaign_edit_state("demo", captions_only=True)["captions"], ["Saved text"])

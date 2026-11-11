@@ -155,36 +155,6 @@ class Harness(unittest.TestCase):
 
 
 # ------------------------------------------------------------------- modes ----
-class ModeTest(Harness):
-    def test_mode_defaults_to_repo(self):
-        self.assertEqual(aa.mode({}), (aa.REPO, None))
-        self.assertEqual(aa.mode({"GENAIE_AD_ASSETS_SOURCE": ""}), (aa.REPO, None))
-
-    def test_an_unknown_value_reads_as_repo_and_warns(self):
-        current, warning = aa.mode({"GENAIE_AD_ASSETS_SOURCE": "R2 "})
-        self.assertEqual(current, aa.R2)       # trimmed and lowercased
-        current, warning = aa.mode({"GENAIE_AD_ASSETS_SOURCE": "firestore"})
-        self.assertEqual(current, aa.REPO)
-        self.assertIn("is not one of", warning)
-
-    def test_repo_mode_returns_the_image_unchanged_and_opens_no_socket(self):
-        self.env["GENAIE_AD_ASSETS_SOURCE"] = "repo"
-        paths = self.baked("cv", "cv-ad.png", write=PNG)
-        self.store(entry("cv", "cv-ad.png", PNG2))
-        self.hold(PNG2)
-        self.assertEqual(self.resolve("cv-promo", paths), paths)
-        self.assertEqual(self.resolve("cv-promo", paths[0]), paths[0])
-        self.assertEqual(self.world.gets, [])
-        self.assertEqual(self.world.firestore.requests, [])
-
-    def test_shadow_mode_returns_the_image_unchanged(self):
-        self.env["GENAIE_AD_ASSETS_SOURCE"] = "shadow"
-        paths = self.baked("cv", "cv-ad.png", write=PNG)
-        self.assertEqual(self.resolve("cv-promo", paths), paths)
-        self.assertEqual(self.world.gets, [])
-
-
-# ------------------------------------------------------------------- index ----
 class IndexTest(Harness):
     def test_entries_come_back_in_rank_order_enabled_only(self):
         self.store(entry("cv", "cv-ad.png", PNG, rank=10),
@@ -363,13 +333,14 @@ class CatalogueTest(Harness):
         self.assertEqual(len(found["campaigns"]["cv"]), 2)
 
     def test_an_unreadable_index_is_a_note_rather_than_an_exception(self):
-        # It falls through to the committed mirror rather than showing nothing,
-        # but the note still says the live index was not the source -- the two
-        # can disagree, and the screen must not imply otherwise. The case with
-        # genuinely nothing to show is covered below, with the mirror removed.
+        # The console's caller is a page where the pictures are one card. An
+        # index it cannot read must cost the pictures and nothing else, so the
+        # failure arrives as a note beside an empty campaigns map rather than as
+        # a screen that will not load.
         self.env.pop("GCP_SERVICE_ACCOUNT_B64")
         found = self.catalogue()
-        self.assertEqual(found["source"], "mirror")
+        self.assertIsNone(found["source"])
+        self.assertEqual(found["campaigns"], {})
         self.assertIn("no service account", found["note"])
 
     def test_firestore_down_falls_back_to_the_snapshot_and_says_so(self):
@@ -398,55 +369,12 @@ class CatalogueTest(Harness):
         self.assertEqual([e["url"] for e in found["campaigns"]["cv"]], [None])
         self.assertIn("https://", found["note"])
 
-    def test_the_mode_does_not_decide_what_the_console_may_show(self):
-        # The index is accurate before the cutover as well as after, so repo
-        # mode must still describe the pictures -- hiding them until r2 is
-        # switched on would hide the thing the cutover is about.
-        self.env["GENAIE_AD_ASSETS_SOURCE"] = "repo"
-        self.store(entry("cv", "cv-ad.png", PNG))
-        self.assertEqual(len(self.catalogue()["campaigns"]["cv"]), 1)
-
-    # --- the mirror, and not retrying a Firestore that already said no ----
-    def mirror(self, *entries):
-        path = os.path.join(self.dir, "ad-assets.json")
-        document = {"version": 1, "campaigns": {}}
-        for one in entries:
-            one = dict(one)
-            one.setdefault("id", "%s-%d" % (one["campaign"], (one.get("rank") or 10) // 10))
-            document["campaigns"].setdefault(one["campaign"], []).append(one)
-        with open(path, "w", encoding="utf-8") as handle:
-            json.dump(document, handle)
-        self.env[aa.MIRROR_VAR] = path
-        return path
-
-    def test_the_committed_mirror_answers_when_there_is_no_index_and_no_snapshot(self):
-        # The production failure this exists for: the project's Firestore quota
-        # is exhausted, and in repo mode no run has ever written a snapshot.
-        self.mirror(entry("cv", "cv-ad.png", PNG))
-        self.env.pop("GCP_SERVICE_ACCOUNT_B64")
-        found = self.catalogue()
-        self.assertEqual(found["source"], "mirror")
-        self.assertEqual([e["url"] for e in found["campaigns"]["cv"]],
-                         ["%s/ads/cv/%s.png" % (BASE, digest(PNG))])
-        # Still says why it is not the live index, because it is not.
-        self.assertIn("no service account", found["note"])
-
-    def test_the_mirror_is_a_last_resort_not_a_preference(self):
-        self.mirror(entry("cv", "old-ad.png", PNG))
-        self.store(entry("cv", "cv-ad.png", PNG2))
-        found = self.catalogue()
-        self.assertEqual(found["source"], "firestore")
-        self.assertEqual([e["filename"] for e in found["campaigns"]["cv"]], ["cv-ad.png"])
-
-    def test_a_mirror_row_is_revalidated_rather_than_trusted(self):
-        self.mirror(entry("cv", "cv-ad.png", PNG),
-                    entry("cv", "bad.png", PNG2, rank=20, sha256="nope"))
-        self.env.pop("GCP_SERVICE_ACCOUNT_B64")
-        found = self.catalogue()
-        self.assertEqual([e["filename"] for e in found["campaigns"]["cv"]], ["cv-ad.png"])
-
-    def test_no_mirror_and_no_index_is_the_one_case_with_nothing_to_show(self):
-        self.env[aa.MIRROR_VAR] = os.path.join(self.dir, "absent.json")
+    # --- not retrying a Firestore that already said no --------------------
+    def test_no_index_and_no_snapshot_leaves_nothing_to_show(self):
+        # The committed mirror used to answer here, which is what made this
+        # survivable in the hours before any run had written a snapshot. It was
+        # operator data in the repository and it is gone, so this is now the
+        # whole answer: no pictures, and a note saying why.
         self.env.pop("GCP_SERVICE_ACCOUNT_B64")
         found = self.catalogue()
         self.assertEqual(found["campaigns"], {})
@@ -454,15 +382,13 @@ class CatalogueTest(Harness):
         self.assertIn("no service account", found["note"])
 
     def test_a_failed_read_is_not_repeated_on_every_call(self):
-        self.mirror(entry("cv", "cv-ad.png", PNG))
         self.world.firestore.down = True
         self.catalogue()
         before = len(self.world.firestore.requests)
-        self.assertEqual(self.catalogue()["source"], "mirror")
+        self.assertIsNone(self.catalogue()["source"])
         self.assertEqual(len(self.world.firestore.requests), before)
 
     def test_the_retry_window_expires_so_a_recovered_quota_is_noticed(self):
-        self.mirror(entry("cv", "old-ad.png", PNG))
         self.world.firestore.down = True
         self.catalogue()
         self.world.firestore.down = False
@@ -473,7 +399,6 @@ class CatalogueTest(Harness):
         self.assertEqual([e["filename"] for e in found["campaigns"]["cv"]], ["cv-ad.png"])
 
     def test_a_read_that_works_forgets_the_earlier_failure(self):
-        self.mirror(entry("cv", "old-ad.png", PNG))
         self.world.firestore.down = True
         self.catalogue()
         self.assertTrue(os.path.exists(aa.failure_path(self.env)))
@@ -488,7 +413,6 @@ class CatalogueTest(Harness):
         # read Firestore once has a snapshot, so a later failure answers out of
         # it instead of raising. That is still a failed read -- without it the
         # backoff would do nothing on any deployed container.
-        self.mirror(entry("cv", "old-ad.png", PNG))
         self.store(entry("cv", "cv-ad.png", PNG))
         self.catalogue()                                    # writes the snapshot
         self.clock[0] += aa.CATALOGUE_MAX_AGE_SECONDS + 1
@@ -518,29 +442,20 @@ class CatalogueTest(Harness):
         self.assertEqual([e["filename"] for e in found["campaigns"]["cv"]], ["cv-ad-2.png"])
         self.assertFalse(os.path.exists(aa.failure_path(self.env)))
 
-    def test_inside_the_window_a_snapshot_past_the_limit_drops_to_the_mirror(self):
-        self.mirror(entry("cv", "old-ad.png", PNG))
+    def test_inside_the_window_a_snapshot_past_the_limit_shows_nothing(self):
+        # A snapshot too old to act on, inside the backoff window, used to drop
+        # to the committed mirror. There is nothing under it now, and saying so
+        # is the right answer: the alternative would be showing pictures from a
+        # file nobody had updated in a day.
         self.store(entry("cv", "cv-ad.png", PNG2))
         self.catalogue()
         self.clock[0] += aa.INDEX_MAX_AGE_SECONDS + 1       # snapshot now too old to act on
         self.world.firestore.down = True
-        self.assertEqual(self.catalogue()["source"], "mirror")
+        self.assertIsNone(self.catalogue()["source"])
         before = len(self.world.firestore.requests)
         found = self.catalogue()
         self.assertEqual(len(self.world.firestore.requests), before)
-        self.assertEqual(found["source"], "mirror")
-        self.assertEqual([e["filename"] for e in found["campaigns"]["cv"]], ["old-ad.png"])
-
-    def test_the_repo_mirror_this_branch_ships_parses_through_the_validator(self):
-        # deploy/ad-assets.json is what a container actually falls back to, so
-        # a row this module would quarantine must be caught here, not in
-        # production at the moment Firestore goes away.
-        root = os.path.dirname(os.path.dirname(os.path.dirname(
-            os.path.abspath(aa.__file__))))
-        found = aa.mirror_index({aa.MIRROR_VAR: os.path.join(root, "deploy", "ad-assets.json")})
-        self.assertIsNotNone(found)
-        self.assertEqual(found["quarantined"], {})
-        self.assertTrue(found["campaigns"])
+        self.assertEqual(found["campaigns"], {})
 
     def test_it_describes_pictures_without_fetching_a_single_byte(self):
         self.store(entry("cv", "cv-ad.png", PNG))
@@ -656,227 +571,5 @@ class CacheTest(Harness):
 
 
 # ----------------------------------------------------------------- resolve ----
-class ResolveTest(Harness):
-    def test_a_single_baked_string_becomes_the_whole_rotation(self):
-        # The point of the move: adding a second picture is an index edit, not a
-        # change to the campaign's post script.
-        path, = self.baked("genaie", "genaie-services.png", write=PNG)
-        self.store(entry("genaie", "genaie-services.png", PNG, rank=10),
-                   entry("genaie", "genaie-2.png", PNG2, rank=20))
-        self.world.objects.update(
-            ("ads/genaie/%s.png" % digest(b), b) for b in (PNG, PNG2))
-        got = self.resolve("genaie-promo", path)
-        self.assertEqual([os.path.basename(p).split("-", 1)[1] for p in got],
-                         ["genaie-services.png", "genaie-2.png"])
-
-    def test_a_baked_list_is_replaced_in_rank_order(self):
-        paths = self.baked("cv", "cv-ad.png", "cv-ad-2.png", write=[PNG, PNG2])
-        self.store(entry("cv", "cv-ad.png", PNG, rank=10),
-                   entry("cv", "cv-ad-2.png", PNG2, rank=20))
-        self.hold(PNG, PNG2)
-        got = self.resolve("cv-promo", paths)
-        self.assertEqual(len(got), 2)
-        for path in got:
-            self.assertTrue(path.startswith(aa.cache_dir(self.env)))
-
-    def test_a_path_outside_the_campaigns_assets_dir_passes_through(self):
-        # An operator's *_IMAGE override, or a test's temp file. Every post
-        # script has such an override, and it must keep working in r2 mode.
-        override = os.path.join(self.dir, "hand-made.png")
-        with open(override, "wb") as handle:
-            handle.write(PNG)
-        self.store(entry("cv", "cv-ad.png", PNG2))
-        self.hold(PNG2)
-        self.assertEqual(self.resolve("cv-promo", override), override)
-        self.assertEqual(self.resolve("cv-promo", [override]), [override])
-        self.assertEqual(self.world.gets, [])
-
-    def test_another_campaigns_asset_is_not_treated_as_this_ones(self):
-        other, = self.baked("borehole-drilling", "borehole-1.jpg", write=JPG)
-        self.assertFalse(aa.is_baked(other, "cv-promo"))
-        self.assertTrue(aa.is_baked(other, "borehole-drilling-promo"))
-        self.assertTrue(aa.is_baked(other, "borehole-drilling"))
-
-    def test_an_empty_index_for_a_campaign_keeps_the_baked_image(self):
-        paths = self.baked("cv", "cv-ad.png", write=PNG)
-        self.store(entry("borehole-drilling", "borehole-1.jpg", JPG))
-        self.assertEqual(self.resolve("cv-promo", paths), paths)
-        self.assertIn("no enabled assets indexed for cv", self.logged())
-
-    def test_one_unreachable_object_leaves_the_others_serving(self):
-        paths = self.baked("cv", "cv-ad.png", "cv-ad-2.png", write=[PNG, PNG2])
-        self.store(entry("cv", "cv-ad.png", PNG, rank=10),
-                   entry("cv", "cv-ad-2.png", PNG2, rank=20))
-        self.hold(PNG, PNG2)
-        self.world.missing.add("ads/cv/%s.png" % digest(PNG))
-        got = self.resolve("cv-promo", paths)
-        self.assertEqual(len(got), 1)
-        self.assertIn("dropping cv-ad.png from the rotation", self.logged())
-
-    def test_every_object_unreachable_falls_back_to_the_baked_image(self):
-        paths = self.baked("cv", "cv-ad.png", write=PNG)
-        self.store(entry("cv", "cv-ad.png", PNG))
-        got = self.resolve("cv-promo", paths)
-        self.assertEqual(got, paths)
-        self.assertIn("using the baked image", self.logged())
-
-    def test_with_nothing_baked_the_result_names_the_missing_asset(self):
-        # What the engine prints as "promo image missing: <path>" once the files
-        # are gone from the repo. Never None, never an empty list.
-        paths = self.baked("cv", "cv-ad.png")        # declared, not written
-        item = entry("cv", "cv-ad.png", PNG)
-        self.store(dict(item))
-        got = self.resolve("cv-promo", paths)
-        self.assertIsInstance(got, str)
-        self.assertIn(digest(PNG)[:12], got)
-        self.assertIn("cv-ad.png", got)
-
-    def test_resolve_never_returns_none_or_an_empty_list(self):
-        paths = self.baked("cv", "cv-ad.png")
-        for store in ([], [entry("cv", "cv-ad.png", PNG)]):
-            self.store(*[dict(s) for s in store])
-            for image in (paths, paths[0]):
-                got = self.resolve("cv-promo", image)
-                self.assertTrue(got, "resolve returned %r" % (got,))
-
-    def test_an_unreadable_index_falls_back_to_the_baked_image(self):
-        paths = self.baked("cv", "cv-ad.png", write=PNG)
-        self.world.firestore.down = True
-        self.assertEqual(self.resolve("cv-promo", paths), paths)
-
-    def test_a_bug_in_this_module_cannot_stop_a_run_posting(self):
-        paths = self.baked("cv", "cv-ad.png", write=PNG)
-        broken = dict(self.inject(), opener=None)
-        original = aa.index
-        aa.index = lambda *a, **k: 1 / 0
-        self.addCleanup(setattr, aa, "index", original)
-        self.assertEqual(aa.resolve("cv-promo", paths, self.env, err=self.err,
-                                    **broken), paths)
-        self.assertIn("could not resolve assets", self.logged())
-
-
-class VariantImageTest(Harness):
-    def test_variant_images_are_mapped_by_filename(self):
-        one, two = self.baked("cv", "cv-ad.png", "cv-ad-2.png", write=[PNG, PNG2])
-        self.store(entry("cv", "cv-ad.png", PNG, rank=10),
-                   entry("cv", "cv-ad-2.png", PNG2, rank=20))
-        self.hold(PNG, PNG2)
-        got = self.resolve("cv-promo", {0: two})
-        self.assertNotEqual(got[0], two)
-        self.assertTrue(got[0].endswith("-cv-ad-2.png"))
-
-    def test_an_unindexed_variant_keeps_its_baked_image(self):
-        one, = self.baked("cv", "cv-ad.png", write=PNG)
-        self.store(entry("cv", "cv-ad-2.png", PNG2))
-        self.hold(PNG2)
-        self.assertEqual(self.resolve("cv-promo", {0: one}), {0: one})
-        self.assertIn("no asset indexed under that name", self.logged())
-
-    def test_an_empty_mapping_is_left_alone(self):
-        self.assertEqual(self.resolve("cv-promo", {}), {})
-
-
-# ------------------------------------------------------------------ shadow ----
-class ShadowTest(Harness):
-    def setUp(self):
-        super().setUp()
-        self.env["GENAIE_AD_ASSETS_SOURCE"] = "shadow"
-
-    def check(self, promo, image):
-        return aa.check(promo, image, self.env, **self.inject())
-
-    def test_matching_index_and_baked_images_report_exact_and_warm_the_cache(self):
-        paths = self.baked("cv", "cv-ad.png", write=PNG)
-        self.store(entry("cv", "cv-ad.png", PNG))
-        self.hold(PNG)
-        result = self.check("cv-promo", paths)
-        self.assertEqual(result["status"], "exact")
-        self.assertEqual(result["cached"], ["cv-ad.png"])
-        self.assertTrue(os.path.exists(
-            aa.cache_path(entry("cv", "cv-ad.png", PNG), self.env)))
-
-    def test_a_changed_picture_reports_drift(self):
-        paths = self.baked("cv", "cv-ad.png", write=PNG)
-        self.store(entry("cv", "cv-ad.png", PNG2))
-        self.hold(PNG2)
-        result = self.check("cv-promo", paths)
-        self.assertEqual(result["status"], "drift")
-        self.assertIn("cv-ad.png differs from the indexed copy", result["problems"])
-
-    def test_an_unindexed_or_unbaked_picture_reports_drift(self):
-        paths = self.baked("cv", "cv-ad.png", "extra.png", write=[PNG, PNG2])
-        self.store(entry("cv", "cv-ad.png", PNG), entry("cv", "ghost.png", JPG, rank=20))
-        self.hold(PNG, JPG)
-        result = self.check("cv-promo", paths)
-        self.assertIn("extra.png is not in the index", result["problems"])
-        self.assertIn("ghost.png is indexed but not baked into this image",
-                      result["problems"])
-
-    def test_an_unreadable_index_reports_unavailable_not_an_exception(self):
-        paths = self.baked("cv", "cv-ad.png", write=PNG)
-        self.world.firestore.down = True
-        result = self.check("cv-promo", paths)
-        self.assertEqual(result["status"], "unavailable")
-        self.assertIsNotNone(result["degraded"])
-
-    def test_the_result_is_written_where_the_console_reads_it(self):
-        paths = self.baked("cv", "cv-ad.png", write=PNG)
-        self.store(entry("cv", "cv-ad.png", PNG))
-        self.hold(PNG)
-        self.check("cv-promo", paths)
-        saved = aa.read_result(self.env)
-        self.assertEqual(saved["campaign"], "cv")
-        self.assertEqual(saved["status"], "exact")
-
-    def test_a_hung_check_does_not_delay_the_run(self):
-        gate = threading.Event()
-        self.world.hang = gate
-        self.addCleanup(gate.set)
-        paths = self.baked("cv", "cv-ad.png", write=PNG)
-        self.store(entry("cv", "cv-ad.png", PNG))
-        self.hold(PNG)
-        handle = aa.start("cv-promo", paths, self.env, err=self.err, **self.inject())
-        self.assertIsNotNone(handle)
-        self.assertIsNone(aa.finish(handle, timeout=0.05, err=self.err))
-        self.assertIn("not waiting for it", self.logged())
-
-    def test_start_does_nothing_outside_shadow_mode(self):
-        for value in ("repo", "r2", ""):
-            self.env["GENAIE_AD_ASSETS_SOURCE"] = value
-            self.assertIsNone(aa.start("cv-promo", [], self.env, err=self.err))
-
-    def test_alongside_passes_the_runs_value_and_exceptions_through(self):
-        self.env["GENAIE_AD_ASSETS_SOURCE"] = "repo"
-
-        @aa.alongside
-        def ran(*, image=None, promo_name=None, targets_file=None):
-            return "the run's own answer"
-
-        @aa.alongside
-        def exploded(*, image=None, promo_name=None, targets_file=None):
-            raise RuntimeError("the run's own failure")
-
-        self.assertEqual(ran(image=[], promo_name="cv-promo"), "the run's own answer")
-        with self.assertRaisesRegex(RuntimeError, "the run's own failure"):
-            exploded(image=[], promo_name="cv-promo")
-
-    def test_alongside_derives_the_campaign_from_the_targets_file(self):
-        seen = {}
-        original = aa.start
-        def record(promo, image, *a, **k):
-            seen["promo"] = promo
-            return None
-
-        aa.start = record
-        self.addCleanup(setattr, aa, "start", original)
-
-        @aa.alongside
-        def ran(*, image=None, targets_file=None, promo_name=None):
-            return 0
-
-        ran(image=[], targets_file="/x/workspace/cron/cv-promo/targets.json")
-        self.assertEqual(seen["promo"], "cv-promo")
-
-
 if __name__ == "__main__":
     unittest.main()

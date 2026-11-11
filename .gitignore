@@ -39,72 +39,6 @@
 !workspace/plugins/
 !workspace/plugins/**
 
-# Cron definitions are tracked, runtime state/logs are not.
-!workspace/cron/
-!workspace/data/
-!workspace/data/*.json
-!workspace/data/*.md
-!workspace/cron/*/
-!workspace/cron/*/*.py
-!workspace/cron/*/*.sh
-
-# CV promo campaign: editable target list + the ad image (developer-owned,
-# deployed with the workspace).
-!workspace/cron/cv-promo/targets.json
-!workspace/cron/cv-promo/assets/
-!workspace/cron/cv-promo/assets/*.png
-!workspace/cron/cv-promo/assets/*.jpg
-
-# Building-materials promo campaign: editable target list + the ad image
-# (developer-owned, deployed with the workspace).
-!workspace/cron/building-materials-promo/targets.json
-!workspace/cron/building-materials-promo/assets/
-!workspace/cron/building-materials-promo/assets/*.jpg
-
-# Genaie-services promo campaign: editable target list + the ad image
-# (developer-owned, deployed with the workspace).
-!workspace/cron/genaie-promo/targets.json
-!workspace/cron/genaie-promo/assets/
-!workspace/cron/genaie-promo/assets/*.png
-
-# Genaie lead-generation promo campaign: editable target list + the ad image
-# (developer-owned, deployed with the workspace). Separate 17:00 cron from
-# genaie-promo above.
-!workspace/cron/genaie-leads-promo/targets.json
-!workspace/cron/genaie-leads-promo/assets/
-!workspace/cron/genaie-leads-promo/assets/*.png
-
-# Fruit-trees promo campaign: editable target list + the ad image (developer-owned,
-# deployed with the workspace). Daily 08:40 Africa/Harare cron.
-!workspace/cron/fruit-trees-promo/targets.json
-!workspace/cron/fruit-trees-promo/assets/
-!workspace/cron/fruit-trees-promo/assets/*.jpg
-
-# Single source of truth for the groups the bot advertises in: names, statuses,
-# activity tiers and promo membership. The promo targets.json files are
-# generated from it by workspace/bin/make-promo-targets (read by that generator,
-# workspace/bin/list-groups and the promo crons' per-group caps).
-!workspace/cron/membership.json
-
-# Appliance-repairs promo campaign (APPLIANCE REPAIRS PL): editable target list +
-# the ad image (developer-owned, deployed with the workspace). Daily 10:35
-# Africa/Harare cron.
-!workspace/cron/appliance-repairs-promo/targets.json
-!workspace/cron/appliance-repairs-promo/assets/
-!workspace/cron/appliance-repairs-promo/assets/*.jpg
-
-# Borehole-drilling promo campaign: editable target list + the rotating ad images
-# (developer-owned, deployed with the workspace). Daily 07:15 Africa/Harare cron.
-!workspace/cron/borehole-drilling-promo/targets.json
-!workspace/cron/borehole-drilling-promo/assets/
-!workspace/cron/borehole-drilling-promo/assets/*.jpg
-
-# Skylight-solar promo campaign: editable target list + the rotating ad posters
-# (developer-owned, deployed with the workspace). Daily 13:21 Africa/Harare cron.
-!workspace/cron/skylight-solar-promo/targets.json
-!workspace/cron/skylight-solar-promo/assets/
-!workspace/cron/skylight-solar-promo/assets/*.jpg
-
 # Service docs and source helpers.
 !workspace/docs/
 !workspace/docs/**
@@ -177,8 +111,3 @@ update-check.json
 gateway-supervisor-restart-handoff.json
 workspace-attestations/
 gitclaw/
-
-# Genaie advertiser recruitment: generated targets and operator-supplied image.
-!workspace/cron/genaie-advertisers-promo/targets.json
-!workspace/cron/genaie-advertisers-promo/assets/
-!workspace/cron/genaie-advertisers-promo/assets/*.jpg
