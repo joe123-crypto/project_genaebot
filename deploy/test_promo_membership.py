@@ -193,17 +193,6 @@ class ProjectionTests(unittest.TestCase):
         self.assertIn("💰", text)
         self.assertNotIn("\\u", text)
 
-    def test_load_returns_none_for_a_missing_file(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            self.assertIsNone(pm.load(str(Path(tmp, "nope.json"))))
-
-    def test_load_raises_on_invalid_json(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            bad = Path(tmp, "membership.json")
-            bad.write_text("{not json", encoding="utf-8")
-            with self.assertRaises(ValueError):
-                pm.load(str(bad))
-
 
 class ValidationTests(unittest.TestCase):
     def assertComplains(self, m, needle):

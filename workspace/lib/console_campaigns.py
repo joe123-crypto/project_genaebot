@@ -182,9 +182,24 @@ def images_from_assets(entries):
 
 
 def image_url(image, env=None):
+    """Where a picture's bytes are served from. Refuses when the origin is not
+    configured, because a write that cannot address the bytes it just stored has
+    nothing to verify. A read wants :func:`described_image_url` instead."""
     origin = ad_assets.base_url(env)
     need(origin is not None, "the bot asset origin is not configured")
     return origin + "/" + image["key"]
+
+
+def described_image_url(image, env=None):
+    """The same address for a screen that is only describing the picture, or
+    ``None`` when the origin is not configured.
+
+    An unconfigured origin must cost the picture tiles and nothing else: the
+    campaigns screen still has to load and say what it cannot show, the same
+    way ``ad_assets.catalogue`` reports an index it could not read. Refusing
+    here instead would take the whole screen down over a display detail."""
+    origin = ad_assets.base_url(env)
+    return None if origin is None else origin + "/" + image["key"]
 
 
 def verify_image(image, env=None, opener=None):
@@ -515,10 +530,10 @@ def records(membership, day, switches=None, only_slug=None):
                        "storeEnabled": bool((switches or {}).get(slug)), "cronEnabled": campaign.get("scheduleStatus") == "ready",
                        "cron": cron_expression(campaign["schedule"]), "hour": hour, "minute": minute,
                        "scheduleMinutes": schedule_minutes(campaign, day), "timezone": campaign["schedule"]["timezone"],
-                       "installer": "", "script": "", "failureAlertTo": campaign.get("failureAlertTo", ""), "legacyNames": [],
+                       "failureAlertTo": campaign.get("failureAlertTo", ""),
                        "timeoutSeconds": campaign["timeoutSeconds"], "captions": campaign["captions"], "tracking": campaign.get("tracking", {}),
                        "images": [image["filename"] for image in campaign["images"]],
-                       "assets": [{"filename": image["filename"], "url": image_url(image),
+                       "assets": [{"filename": image["filename"], "url": described_image_url(image),
                                    "sha256": image["sha256"], "bytes": image["bytes"],
                                    "contentType": image["contentType"], "rank": (index + 1) * 10}
                                   for index, image in enumerate(campaign["images"])],

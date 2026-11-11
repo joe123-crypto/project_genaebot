@@ -1,13 +1,20 @@
 """Cover the console read bridge: the shape of each payload, its refusals, and
 its promise never to write anything.
 
+These used to run against the repository's own roster and cron manifest. There
+is no committed config left, so the bridge is run against a synthetic one --
+``deploy/promo_fixture`` written out as a last-known-good snapshot, which is
+what ``operator_config`` serves when Firestore cannot be reached. That is closer
+to production than the old arrangement, not further from it: the bridge now
+takes the same path here as it does on the gateway, and a test no longer starts
+failing because somebody added a group in the console.
+
+Structure is still what is asserted rather than totals, with one change: the
+fixture is fixed, so a count that says something (a campaign with no cron, a
+paused assignment) can be named outright.
+
 unittest-style so deploy/ci-check.sh, which runs each test file with plain
 ``python3``, executes them.
-
-These run against the repository's real membership and campaigns, but assert
-structure rather than totals. Frozen counts here would mean every added group
-had to be reflected in a test, which is exactly the per-group busywork the
-console exists to remove.
 """
 
 import json
@@ -20,13 +27,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 BRIDGE = ROOT / "workspace/bin/console-read"
-LIB_DIR = ROOT / "workspace/lib"
-if str(LIB_DIR) not in sys.path:
-    sys.path.insert(0, str(LIB_DIR))
+for _path in (str(ROOT / "workspace/lib"), str(ROOT / "deploy")):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
 
+import promo_fixture  # noqa: E402
 import promo_membership  # noqa: E402
 
-DAY = "2026-11-04"
+# The fixture's Friday, so its weekly campaign has an occurrence today.
+DAY = promo_fixture.DAY.isoformat()
+BASE_URL = "https://assets.example.test"
+WRITE_KEY = "GCP_SERVICE_ACCOUNT_WRITE_B64"
 
 GROUP_KEYS = {
     "jid", "name", "source", "status", "activity", "account", "dailyCapOverride",
@@ -37,38 +48,73 @@ PREVIEW_KEYS = {
     "cap", "paused", "sendsToday", "allowedToday", "weekly",
 }
 CAMPAIGN_KEYS = {
-    "slug", "name", "cron", "hour", "minute", "timezone", "installer", "script",
-    "failureAlertTo", "legacyNames", "timeoutSeconds", "captions", "tracking",
+    "slug", "name", "cron", "hour", "minute", "timezone",
+    "failureAlertTo", "timeoutSeconds", "captions", "tracking",
     "images", "assets", "targetCount", "weeklyCount", "accounts", "source",
     "error", "enabled", "storeEnabled", "cronEnabled", "scheduleMinutes", "scheduleEdit",
+    "jobName", "scheduleStatus",
 }
 AD_ASSET_KEYS = {"mode", "warning", "lastCheck", "source", "fetchedAt", "note"}
 ASSET_KEYS = {"filename", "url", "sha256", "bytes", "contentType", "rank"}
 
 
-class ConsoleReadTests(unittest.TestCase):
-    def run_bridge(self, *args, **environment):
-        """Run the bridge in isolated mode, exactly as the console API does."""
+def load_console_read():
+    """console-read has no extension, so it loads by path -- the same way the
+    review regression tests reach its internals."""
+    import importlib.machinery
+    import importlib.util
+    loader = importlib.machinery.SourceFileLoader("console_read_inproc", str(BRIDGE))
+    spec = importlib.util.spec_from_loader("console_read_inproc", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+class BridgeCase(unittest.TestCase):
+    """One offline config on disk, and the bridge run against it as the console
+    API runs it: a fresh isolated interpreter, per call."""
+
+    CONFIG = None          # a subclass may hand the snapshot a different config
+    ENABLED = None
+    ASSETS = True
+
+    def setUp(self):
+        self.state = tempfile.TemporaryDirectory()
+        self.addCleanup(self.state.cleanup)
+        self.firestore = os.path.join(self.state.name, "firestore")
+        config = self.CONFIG or promo_fixture.membership()
+        promo_fixture.snapshot(self.firestore, config, self.ENABLED)
+        if self.ASSETS:
+            promo_fixture.asset_index(self.firestore, config)
+        self.config = config
+
+    def bridge_env(self, **overrides):
         env = dict(os.environ)
         # Production sets this, and it keeps the test from leaving bytecode in
         # the tree, which the staging checks forbid.
         env["PYTHONDONTWRITEBYTECODE"] = "1"
-        env.update({key: str(value) for key, value in environment.items()})
-        done = subprocess.run(
-            [sys.executable, "-I", str(BRIDGE)] + [str(a) for a in args],
-            capture_output=True, text=True, timeout=120, env=env,
-        )
-        return done
+        env.update({"OPENCLAW_STATE_DIR": self.state.name,
+                    "GENAIE_FIRESTORE_DIR": self.firestore,
+                    "GENAIE_CONFIG_SOURCE": "firestore",
+                    "GENAIE_AD_ASSETS_BASE_URL": BASE_URL})
+        env.update({key: str(value) for key, value in overrides.items()})
+        return env
 
-    def ok(self, *args):
-        done = self.run_bridge(*args)
+    def run_bridge(self, *args, **environment):
+        return subprocess.run(
+            [sys.executable, "-I", str(BRIDGE)] + [str(a) for a in args],
+            capture_output=True, text=True, timeout=120,
+            env=self.bridge_env(**environment))
+
+    def ok(self, *args, **environment):
+        done = self.run_bridge(*args, **environment)
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(done.stderr, "")
         return json.loads(done.stdout)
 
     def ok_with(self, args, **environment):
         """``ok``, but with the bridge's environment changed -- for the paths
-        that depend on what is configured rather than on what is declared."""
+        that depend on what is configured."""
         done = self.run_bridge(*args, **environment)
         self.assertEqual(done.returncode, 0, done.stderr)
         return json.loads(done.stdout)
@@ -79,6 +125,9 @@ class ConsoleReadTests(unittest.TestCase):
         payload = json.loads(done.stdout)
         self.assertEqual(set(payload), {"error"}, payload)
         return done.returncode, payload["error"]
+
+
+class ConsoleReadTests(BridgeCase):
 
     # -- payload shapes ---------------------------------------------------
 
@@ -96,7 +145,7 @@ class ConsoleReadTests(unittest.TestCase):
         payload = self.ok("groups", "--date", DAY)
         self.assertEqual(set(payload), {"date", "disabledPromos", "groups", "discoveredGroups", "groupDiscovery", "context"})
         self.assertEqual(payload["date"], DAY)
-        self.assertTrue(payload["groups"])
+        self.assertEqual(len(payload["groups"]), len(self.config["groups"]))
         for row in payload["groups"]:
             self.assertEqual(set(row), GROUP_KEYS, row.get("jid"))
             self.assertTrue(row["jid"])
@@ -105,48 +154,68 @@ class ConsoleReadTests(unittest.TestCase):
             self.assertIsInstance(row["allowedToday"], list)
             self.assertIsInstance(row["weekly"], dict)
             # Today's allowance can only go to campaigns that target the group.
-            self.assertLessEqual(set(row["allowedToday"]), set(row["promos"]))
+            self.assertLessEqual(set(row["allowedToday"]),
+                                 set(row["promos"]) | set(row["weekly"]))
 
     def test_a_group_that_cannot_be_posted_to_is_never_targeted(self):
-        """A non-active group keeps its configured campaigns in membership.json,
-        so the console can show what reactivating it would restore. The
-        invariant that matters is that no campaign actually targets it."""
-        m = promo_membership.load(
-            promo_membership.default_path(str(ROOT / "workspace")))
-        inactive = {jid for jid, entry in promo_membership.groups(m).items()
+        """A non-active group keeps its configured campaigns, so the console can
+        show what reactivating it would restore. The invariant that matters is
+        that no campaign actually targets it."""
+        inactive = {jid for jid, entry in self.config["groups"].items()
                     if promo_membership.status_of(entry) != "active"}
         self.assertTrue(inactive, "expected the fixture to have inactive groups")
-        for promo in promo_membership.promo_names(m):
-            daily, weekly = promo_membership.groups_for_promo(m, promo)
-            self.assertEqual(inactive & (set(daily) | set(weekly)), set(), promo)
+        for row in self.ok("groups", "--date", DAY)["groups"]:
+            if row["jid"] in inactive:
+                self.assertEqual(row["allowedToday"], [], row["jid"])
+        for record in self.ok("campaigns", "--date", DAY)["campaigns"]:
+            previewed = {row["jid"] for row
+                         in self.ok("preview", record["slug"], "--date", DAY)["groups"]}
+            self.assertEqual(inactive & previewed, set(), record["slug"])
 
-    def test_campaigns_describes_every_declared_promo_in_slot_order(self):
+    def test_campaigns_describes_every_campaign_in_slot_order(self):
         payload = self.ok("campaigns", "--date", DAY)
         self.assertEqual(set(payload), {"date", "adAssets", "campaigns", "deletions"})
         self.assertEqual(set(payload["adAssets"]), AD_ASSET_KEYS)
         records = payload["campaigns"]
-        self.assertTrue(records)
+        self.assertEqual({r["slug"] for r in records}, set(self.config["promos"]))
         for record in records:
             self.assertEqual(set(record), CAMPAIGN_KEYS, record.get("slug"))
             self.assertTrue(record["slug"])
             self.assertIsNone(record["error"], record["slug"])
             self.assertTrue(record["captions"], record["slug"])
-            self.assertTrue(record["script"].endswith(".py"))
+            self.assertEqual(record["source"], "console", record["slug"])
             self.assertIsInstance(record["assets"], list)
             for asset in record["assets"]:
                 self.assertEqual(set(asset), ASSET_KEYS, record["slug"])
         slots = [(r["hour"], r["minute"]) for r in records]
         self.assertEqual(slots, sorted(slots))
 
-    def test_no_index_and_no_mirror_costs_the_pictures_and_nothing_else(self):
-        """The whole point of the bridge's catalogue being failure-tolerant. With
-        no credentials, no snapshot and no mirror there is nothing to show, and
-        the campaigns screen must still load in full and say why its tiles are
-        empty rather than implying the campaigns have no pictures."""
+    def test_a_converted_campaign_reports_the_job_name_it_kept(self):
+        # alpha carries jobName; the other two never had a script, so theirs is
+        # derived. The console shows the name so an operator can find the job.
+        records = dict((r["slug"], r) for r
+                       in self.ok("campaigns", "--date", DAY)["campaigns"])
+        self.assertEqual(records["alpha"]["jobName"], "alpha-promo")
+        self.assertEqual(records["beta"]["jobName"], "console-beta-promo")
+
+    def test_the_pictures_carry_the_address_of_their_bytes(self):
+        for record in self.ok("campaigns", "--date", DAY)["campaigns"]:
+            self.assertEqual([a["filename"] for a in record["assets"]],
+                             record["images"], record["slug"])
+            for asset in record["assets"]:
+                self.assertTrue(asset["url"].startswith(BASE_URL + "/ads/"),
+                                asset["url"])
+
+    def test_no_index_costs_the_pictures_and_nothing_else(self):
+        """The whole point of the bridge's catalogue being failure-tolerant. The
+        pictures live in R2 behind an index in Firestore; with neither readable
+        there is nothing to show, and the campaigns screen must still load in
+        full and say why its tiles are empty rather than implying the campaigns
+        have no pictures."""
         with tempfile.TemporaryDirectory() as empty:
+            promo_fixture.snapshot(empty, self.config, self.ENABLED)
             payload = self.ok_with(("campaigns", "--date", DAY),
                                    GENAIE_FIRESTORE_DIR=empty,
-                                   GENAIE_AD_ASSETS_MIRROR=os.path.join(empty, "absent.json"),
                                    GENAIE_AD_ASSETS_BASE_URL="")
         self.assertTrue(payload["campaigns"])
         for record in payload["campaigns"]:
@@ -156,29 +225,20 @@ class ConsoleReadTests(unittest.TestCase):
         self.assertIsNone(payload["adAssets"]["source"])
         self.assertTrue(payload["adAssets"]["note"])
 
-    def test_the_committed_mirror_carries_the_pictures_when_firestore_cannot(self):
-        """What production actually hit: the Firestore quota was exhausted and,
-        in repo mode, no run had ever written a snapshot. Every tile went blank
-        over pictures that were sitting in the bucket."""
-        base = "https://ads.example.test"
-        with tempfile.TemporaryDirectory() as empty:
-            payload = self.ok_with(("campaigns", "--date", DAY),
-                                   GENAIE_FIRESTORE_DIR=empty,
-                                   GENAIE_AD_ASSETS_BASE_URL=base)
-        self.assertEqual(payload["adAssets"]["source"], "mirror")
+    def test_the_index_snapshot_carries_the_pictures_when_firestore_cannot(self):
+        """What production actually hit: the Firestore quota was exhausted and
+        every picture tile went blank over bytes that were sitting in the
+        bucket. The index snapshot is what keeps them visible."""
+        payload = self.ok("campaigns", "--date", DAY)
+        self.assertEqual(payload["adAssets"]["source"], "snapshot")
         shown = [r for r in payload["campaigns"] if r["assets"]]
-        self.assertTrue(shown, "the committed mirror should name some pictures")
+        self.assertTrue(shown, "the index snapshot should name some pictures")
         for record in shown:
-            for asset in record["assets"]:
-                self.assertEqual(set(asset), ASSET_KEYS, record["slug"])
-                self.assertTrue(asset["url"].startswith(base + "/ads/"))
-            # The mirror is the index for the same campaign the post script
-            # declares, so the two lists must still be about the same pictures.
             self.assertLessEqual({a["filename"] for a in record["assets"]},
                                  set(record["images"]), record["slug"])
 
-    def test_preview_renders_the_caption_the_cron_would_send(self):
-        payload = self.ok("preview", "borehole-drilling", "--date", DAY)
+    def test_preview_renders_the_caption_the_run_would_send(self):
+        payload = self.ok("preview", "alpha", "--date", DAY)
         self.assertEqual(set(payload),
                          {"slug", "enabled", "captions", "tracking", "groups"})
         self.assertTrue(payload["groups"])
@@ -193,14 +253,21 @@ class ConsoleReadTests(unittest.TestCase):
             self.assertNotIn("<ref_link>", row["caption"])
             self.assertNotIn("<bot_number>", row["caption"])
             # The engine's variant index is 0-based; the console adds one only
-            # when it shows it, exactly as post_ad.py --dry-run does.
+            # when it shows it, exactly as a dry run does.
             self.assertIn(row["variant"], range(len(payload["captions"])))
 
-    def test_every_declared_campaign_can_be_previewed(self):
+    def test_every_campaign_can_be_previewed(self):
         for record in self.ok("campaigns", "--date", DAY)["campaigns"]:
             payload = self.ok("preview", record["slug"], "--date", DAY)
             self.assertEqual(payload["slug"], record["slug"])
-            self.assertEqual(len(payload["groups"]), record["targetCount"])
+            # A preview lists every assignment, paused ones included, so that a
+            # paused group can be found and resumed; targetCount is what the
+            # campaign would actually post to.
+            paused = sum(record["slug"] in (entry.get("paused_promos") or [])
+                         for entry in self.config["groups"].values())
+            self.assertEqual(len(payload["groups"]),
+                             record["targetCount"] + paused, record["slug"])
+            self.assertEqual(sum(row["paused"] for row in payload["groups"]), paused)
 
     def test_overview_agrees_with_the_routes_it_summarizes(self):
         overview = self.ok("overview", "--date", DAY)
@@ -217,63 +284,36 @@ class ConsoleReadTests(unittest.TestCase):
 
     # -- switched-off campaigns -------------------------------------------
 
-    def declared_disabled(self):
-        """Slugs the repository's own manifest switches off. Derived, not
-        hardcoded: re-enabling a campaign is a deliberate config change and
-        should not have to be mirrored here."""
-        manifest = json.loads((ROOT / "deploy/promo-crons.json").read_text())
-        return {promo["slug"] for promo in manifest["promos"]
-                if promo.get("enabled", True) is False}
-
-    def test_overview_reports_shadow_mode_off_by_default(self):
-        with tempfile.TemporaryDirectory() as state:
-            done = self.run_bridge("overview", "--date", DAY, GENAIE_CONFIG_SOURCE="",
-                                   GENAIE_FIRESTORE_DIR=state)
-        self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertEqual(json.loads(done.stdout)["configShadow"],
-                         {"mode": "file", "warning": None, "lastCheck": None})
-
-    def test_overview_carries_the_newest_shadow_check(self):
-        with tempfile.TemporaryDirectory() as state:
-            check = {"checkedAt": "2026-11-05T06:00:00Z", "status": "drift",
-                     "source": "firestore", "degraded": None,
-                     "problems": ["groups/x@g.us differs in status"], "notes": []}
-            with open(os.path.join(state, "shadow.json"), "w") as handle:
-                json.dump(check, handle)
-            done = self.run_bridge("overview", "--date", DAY, GENAIE_CONFIG_SOURCE="shadow",
-                                   GENAIE_FIRESTORE_DIR=state)
-        self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertEqual(done.stderr, "")
-        shadow = json.loads(done.stdout)["configShadow"]
-        self.assertEqual((shadow["mode"], shadow["lastCheck"]), ("shadow", check))
+    def disabled(self):
+        """Campaigns the operator has switched off in the store."""
+        return {slug for slug, doc in self.config["promos"].items()
+                if not doc.get("enabled")}
 
     def test_every_campaign_says_whether_it_is_switched_on(self):
-        disabled = self.declared_disabled()
-        self.assertTrue(disabled, "expected the manifest to switch one promo off")
-        records = self.ok("campaigns", "--date", DAY)["campaigns"]
-        for record in records:
+        off = self.disabled()
+        self.assertTrue(off, "expected the fixture to switch one campaign off")
+        for record in self.ok("campaigns", "--date", DAY)["campaigns"]:
             self.assertIsInstance(record["enabled"], bool, record["slug"])
-            self.assertEqual(record["enabled"], record["slug"] not in disabled,
+            self.assertEqual(record["enabled"], record["slug"] not in off,
                              record["slug"])
         self.assertEqual(self.ok("groups", "--date", DAY)["disabledPromos"],
-                         sorted(disabled))
+                         sorted(off))
 
     def test_a_switched_off_campaign_is_never_predicted_to_send(self):
-        """It installs no cron, so it cannot post today however the caps fall.
-        It stays in each group's configured promos, because the console has to
-        be able to show what switching it back on would restore."""
-        disabled = self.declared_disabled()
-        self.assertTrue(disabled, "expected the manifest to switch one promo off")
+        """It stands down whatever the caps say. It stays in each group's
+        configured campaigns, because the console has to be able to show what
+        switching it back on would restore."""
+        off = self.disabled()
         payload = self.ok("groups", "--date", DAY)
         configured = set()
         for row in payload["groups"]:
-            configured |= set(row["promos"]) & disabled
-            self.assertEqual(set(row["allowedToday"]) & disabled, set(), row["jid"])
+            configured |= set(row["promos"]) & off
+            self.assertEqual(set(row["allowedToday"]) & off, set(), row["jid"])
         self.assertTrue(configured,
-                        "expected a switched-off promo to still be configured")
+                        "expected a switched-off campaign to still be configured")
 
     def test_previewing_a_switched_off_campaign_shows_copy_but_no_sends(self):
-        for slug in sorted(self.declared_disabled()):
+        for slug in sorted(self.disabled()):
             payload = self.ok("preview", slug, "--date", DAY)
             self.assertFalse(payload["enabled"], slug)
             self.assertTrue(payload["captions"], slug)
@@ -307,70 +347,44 @@ class ConsoleReadTests(unittest.TestCase):
             code, _ = self.refused(*args)
             self.assertEqual(code, 1, args)
 
-    def test_a_missing_cron_manifest_is_reported_clearly(self):
+    def test_no_config_at_all_is_reported_rather_than_guessed(self):
+        """There is no second source. With neither Firestore nor a snapshot the
+        bridge has nothing to describe and must say so, not show an empty
+        console that reads as "you have no groups"."""
         with tempfile.TemporaryDirectory() as empty:
-            code, message = self.refused(
-                "campaigns", GENAIE_PROMO_CRONS=os.path.join(empty, "absent.json"))
-            self.assertEqual(code, 1)
-            self.assertIn("cron manifest", message)
+            code, message = self.refused("groups", "--date", DAY,
+                                         GENAIE_FIRESTORE_DIR=empty)
+        self.assertEqual(code, 1)
+        self.assertIn("service account", message)
 
-    def test_an_explicit_cron_manifest_is_preferred(self):
-        with tempfile.TemporaryDirectory() as directory:
-            manifest = Path(directory) / "promo-crons.json"
-            manifest.write_text(json.dumps({"timeoutSeconds": 11, "promos": []}))
-            payload = json.loads(self.run_bridge(
-                "campaigns", GENAIE_PROMO_CRONS=manifest).stdout)
-            self.assertEqual(payload["campaigns"], [])
-
-    def mutated_manifest(self, directory, mutate):
-        """The repository's own manifest with one promo altered, so these keep
-        real script paths and stay about the enabled key alone."""
-        manifest = json.loads((ROOT / "deploy/promo-crons.json").read_text())
-        mutate(manifest["promos"][0])
-        path = Path(directory) / "promo-crons.json"
-        path.write_text(json.dumps(manifest))
-        return path
-
-    def test_an_absent_enabled_key_means_switched_on(self):
-        """install-promo.sh, railway-release.py and report-release-ready.py all
-        default it to true, so a promo that never mentions it must read as on."""
-        with tempfile.TemporaryDirectory() as directory:
-            path = self.mutated_manifest(
-                directory, lambda promo: promo.pop("enabled", None))
-            payload = json.loads(self.run_bridge(
-                "campaigns", GENAIE_PROMO_CRONS=path).stdout)
-            self.assertTrue(payload["campaigns"][0]["enabled"])
-
-    def test_a_non_boolean_enabled_is_refused_not_guessed(self):
-        """A string is truthy in Python, so guessing would silently promise
-        sends for a campaign the operator wrote off. railway-release.py rejects
-        a non-bool here too."""
-        with tempfile.TemporaryDirectory() as directory:
-            path = self.mutated_manifest(
-                directory, lambda promo: promo.update({"enabled": "false"}))
-            code, message = self.refused("campaigns", GENAIE_PROMO_CRONS=path)
-            self.assertEqual(code, 1)
-            self.assertIn("enabled", message)
+    def test_asking_for_a_retired_source_is_still_answered(self):
+        """``GENAIE_CONFIG_SOURCE`` selected the committed files once. Setting it
+        to one of those now has to be harmless -- the store is the only source --
+        and the resolver's note says so rather than the read failing."""
+        payload = self.ok_with(("overview", "--date", DAY),
+                               GENAIE_CONFIG_SOURCE="file")
+        self.assertTrue(payload["campaigns"])
+        source = payload["configSource"]
+        self.assertEqual(source["mode"], "firestore")
+        self.assertTrue(any("no longer selects anything" in note
+                            for note in source["notes"]), source["notes"])
 
     # -- the read-only promise -------------------------------------------
 
-    def snapshot(self):
-        """Size and mtime of everything the bridge reads."""
+    def snapshot_of_tree(self):
+        """Size and mtime of everything the bridge reads from the checkout."""
         seen = {}
-        for base in (ROOT / "workspace/cron", ROOT / "workspace/lib",
-                     ROOT / "deploy/promo-crons.json"):
-            for path in ([base] if base.is_file() else sorted(base.rglob("*"))):
-                if path.is_file():
-                    stat = path.stat()
-                    seen[str(path)] = (stat.st_size, stat.st_mtime_ns)
+        for path in sorted((ROOT / "workspace/lib").rglob("*")):
+            if path.is_file():
+                stat = path.stat()
+                seen[str(path)] = (stat.st_size, stat.st_mtime_ns)
         return seen
 
     def test_reading_changes_nothing_in_the_tree(self):
-        before = self.snapshot()
-        for args in (("overview",), ("groups",), ("campaigns",),
-                     ("preview", "borehole-drilling")):
+        before = self.snapshot_of_tree()
+        for args in (("overview",), ("groups",), ("campaigns",), ("preview", "alpha")):
             self.assertEqual(self.run_bridge(*args, "--date", DAY).returncode, 0)
-        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(self.snapshot_of_tree(), before)
 
     def test_reading_never_records_a_cap_snapshot(self):
         """promo_caps.plan writes the ad-ref history when asked to record. The
@@ -378,7 +392,7 @@ class ConsoleReadTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             history = Path(directory) / "ad-ref-history.json"
             refs = Path(directory) / "ad-refs.json"
-            for args in (("groups",), ("overview",), ("preview", "borehole-drilling")):
+            for args in (("groups",), ("overview",), ("preview", "alpha")):
                 done = self.run_bridge(
                     *args, "--date", DAY,
                     PROMO_CAPS_HISTORY=history, PROMO_AD_REFS_PATH=refs)
@@ -438,137 +452,133 @@ class ConsoleReadTests(unittest.TestCase):
         self.assertIs(json.loads(done.stdout)["writes"]["enabled"], True)
         self.assertNotIn(secret, done.stdout + done.stderr)
 
-    def test_writes_say_whether_a_saved_change_reaches_the_campaigns(self):
-        # Before the cutover a write lands in Firestore while runs still act on
-        # membership.json; a console has to be able to say so.
-        for mode in ("file", "shadow"):
-            with self.subTest(mode=mode):
-                writes = self.overview_writes(GENAIE_CONFIG_SOURCE=mode)
-                self.assertIs(writes["affectsProduction"], False)
-
-    def test_after_the_cutover_a_saved_change_reaches_the_campaigns(self):
-        # Checked in-process: a firestore-mode overview would need a live
-        # Firestore, but this answer depends only on the mode.
-        from unittest import mock
-        console = load_console_read()
-        with mock.patch.dict(os.environ, {"GENAIE_CONFIG_SOURCE": "firestore"}):
-            self.assertIs(console.write_capabilities()["affectsProduction"], True)
+    def test_a_saved_change_always_reaches_the_campaigns_now(self):
+        # Before the cutover a write landed in Firestore while runs still acted
+        # on the committed file, and a console had to be able to say so. The
+        # file is gone, so there is no longer a state in which a saved change
+        # does not reach production.
+        self.assertIs(self.overview_writes()["affectsProduction"], True)
+        self.assertIs(self.overview_writes(
+            GENAIE_CONFIG_SOURCE="file")["affectsProduction"], True)
 
     def test_cap_settings_come_in_the_shape_a_form_edits(self):
-        m = promo_membership.load(promo_membership.default_path(str(ROOT / "workspace")))
         settings = self.ok("overview", "--date", DAY)["capSettings"]
         self.assertEqual(set(settings), {"enabled", "defaultActivity", "bands"})
-        self.assertIs(settings["enabled"], promo_membership.caps_enabled(m))
+        self.assertIs(settings["enabled"], promo_membership.caps_enabled(self.config))
         self.assertEqual(settings["bands"], dict(
-            (tier, [low, high]) for tier, (low, high) in promo_membership.bands(m).items()))
+            (tier, [low, high]) for tier, (low, high)
+            in promo_membership.bands(self.config).items()))
+
+    def test_ad_assets_report_the_one_source_there_is(self):
+        assets = self.ok("campaigns", "--date", DAY)["adAssets"]
+        self.assertEqual(assets["mode"], "r2")
+        self.assertIsNone(assets["warning"])
+
+
+class UnverifiedScheduleTests(BridgeCase):
+    """A campaign whose cron the reconciler has not confirmed."""
+
+    @property
+    def CONFIG(self):
+        config = promo_fixture.membership()
+        config["promos"]["beta"] = promo_fixture.campaign(
+            "beta", "13:21", prefix="BE", status="pending")
+        return config
 
     def test_a_campaign_reports_both_switches(self):
-        # cv has no cron registered (manifest enabled: false), so it cannot post
-        # whatever its store switch says; the console must not offer a toggle as
-        # if it could.
+        # beta has no verified cron, so it cannot post whatever its store switch
+        # says; the console must not offer a toggle as if it could.
         campaigns = dict((row["slug"], row) for row
                          in self.ok("campaigns", "--date", DAY)["campaigns"])
-        self.assertIs(campaigns["cv"]["cronEnabled"], False)
-        self.assertIs(campaigns["cv"]["enabled"], False)
-        self.assertIs(campaigns["genaie"]["cronEnabled"], True)
-        self.assertIs(campaigns["genaie"]["storeEnabled"], True)
+        self.assertIs(campaigns["beta"]["storeEnabled"], True)
+        self.assertIs(campaigns["beta"]["cronEnabled"], False)
+        self.assertIs(campaigns["beta"]["enabled"], False)
+        self.assertIs(campaigns["alpha"]["cronEnabled"], True)
+        self.assertIs(campaigns["alpha"]["enabled"], True)
         for row in campaigns.values():
             self.assertIs(row["enabled"], row["storeEnabled"] and row["cronEnabled"],
                           row["slug"])
 
-
-WRITE_KEY = "GCP_SERVICE_ACCOUNT_WRITE_B64"
-
-
-def load_console_read():
-    """console-read has no extension, so it loads by path -- the same way the
-    review regression tests reach its internals."""
-    import importlib.machinery
-    import importlib.util
-    loader = importlib.machinery.SourceFileLoader("console_read_inproc", str(BRIDGE))
-    spec = importlib.util.spec_from_loader("console_read_inproc", loader)
-    module = importlib.util.module_from_spec(spec)
-    loader.exec_module(module)
-    return module
+    def test_an_unverified_campaign_is_never_predicted_to_send(self):
+        for row in self.ok("groups", "--date", DAY)["groups"]:
+            self.assertNotIn("beta", row["allowedToday"], row["jid"])
 
 
 class AssetEntryTests(unittest.TestCase):
-    """The join itself, offline. The subprocess tests above run without
-    credentials, so they prove the empty case; this proves the full one without
-    asking CI for a network."""
+    """The join itself, in-process. The subprocess tests above drive it through
+    an index snapshot; this pins the shape of one entry without a file at all."""
 
     def setUp(self):
         self.console = load_console_read()
+        self.entries = [
+            {"id": "alpha-1", "campaign": "alpha", "filename": "one.jpg",
+             "key": "ads/alpha/%s.jpg" % ("a" * 64), "sha256": "a" * 64,
+             "bytes": 100, "content_type": "image/jpeg", "rank": 10},
+            {"id": "alpha-2", "campaign": "alpha", "filename": "two.jpg",
+             "key": "ads/alpha/%s.jpg" % ("b" * 64), "sha256": "b" * 64,
+             "bytes": 200, "content_type": "image/jpeg", "rank": 20},
+        ]
         self.console._CATALOGUE["value"] = {
-            "source": "firestore", "fetchedAt": "2026-11-09T02:53:12Z", "note": None,
-            "campaigns": {"borehole-drilling": [
-                {"id": "borehole-drilling-1", "campaign": "borehole-drilling",
-                 "filename": "borehole-1.jpg", "key": "ads/borehole-drilling/aa.jpg",
-                 "url": "https://ads.example.test/ads/borehole-drilling/aa.jpg",
-                 "sha256": "a" * 64, "bytes": 243016, "content_type": "image/jpeg",
-                 "rank": 10, "enabled": True, "comment": None},
-                {"id": "borehole-drilling-2", "campaign": "borehole-drilling",
-                 "filename": "borehole-2.jpg", "key": "ads/borehole-drilling/bb.jpg",
-                 "url": "https://ads.example.test/ads/borehole-drilling/bb.jpg",
-                 "sha256": "b" * 64, "bytes": 11918, "content_type": "image/jpeg",
-                 "rank": 20, "enabled": True, "comment": None}]}}
+            "campaigns": {"alpha": [dict(entry, url="%s/%s" % (BASE_URL, entry["key"]))
+                                    for entry in self.entries]},
+            "source": "snapshot", "fetchedAt": "2026-11-06T06:00:00Z", "note": None}
 
     def test_a_campaigns_pictures_carry_the_address_of_their_bytes(self):
-        entries = self.console.asset_entries("borehole-drilling")
-        self.assertEqual([e["filename"] for e in entries],
-                         ["borehole-1.jpg", "borehole-2.jpg"])
-        self.assertEqual(entries[0]["url"],
-                         "https://ads.example.test/ads/borehole-drilling/aa.jpg")
-        self.assertEqual(entries[0]["contentType"], "image/jpeg")
-        self.assertEqual(entries[0]["rank"], 10)
+        entries = self.console.asset_entries("alpha")
+        self.assertEqual(len(entries), 2)
+        for entry in entries:
+            self.assertEqual(set(entry), ASSET_KEYS)
+            self.assertTrue(entry["url"].startswith(BASE_URL + "/ads/alpha/"))
+            self.assertIn(entry["sha256"], entry["url"])
 
     def test_the_index_order_is_kept_because_it_is_the_rotation_order(self):
-        entries = self.console.asset_entries("borehole-drilling")
-        self.assertEqual([e["rank"] for e in entries], [10, 20])
+        entries = self.console.asset_entries("alpha")
+        self.assertEqual([entry["filename"] for entry in entries],
+                         ["one.jpg", "two.jpg"])
+        self.assertEqual([entry["rank"] for entry in entries], [10, 20])
 
     def test_a_campaign_the_index_does_not_mention_has_no_pictures_not_an_error(self):
-        self.assertEqual(self.console.asset_entries("fruit-trees"), [])
+        self.assertEqual(self.console.asset_entries("beta"), [])
 
     def test_the_key_never_reaches_the_console_because_the_url_already_has_it(self):
-        for entry in self.console.asset_entries("borehole-drilling"):
+        for entry in self.console.asset_entries("alpha"):
             self.assertNotIn("key", entry)
-            self.assertNotIn("enabled", entry)
 
 
 class PausedAssignmentTests(unittest.TestCase):
-    """A paused assignment has to stay visible: the campaign page's list of where
-    it goes is the only place it can be resumed from."""
+    """One group's assignment paused, in-process: the store keeps the campaign
+    on the group so the console can show what resuming would restore, and
+    nothing may plan a send for it."""
 
     def setUp(self):
-        import copy
-        from datetime import date
+        self.day = promo_fixture.DAY
         self.console = load_console_read()
-        self.day = date(2026, 11, 4)
-        base = promo_membership.load(self.console.MEMBERSHIP)
-        self.m = copy.deepcopy(base)
-        self.jid = next(jid for jid, entry in self.m["groups"].items()
-                        if promo_membership.is_active(entry)
-                        and "genaie" in (entry.get("promos") or []))
-        self.m["groups"][self.jid]["paused_promos"] = ["genaie"]
+        self.config = promo_fixture.membership()
+        # group 7 in the fixture has alpha configured and alpha paused.
+        self.paused = next(jid for jid, entry in self.config["groups"].items()
+                           if "alpha" in (entry.get("paused_promos") or []))
+        switches = promo_fixture.switches(self.config)
         self.console._RESOLVED["config"] = {
-            "mode": "file", "source": "file", "membership": self.m, "doc": {},
-            "switches": {}, "storeSwitches": {}, "cronSwitches": {},
-            "report": {"quarantined": {}, "warnings": [], "campaigns": {}}, "notes": []}
+            "membership": self.config, "switches": switches,
+            "storeSwitches": switches, "cronSwitches": dict.fromkeys(switches, True),
+            "source": "snapshot", "mode": "firestore", "deleted": [],
+            "report": {"quarantined": {}, "warnings": [], "campaigns": {}},
+            "notes": []}
+        self.console._CATALOGUE["value"] = {"campaigns": {}, "source": None,
+                                            "fetchedAt": None, "note": "no index"}
 
     def test_a_paused_group_stays_in_the_campaigns_list_marked_paused(self):
-        rows = dict((row["jid"], row) for row
-                    in self.console.preview("genaie", self.day)["groups"])
-        self.assertIn(self.jid, rows)
-        self.assertIs(rows[self.jid]["paused"], True)
-        self.assertIs(rows[self.jid]["sendsToday"], False)
-        self.assertTrue(any(not row["paused"] for row in rows.values()))
+        row = next(row for row in self.console.preview("alpha", self.day)["groups"]
+                   if row["jid"] == self.paused)
+        self.assertIs(row["paused"], True)
+        self.assertIs(row["sendsToday"], False)
 
     def test_the_group_row_lists_the_pause_and_plans_no_send_for_it(self):
         row = next(row for row in self.console.group_rows(self.day)
-                   if row["jid"] == self.jid)
-        self.assertEqual(row["pausedPromos"], ["genaie"])
-        self.assertIn("genaie", row["promos"])
-        self.assertNotIn("genaie", row["allowedToday"])
+                   if row["jid"] == self.paused)
+        self.assertIn("alpha", row["promos"])
+        self.assertIn("alpha", row["pausedPromos"])
+        self.assertNotIn("alpha", row["allowedToday"])
 
 
 if __name__ == "__main__":

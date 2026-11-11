@@ -19,11 +19,13 @@ it only as a module the test files import.
 """
 
 import copy
+import datetime
 import io
 import os
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 from datetime import date
 from pathlib import Path
@@ -126,6 +128,54 @@ def wire(docs):
     return dict((collection, dict((doc_id, operator_config.encode_fields(fields))
                                   for doc_id, fields in rows))
                 for collection, rows in docs.items())
+
+
+def snapshot(directory, config=None, enabled=None, *, now=None, deleted=()):
+    """Write the fixture as a last-known-good config snapshot.
+
+    This is how a test drives something that reads the config in its own
+    process -- ``workspace/bin/console-read``, run the way the console API runs
+    it -- now that there is no file for it to read. ``operator_config`` serves
+    this snapshot whenever Firestore cannot be reached, which with no service
+    account configured is immediately, so a snapshot stamped now is a complete
+    offline config. One at the full scope seeds every narrower one.
+    """
+    config = config or membership()
+    at = (now or time.time)()
+    stamp = datetime.datetime.fromtimestamp(
+        at, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    operator_config._write_private_json(
+        operator_config.snapshot_path(directory),
+        {"fetchedAt": stamp, "membership": config,
+         "enabled": enabled or switches(config), "deleted": sorted(deleted)})
+    return directory
+
+
+def asset_index(directory, config=None, *, now=None):
+    """Write the fixture's pictures as a last-known-good asset index snapshot.
+
+    The same trick as :func:`snapshot`, for the index whose bytes live in R2.
+    Each campaign's entries are in the document's own order, which is the
+    rotation order a run posts them in."""
+    import ad_assets
+    config = config or membership()
+    stamp = datetime.datetime.fromtimestamp(
+        (now or time.time)(), datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    campaigns = {}
+    for slug, campaign in config["promos"].items():
+        campaigns[slug] = [
+            {"id": "%s-%d" % (slug, index + 1), "campaign": slug,
+             "filename": image["filename"], "key": image["key"],
+             "sha256": image["sha256"], "bytes": image["bytes"],
+             "content_type": image["contentType"], "rank": (index + 1) * 10,
+             "enabled": True}
+            for index, image in enumerate(campaign["images"])]
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    operator_config._write_private_json(
+        ad_assets.index_path({"GENAIE_FIRESTORE_DIR": directory}),
+        {"fetchedAt": stamp, "campaigns": campaigns, "quarantined": {}})
+    return directory
 
 
 def pin(day):

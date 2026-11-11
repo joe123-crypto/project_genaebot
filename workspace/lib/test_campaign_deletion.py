@@ -199,11 +199,9 @@ class Retirement(unittest.TestCase):
             with self.assertRaises(config.ConfigUnavailable): config.load(self.env, log=lambda _: None)
             fallback.assert_not_called()
     def test_live_guard_stops_the_second_group_and_fails_closed(self):
-        target_file = Path(self.tmp.name) / "targets.json"
-        target_file.write_text(json.dumps({"groups": ["1@g.us", "2@g.us"]}))
         image = Path(self.tmp.name) / "image.png"; image.write_bytes(BODY)
         def run():
-            return broadcast.broadcast(text="offer", image=str(image), targets_file=str(target_file),
+            return broadcast.broadcast(text="offer", image=str(image),
                 state_file=str(Path(self.tmp.name) / "state.json"), promo_name="demo-promo", send_delay=0, start_jitter=0,
                 caps=None, resolve_config=lambda *args, **kwargs: {"mode": "firestore", "source": "firestore", "enabled": True, "membership": {}, "switches": {}, "doc": {"groups": ["1@g.us", "2@g.us"]}}, sleep=lambda _: None, account_status=lambda accounts: {a: True for a in accounts}, argv=[])
         with patch.dict(os.environ, dict(self.env, GENAIE_AD_ASSETS_SOURCE="repo")), patch("sys.stdout", io.StringIO()), patch.object(deletion, "live_campaign", side_effect=[{}, {"deleted": True}]), patch.object(broadcast, "send_ad", return_value=(True, "sent")) as send:

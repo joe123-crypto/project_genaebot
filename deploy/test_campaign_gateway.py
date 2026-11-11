@@ -98,14 +98,12 @@ for line in sys.stdin:
     def test_one_shot_broadcast_releases_helper_before_the_random_gap(self):
         image = self.root / "ad.png"
         image.write_bytes(b"fixture")
-        targets = self.root / "targets.json"
-        targets.write_text('{"groups":["1@g.us","2@g.us"]}')
         state = self.root / "state.json"
         def gap(seconds):
             self.assertTrue(self.processes)
             self.assertTrue(all(process.poll() is not None for process in self.processes))
         with patch.dict(os.environ, {"GENAIE_CAMPAIGN_TRANSPORT": "rpc-once"}):
-            self.assertEqual(pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, text="hello", image=str(image), targets_file=str(targets),
+            self.assertEqual(pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, text="hello", image=str(image), promo_name="alpha-promo",
                 state_file=str(state), argv=[], caps=None, cron_timeout=None,
                 start_jitter=0, send_delay=1, sleep=gap,
                 resolve_config=resolver_for(TWO)), 0)
@@ -169,10 +167,8 @@ for line in sys.stdin:
     def test_dry_run_never_starts_the_helper(self):
         image = self.root / "ad.png"
         image.write_bytes(b"fixture")
-        targets = self.root / "targets.json"
-        targets.write_text('{"groups":["1@g.us"]}')
         with patch.dict(os.environ, {"GENAIE_CAMPAIGN_TRANSPORT": "rpc"}):
-            result = pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, text="hello", image=str(image), targets_file=str(targets),
+            result = pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, text="hello", image=str(image), promo_name="alpha-promo",
                                   state_file=str(self.root / "state.json"),
                                   argv=["--dry-run"], caps=None,
                                   resolve_config=resolver_for(ONE))
@@ -183,10 +179,8 @@ for line in sys.stdin:
     def test_rpc_broadcast_commits_each_group_and_skips_completed_reruns(self):
         image = self.root / "ad.png"
         image.write_bytes(b"fixture")
-        targets = self.root / "targets.json"
-        targets.write_text('{"groups":["1@g.us","2@g.us"]}')
         state = self.root / "state.json"
-        arguments = dict(text="hello", image=str(image), targets_file=str(targets),
+        arguments = dict(text="hello", image=str(image), promo_name="alpha-promo",
                          state_file=str(state), argv=[], caps=None, cron_timeout=None,
                          start_jitter=0, send_delay=0,
                          resolve_config=resolver_for(TWO))
@@ -201,12 +195,10 @@ for line in sys.stdin:
     def test_rpc_reconnect_queue_is_committed_without_a_resend(self):
         image = self.root / "ad.png"
         image.write_bytes(b"fixture")
-        targets = self.root / "targets.json"
-        targets.write_text('{"groups":["1@g.us"]}')
         state = self.root / "state.json"
         with patch.dict(os.environ, {"GENAIE_CAMPAIGN_TRANSPORT": "rpc"}):
-            self.assertEqual(pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, text="queued", image=str(image),
-                targets_file=str(targets), state_file=str(state), argv=[], caps=None,
+            self.assertEqual(pb.broadcast(account_status=lambda accounts: {a: True for a in accounts}, text="queued", image=str(image), promo_name="alpha-promo",
+                state_file=str(state), argv=[], caps=None,
                 cron_timeout=None, start_jitter=0, send_delay=0,
                 resolve_config=resolver_for(ONE)), 0)
         self.assertEqual(len(self.calls()), 1)

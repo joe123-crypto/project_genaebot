@@ -103,7 +103,6 @@ class LiveViews:
             row.pop("captions", None)
             row.pop("images", None)
             row.pop("assets", None)
-            row.pop("script", None)
         def band(row):
             return 0 if row["status"] != "active" else 1 if row["promos"] else 2
         groups.sort(key=lambda row: (band(row), row["jid"]))
