@@ -52,7 +52,7 @@ CAMPAIGN_KEYS = {
     "failureAlertTo", "timeoutSeconds", "captions", "tracking",
     "images", "assets", "targetCount", "weeklyCount", "accounts", "source",
     "error", "enabled", "storeEnabled", "cronEnabled", "scheduleMinutes", "scheduleEdit",
-    "jobName", "scheduleStatus",
+    "jobName", "scheduleStatus", "scheduleEntries",
 }
 AD_ASSET_KEYS = {"mode", "warning", "lastCheck", "source", "fetchedAt", "note"}
 ASSET_KEYS = {"filename", "url", "sha256", "bytes", "contentType", "rank"}

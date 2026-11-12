@@ -82,13 +82,17 @@ def describe(doc, day):
             "status": "pending" if state.get("pending") else "ready", "confirmedMinutes": confirmed_minutes}
 
 
-def read_fields(doc, day):
+def read_fields(doc, day, slug=""):
     value = definition(doc)
     edit = describe(doc, day)
     if not edit["editable"]:
         return {"scheduleEdit": edit}
     parts = parse(value)
-    return {"cron": value["cron"], "timezone": value["timezone"],
+    import console_schedule_entries
+    entry_rows = console_schedule_entries.rows(slug, doc, day)
+    if "scheduleEntries" in doc:
+        edit = {**edit, "editable": False, "reason": "Use the independent schedule entry controls."}
+    return {"scheduleEntries": entry_rows, "cron": value["cron"], "timezone": value["timezone"],
             "hour": int(parts[1]), "minute": int(parts[0]), "scheduleMinutes": occurrence(value, day), "scheduleEdit": edit}
 
 
@@ -108,6 +112,9 @@ def move(value, time, day):
 
 
 def validate(data):
+    if isinstance(data, dict) and "operationId" in data:
+        import console_schedule_entries
+        return console_schedule_entries.validate(data)
     need(isinstance(data, dict) and not set(data) - {"date", "timezone", "changes", "actor"}, "Invalid schedule request.")
     need(data.get("timezone") == DISPLAY_ZONE, "Invalid display timezone.")
     need(isinstance(data.get("date"), str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", data["date"]), "Invalid schedule day.")
@@ -130,6 +137,9 @@ def validate(data):
 
 
 def save(data, store, env=None):
+    if isinstance(data, dict) and "operationId" in data:
+        import console_schedule_entries
+        return console_schedule_entries.save(data, store, env)
     day = validate(data)
     # Shared with retirement and reconciliation, so an old retry cannot restore
     # a retired job or mark a newer edit as applied.
@@ -141,6 +151,7 @@ def save(data, store, env=None):
                 slug = row["slug"]
                 existing = store.get("campaigns", slug)
                 need(existing is not None and not existing.get("deleted"), "Campaign is missing or deleted: %s" % slug, 409)
+                need("scheduleEntries" not in existing, "This campaign uses independent schedule entries. Reload with the updated console.", 409)
                 current = definition(existing)
                 desired = move(current, row["time"], day)
                 # An identical desired time is a safe retry after a lost reply.
@@ -168,7 +179,7 @@ def save(data, store, env=None):
 def summary(slug, store, day):
     doc = store.get("campaigns", slug)
     need(doc is not None and not doc.get("deleted"), "Campaign was deleted while saving.", 409)
-    fields = read_fields(doc, day)
+    fields = read_fields(doc, day, slug)
     minutes = fields.get("scheduleMinutes")
     need(minutes is not None, "Saved schedule has no occurrence on the displayed day.", 409)
     return {"slug": slug, "minutes": minutes, "scheduleEdit": fields["scheduleEdit"]}
@@ -180,6 +191,9 @@ def reconcile_one(slug, store, env=None, call=None):
         doc = store.get("campaigns", slug)
         if not doc or doc.get("deleted") or not (doc.get("scheduleEdit") or {}).get("pending"):
             return
+        if "scheduleEntries" in doc:
+            import console_schedule_entries
+            return console_schedule_entries.reconcile(slug, store, env, call)
         desired = definition(doc)
         campaigns._reconcile_one(slug, store, call)
         jobs = call(["list", "--all", "--json"]).get("jobs", [])

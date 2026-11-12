@@ -761,6 +761,16 @@ refuses to start without one of at least 32 characters, so it cannot come up
 unauthenticated. Neither variable is release-managed in `deploy/railway-release.py`,
 so a deploy neither sets nor clears them; they behave like `REPLIES_DISABLED`.
 
+The schedule route accepts an `operationId` alongside the usual
+`changes`/`date`/`timezone`/`actor` body; that is an independent schedule entry
+request, documented in the repository README:
+[Independent schedule entries](../../README.md#independent-schedule-entries).
+Nothing turns it on -- `writes.scheduleEditing.entries` follows
+`workspace/bin/run-schedule-entry` shipping in the image, which
+`deploy/stage-workspace.rsync` already stages with the rest of `bin/`. A deploy
+that reaches a console whose Day timeline still asks for the companion bot
+update is serving an image without that file.
+
 It listens on `CONSOLE_API_PORT` (default 18790), never the gateway's 18789. The
 entrypoint reassigns `PORT` to the gateway's port before any child starts, so a
 process that read `$PORT` here would collide with the gateway; this is why the

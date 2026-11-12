@@ -557,7 +557,7 @@ class Handler(BaseHTTPRequestHandler):
             if len(raw) != size:
                 raise ValueError()
             request = json.loads(raw)
-            if not isinstance(request, dict) or set(request) - {"changes", "date", "timezone", "actor"}:
+            if not isinstance(request, dict) or set(request) - {"changes", "date", "timezone", "actor", "operationId"}:
                 raise ValueError()
         except (ValueError, TypeError):
             self.send_any(400, b'{"error":"Invalid schedule change."}', True)
