@@ -8,6 +8,7 @@ import io
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -86,6 +87,9 @@ class FakeGateway:
         if args[0] == "list":
             return {"jobs": copy.deepcopy(self.jobs)}
         if args[0] == "add":
+            # cron add carries no failure-alert options; only cron edit does.
+            if any(arg.startswith("--failure-alert") for arg in args):
+                raise subprocess.CalledProcessError(1, args, stderr='OpenClaw does not recognize option "--failure-alert".')
             job = {"id": "one", "enabled": False}
             self.jobs.append(job)
         else:

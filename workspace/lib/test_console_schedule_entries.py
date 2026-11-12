@@ -11,7 +11,7 @@ import console_schedule as schedule
 import operator_config as config
 import operator_writer as writer
 import promo_broadcast
-from test_console_schedule import Schedule, DAY, JOB
+from test_console_schedule import Schedule, DAY, JOB, ALERT
 from test_console_campaigns import FakeGateway
 
 
@@ -82,6 +82,17 @@ class Entries(unittest.TestCase):
         self.assertEqual(len(self.gateway.jobs), 1)
         self.assertTrue(self.store.get("campaigns", self.slug)["scheduleEntries"]["repeat-1"]["deleted"])
         self.assertFalse(any(call[0] == "run" for call in self.gateway.calls))
+
+    def test_created_entry_job_takes_its_failure_alert_from_an_edit(self):
+        entries.save(self.body(), self.store, self.env)
+        schedule.reconcile_one(self.slug, self.store, self.env, self.gateway)
+        self.assertFalse([call for call in self.gateway.calls
+                          if call[0] == "add" and any(flag.startswith("--failure-alert") for flag in call)])
+        job = next(job for job in self.gateway.jobs if job["name"].startswith("console-entry"))
+        self.assertEqual(job["failureAlert"]["to"], ALERT)
+        self.assertTrue(job["enabled"])
+        entry = self.store.get("campaigns", self.slug)["scheduleEntries"]["repeat-1"]
+        self.assertEqual(entry["confirmed"]["cron"], "15 12 * * *")
 
     def test_runner_checks_current_state_and_occurrence_day(self):
         entries.save(self.body(), self.store, self.env)
