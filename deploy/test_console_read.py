@@ -289,6 +289,14 @@ class ConsoleReadTests(BridgeCase):
         return {slug for slug, doc in self.config["promos"].items()
                 if not doc.get("enabled")}
 
+    def test_schedule_entries_carry_the_campaign_switch(self):
+        off = self.disabled()
+        self.assertTrue(off, "expected the fixture to switch one campaign off")
+        for record in self.ok("campaigns", "--date", DAY)["campaigns"]:
+            self.assertTrue(record["scheduleEntries"], record["slug"])
+            for entry in record["scheduleEntries"]:
+                self.assertIs(entry["campaignEnabled"], record["storeEnabled"], record["slug"])
+
     def test_every_campaign_says_whether_it_is_switched_on(self):
         off = self.disabled()
         self.assertTrue(off, "expected the fixture to switch one campaign off")
