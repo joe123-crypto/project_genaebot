@@ -1875,6 +1875,21 @@ keeps its own send state, so two runs on one day do not deduplicate each other.
 Deleting a campaign retires its entry jobs with it, and an entries campaign
 counts as schedulable for caps only while one of its entries may still run today.
 
+A job is created by `openclaw cron add` and then adjusted by `openclaw cron
+edit`, and the two do not take the same options: `--enable`, `--disable` and the
+whole `--failure-alert` family belong to `edit` alone, while `add` takes
+`--disabled` in their place. openclaw fails the whole call on an option its
+subcommand does not take, and a failed call is only counted as pending, so the
+mistake shows up as a job that is never created rather than as an error anyone
+reads. `console_campaigns.CRON_OPTIONS` is the list of options each subcommand
+is passed; `gateway` refuses anything outside it before openclaw is invoked, the
+fake gateway in the tests refuses the same, and a test checks the list against
+`openclaw cron <subcommand> --help` wherever openclaw is installed. Add a new
+flag to that list in the same change that starts passing it. When a
+reconciliation does stay pending, the reason now travels out through the
+bridge's JSON as `scheduleProblems` and the console API logs it once per change,
+because the bridge never leaks stderr.
+
 ## Indexed live console views
 
 The console's Schedule home page, paginated Groups/Campaigns views, and assignment

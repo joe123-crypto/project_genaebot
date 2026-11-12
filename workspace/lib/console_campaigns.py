@@ -377,7 +377,34 @@ def cron_expression(schedule):
     return "%s %s * * %s" % (minute, hour, days)
 
 
+# What each cron subcommand accepts. openclaw registers --enable/--disable and
+# the whole --failure-alert family on edit only, and add takes --disabled in
+# their place, so one flag list shared between the two fails the call outright.
+# A failed call is only counted as pending, so the mistake would otherwise show
+# up as a job that is never created rather than as an error anyone reads.
+CRON_OPTIONS = {
+    "add": {"--command-argv", "--command-cwd", "--cron", "--disabled", "--exact", "--json",
+            "--name", "--no-deliver", "--session", "--timeout-seconds", "--tz"},
+    "edit": {"--command-argv", "--command-cwd", "--cron", "--disable", "--enable", "--exact",
+             "--failure-alert", "--failure-alert-after", "--failure-alert-channel",
+             "--failure-alert-cooldown", "--failure-alert-to", "--name", "--no-deliver",
+             "--session", "--timeout-seconds", "--tz"},
+    "list": {"--all", "--json"},
+    "rm": set(),
+}
+
+
+def unsupported(arguments):
+    """The options this cron subcommand does not take, in the order shown."""
+    if arguments[0] not in CRON_OPTIONS:
+        return ["cron " + arguments[0]]
+    return [argument for argument in arguments[1:]
+            if argument.startswith("--") and argument not in CRON_OPTIONS[arguments[0]]]
+
+
 def gateway(arguments):
+    refused = unsupported(arguments)
+    need(not refused, "openclaw cron %s does not take %s" % (arguments[0], ", ".join(refused)))
     environment = dict(os.environ)
     environment.pop("OPENCLAW_HOME", None)
     environment["OPENCLAW_GATEWAY_TOKEN"] = environment.get("GATEWAY_AUTH_TOKEN", "")
@@ -475,7 +502,12 @@ def set_images(project, token, slug, images, *, opener=None, sleep=None):
                     opener=opener or urllib.request.urlopen, sleep=sleep or time.sleep)
 
 
-def reconcile_all(store):
+def reason(ex):
+    # Our own refusals are safe to repeat; anything else may carry output.
+    return str(ex) if isinstance(ex, writer.WriteRefused) else type(ex).__name__
+
+
+def reconcile_all(store, problems=None):
     failures = 0
     for slug, fields in store.list("campaigns", where={"fieldFilter": {
             "field": {"fieldPath": "kind"}, "op": "EQUAL", "value": {"stringValue": "console"}}}):
@@ -489,7 +521,9 @@ def reconcile_all(store):
                 # that campaign visible while its schedule receipt is pending.
                 if not (current.get("scheduleEdit", {}).get("pending") and current.get("scheduleStatus") == "ready"):
                     mark_status(slug, store, "pending")
-                sys.stderr.write("[console-campaign] schedule pending for %s: %s\n" % (slug, type(ex).__name__))
+                if problems is not None:
+                    problems.append("%s: %s" % (slug, reason(ex)))
+                sys.stderr.write("[console-campaign] schedule pending for %s: %s\n" % (slug, reason(ex)))
     return failures
 
 

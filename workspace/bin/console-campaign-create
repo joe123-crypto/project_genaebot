@@ -28,11 +28,13 @@ def main():
             epoch = console_config._epoch(operator_config.state_dir())
             retired_pending = campaign_deletion.reconcile_all(store) if campaign_deletion.enabled() else 0
             import console_schedule
-            pending = campaigns.reconcile_all(store)
-            schedule_pending = console_schedule.reconcile_all(store)
+            problems = []
+            pending = campaigns.reconcile_all(store, problems)
+            schedule_pending = console_schedule.reconcile_all(store, problems=problems)
             changed = epoch != console_config._epoch(operator_config.state_dir())
             result = {"pending": pending, "schedulePending": schedule_pending,
-                      "deletionsPending": retired_pending, "deletionsChanged": changed}
+                      "deletionsPending": retired_pending, "deletionsChanged": changed,
+                      "scheduleProblems": problems}
         elif isinstance(data, dict) and "delete" in data:
             campaigns.need(not set(data) - {"delete", "actor"}, "invalid deletion request")
             import campaign_deletion
