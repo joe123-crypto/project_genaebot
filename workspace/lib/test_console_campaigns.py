@@ -8,6 +8,9 @@ import io
 import json
 import os
 from pathlib import Path
+import re
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -83,6 +86,11 @@ class FakeGateway:
         self.lose_add_ack = False
     def __call__(self, args):
         self.calls.append(args)
+        # Refuse exactly what the real CLI refuses, or a flag on the wrong
+        # subcommand passes here and fails only against the live gateway.
+        refused = cc.unsupported(args)
+        if refused:
+            raise subprocess.CalledProcessError(1, args, stderr='OpenClaw does not recognize option "%s".' % refused[0])
         if args[0] == "list":
             return {"jobs": copy.deepcopy(self.jobs)}
         if args[0] == "add":
@@ -104,6 +112,43 @@ class FakeGateway:
             self.lose_add_ack = False
             raise TimeoutError("ack lost")
         return {}
+
+
+class CronOptions(unittest.TestCase):
+    """CRON_OPTIONS is a claim about openclaw, so verify it against openclaw."""
+
+    def accepted(self, subcommand):
+        done = subprocess.run(["openclaw", "cron", subcommand, "--help"],
+                              capture_output=True, text=True, timeout=120)
+        options = set()
+        for line in done.stdout.splitlines():
+            # The option column only; a flag named in a description is not one
+            # this subcommand takes.
+            match = re.match(r" {2}(-[^\s,]+)(?:,\s+(--\S+))?", line)
+            if match:
+                options.update(flag for flag in match.groups() if flag and flag.startswith("--"))
+        return options
+
+    def test_no_subcommand_is_passed_an_option_it_does_not_take(self):
+        self.assertFalse(cc.unsupported(["add", "--name", "x", "--disabled"]))
+        self.assertEqual(cc.unsupported(["add", "--failure-alert", "--failure-alert-to", "+1"]),
+                         ["--failure-alert", "--failure-alert-to"])
+        self.assertEqual(cc.unsupported(["add", "--enable"]), ["--enable"])
+        self.assertFalse(cc.unsupported(["edit", "one", "--failure-alert", "--enable"]))
+        self.assertEqual(cc.unsupported(["sweep"]), ["cron sweep"])
+
+    def test_the_gateway_refuses_before_it_reaches_the_cli(self):
+        with self.assertRaises(writer.WriteRefused) as caught:
+            cc.gateway(["add", "--name", "x", "--failure-alert"])
+        self.assertIn("cron add does not take --failure-alert", str(caught.exception))
+
+    @unittest.skipUnless(shutil.which("openclaw"), "openclaw is not installed here")
+    def test_every_option_in_the_contract_is_one_its_subcommand_accepts(self):
+        for subcommand, options in cc.CRON_OPTIONS.items():
+            accepted = self.accepted(subcommand)
+            self.assertTrue(accepted, "no options parsed from cron %s --help" % subcommand)
+            self.assertFalse(options - accepted,
+                             "cron %s does not take %s" % (subcommand, sorted(options - accepted)))
 
 
 class Creation(unittest.TestCase):

@@ -172,14 +172,18 @@ def apply_jobs(slug, doc, call):
         flags = ["--name", name, "--cron", entry["cron"], "--tz", entry["timezone"], "--exact",
                  "--session", "isolated", "--command-argv", json.dumps(argv), "--command-cwd", str(Path(argv[1]).parents[1]),
                  "--timeout-seconds", str(timeout), "--no-deliver"]
-        if alert:
-            flags += ["--failure-alert", "--failure-alert-after", "1", "--failure-alert-channel", "whatsapp", "--failure-alert-to", alert, "--failure-alert-cooldown", "1h"]
+        # Only cron edit takes the failure-alert options, so a created job is
+        # given its alert by the edit that follows, never by the add itself.
+        alert_flags = ["--failure-alert", "--failure-alert-after", "1", "--failure-alert-channel", "whatsapp",
+                       "--failure-alert-to", alert, "--failure-alert-cooldown", "1h"] if alert else []
         if found:
-            call(["edit", found[0]["id"]] + flags + (["--enable"] if enabled else ["--disable"]))
+            call(["edit", found[0]["id"]] + flags + alert_flags + (["--enable"] if enabled else ["--disable"]))
         else:
             call(["add"] + flags + ["--disabled", "--json"])
             found = [job for job in call(["list", "--all", "--json"]).get("jobs", []) if job.get("name") == name]
             schedule.need(len(found) == 1, "New entry job was not found uniquely.", 503)
+            if alert_flags:
+                call(["edit", found[0]["id"]] + alert_flags)
             if enabled:
                 call(["edit", found[0]["id"], "--enable"])
         verified = [job for job in call(["list", "--all", "--json"]).get("jobs", []) if job.get("name") == name]

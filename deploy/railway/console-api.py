@@ -875,26 +875,35 @@ def main():
     server.console["reconcileWake"] = wake_reconcile
     def reconcile_campaigns():
         delay = 300
+        reported = None
         while not stop_reconcile.is_set():
             wake_reconcile.clear()
             if (os.environ.get(WRITE_KEY_VAR) or "").strip():
                 status, body = server.console["campaigns"].run({"reconcile": True})
                 deletions_pending = schedule_pending = 0
+                problems = []
                 try:
                     result = json.loads(body)
                     pending = result.get("pending", 0)
                     schedule_pending = result.get("schedulePending", 0)
                     deletions_pending = result.get("deletionsPending", 0)
+                    problems = result.get("scheduleProblems") or []
                     if result.get("deletionsChanged"):
                         server.console["bridge"].invalidate()
                 except (ValueError, AttributeError):
                     pending = 1
                 if status == 200 and (deletions_pending or schedule_pending):
+                    # Retrying every minute in silence is how a rejected job
+                    # stays missing for a day. Say why, once per change.
+                    if problems and problems != reported:
+                        log("campaign schedule reconciliation is pending: %s" % "; ".join(problems[:5]))
+                    reported = problems
                     delay = 60
                 elif status != 200 or pending:
                     log("campaign schedule reconciliation is pending")
                     delay = min(delay * 2, 3600)
                 else:
+                    reported = None
                     delay = 300
             wake_reconcile.wait(delay)
     threading.Thread(target=reconcile_campaigns, daemon=True).start()

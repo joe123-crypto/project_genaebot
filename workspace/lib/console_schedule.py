@@ -213,12 +213,14 @@ def reconcile_one(slug, store, env=None, call=None):
             store.rollback()
 
 
-def reconcile_all(store, env=None, call=None):
+def reconcile_all(store, env=None, call=None, problems=None):
     pending = 0
     for slug, _ in store.list("campaigns", where={"fieldFilter": {
             "field": {"fieldPath": "scheduleEdit.pending"}, "op": "EQUAL", "value": {"booleanValue": True}}}):
         try:
             reconcile_one(slug, store, env, call)
-        except Exception:
+        except Exception as ex:
             pending += 1
+            if problems is not None:
+                problems.append("%s: %s" % (slug, campaigns.reason(ex)))
     return pending
