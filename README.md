@@ -1866,6 +1866,11 @@ and reusing the ID for different content is refused. A campaign that has entries
 refuses the older times-only path, so an out-of-date console cannot quietly
 overwrite them.
 
+An entry's time obeys the same off-the-hour rule as a campaign's own start time:
+the minute it converts to in the entry's own timezone must not be 0, because a
+run on the hour makes the account's day perfectly periodic. Creating an entry
+and moving one later are both checked.
+
 Reconciliation registers one gateway job per entry. The entry named `primary`
 keeps the job the campaign document already names, so adding entries never
 restarts an existing run; every other entry gets `console-entry-<slug>-<entryId>`

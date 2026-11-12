@@ -94,6 +94,15 @@ class Entries(unittest.TestCase):
         entry = self.store.get("campaigns", self.slug)["scheduleEntries"]["repeat-1"]
         self.assertEqual(entry["confirmed"]["cron"], "15 12 * * *")
 
+    def test_an_entry_may_not_be_created_or_moved_onto_the_hour(self):
+        with self.assertRaisesRegex(writer.WriteRefused, "not on the hour"):
+            entries.save(self.body(time="06:00"), self.store, self.env)
+        self.assertNotIn("scheduleEntries", self.store.get("campaigns", self.slug))
+        entries.save(self.body(), self.store, self.env)
+        with self.assertRaisesRegex(writer.WriteRefused, "not on the hour"):
+            entries.save(self.body(operation="move", time="06:00"), self.store, self.env)
+        self.assertEqual(self.store.get("campaigns", self.slug)["scheduleEntries"]["repeat-1"]["cron"], "15 12 * * *")
+
     def test_runner_checks_current_state_and_occurrence_day(self):
         entries.save(self.body(), self.store, self.env)
         execute = unittest.mock.Mock(return_value=0)

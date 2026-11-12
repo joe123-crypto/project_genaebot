@@ -112,6 +112,9 @@ def save(data, store, env=None):
                     entry = copy.deepcopy(desired[key])
                 hour, minute = map(int, change["time"].split(":"))
                 native = dt.datetime.combine(day, dt.time(hour, minute), ZoneInfo(data["timezone"])).astimezone(ZoneInfo(entry["timezone"]))
+                # The same rule a primary move enforces: a cron minute of 0 makes
+                # the account's whole day perfectly periodic.
+                schedule.need(native.minute != 0, "Choose a posting time that is not on the hour.")
                 parts = schedule.parse(entry)
                 parts[:2] = [str(native.minute), str(native.hour)]
                 entry["cron"] = " ".join(parts)
