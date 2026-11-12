@@ -103,6 +103,26 @@ class Entries(unittest.TestCase):
             entries.save(self.body(operation="move", time="06:00"), self.store, self.env)
         self.assertEqual(self.store.get("campaigns", self.slug)["scheduleEntries"]["repeat-1"]["cron"], "15 12 * * *")
 
+    def test_a_switched_off_campaign_saves_and_is_still_revision_checked(self):
+        stored = self.store.get("campaigns", self.slug)
+        self.store.docs["campaigns"][self.slug] = config.encode_fields({**stored, "enabled": False})
+        # The reader's document comes from assembled membership, which lifts the
+        # switch out of the definition; the writer reads the stored document. The
+        # precondition has to mean the same thing on both sides.
+        self.assertEqual(entries.revision(stored), entries.revision({**stored, "enabled": False}))
+        before = entries.revision(self.store.get("campaigns", self.slug))
+        result = entries.save(self.body(), self.store, self.env)
+        self.assertIs(result["entries"][0]["campaignEnabled"], False)
+        self.assertIn("repeat-1", self.store.get("campaigns", self.slug)["scheduleEntries"])
+        # The second write is gated as usual: the stale revision is refused and
+        # the current one goes through.
+        stale = self.body(operation="second", time="12:45")
+        stale["changes"][0]["expectedRevision"] = before
+        with self.assertRaisesRegex(writer.WriteRefused, "schedule changed"):
+            entries.save(stale, self.store, self.env)
+        entries.save(self.body(operation="second", time="12:45"), self.store, self.env)
+        self.assertEqual(self.store.get("campaigns", self.slug)["scheduleEntries"]["repeat-1"]["cron"], "45 12 * * *")
+
     def test_runner_checks_current_state_and_occurrence_day(self):
         entries.save(self.body(), self.store, self.env)
         execute = unittest.mock.Mock(return_value=0)

@@ -145,9 +145,16 @@ def snapshot(directory, config=None, enabled=None, *, now=None, deleted=()):
     stamp = datetime.datetime.fromtimestamp(
         at, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     os.makedirs(directory, mode=0o700, exist_ok=True)
+    # A real snapshot holds assembled membership, which lifts each campaign's
+    # switch out of its definition into the ``enabled`` map. Write that shape, or
+    # a reader that mistakenly looks for ``enabled`` on the definition passes
+    # here and fails in production.
+    assembled = dict(config, promos=dict(
+        (slug, {key: value for key, value in doc.items() if key != "enabled"})
+        for slug, doc in (config.get("promos") or {}).items()))
     operator_config._write_private_json(
         operator_config.snapshot_path(directory),
-        {"fetchedAt": stamp, "membership": config,
+        {"fetchedAt": stamp, "membership": assembled,
          "enabled": enabled or switches(config), "deleted": sorted(deleted)})
     return directory
 

@@ -293,7 +293,9 @@ def campaign_records(day, only_slug=None, include_assets=True):
     deleted = resolved().get("deleted", [])
     records = [row for row in records if row["slug"] not in deleted]
     for row in records:
-        doc = (m.get("promos") or {}).get(row["slug"], {})
+        # assemble() lifts the campaign switch out of the definition, so put it
+        # back: the schedule fields read it as a plain document field.
+        doc = {**(m.get("promos") or {}).get(row["slug"], {}), "enabled": row["storeEnabled"]}
         row["assets"] = asset_entries(row["slug"]) if include_assets else row.get("assets", [])
         row.update(console_schedule.read_fields(doc, day, row["slug"]))
     records.sort(key=lambda row: (row["hour"] if row["hour"] is not None else 99, row["minute"] or 0))

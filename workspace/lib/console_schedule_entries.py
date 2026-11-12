@@ -22,9 +22,16 @@ def entries(doc):
 
 
 def revision(doc):
+    """A precondition over the entries alone.
+
+    The campaign switch is deliberately not folded in: this writer never changes
+    ``enabled``, the switch has its own write path and its own reconciler, and
+    the reader's document comes from assembled membership, which lifts
+    ``enabled`` out into the switch map. Hashing it made a switched-off campaign
+    permanently unsavable behind a concurrent-edit message."""
     desired = {key: {field: value for field, value in entry.items() if field != "confirmed"}
                for key, entry in entries(doc).items()}
-    return hashlib.sha256(json.dumps([desired, doc.get("enabled", True)], sort_keys=True).encode()).hexdigest()
+    return hashlib.sha256(json.dumps([desired], sort_keys=True).encode()).hexdigest()
 
 
 def state(entry, day):
