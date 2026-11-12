@@ -190,6 +190,14 @@ class LiveViews:
                          for row in model["campaigns"] if row["enabled"] and row["hour"] is not None and row.get("scheduleMinutes", 0) is not None]
                 for slot in slots:
                     slot["time"] = "%02d:%02d" % divmod(slot["minutes"], 60)
+                independent = []
+                for row in model["campaigns"]:
+                    if "scheduleEntries" in row:
+                        for entry in row["scheduleEntries"]:
+                            independent.append({**entry, "slug": row["slug"], "name": row["name"], "targetCount": row["targetCount"], "accounts": row["accounts"]})
+                    else:
+                        independent.extend(slot for slot in slots if slot["slug"] == row["slug"])
+                slots = independent
                 payload = {"date": model["date"], "timezone": "Africa/Harare", "slots": slots,
                            "writes": model["context"]["writes"]}
                 revision = digest(payload)

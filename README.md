@@ -1849,6 +1849,32 @@ on stdin; that mode attempts gateway reconciliation immediately. The console API
 worker provides automatic retry for any pending updates. Repeating a request for
 an already-saved time is safe; stale revisions reject changes as a whole.
 
+## Independent schedule entries
+
+A campaign's start time is one run a day. A campaign may instead carry
+`scheduleEntries`: a map of independent recurring runs, each with its own cron,
+timezone, `paused` switch and `skipDates` list. The bot advertises
+`writes.scheduleEditing.entries` when `workspace/bin/run-schedule-entry` is
+present, which is what makes the console draw its repeat, pause, skip and delete
+controls; without it the console offers start times only.
+
+A schedule request carrying an `operationId` is an entry request. Its changes are
+`{slug, entryId, expectedRevision, create, time, paused, skipped, deleted}` rows,
+applied atomically with their audit records. The `operationId` is a durable
+receipt: replaying a request returns the stored result rather than writing again,
+and reusing the ID for different content is refused. A campaign that has entries
+refuses the older times-only path, so an out-of-date console cannot quietly
+overwrite them.
+
+Reconciliation registers one gateway job per entry. The entry named `primary`
+keeps the job the campaign document already names, so adding entries never
+restarts an existing run; every other entry gets `console-entry-<slug>-<entryId>`
+running `run-schedule-entry`, which re-reads the campaign at fire time and exits
+quietly when its entry is paused, skipped for that day, or deleted. Each entry
+keeps its own send state, so two runs on one day do not deduplicate each other.
+Deleting a campaign retires its entry jobs with it, and an entries campaign
+counts as schedulable for caps only while one of its entries may still run today.
+
 ## Indexed live console views
 
 The console's Schedule home page, paginated Groups/Campaigns views, and assignment

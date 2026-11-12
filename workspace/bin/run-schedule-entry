@@ -1,0 +1,8 @@
+#!/usr/bin/env python3
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+import console_schedule_entries
+
+if __name__ == "__main__":
+    sys.exit(console_schedule_entries.run(sys.argv[1], sys.argv[2], sys.argv[3:]))

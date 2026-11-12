@@ -1131,6 +1131,21 @@ def broadcast(*, text, image, state_file, promo_name, send_delay=None, argv=None
             "(%s) has no account_numbers map; check the lines configured in the "
             "console" % source["source"])
 
+    entry_id = os.environ.get("GENAIE_SCHEDULE_ENTRY", "primary")
+    campaign_doc = (source.get("membership", {}).get("promos") or {}).get(promo_config.promo_key(promo_name), {})
+    if "scheduleEntries" in campaign_doc or entry_id != "primary":
+        import console_schedule_entries
+        import campaign_deletion
+        import datetime as scheduled_datetime
+        from zoneinfo import ZoneInfo
+        occurrence_day = scheduled_datetime.date.fromisoformat(os.environ["GENAIE_SCHEDULE_DAY"]) if os.environ.get("GENAIE_SCHEDULE_DAY") else scheduled_datetime.datetime.now(ZoneInfo("Africa/Harare")).date()
+        if not dry and not console_schedule_entries.allowed(campaign_deletion.live_campaign(promo_config.promo_key(promo_name)), entry_id, occurrence_day):
+            return 0
+        if entry_id != "primary":
+            if not console_schedule_entries.IDENTIFIER.fullmatch(entry_id):
+                raise ValueError("Invalid schedule entry ID")
+            state_file = state_file + ".entry-" + entry_id
+        today = occurrence_day.isoformat()
     st = load_state(state_file)
     jids = resolve_targets(all_entries, st, dry=dry)
     if not jids:

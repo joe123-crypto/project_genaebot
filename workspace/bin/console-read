@@ -295,7 +295,7 @@ def campaign_records(day, only_slug=None, include_assets=True):
     for row in records:
         doc = (m.get("promos") or {}).get(row["slug"], {})
         row["assets"] = asset_entries(row["slug"]) if include_assets else row.get("assets", [])
-        row.update(console_schedule.read_fields(doc, day))
+        row.update(console_schedule.read_fields(doc, day, row["slug"]))
     records.sort(key=lambda row: (row["hour"] if row["hour"] is not None else 99, row["minute"] or 0))
     return records
 
@@ -469,7 +469,8 @@ def write_capabilities():
                        for collection, names in operator_writer.EDITABLE.items()),
         "delete": list(operator_writer.DELETABLE),
         "campaignDeletion": __import__("campaign_deletion").capability(),
-        "scheduleEditing": {"edit": os.path.isfile(str(Path(__file__).with_name("console-schedule")))},
+        "scheduleEditing": {"edit": os.path.isfile(str(Path(__file__).with_name("console-schedule"))),
+                            "entries": os.path.isfile(str(Path(__file__).with_name("run-schedule-entry")))},
         "campaignCreation": {"create": True,
                              "images": bool(ad_assets.base_url()),
                              "scheduling": True},

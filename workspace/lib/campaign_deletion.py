@@ -195,6 +195,11 @@ def delete(slug, actor, store, env=None):
                          "jobNames": [console_campaigns.job_name(slug, campaign)],
                          "commands": [{"argv": runner}],
                          "audit": audit_id, "deletedAt": audit["at"], "picturesAfter": int(time.time()) + 600}
+            if "scheduleEntries" in campaign:
+                import console_schedule_entries
+                for entry_id in campaign["scheduleEntries"]:
+                    operation["jobNames"].append(console_schedule_entries.job_name(slug, entry_id, campaign))
+                    operation["commands"].append({"argv": console_schedule_entries.command(slug, entry_id)})
             marker = {"deleted": True, "enabled": False, "deletedAt": audit["at"], "deletion": slug}
             with __import__("console_config").mutation(env):
                 store.commit([("campaigns", slug, marker, True),

@@ -398,6 +398,9 @@ def _reconcile_one(slug, store, call):
     campaign = store.get("campaigns", slug)
     if not campaign or campaign.get("kind") != "console":
         return
+    if "scheduleEntries" in campaign:
+        import console_schedule_entries
+        return console_schedule_entries.reconcile(slug, store, call=call)
     name = job_name(slug, campaign)
     expression = cron_expression(campaign["schedule"])
     jobs = call(["list", "--all", "--json"]).get("jobs", [])
@@ -557,8 +560,10 @@ def run_campaign(slug, argv=None, now=None, resolve=None, broadcast=None, ensure
     if not dry and (source.get("enabled") is not True or campaign.get("scheduleStatus") != "ready"):
         return 0
     now = now or dt.datetime.now(dt.timezone.utc)
-    day = now.astimezone(ZoneInfo(campaign["schedule"]["timezone"])).date()
-    if not dry and day.weekday() not in campaign["schedule"]["weekdays"]:
+    entry_id = os.environ.get("GENAIE_SCHEDULE_ENTRY", "primary")
+    entry = campaign.get("scheduleEntries", {}).get(entry_id)
+    day = now.astimezone(ZoneInfo(entry["timezone"] if entry else campaign["schedule"]["timezone"])).date()
+    if not dry and entry is None and day.weekday() not in campaign["schedule"]["weekdays"]:
         return 0
     # Keep strict all-picture validation for data-only campaigns: there are no
     # baked files to fall back to, and a missing asset must never change rotation.

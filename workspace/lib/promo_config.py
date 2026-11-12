@@ -115,8 +115,15 @@ def resolve(promo, env=None, err=None, config_loader=None, **inject):
         inject.get("now", time.time)(), ZoneInfo("Africa/Harare")).date()
     for key, meta in (membership.get("promos") or {}).items():
         import console_campaigns
-        ready = (meta.get("scheduleStatus") == "ready"
-                 and console_campaigns.schedule_occurrence(meta, campaign_day) is not None)
+        if "scheduleEntries" in meta:
+            # Independent entries: the campaign has a cron to fire as long as one
+            # entry is neither paused, skipped nor deleted on this day.
+            import console_schedule_entries
+            ready = any(console_schedule_entries.allowed(meta, entry_id, campaign_day)
+                        for entry_id in meta["scheduleEntries"])
+        else:
+            ready = (meta.get("scheduleStatus") == "ready"
+                     and console_campaigns.schedule_occurrence(meta, campaign_day) is not None)
         cron[key] = bool(ready)
         switches[key] = bool(loaded["enabled"].get(key)) and bool(ready)
     # A campaign in the switch map with no document is already off everywhere;
