@@ -59,6 +59,7 @@ import json
 import time
 import math
 import random
+import re
 import hashlib
 import subprocess
 import urllib.parse
@@ -417,8 +418,55 @@ PERMISSION_MARKERS = (
 
 
 def is_permission_error(out):
+    if is_account_limited(out):
+        # "Your account is restricted" contains "restricted", but it is the whole
+        # line being limited, not one admins-only group: never a quiet skip.
+        return False
     low = (out or "").casefold()
     return any(marker in low for marker in PERMISSION_MARKERS)
+
+
+# WhatsApp can also limit the sending ACCOUNT rather than refuse one group:
+# Baileys surfaces a rate limit as ``rate-overlimit`` (429) and, from v7, an
+# account restriction as error 463 ("Your account is restricted", with a
+# reach-out timelock / new chat limits). Every further send in that state is
+# exactly the behaviour that turns a temporary restriction into a ban, so the
+# engine stops using that account for the rest of the run instead of walking
+# through the remaining hundred groups one refusal at a time. The account's
+# remaining groups are deferred (not marked sent) and the run exits non-zero.
+ACCOUNT_LIMIT_MARKERS = (
+    "rate-overlimit",
+    "rate overlimit",
+    "rate_overlimit",
+    "reachout timelock",
+    "reach-out timelock",
+    "reachout_timelock",
+)
+# The restriction wording is not pinned down ("Your account is restricted" is
+# the Baileys string, but "has been restricted" / "is temporarily restricted"
+# are the same event), and a miss here does not merely go unclassified: it falls
+# back into PERMISSION_MARKERS' ``restricted`` and is skipped as harmless, which
+# is the bug this whole guard exists to close. So match the pair -- the subject
+# ACCOUNT and the verb -- rather than one phrasing. Whitespace after "account"
+# is required so the "(account: ads)" that other errors carry can never pair up
+# with a group's own "restricted to admins" and halt a line over a quiet skip.
+ACCOUNT_RESTRICTED = re.compile(r"account\s+(?:\w+\s+){0,3}restrict")
+# Bare status codes only where the line presents them AS a status. ``out`` is
+# the whole CLI stdout+stderr (see send_ad), so a loose whole-token match would
+# also fire on a byte count, a "463 ms" duration or a log timestamp's
+# comma-millis -- and a false positive costs this account the rest of the run's
+# groups, with no catch-up. The leading keyword also rules out a JID, a message
+# id and "1.429s" without a lookbehind.
+ACCOUNT_LIMIT_CODES = re.compile(r"(?:status|code|error|err|http)\W{0,3}(?:429|463)(?![\w.])")
+
+
+def is_account_limited(out):
+    low = (out or "").casefold()
+    if any(marker in low for marker in ACCOUNT_LIMIT_MARKERS):
+        return True
+    if ACCOUNT_RESTRICTED.search(low):
+        return True
+    return bool(ACCOUNT_LIMIT_CODES.search(low))
 
 
 # A send can also be rejected because the WhatsApp Web link is momentarily down:
@@ -1259,6 +1307,16 @@ def broadcast(*, text, image, state_file, promo_name, send_delay=None, argv=None
             ok, out = send_ad(jid, caption, variant_images.get(idx, image_path),
                               account=account)
         attempted += 1
+        if not ok and is_account_limited(out):
+            # WhatsApp is limiting this line (see ACCOUNT_LIMIT_MARKERS): stop
+            # sending from it now. This group and the account's remaining ones are
+            # not marked sent; other accounts keep their turn.
+            failures += 1
+            unavailable.add(account)
+            sys.stderr.write(
+                "HALTED account %r: WhatsApp is limiting it; no more sends from it "
+                "this run. Last target %s:\n%s\n" % (account, jid, out))
+            continue
         if (not ok) and (not is_permission_error(out)) and is_not_dispatched_error(out):
             # Link was mid-reconnect: the gateway queued this send and replays it
             # on reconnect (see NOT_DISPATCHED_MARKERS). Re-sending would post the
