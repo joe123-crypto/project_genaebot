@@ -59,6 +59,7 @@ import json
 import time
 import math
 import random
+import re
 import hashlib
 import subprocess
 import urllib.parse
@@ -417,8 +418,41 @@ PERMISSION_MARKERS = (
 
 
 def is_permission_error(out):
+    if is_account_limited(out):
+        # "Your account is restricted" contains "restricted", but it is the whole
+        # line being limited, not one admins-only group: never a quiet skip.
+        return False
     low = (out or "").casefold()
     return any(marker in low for marker in PERMISSION_MARKERS)
+
+
+# WhatsApp can also limit the sending ACCOUNT rather than refuse one group:
+# Baileys surfaces a rate limit as ``rate-overlimit`` (429) and, from v7, an
+# account restriction as error 463 ("Your account is restricted", with a
+# reach-out timelock / new chat limits). Every further send in that state is
+# exactly the behaviour that turns a temporary restriction into a ban, so the
+# engine stops using that account for the rest of the run instead of walking
+# through the remaining hundred groups one refusal at a time. The account's
+# remaining groups are deferred (not marked sent) and the run exits non-zero.
+ACCOUNT_LIMIT_MARKERS = (
+    "rate-overlimit",
+    "rate overlimit",
+    "account is restricted",
+    "account restricted",
+    "reachout timelock",
+    "reach-out timelock",
+    "reachout_timelock",
+)
+# Bare status codes only as whole tokens, so a JID, message id or "463ms"
+# duration never matches.
+ACCOUNT_LIMIT_CODES = re.compile(r"(?<![\w.])(?:429|463)(?![\w.])")
+
+
+def is_account_limited(out):
+    low = (out or "").casefold()
+    if any(marker in low for marker in ACCOUNT_LIMIT_MARKERS):
+        return True
+    return bool(ACCOUNT_LIMIT_CODES.search(low))
 
 
 # A send can also be rejected because the WhatsApp Web link is momentarily down:
@@ -1259,6 +1293,16 @@ def broadcast(*, text, image, state_file, promo_name, send_delay=None, argv=None
             ok, out = send_ad(jid, caption, variant_images.get(idx, image_path),
                               account=account)
         attempted += 1
+        if not ok and is_account_limited(out):
+            # WhatsApp is limiting this line (see ACCOUNT_LIMIT_MARKERS): stop
+            # sending from it now. This group and the account's remaining ones are
+            # not marked sent; other accounts keep their turn.
+            failures += 1
+            unavailable.add(account)
+            sys.stderr.write(
+                "HALTED account %r: WhatsApp is limiting it; no more sends from it "
+                "this run. Last target %s:\n%s\n" % (account, jid, out))
+            continue
         if (not ok) and (not is_permission_error(out)) and is_not_dispatched_error(out):
             # Link was mid-reconnect: the gateway queued this send and replays it
             # on reconnect (see NOT_DISPATCHED_MARKERS). Re-sending would post the
