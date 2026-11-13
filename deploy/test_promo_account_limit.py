@@ -36,6 +36,10 @@ LIMITED = (
     "OutboundDeliveryError: Your account is restricted <- Error: 463",
     "send failed (status 429)",
     "reachout timelock active",
+    # The restriction wording is not pinned down, so the pair "account" + the
+    # verb has to carry it, not one phrasing.
+    "OutboundDeliveryError: your account has been restricted",
+    "Boom [Error]: Connection Failure, data: { statusCode: 463 }",
 )
 
 
@@ -108,11 +112,24 @@ class AccountLimitTests(unittest.TestCase):
         self.assertFalse(pb.is_permission_error("Your account is restricted"))
         for out in LIMITED:
             self.assertTrue(pb.is_account_limited(out), out)
-        # Status codes only as whole tokens: never inside a JID, id or duration.
+        self.assertFalse(pb.is_permission_error("this account is temporarily restricted"))
+        self.assertTrue(pb.is_account_limited("this account is temporarily restricted"))
+        # A status code counts only where the line presents it AS a status.
+        # ``out`` is the whole CLI stdout+stderr, so a byte count, a duration or
+        # a log timestamp must never halt the line.
         for out in ("Sent message 3EB0463A -> sha256:be883eeb1d13 (463ms)",
+                    "OutboundDeliveryError: send failed <- timeout after 463 ms",
+                    "gateway transport error: Command timed out, 429 bytes written",
+                    "2026-11-13 09:04:12,463 WARN send failed",
                     "120363429000111@g.us", "took 1.429s", "forbidden",
                     "No active WhatsApp Web listener"):
             self.assertFalse(pb.is_account_limited(out), out)
+        # An admins-only refusal names the sending line too ("(account: ads)").
+        # That must not pair with the GROUP's "restricted" and halt the account.
+        admins_only = ("OutboundDeliveryError: forbidden (account: ads) "
+                       "120363407177302513@g.us is restricted to admins")
+        self.assertFalse(pb.is_account_limited(admins_only))
+        self.assertTrue(pb.is_permission_error(admins_only))
 
 
 if __name__ == "__main__":

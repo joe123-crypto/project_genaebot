@@ -437,20 +437,34 @@ def is_permission_error(out):
 ACCOUNT_LIMIT_MARKERS = (
     "rate-overlimit",
     "rate overlimit",
-    "account is restricted",
-    "account restricted",
+    "rate_overlimit",
     "reachout timelock",
     "reach-out timelock",
     "reachout_timelock",
 )
-# Bare status codes only as whole tokens, so a JID, message id or "463ms"
-# duration never matches.
-ACCOUNT_LIMIT_CODES = re.compile(r"(?<![\w.])(?:429|463)(?![\w.])")
+# The restriction wording is not pinned down ("Your account is restricted" is
+# the Baileys string, but "has been restricted" / "is temporarily restricted"
+# are the same event), and a miss here does not merely go unclassified: it falls
+# back into PERMISSION_MARKERS' ``restricted`` and is skipped as harmless, which
+# is the bug this whole guard exists to close. So match the pair -- the subject
+# ACCOUNT and the verb -- rather than one phrasing. Whitespace after "account"
+# is required so the "(account: ads)" that other errors carry can never pair up
+# with a group's own "restricted to admins" and halt a line over a quiet skip.
+ACCOUNT_RESTRICTED = re.compile(r"account\s+(?:\w+\s+){0,3}restrict")
+# Bare status codes only where the line presents them AS a status. ``out`` is
+# the whole CLI stdout+stderr (see send_ad), so a loose whole-token match would
+# also fire on a byte count, a "463 ms" duration or a log timestamp's
+# comma-millis -- and a false positive costs this account the rest of the run's
+# groups, with no catch-up. The leading keyword also rules out a JID, a message
+# id and "1.429s" without a lookbehind.
+ACCOUNT_LIMIT_CODES = re.compile(r"(?:status|code|error|err|http)\W{0,3}(?:429|463)(?![\w.])")
 
 
 def is_account_limited(out):
     low = (out or "").casefold()
     if any(marker in low for marker in ACCOUNT_LIMIT_MARKERS):
+        return True
+    if ACCOUNT_RESTRICTED.search(low):
         return True
     return bool(ACCOUNT_LIMIT_CODES.search(low))
 
