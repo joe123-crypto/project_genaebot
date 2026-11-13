@@ -903,6 +903,13 @@ collections, `capabilities` needs no Firestore read, and `navigation` caches two
 small count queries. `campaign-state/<slug>` and `captions/<slug>` read one campaign
 document for save preflight. Campaign asset queries also filter by slug.
 
+`POST /internal/console/config/<collection>/<id>` bounds a request body to 2048
+bytes, or 64 KiB for `campaigns`. Only campaigns carry a large field -- captions,
+which `operator_config.validate_captions` allows up to 60 KiB -- so the wider
+envelope is theirs alone; for every other collection it is the only size limit
+in the path. The refusal is `400 {"error":"Invalid config change."}`, sent before
+console-write sees the request.
+
 `POST /internal/console/config/batch/groups` accepts up to 100 selected group
 changes with optional expected field values. The native transaction reads shared
 validation rules once and commits changed groups with their audit entries

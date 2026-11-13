@@ -1248,7 +1248,11 @@ POST /internal/console/config/<collection>/<id>
 ```
 
 `<collection>` is `groups`, `lines`, `campaigns` or `settings`; `<id>` is
-percent-encoded, because a group JID carries an `@`. It writes **Firestore**,
+percent-encoded, because a group JID carries an `@`. A request body is bounded
+to 2048 bytes, or 64 KiB for `campaigns`, whose `captions` the bot's own
+validator allows up to 60 KiB; the other collections hold scalars and short
+strings that nothing downstream length-checks, so the envelope stays their
+bound. It writes **Firestore**,
 which production has read since the cutover (*Moving membership to Firestore*);
 `overview.writes.affectsProduction` says whether that is the case. A change takes
 effect from each campaign's **next run** -- a run already sending keeps the
