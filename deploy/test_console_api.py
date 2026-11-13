@@ -86,10 +86,12 @@ class ConsoleApiTests(unittest.TestCase):
         self.server = server
         return "http://127.0.0.1:%d/internal/console" % server.server_address[1]
 
-    def fetch(self, url, token=TOKEN, method="GET", data=None):
+    def fetch(self, url, token=TOKEN, method="GET", data=None, content_type=None):
         request = urllib.request.Request(url, data=data, method=method)
         if token is not None:
             request.add_header("Authorization", "Bearer %s" % token)
+        if content_type is not None:
+            request.add_header("Content-Type", content_type)
         try:
             with urllib.request.urlopen(request, timeout=30) as response:
                 return response.status, response.read(), dict(response.headers)
@@ -151,6 +153,65 @@ class ConsoleApiTests(unittest.TestCase):
             self.assertEqual(run.call_args.args, ({"action": "link", "accountId": "sales", "create": True},))
             self.assertEqual(post("/accounts/ads/pause", b"{}"), 200)
             self.assertEqual(run.call_args.args, ({"action": "pause", "accountId": "ads"},))
+
+    # -- operator-config writes -------------------------------------------
+
+    def test_a_config_write_carries_a_caption_far_past_the_old_two_kilobytes(self):
+        """A caption the bot itself allows must reach console-write.
+
+        The envelope used to stop at 2048 bytes, from when a config change only
+        carried scalars. Captions became writable later, so a caption of a few
+        kilobytes -- well inside the 60 KiB the bot's own validator permits --
+        was refused here before console-write ever saw it.
+        """
+        base = self.serve()
+        writes = self.server.console["writes"]
+        caption = "Stop losing money. " * 300  # ~5.7 KiB, once JSON-encoded.
+        payload = json.dumps({"fields": {"captions": [caption]},
+                              "actor": "Joseph"}).encode("utf-8")
+        self.assertGreater(len(payload), 2048)
+        with unittest.mock.patch.dict(os.environ, {API.WRITE_KEY_VAR: "key"}), \
+                unittest.mock.patch.object(writes, "run",
+                                           return_value=(200, b'{"ok":true}')) as run:
+            status, _, _ = self.fetch(base + "/config/campaigns/genaie",
+                                      method="POST", data=payload,
+                                      content_type="application/json")
+        self.assertEqual(status, 200)
+        self.assertEqual(run.call_args.args[0]["fields"]["captions"], [caption])
+
+    def test_a_config_write_past_the_envelope_is_still_refused_unread(self):
+        base = self.serve()
+        writes = self.server.console["writes"]
+        payload = json.dumps({"fields": {"captions": ["x" * (64 * 1024)]},
+                              "actor": "Joseph"}).encode("utf-8")
+        with unittest.mock.patch.dict(os.environ, {API.WRITE_KEY_VAR: "key"}), \
+                unittest.mock.patch.object(writes, "run") as run:
+            status, body, _ = self.fetch(base + "/config/campaigns/genaie",
+                                         method="POST", data=payload,
+                                         content_type="application/json")
+        self.assertEqual(status, 400)
+        self.assertEqual(json.loads(body), {"error": "Invalid config change."})
+        self.assertFalse(run.called)
+
+    def test_only_campaigns_get_the_room_captions_need(self):
+        """The larger envelope is for captions, and nothing else has a field
+        that size. Groups, lines and settings hold scalars and short strings,
+        and none of them is length-checked downstream, so the envelope stays
+        their bound."""
+        base = self.serve()
+        writes = self.server.console["writes"]
+        payload = json.dumps({"fields": {"note": "x" * 4096},
+                              "actor": "Joseph"}).encode("utf-8")
+        self.assertLess(len(payload), 64 * 1024)
+        with unittest.mock.patch.dict(os.environ, {API.WRITE_KEY_VAR: "key"}), \
+                unittest.mock.patch.object(writes, "run",
+                                           return_value=(200, b'{"ok":true}')) as run:
+            status, body, _ = self.fetch(base + "/config/groups/1@g.us",
+                                         method="POST", data=payload,
+                                         content_type="application/json")
+        self.assertEqual(status, 400)
+        self.assertEqual(json.loads(body), {"error": "Invalid config change."})
+        self.assertFalse(run.called)
 
     # -- the release gates' read-scoped token -----------------------------
 

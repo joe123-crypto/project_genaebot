@@ -44,9 +44,12 @@ percent-encoded because a group JID carries an "@". Every change goes through
 workspace/bin/console-write, which judges it with the bot's own
 promo_membership.validate and refuses anything that would stop a group being
 advertised to; this process only checks that a request is worth forwarding.
-Writes are serialised, never cached, and clear the read cache afterwards. They
-need GCP_SERVICE_ACCOUNT_WRITE_B64 -- a key with Cloud Datastore User, separate
-from the read-only runtime key the cron runs carry -- and answer 503 without it,
+Writes are serialised, never cached, and clear the read cache afterwards. A
+request body is bounded to 2048 bytes, or 64 KiB for campaigns, whose captions
+the bot's own validator allows up to 60 KiB; the envelope is transport sizing
+only, and what a field may hold is console-write's call. They need
+GCP_SERVICE_ACCOUNT_WRITE_B64 -- a key with Cloud Datastore User, separate from
+the read-only runtime key the cron runs carry -- and answer 503 without it,
 which is how the write surface ships inert.
 
 Group actions (bearer, no cache):
@@ -462,9 +465,14 @@ class Handler(BaseHTTPRequestHandler):
             self.send_any(404, b'{"error":"not found"}', with_body)
             return
 
+        # Only campaigns carry a large field -- captions, which the bot's own
+        # validator bounds at 60 KiB. The other collections hold scalars and
+        # short strings, so they keep the tighter envelope rather than
+        # inheriting the room captions need.
+        roomy = is_batch or parts[1] == "campaigns"
         try:
             size = int(self.headers.get("Content-Length") or "0")
-            if self.headers.get("Transfer-Encoding") or not 0 < size <= (64 * 1024 if is_batch else 2048):
+            if self.headers.get("Transfer-Encoding") or not 0 < size <= (64 * 1024 if roomy else 2048):
                 raise ValueError()
             if self.headers.get("Content-Type", "").split(";", 1)[0].strip() != "application/json":
                 raise ValueError()
