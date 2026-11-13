@@ -133,6 +133,23 @@ class LiveIndexTests(Harness):
             self.assertNotIn("groups", captions)
             self.assertNotIn("adAssets", captions)
 
+    def test_a_switched_off_campaign_keeps_its_slot_until_the_run_is_deleted(self):
+        # cv is the fixture's switched-off campaign. The timeline shows such a
+        # run, greyed, rather than hiding it, so the slot has to be there and
+        # carry the switch; a deleted run is the one thing that removes it.
+        view = self.service()
+        slots = {(slot["slug"], slot["entryId"]): slot for slot in view.handle("schedule", "")["slots"]}
+        self.assertIn(("cv", "primary"), slots)
+        self.assertIs(slots[("cv", "primary")]["campaignEnabled"], False)
+        self.assertEqual(slots[("cv", "primary")]["time"], "11:39")
+        self.assertIs(slots[("genaie", "primary")]["campaignEnabled"], True)
+        doc = config.decode_fields(self.firestore.store["campaigns"]["cv"])
+        doc["scheduleEntries"] = {"primary": {"cron": "39 11 * * *", "timezone": "Africa/Harare",
+                                              "paused": False, "deleted": True, "skipDates": [], "confirmed": None}}
+        self.firestore.store["campaigns"]["cv"] = config.encode_fields(doc)
+        after = self.service()
+        self.assertEqual([slot["slug"] for slot in after.handle("schedule", "")["slots"]], ["genaie"])
+
     def test_observation_endpoints_do_not_load_full_indexed_config(self):
         view = self.service()
         with patch.object(self.index, "snapshot", side_effect=AssertionError("full membership read")):
