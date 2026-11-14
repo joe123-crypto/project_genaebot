@@ -68,6 +68,17 @@ above is actually in force:
   message from that customer before the agent runs (`runtime/public-service-gate/handoffs.json`),
   so a person continues the chat. The admin re-enables the bot for a customer
   with `resume +<number>`.
+- Human takeover needs no handoff: the first reply the operator types by hand in
+  a customer DM takes that chat off the bot for good. The customer's later
+  messages are claimed silently, and a reply already on its way out is cancelled
+  (`cancelReason: human_takeover`), including one reply pacing is still holding,
+  so the bot cannot answer after a person already has. The operator gets one
+  line in the operator self-chat naming the customer and the way back, which is
+  the same `resume +<number>`; it releases a takeover and a handoff together.
+  Detection lives in the WhatsApp adapter, because the operator shares the bot's
+  account, which makes that outgoing message invisible to the gate; see
+  `deploy/railway/whatsapp-human-takeover.mjs` and `lib/takeover.js`.
+  `GENAIE_HUMAN_TAKEOVER=0` switches the whole thing off.
 - CVs: the agent states the $5 EcoCash price and asks whether the customer wants
   the automated AI interview. Yes starts `cv_maker_start`, after which the gate
   relays every turn to the CV maker until the order settles ("cancel" returns

@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
-import { patchWhatsAppGroupActions, patchWhatsAppGroupActivity, patchWhatsAppGroupDiscovery, patchWhatsAppHealthAudit, patchWhatsAppCacheCleanup, patchWhatsAppMonitor } from './whatsapp-lid-loader.mjs';
+import { patchWhatsAppGroupActions, patchWhatsAppGroupActivity, patchWhatsAppGroupDiscovery, patchWhatsAppHealthAudit, patchWhatsAppHumanTakeover, patchWhatsAppCacheCleanup, patchWhatsAppMonitor } from './whatsapp-lid-loader.mjs';
 
 const root = process.env.GENAIE_WHATSAPP_ROOT;
 if (process.env.GENAIE_REQUIRE_INTEGRATION === '1' && !root) throw new Error('Pinned WhatsApp adapter is required for discovery compatibility');
@@ -23,10 +23,25 @@ test('actual pinned WhatsApp lifecycle and socket contracts accept every compose
   assert.match(original, /groupFetchAllParticipating\(\)/, 'adapter uses the unbounded group lookup');
   // Compose in the order whatsapp-lid-loader.mjs applies at load time, so an
   // anchor one patch moves under another is caught here and not in production.
-  const patched = patchWhatsAppCacheCleanup(patchWhatsAppGroupActions(patchWhatsAppGroupDiscovery(patchWhatsAppGroupActivity(patchWhatsAppHealthAudit(patchWhatsAppMonitor(original))))));
+  const patched = patchWhatsAppCacheCleanup(patchWhatsAppHumanTakeover(patchWhatsAppGroupActions(patchWhatsAppGroupDiscovery(patchWhatsAppGroupActivity(patchWhatsAppHealthAudit(patchWhatsAppMonitor(original)))))));
   assert.equal(patchWhatsAppGroupDiscovery(patched), patched);
   assert.equal(patchWhatsAppGroupActivity(patched), patched);
   assert.equal(patchWhatsAppGroupActions(patched), patched);
+  assert.equal(patchWhatsAppHumanTakeover(patched), patched);
+  // Handover detection rides on three adapter behaviours, in this order: the
+  // bot's own sends are dropped as echoes, receipts and reactions are dropped
+  // as non-content, and only then is a fromMe DM rejected. Lose any of them
+  // and "a person typed this" stops being true.
+  assert.ok(original.indexOf('if (shouldSkipRecentOutboundEcho(msg)) return null;')
+    < original.indexOf('if (!hasInboundUserContent(msg.message ?? void 0)) return null;'),
+    'adapter drops the bot\'s own echoes before filtering for user content');
+  assert.ok(original.includes('sendTrackedMessage'), 'every bot send is tracked for echo suppression');
+  assert.ok(original.includes("recentOutboundMessages = createDedupeCache({\n\tttlMs: 12e5,"),
+    'echo suppression still remembers sends for 20 minutes; CONNECT_GRACE_MS assumes it');
+  assert.equal((patched.match(/genaieNoteHumanTakeover\(\{/g) || []).length, 1);
+  // The clock the replay guard needs has to reach inbound access control.
+  assert.ok(original.includes("\t\t\tmessageTimestampMs,\n\t\t\tconnectedAtMs: socketSession.connectedAtMs,"),
+    'inbound access control still receives the message and connection clocks');
   assert.match(original, /messages\.upsert/, 'collector receives raw socket messages before admission');
   // Every helper has to survive the others' insertions at the shared anchors.
   assert.equal((patched.match(/genaieGroupDiscovery\.start\(/g) || []).length, 1);

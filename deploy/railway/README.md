@@ -1002,6 +1002,50 @@ Release this bot support before the paired console UI. Existing consoles ignore
 the added fields; the new console displays `—` with an older bot. No historical
 backfill, advertising tier changes or cap changes are involved.
 
+## Human takeover of a customer chat
+
+The operator runs the business from the same WhatsApp account as the bot, so a
+reply typed by hand in a customer DM is outbound traffic. No gateway plugin can
+see it, which is why the AI used to answer over the top of a conversation a
+person was already having.
+
+The pinned adapter does see it. `whatsapp-human-takeover.mjs` is injected by the
+same loader as the group helpers, at the one place in inbound access control
+that rejects a `fromMe` DM. By the time that branch runs, the adapter has
+already dropped the echo of every message the bot itself sent (its
+`recentOutboundMessages` cache, filled by `sendTrackedMessage`, with a 20 minute
+TTL) and every receipt, reaction and deletion (`hasInboundUserContent`), so what
+is left is a person typing. The peer is written to
+`runtime/public-service-gate/takeovers.json` and nothing else happens there: the
+helper never replies, never touches the socket, and a storage failure warns once
+under `[whatsapp-takeover]` and leaves the bot talking.
+
+Two rules keep a false positive from silencing a real customer. A message older
+than the current connection is ignored, because a reconnect replays recent
+traffic with a dedupe cache that may no longer vouch for it; the cost is a reply
+typed while the gateway was offline, which is missed. And the operator's own
+numbers are exempt on the plugin side, because an entry against the command line
+would swallow `resume` itself.
+
+`public-service-gate` reads that store (`lib/takeover.js`) and acts on it above
+every other hook: the customer's later messages are claimed before the agent
+runs, and a reply already on its way out is cancelled with
+`cancelReason: human_takeover`, including one reply pacing is still holding. A
+half-finished CV order is left untouched rather than cleared, so `resume` can
+hand the interview back inside its 30 minute state window. The operator gets one
+line per chat in the self-chat; `resume +<number>` releases a takeover and a
+handoff together, and releases every spelling WhatsApp used for that chat.
+
+Each file has a single writer, so no update can be lost if channels ever move
+out of the gateway process: the adapter owns `takeovers.json`, the plugin owns
+`handoffs.json`, and a `resume` is a stamped clear compared against the takeover
+time rather than a delete. `GENAIE_HUMAN_TAKEOVER=0` switches off detection and
+enforcement together, and leaves recorded chats recorded. An adapter upgrade
+that moves any of the asserted anchors makes the patch throw, which is caught
+and logged as `[whatsapp-takeover] detection unavailable`: the feature turns
+itself off rather than breaking WhatsApp. The compatibility job asserts those
+anchors and the echo/content ordering against the real 2026.9.9 package.
+
 ## Operator-requested group actions
 
 The same loader that injects the group inventory also injects

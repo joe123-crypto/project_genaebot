@@ -11,6 +11,7 @@ const HEALTH_HELPER = new URL('./whatsapp-health-audit.mjs', import.meta.url).hr
 const DISCOVERY_HELPER = new URL('./whatsapp-group-discovery.mjs', import.meta.url).href;
 const ACTIVITY_HELPER = new URL('./whatsapp-group-activity.mjs', import.meta.url).href;
 const ACTIONS_HELPER = new URL('./whatsapp-group-actions.mjs', import.meta.url).href;
+const TAKEOVER_HELPER = new URL('./whatsapp-human-takeover.mjs', import.meta.url).href;
 const CACHE_MARKER = '// GENAIE_WHATSAPP_EXPIRED_CACHE_CLEANUP_V1';
 const CACHE_START = '\t\tif (started || closed) return;\n\t\tstarted = true;\n\t\tconst listen = (event, listener) => {';
 const FROM = 'const from = group ? remoteJid : await socketSession.resolveInboundJid(remoteJid);';
@@ -75,6 +76,29 @@ export function patchWhatsAppGroupActions(source) {
   }
   for (const [anchor, addition, after] of changes) source = source.replace(anchor, after ? anchor + addition : addition + anchor);
   return `${marker}\nimport { createWhatsAppGroupActions as genaieCreateWhatsAppGroupActions } from ${JSON.stringify(ACTIONS_HELPER)};\n` + source;
+}
+
+// Inbound access control drops a DM the operator typed by hand (it is fromMe,
+// and the chat is not the operator's self-chat) without telling anyone. Record
+// the peer first, so the public-service-gate plugin can stop replying there. By
+// this point the adapter has already dropped the echoes of the bot's own sends
+// and every receipt, reaction and deletion, so what reaches here is a person.
+export function patchWhatsAppHumanTakeover(source) {
+  const marker = '// GENAIE_WHATSAPP_HUMAN_TAKEOVER_V1';
+  if (source.includes(marker)) return source;
+  const guard = '\t\tif (params.isFromMe && (policy.account.selfChatMode === false || !policy.isSamePhone(params.from))) {';
+  const anchor = '\t\t\tlogWhatsAppVerbose$2(params.verbose, "Skipping outbound DM (fromMe); no pairing reply needed.");\n\t\t\treturn blockedInboundAccess(policy);';
+  for (const contract of [guard, anchor]) {
+    if (source.split(contract).length !== 2) throw new Error('WhatsApp human takeover contract changed; review adapter before upgrading');
+  }
+  // The echo filter and the user-content filter are what make this branch mean
+  // "a person typed this". Without them in front of it, it means nothing.
+  for (const ordering of ['if (shouldSkipRecentOutboundEcho(msg)) return null;', 'if (!hasInboundUserContent(msg.message ?? void 0)) return null;']) {
+    if (source.split(ordering).length !== 2) throw new Error('WhatsApp outbound echo filtering contract changed; review adapter before upgrading');
+  }
+  const addition = '\n\t\t\tgenaieNoteHumanTakeover({ accountId: params.accountId, from: params.from, remoteJid: params.remoteJid, group: params.group, selfE164: params.selfE164, messageTimestampMs: params.messageTimestampMs, connectedAtMs: params.connectedAtMs });';
+  const replacement = anchor.replace('\n\t\t\treturn blockedInboundAccess(policy);', addition + '\n\t\t\treturn blockedInboundAccess(policy);');
+  return `${marker}\nimport { noteHumanTakeover as genaieNoteHumanTakeover } from ${JSON.stringify(TAKEOVER_HELPER)};\n` + source.replace(anchor, () => replacement);
 }
 
 export function patchWhatsAppHealthAudit(source) {
@@ -183,6 +207,10 @@ registerHooks({
     if (patch === patchWhatsAppMonitor && process.env.GENAIE_GROUP_ACTIONS !== '0') {
       try { patched = patchWhatsAppGroupActions(patched); }
       catch { console.warn('[whatsapp-group-actions] group actions unavailable; review adapter compatibility'); }
+    }
+    if (patch === patchWhatsAppMonitor && process.env.GENAIE_HUMAN_TAKEOVER !== '0') {
+      try { patched = patchWhatsAppHumanTakeover(patched); }
+      catch { console.warn('[whatsapp-takeover] detection unavailable; review adapter compatibility'); }
     }
     if (patch === patchWhatsAppMonitor && process.env.GENAIE_WHATSAPP_CACHE_CLEANUP === '1') patched = patchWhatsAppCacheCleanup(patched);
     return { ...result, source: patched };
