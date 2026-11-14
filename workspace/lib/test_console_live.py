@@ -111,7 +111,8 @@ class LiveIndexTests(Harness):
         self.index.publish(changes, "2026-11-10T10:01:00Z", {})
         with patch.object(config, "fetch", side_effect=AssertionError("Firestore fetch")), \
              patch.object(config, "get_document", side_effect=AssertionError("Firestore point read")), \
-             patch.object(config, "list_documents", side_effect=AssertionError("Firestore scan")):
+             patch.object(config, "list_documents", side_effect=AssertionError("Firestore scan")), \
+             patch.object(view.bridge, "asset_catalogue", side_effect=AssertionError("asset catalogue read")):
             first = view.handle("groups", "")
             self.assertEqual(len(first["rows"]), 10)
             second = view.handle("groups", "cursor=" + first["nextCursor"])
@@ -132,6 +133,91 @@ class LiveIndexTests(Harness):
             self.assertIn("captions", captions)
             self.assertNotIn("groups", captions)
             self.assertNotIn("adAssets", captions)
+
+    def picture(self, filename="cv-1.jpg", body=b"first", **overrides):
+        from test_ad_assets import entry
+        return config.encode_fields(entry("cv", filename, body, **overrides))
+
+    def test_campaign_previews_use_streamed_assets_and_track_updates_without_remote_reads(self):
+        self.env["GENAIE_AD_ASSETS_BASE_URL"] = "https://ads.example.test"
+        # Asset rank does not override the campaign's declared first filename.
+        first = self.picture(rank=99)
+        self.firestore.store["assets"] = {
+            "other-first": self.picture("cv-2.jpg", b"second", rank=1),
+            "first": first,
+            "disabled": self.picture(enabled=False, rank=0),
+            "invalid": config.encode_fields({"campaign": "cv", "filename": "cv-1.jpg"}),
+        }
+        view = self.service()
+        with patch.object(config, "fetch", side_effect=AssertionError("Firestore fetch")), \
+             patch.object(config, "get_document", side_effect=AssertionError("Firestore point read")), \
+             patch.object(config, "list_documents", side_effect=AssertionError("Firestore scan")):
+            initial = view.handle("campaigns", "q=cv")
+            row = initial["rows"][0]
+            self.assertEqual(row["slug"], "cv")
+            self.assertEqual(row["imageCount"], 1)
+            self.assertEqual(row["thumbnailUrl"],
+                             "https://ads.example.test/" + config.decode_fields(first)["key"])
+            for field in ("images", "assets", "captions", "script"):
+                self.assertNotIn(field, row)
+            self.assertTrue(view.handle("campaigns", "q=cv&since=" + initial["revision"])["unchanged"])
+            schedule = view.handle("schedule", "")
+            for slot in schedule["slots"]:
+                for field in ("imageCount", "thumbnailUrl", "images", "assets"):
+                    self.assertNotIn(field, slot)
+            replacement = self.picture(body=b"replacement", rank=99)
+            self.index.publish([("assets", "first", replacement)], "2026-11-10T10:01:00Z", {})
+            changed = view.handle("campaigns", "q=cv&since=" + initial["revision"])
+            self.assertNotEqual(changed["revision"], initial["revision"])
+            self.assertNotEqual(changed["rows"][0]["thumbnailUrl"], row["thumbnailUrl"])
+            self.assertEqual(view.handle("schedule", "")["revision"], schedule["revision"])
+            self.index.publish([("assets", "first", None)], "2026-11-10T10:02:00Z", {})
+            missing = view.handle("campaigns", "q=cv")
+            self.assertIsNone(missing["rows"][0]["thumbnailUrl"])
+            self.assertEqual(missing["rows"][0]["imageCount"], 1)
+            self.assertNotEqual(missing["revision"], changed["revision"])
+
+    def test_preview_missing_or_invalid_origin_keeps_picture_count_and_table(self):
+        self.firestore.store["assets"] = {"first": self.picture()}
+        view = self.service()
+        for origin in ("", "http://invalid.test"):
+            view.env["GENAIE_AD_ASSETS_BASE_URL"] = origin
+            view.cache = None
+            row = view.handle("campaigns", "q=cv")["rows"][0]
+            self.assertEqual(row["imageCount"], 1)
+            self.assertIsNone(row["thumbnailUrl"])
+
+    def test_summary_without_pictures_reports_zero_and_no_url(self):
+        view = self.service()
+        # A broken/missing declaration can legitimately return an empty image list.
+        original = view.bridge.campaign_records
+        def records(*args, **kwargs):
+            rows = original(*args, **kwargs)
+            for row in rows:
+                row["images"] = []
+            return rows
+        with patch.object(view.bridge, "campaign_records", side_effect=records):
+            row = view.handle("campaigns", "q=cv")["rows"][0]
+        self.assertEqual(row["imageCount"], 0)
+        self.assertIsNone(row["thumbnailUrl"])
+
+    def test_console_campaign_summaries_build_previews_without_gallery_urls(self):
+        import console_campaigns
+        from test_console_campaigns import payload, MemoryStore
+        store = MemoryStore()
+        console_campaigns.create(payload(), store,
+            env={**self.env, "GENAIE_AD_ASSETS_SOURCE": "r2",
+                 "GENAIE_AD_ASSETS_BASE_URL": "https://ads.example.test"},
+            verify=lambda *args: None, reconcile=lambda *args: None)
+        self.firestore.store = store.docs
+        view = self.service()
+        # No global image origin is needed to construct the compact row.
+        with patch.object(console_campaigns, "image_url", side_effect=AssertionError("gallery URLs")):
+            row = view.handle("campaigns", "q=demo")["rows"][0]
+        self.assertEqual(row["imageCount"], 1)
+        # The thumbnail comes from the streamed asset document, not the gallery.
+        self.assertTrue(row["thumbnailUrl"].startswith(
+            self.env["GENAIE_AD_ASSETS_BASE_URL"] + "/ads/demo/"), row["thumbnailUrl"])
 
     def test_a_switched_off_campaign_keeps_its_slot_until_the_run_is_deleted(self):
         # cv is the fixture's switched-off campaign. The timeline shows such a
