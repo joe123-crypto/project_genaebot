@@ -18,7 +18,19 @@ import {
   runJsonCommand,
 } from "./lib/runtime.js";
 import { clearServiceState } from "./lib/state.js";
-import { clearHandoff, isHandedOff } from "./lib/handoffs.js";
+import {
+  clearHandoff,
+  isHandedOff,
+  markTakeoverCleared,
+  markTakeoverNotified,
+} from "./lib/handoffs.js";
+import {
+  TAKEOVER_PRIORITY,
+  isTakenOverNow,
+  pendingTakeoverNotices,
+  takeoverPeers,
+  takeoversChangedAt,
+} from "./lib/takeover.js";
 import { recordAdRefs } from "./lib/ad-refs.js";
 import { BOREHOLE_SERVICES, lookupBorehole } from "./services/borehole.js";
 import { recordAndCheck as checkSiblingLine } from "./lib/sibling-lines.js";
@@ -38,6 +50,7 @@ import {
 import {
   DEFAULT_ALLOW_FAILED,
   isWhatsAppAdmin,
+  notifyAdminOfTakeover,
   isWhatsAppPublicUser,
   memberGateEnabled,
   parseAllowCommand,
@@ -70,6 +83,51 @@ const REPLY_PACING_PRIORITY = -10;
 // Above the longest hold (MAX_HOLD_MS in lib/reply-pacing.js): if the runner
 // gives up first, the reply is sent at once rather than lost.
 const REPLY_PACING_TIMEOUT_MS = 120_000;
+
+// How often the operator's confirmation is looked for. The takeover itself needs
+// no polling (both hooks read the store directly); this only exists so the
+// operator hears about it even when the customer never writes again.
+const TAKEOVER_NOTICE_INTERVAL_MS = 30_000;
+let takeoverNoticeWatcher = null;
+
+// Tell the operator, once per chat, that the bot has stepped out of it. Best
+// effort throughout: a failed message must never make the bot speak again.
+async function announceTakeovers(api) {
+  for (const notice of pendingTakeoverNotices(api)) {
+    try {
+      await notifyAdminOfTakeover(api, notice.peer);
+      markTakeoverNotified(api, notice.peer, notice.at);
+      api.logger?.info?.("public-service-gate: operator told the bot stepped out of a chat");
+    } catch (err) {
+      api.logger?.warn?.(`public-service-gate: failed to announce a takeover (${String(err)})`);
+      return;
+    }
+  }
+}
+
+// Armed once per process. A plugin reload must not stack intervals, and the
+// timer must never hold the gateway open.
+function watchTakeovers(api) {
+  if (takeoverNoticeWatcher) return;
+  let seenAt = takeoversChangedAt(api);
+  takeoverNoticeWatcher = setInterval(() => {
+    try {
+      const changedAt = takeoversChangedAt(api);
+      if (changedAt === seenAt) return;
+      seenAt = changedAt;
+      void announceTakeovers(api);
+    } catch (err) {
+      api.logger?.warn?.(`public-service-gate: takeover watch failed (${String(err)})`);
+    }
+  }, TAKEOVER_NOTICE_INTERVAL_MS);
+  takeoverNoticeWatcher?.unref?.();
+}
+
+/** Test seam: the watcher is once per process, which would leak across tests. */
+export function stopTakeoverWatch() {
+  if (takeoverNoticeWatcher) clearInterval(takeoverNoticeWatcher);
+  takeoverNoticeWatcher = null;
+}
 
 // The refusal names only the services actually switched on, so a chat with the
 // CV maker disabled never offers a CV in the same breath as declining one.
@@ -144,6 +202,64 @@ export default {
   description: "Handles WhatsApp public-user safety and admin-managed member access control before agent dispatch.",
   version: "0.1.0",
   register(api) {
+    watchTakeovers(api);
+
+    // A chat the operator answered by hand is theirs. The bot says nothing there
+    // until they send "resume +<number>": the customer's messages are claimed
+    // before the agent runs, and any reply already on its way out is cancelled
+    // by the hook below. Detection happens inside the WhatsApp adapter, which
+    // is the only place the operator's own outgoing message is visible; see
+    // lib/takeover.js.
+    //
+    // Runs above FAILSAFE_STOP_PRIORITY so a taken-over customer typing "stop"
+    // cannot clear their saved order on the way past, and intentionally NOT
+    // gated on isEnabled(api): flipping the plugin config off must not put the
+    // bot back into a conversation a person is having. GENAIE_HUMAN_TAKEOVER=0
+    // is the switch for that.
+    api.on(
+      "before_dispatch",
+      async (event, ctx) => {
+        const channel = getEventChannel(event, ctx);
+        if (!isWhatsAppChannel(channel)) return;
+        if (isGroupEvent(event, ctx)) return; // groups are handled by the hard block below
+        const sender = getEventSender(event, ctx);
+        if (!isTakenOverNow(api, sender)) return;
+        api.logger?.info?.("public-service-gate: message held silently, a person has this chat");
+        await announceTakeovers(api);
+        return { handled: true };
+      },
+      { priority: TAKEOVER_PRIORITY },
+    );
+
+    // The outbound half. This is what stops a reply the agent is still writing,
+    // or one reply pacing is holding for up to MAX_HOLD_MS, from landing after
+    // the operator has already answered. It keys on the takeover store only,
+    // never on isHandedOff: handleHandoff marks the customer and THEN returns
+    // "someone will contact you soon", so cancelling on a handoff would swallow
+    // the agent's own confirmation.
+    api.on(
+      "message_sending",
+      async (event, ctx) => {
+        const channel = getEventChannel(event, ctx);
+        if (!isWhatsAppChannel(channel)) return;
+        // WhatsApp may address the same chat by a different id than the inbound
+        // carried, so try every spelling, as reply pacing does.
+        for (const recipient of [getOutboundRecipient(event, ctx), getOutboundRecipient(event), ctx?.senderId, ctx?.from, ctx?.conversationId]) {
+          if (!isTakenOverNow(api, normalizePhone(String(recipient ?? "")))) continue;
+          api.logger?.info?.(
+            `public-service-gate: cancelled a WhatsApp reply, a person has this chat (len=${typeof event?.content === "string" ? event.content.length : 0})`,
+          );
+          void announceTakeovers(api);
+          return {
+            cancel: true,
+            cancelReason: "human_takeover",
+            metadata: { suppressedBy: "public-service-gate", reason: "human_takeover" },
+          };
+        }
+      },
+      { priority: TAKEOVER_PRIORITY },
+    );
+
     // Hard block: the bot never replies in group chats. Group messages are
     // claimed and dropped before any agent dispatch, so no AI reply is ever
     // generated — including when the bot is @-mentioned (the mention still lands
@@ -410,7 +526,14 @@ export default {
         if (resumeTarget) {
           let cleared = false;
           try {
-            cleared = clearHandoff(api, resumeTarget);
+            // Both reasons the bot could be silent are released, and without
+            // short-circuiting, so a leftover entry on either side can never
+            // survive a resume. A chat taken over by hand is recorded under
+            // every spelling WhatsApp used for it, so all of them are stamped.
+            const peers = takeoverPeers(api, resumeTarget);
+            const takenOver = peers.some((peer) => isTakenOverNow(api, peer));
+            for (const peer of peers) markTakeoverCleared(api, peer);
+            cleared = clearHandoff(api, resumeTarget) || takenOver;
           } catch (err) {
             api.logger?.warn?.(`public-service-gate: failed to clear handoff (${String(err)})`);
             return { handled: true, text: "That number couldn't be resumed. Try again later." };
@@ -446,7 +569,7 @@ export default {
       const member = isWhatsAppPublicUser(api, event, ctx);
       if (!member) return; // leave to core access control
       // The handoff action is exposed in this mode too, so its silence must hold.
-      if (isHandedOff(api, sender)) return { handled: true };
+      if (isHandedOff(api, sender) || isTakenOverNow(api, sender)) return { handled: true };
       if (isDisabledServiceRequestText(api, text)) {
         return { handled: true, text: serviceDisabledReply(api) };
       }

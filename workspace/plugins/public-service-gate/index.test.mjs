@@ -8,6 +8,7 @@ import test from "node:test";
 import plugin, { createLimiter, isQueueFullError, runJsonCommand } from "./index.js";
 import { busyReply } from "./lib/runtime.js";
 import { REPLY_PACING_ENV, resetReplyPacer } from "./lib/reply-pacing.js";
+import { TAKEOVER_ENV } from "./lib/takeover.js";
 import { notifyAdminOfIntake, notifyAdminOfLead } from "./services/membership.js";
 
 const MEMBER = "+233208864185";
@@ -434,7 +435,33 @@ function intakeHandler(extraConfig = {}, store = leadStore) {
   handler.dir = dir;
   handler.memberArgs = () => (fs.existsSync(argsLog) ? fs.readFileSync(argsLog, "utf8") : "");
   handler.handoffsPath = path.join(dir, "handoffs.json");
+  handler.serviceStatePath = serviceStatePath;
   return handler;
+}
+
+// Stands in for deploy/railway/whatsapp-human-takeover.mjs: the operator's own
+// outgoing message is only visible inside the WhatsApp adapter, which records
+// the peer here. Everything below this line is what the plugin then does.
+// `atMs` is relative to the real clock on purpose: "resume" stamps its clear
+// with the real time, and the two are compared.
+function answeredByHand(handler, peers, atMs = Date.now() - 60_000) {
+  const takeovers = {};
+  const at = new Date(atMs).toISOString();
+  for (const peer of peers) takeovers[peer] = { at, accountId: "default", peers };
+  fs.writeFileSync(path.join(path.dirname(handler.serviceStatePath), "takeovers.json"), JSON.stringify({ version: 1, takeovers }));
+}
+
+async function withHumanTakeover(value, fn) {
+  const had = Object.prototype.hasOwnProperty.call(process.env, TAKEOVER_ENV);
+  const previous = process.env[TAKEOVER_ENV];
+  if (value === undefined) delete process.env[TAKEOVER_ENV];
+  else process.env[TAKEOVER_ENV] = value;
+  try {
+    return await fn();
+  } finally {
+    if (had) process.env[TAKEOVER_ENV] = previous;
+    else delete process.env[TAKEOVER_ENV];
+  }
 }
 
 function publicToolFor(handler, sender) {
@@ -1407,4 +1434,175 @@ test('audit: CV tools and interview turns retain the authenticated receiving acc
   const before=handler.cvCalls().length;
   await handler(eventFor('hello',UNKNOWN),{channelId:'whatsapp',senderId:UNKNOWN,accountId:'default'});
   assert.equal(handler.cvCalls().length,before);
+});
+
+// ---------------------------------------------------------------------------
+// Human takeover. The operator answers a customer by hand once and the bot is
+// out of that chat until they send "resume +<number>".
+// ---------------------------------------------------------------------------
+
+test("a chat the operator answered by hand is left alone, with no lead and no alert", async () => {
+  const handler = intakeHandler();
+  answeredByHand(handler, [UNKNOWN]);
+
+  const reply = await handler(eventFor("are you there?", UNKNOWN), { channelId: "whatsapp", senderId: UNKNOWN });
+  assert.equal(reply.handled, true, "claimed before the agent runs");
+  assert.equal(reply.text, undefined, "and answered with nothing");
+  // A person is already in the conversation; a lead and a "new chat" alert would be noise.
+  assert.equal(handler.memberArgs(), "");
+});
+
+test("a reply already on its way out is cancelled, however the chat is addressed", async () => {
+  for (const ctx of [
+    { channelId: "whatsapp", senderId: UNKNOWN },
+    { channelId: "whatsapp", from: UNKNOWN },
+    { channelId: "whatsapp", conversationId: UNKNOWN },
+  ]) {
+    const handler = intakeHandler();
+    answeredByHand(handler, [UNKNOWN]);
+    const sending = await handler.messageSending({ content: "Red commons are $95 per thousand." }, ctx);
+    assert.equal(sending.cancel, true, JSON.stringify(ctx));
+    assert.equal(sending.cancelReason, "human_takeover");
+    assert.deepEqual(sending.metadata, { suppressedBy: "public-service-gate", reason: "human_takeover" });
+  }
+
+  // And when the outbound names the recipient itself.
+  const handler = intakeHandler();
+  answeredByHand(handler, [UNKNOWN]);
+  const byTarget = await handler.messageSending({ to: UNKNOWN, content: "hello" }, { channelId: "whatsapp" });
+  assert.equal(byTarget.cancel, true);
+  const other = await handler.messageSending({ to: MEMBER, content: "hello" }, { channelId: "whatsapp" });
+  assert.equal(other, undefined, "other chats are untouched");
+});
+
+test("a reply the pacer is holding is cancelled rather than waited out", async () => {
+  await withReplyPacing(async ({ sleeps }) => {
+    const handler = intakeHandler({}, intakeStore);
+    const ctx = { channelId: "whatsapp", senderId: UNKNOWN, accountId: "default" };
+    assert.equal(await handler(eventFor("How much are bricks?", UNKNOWN), ctx), undefined);
+    const held = sleeps.length;
+
+    // The operator answers while the bot is still "typing". This is the case
+    // that forced the operator to delete the bot's messages.
+    answeredByHand(handler, [UNKNOWN]);
+    const sending = await handler.messageSending({ to: UNKNOWN, content: "Red commons are $95 per thousand." }, ctx);
+    assert.equal(sending.cancel, true);
+    assert.equal(sleeps.length, held, "a cancelled reply is never held");
+  });
+});
+
+test("the agent's own handoff reply is not cancelled by the silence it creates", async () => {
+  const handler = intakeHandler();
+  await withFakeOpenclaw(handler.dir, async () => {
+    const result = await publicToolFor(handler, UNKNOWN).execute("test", { action: "handoff", category: "borehole", details: "x" });
+    assert.match(result.content[0].text, HANDOFF);
+    // handleHandoff marks the customer and THEN returns this text, so a cancel
+    // keyed on the handoff store would swallow the customer's confirmation.
+    const sending = await handler.messageSending({ to: UNKNOWN, content: result.content[0].text }, { channelId: "whatsapp" });
+    assert.equal(sending, undefined);
+  });
+});
+
+test("the operator's own numbers are never silenced, whatever the store says", async () => {
+  await withAdminMode("true", async () => {
+    const handler = intakeHandler({ whatsappAdminUsers: [ADMIN], whatsappLines: { default: ADMIN, ads: "+263790453292" } });
+    answeredByHand(handler, [ADMIN, "+263790453292"]);
+    await withFakeOpenclaw(handler.dir, async (sent) => {
+      // An entry against the operator's own line would swallow "resume" itself.
+      assert.equal(await handler(eventFor("status", ADMIN), { channelId: "whatsapp", senderId: ADMIN }), undefined);
+      assert.equal(await handler.messageSending({ to: ADMIN, content: "All campaigns ran." }, { channelId: "whatsapp" }), undefined);
+      assert.equal(await handler.messageSending({ to: "+263790453292", content: "ping" }, { channelId: "whatsapp" }), undefined);
+      assert.equal(sent(), "", "and nothing is announced about it");
+    });
+  });
+});
+
+test("admin resume gives back a chat taken over by hand, including its opaque id", async () => {
+  await withAdminMode("true", async () => {
+    const handler = intakeHandler({ whatsappAdminUsers: [ADMIN] }, intakeStore);
+    answeredByHand(handler, [UNKNOWN, "4455@lid"]);
+    await withFakeOpenclaw(handler.dir, async () => {
+      const resumed = await handler(eventFor(`resume ${UNKNOWN}`, ADMIN), { channelId: "whatsapp", senderId: ADMIN });
+      assert.equal(resumed.handled, true);
+      assert.match(resumed.text, /Resumed \+19995550123/);
+
+      assert.equal(await handler(eventFor("hi", UNKNOWN), { channelId: "whatsapp", senderId: UNKNOWN }), undefined);
+      // The chat was recorded under both spellings; releasing only one would
+      // leave the bot silent with no visible cause.
+      assert.equal(await handler.messageSending({ to: "4455@lid", content: "hello" }, { channelId: "whatsapp" }), undefined);
+
+      const noop = await handler(eventFor(`resume ${UNKNOWN}`, ADMIN), { channelId: "whatsapp", senderId: ADMIN });
+      assert.match(noop.text, /was not handed off/);
+
+      // Answered by hand again: the chat goes back to the operator.
+      answeredByHand(handler, [UNKNOWN], Date.now() + 1_000);
+      const later = await handler(eventFor("hi again", UNKNOWN), { channelId: "whatsapp", senderId: UNKNOWN });
+      assert.equal(later.handled, true);
+      assert.equal(later.text, undefined);
+    });
+  });
+});
+
+test("the operator is told once per chat that the bot stepped out of it", async () => {
+  await withAdminMode("true", async () => {
+    const handler = intakeHandler({ whatsappAdminUsers: [ADMIN] }, intakeStore);
+    answeredByHand(handler, [UNKNOWN, "4455@lid"]);
+    await withFakeOpenclaw(handler.dir, async (sent) => {
+      await handler(eventFor("are you there?", UNKNOWN), { channelId: "whatsapp", senderId: UNKNOWN });
+      assert.match(sent(), new RegExp(`--target \\${ADMIN}`));
+      assert.match(sent(), /Bot off for \+19995550123/);
+      assert.match(sent(), /resume \+19995550123/);
+      // One conversation, recorded under two spellings, is one notice.
+      assert.equal(sent().match(/Bot off for/g).length, 1);
+
+      await handler(eventFor("hello?", UNKNOWN), { channelId: "whatsapp", senderId: UNKNOWN });
+      assert.equal(sent().match(/Bot off for/g).length, 1, "and it is not repeated");
+    });
+  });
+});
+
+test("a taken-over customer typing stop cannot clear their saved order", async () => {
+  const handler = cvHandler();
+  await handler.startCv();
+  const before = fs.readFileSync(handler.serviceStatePath, "utf8");
+  answeredByHand(handler, [UNKNOWN]);
+
+  // The takeover hook runs above the failsafe stop, so "stop" is held silently
+  // and the half-finished order survives for a later resume.
+  const reply = await handler(eventFor("stop", UNKNOWN), { channelId: "whatsapp", senderId: UNKNOWN });
+  assert.equal(reply.handled, true);
+  assert.equal(reply.text, undefined);
+  assert.equal(fs.readFileSync(handler.serviceStatePath, "utf8"), before);
+  assert.deepEqual(handler.cvCalls(), [`status --phone=${UNKNOWN}`], "no interview turn was relayed");
+});
+
+test("the kill switch puts the bot back into every chat", async () => {
+  const handler = intakeHandler({}, intakeStore);
+  answeredByHand(handler, [UNKNOWN]);
+  await withHumanTakeover("0", async () => {
+    assert.equal(await handler(eventFor("hi", UNKNOWN), { channelId: "whatsapp", senderId: UNKNOWN }), undefined);
+    assert.equal(await handler.messageSending({ to: UNKNOWN, content: "hello" }, { channelId: "whatsapp" }), undefined);
+  });
+  // The record survives, so switching it back on restores the silence.
+  const reply = await handler(eventFor("hi", UNKNOWN), { channelId: "whatsapp", senderId: UNKNOWN });
+  assert.equal(reply.handled, true);
+});
+
+test("classic mode: a chat taken over by hand is held silently too", async () => {
+  const handler = intakeHandler({ memberGateEnabled: false });
+  answeredByHand(handler, [MEMBER]);
+  const reply = await handler(eventFor("hello?", MEMBER), { channelId: "whatsapp", senderId: MEMBER });
+  assert.equal(reply.handled, true);
+  assert.equal(reply.text, undefined);
+});
+
+test("a group message is left to the group block, not to the takeover store", async () => {
+  const handler = intakeHandler();
+  answeredByHand(handler, [UNKNOWN]);
+  const reply = await handler(
+    { channel: "whatsapp", senderId: UNKNOWN, content: "hi", isGroup: true },
+    { channelId: "whatsapp", senderId: UNKNOWN, conversationId: "1@g.us" },
+  );
+  assert.equal(reply.handled, true);
+  assert.equal(reply.text, undefined);
 });

@@ -113,6 +113,35 @@ export async function notifyAdminOfLead(api, phone, text) {
   }
 }
 
+// Best-effort WhatsApp alert telling the operator the bot has stepped out of a
+// chat answered by hand. The admin number is the default line's own number with
+// selfChatMode on, so this lands in the operator self-chat. It is the only sign
+// the takeover happened, and it carries the way back, because nothing but
+// "resume" lets the bot talk to that customer again.
+export async function notifyAdminOfTakeover(api, phone) {
+  try {
+    const target = normalizePhone(phone || "");
+    if (!target) return;
+    const admins = getAdminUsers(api);
+    if (!admins.size) {
+      api.logger?.warn?.("public-service-gate: chat taken over but no whatsappAdminUsers configured to notify");
+      return;
+    }
+    const body = `Bot off for ${target}: you replied there by hand, so it will stay quiet in that chat.\nSend "resume ${target}" to switch it back on.`;
+    for (const admin of admins) {
+      await helperLimiter(() =>
+        runTextCommand(
+          "openclaw",
+          ["message", "send", "--channel", "whatsapp", "--account", "default", "--target", admin, "--message", body],
+          { timeoutMs: HELPER_TIMEOUT_MS },
+        ),
+      );
+    }
+  } catch (err) {
+    api.logger?.warn?.(`public-service-gate: failed to notify admin of takeover (${String(err)})`);
+  }
+}
+
 // Best-effort WhatsApp alert to each admin when a DM user picks a service and says
 // what they need, so the admin can follow up by hand. Includes the chosen service.
 export async function notifyAdminOfIntake(api, phone, serviceLabel, text) {

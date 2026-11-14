@@ -62,7 +62,10 @@ answers from `workspace/docs/business-info.md` (edit prices there) and hands a
 customer off when they are ready to order or ask something the page does not
 cover. Fruit-tree and building-material handoffs are forwarded to the partner on
 WhatsApp; after any handoff the bot stays silent for that customer until an admin
-sends `resume +<number>`. See `workspace/docs/public-services.md`.
+sends `resume +<number>`. The same silence falls without a handoff the moment the
+operator answers a customer by hand: that chat becomes theirs, a reply already
+on its way out is cancelled, and `resume +<number>` is the only way back. See
+`workspace/docs/public-services.md`.
 
 ## Structure
 
@@ -1593,6 +1596,7 @@ runtime/
 ├── public-service-gate/state.json
 ├── public-service-gate/ad-refs.json (promo ad ref code counts)
 ├── public-service-gate/handoffs.json (customers handed off to a person; bot silent)
+├── public-service-gate/takeovers.json (chats the operator answered by hand; bot silent)
 ├── cv-maker/ (CV orders; settled orders are purged)
 └── cron-state/<promo>/state.json (per-promo delivery state)
 ```

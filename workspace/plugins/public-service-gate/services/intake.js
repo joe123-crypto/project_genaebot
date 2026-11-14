@@ -1,5 +1,6 @@
 import { isQueueFullError } from "../lib/runtime.js";
 import { isHandedOff } from "../lib/handoffs.js";
+import { isTakenOverNow } from "../lib/takeover.js";
 import { clearServiceState, loadServiceState } from "../lib/state.js";
 import { isStateResetRequest } from "./greeting.js";
 import { notifyAdminOfLead, recordLead } from "./membership.js";
@@ -13,6 +14,16 @@ import { CV_SERVICE, handleCvOrder } from "./cv-maker.js";
 //   - a customer inside the automated CV order is relayed to the CV maker.
 // Everything else returns undefined and falls through to the agent.
 export async function handleIntake(api, sender, text, accountId = "default") {
+  // Defence in depth: index.js claims a taken-over chat at a higher priority
+  // than this, so in practice nothing reaches here. Checked again above the
+  // lead recording because a chat the operator is already in needs no lead and
+  // no "new chat" alert, and because reply silence must not depend on hook
+  // ordering staying as it is.
+  if (isTakenOverNow(api, sender)) {
+    api.logger?.info?.("public-service-gate: intake skipped, a person has this chat");
+    return { handled: true };
+  }
+
   // Record the contact as a lead; the admin is alerted once, on first contact.
   // Best effort: a store or messaging failure never blocks the reply.
   try {
