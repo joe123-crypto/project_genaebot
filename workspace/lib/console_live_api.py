@@ -15,6 +15,7 @@ import time
 from urllib.parse import parse_qs
 from zoneinfo import ZoneInfo
 
+import ad_assets
 import console_live_index
 import group_discovery
 import group_metrics
@@ -97,9 +98,19 @@ class LiveViews:
             err=io.StringIO())
         groups = bridge.group_rows(day)
         campaigns = bridge.campaign_records(day, include_assets=False)
-        # No image catalogue reads. List copy is a count, not downloaded captions.
+        # Summaries use only streamed asset metadata, never a catalogue query.
+        # List copy stays a count, not downloaded captions.
         for row in campaigns:
             row["captionCount"] = len(row.get("captions", []))
+            images = row.get("images", [])
+            row["imageCount"] = len(images)
+            first = next((asset for asset in (config.get("assets") or {}).get(row["slug"], [])
+                          if images and asset["filename"] == images[0]), None)
+            try:
+                row["thumbnailUrl"] = ad_assets.public_url(first, self.env) if first else None
+            except ad_assets.AssetsUnavailable:
+                # A bad/missing origin costs the thumbnail, never the table.
+                row["thumbnailUrl"] = None
             row.pop("captions", None)
             row.pop("images", None)
             row.pop("assets", None)

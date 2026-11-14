@@ -12,10 +12,11 @@ import sqlite3
 import threading
 import time
 
+import ad_assets
 import operator_config as config
 
-SCHEMA = 2
-COLLECTIONS = ("settings", "lines", "campaigns", "groups", "campaign_deletions")
+SCHEMA = 3
+COLLECTIONS = ("settings", "lines", "campaigns", "groups", "campaign_deletions", "assets")
 LEASE_SECONDS = 90
 
 
@@ -168,7 +169,8 @@ class Index:
         membership, report = config.quarantine(membership, undecodable)
         enabled, report["campaigns"] = config.campaign_switches(enabled)
         return {"source": "snapshot", "membership": membership, "enabled": enabled,
-                "report": report, "fetchedAt": stamp, "degraded": None, "deleted": deleted}, str(revision)
+                "report": report, "fetchedAt": stamp, "degraded": None, "deleted": deleted,
+                "assets": ad_assets._enabled_only(ad_assets._assemble(raw["assets"])[0])}, str(revision)
 
     def publish(self, changes, read_time, tokens, *, reset=False):
         """Called only at a global consistent stream boundary."""
