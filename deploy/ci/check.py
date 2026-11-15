@@ -306,6 +306,7 @@ def documentation_failures(changed: set[str], contract: dict) -> list[str]:
 # room files all go into the model's context verbatim.
 CUSTOMER_FACING_PAGES = (
     "workspace/docs/public-whatsapp-system-prompt.txt",
+    "workspace/docs/public-whatsapp-reply-instructions.txt",
     "workspace/docs/public-services.md",
     "workspace/docs/business-info.md",
     "workspace/docs/cv-maker-onboarding.md",

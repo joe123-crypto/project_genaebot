@@ -135,6 +135,7 @@
       },
       "public-service-gate": {
         "enabled": true,
+        "hooks": { "allowConversationAccess": true, "allowPromptInjection": true },
         "config": {
           "enabled": true,
           "businessInfoPath": "/home/joseph/.openclaw/workspace/docs/business-info.md",

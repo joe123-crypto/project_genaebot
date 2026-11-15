@@ -977,20 +977,28 @@ self-hosted deploy script. The applier is still here and still tested, but nothi
 on the Railway boot path calls it, so editing the template alone changes nothing
 in production.
 
-There are two exceptions. The first is the public WhatsApp system prompt at
+There are two exceptions. The first is the public WhatsApp service policy at
 `workspace/docs/public-whatsapp-system-prompt.txt`. On every boot, after the
 OpenClaw upgrade step and before the gateway starts, the entrypoint runs
 `deploy/railway/sync-public-prompt.py`, which writes that file into
 `channels.whatsapp.direct["*"].systemPrompt` and touches nothing else in the
 config (peer overrides included). It logs `public WhatsApp prompt updated` or
 `unchanged`; any problem (missing or empty file, bad JSON) is logged as
-`NOT synced` and the boot carries on with the previous prompt. So a prompt edit
-reaches the live agent on the next deploy, and the business facts it reads
-(`workspace/docs/business-info.md`) are synced with the rest of `workspace/`.
+`NOT synced` and the boot carries on with the previous prompt. The policy keeps
+the service, handoff, and privacy rules outside the Customer Bot editor.
+
+Default reply guidance (`workspace/docs/public-whatsapp-reply-instructions.txt`)
+and business facts (`workspace/docs/business-info.md`, or the configured
+`businessInfoPath`) are used until an operator publishes from **Customer Bot**.
+The published revision lives outside the source overlay. The public agent's
+prompt hook reads it on each WhatsApp DM turn, and `business_info` reads the
+same copy. Published facts supersede older facts in the conversation; publishing
+does not restart the gateway, change routing, or send messages.
 
 The second exception is the WhatsApp **reply gates**. Right after the prompt sync
-the entrypoint runs `deploy/railway/sync-reply-gates.py`, which sets each of these
-nine keys to its value in `config/openclaw.template.json`:
+the entrypoint runs `deploy/railway/sync-reply-gates.py`, which sets the managed
+keys to their values in `config/openclaw.template.json`. This includes enabling
+the trusted public-service plugin's prompt hook:
 
 | Path | Template |
 |---|---|
