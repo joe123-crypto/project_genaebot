@@ -1,11 +1,5 @@
 # Genaie Business Info
 
-This page is what the public WhatsApp bot answers from, via the
-`public_service` `business_info` action. Edit prices and details here; the bot
-reads this file on every lookup, so a deploy is all a change needs. If something
-is not written here, the bot does not know it and must hand the customer off
-instead of guessing.
-
 ## How we work (all businesses)
 
 - All our services operate all around Zimbabwe.

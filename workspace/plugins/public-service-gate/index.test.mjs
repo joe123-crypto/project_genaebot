@@ -22,6 +22,30 @@ process.env[REPLY_PACING_ENV] = "0";
 const HANDOFF = /your request is in\. Someone will contact you soon/i;
 const PARTNER = "+263775489417";
 
+test("the public business_info action reads the active copy and does not fall back after corruption", async (t) => {
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), "customer-bot-tool-"));
+  const previous = process.env.OPENCLAW_STATE_DIR;
+  process.env.OPENCLAW_STATE_DIR = state;
+  t.after(() => {
+    if (previous === undefined) delete process.env.OPENCLAW_STATE_DIR;
+    else process.env.OPENCLAW_STATE_DIR = previous;
+    fs.rmSync(state, { recursive: true, force: true });
+  });
+  const defaultFile = path.join(state, "default.md");
+  fs.writeFileSync(defaultFile, "Bricks: $95", "utf8");
+  const tool = publicToolFor(registerHandler({ businessInfoPath: defaultFile }), MEMBER);
+  const lookup = async () => (await tool.execute("test", { action: "business_info" })).content[0].text;
+  assert.equal(await lookup(), "Bricks: $95");
+  const published = path.join(state, "runtime", "customer-bot", "published.json");
+  fs.mkdirSync(path.dirname(published), { recursive: true });
+  fs.writeFileSync(published, JSON.stringify({ version: 1, revision: "a".repeat(32),
+    publishedAt: "2026-11-15T00:00:00Z", publishedBy: "Fixture operator",
+    instructions: "Start with the answer.", knowledge: "Bricks: $107" }));
+  assert.equal(await lookup(), "Bricks: $107");
+  fs.writeFileSync(published, "{");
+  assert.match(await lookup(), /use the handoff action/);
+});
+
 function registerHandler(config = {}, complete, relevanceConfig = {}) {
   const handlers = [];
   const serviceStatePath =
@@ -888,6 +912,7 @@ test("public canned replies use the concise style", () => {
 
   const docs = [
     "public-whatsapp-system-prompt.txt",
+    "public-whatsapp-reply-instructions.txt",
     "public-services.md",
     "business-info.md",
   ];
@@ -900,10 +925,11 @@ test("public canned replies use the concise style", () => {
     new URL("../../docs/public-whatsapp-system-prompt.txt", import.meta.url),
     "utf8",
   );
-  assert.match(prompt, /one or two short sentences is a whole reply/i);
-  assert.match(prompt, /Never use an em dash or an en dash/i);
-  assert.match(prompt, /Answer the question and stop/i);
-  assert.match(prompt, /Never pitch a service the customer did not ask about/i);
+  const instructions = fs.readFileSync(new URL("../../docs/public-whatsapp-reply-instructions.txt", import.meta.url), "utf8");
+  assert.match(instructions, /one or two short sentences is a whole reply/i);
+  assert.match(instructions, /Never use an em dash or an en dash/i);
+  assert.match(instructions, /Answer the question and stop/i);
+  assert.match(instructions, /Never pitch a service the customer did not ask about/i);
   assert.match(prompt, /call `public_service` with action `business_info`/i);
   assert.match(prompt, /Never guess/);
   assert.match(prompt, /unrelated to the business[^\n]*list what we offer/i);

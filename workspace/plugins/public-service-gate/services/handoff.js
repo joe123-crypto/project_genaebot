@@ -1,7 +1,5 @@
-import fs from "node:fs";
 import { boreholeHandoffDetails } from "./borehole.js";
 
-import { expandHome, getPluginConfig } from "../lib/config.js";
 import { normalizePhone } from "../lib/events.js";
 import { markHandedOff } from "../lib/handoffs.js";
 import { HELPER_TIMEOUT_MS, helperLimiter, runTextCommand } from "../lib/runtime.js";
@@ -39,10 +37,6 @@ const CATEGORY_LABELS = {
 
 export const HANDOFF_REPLY = "Got it, your request is in. Someone will contact you soon.";
 
-const DEFAULT_BUSINESS_INFO_PATH = "~/.openclaw/workspace/docs/business-info.md";
-const BUSINESS_INFO_UNAVAILABLE =
-  "Business info is unavailable right now. Do not quote any price or detail; use the handoff action instead.";
-
 // Keep forwarded snippets bounded and single-line.
 const DETAILS_MAX = 600;
 function detailsSnippet(text) {
@@ -52,21 +46,6 @@ function detailsSnippet(text) {
 export function normalizeHandoffCategory(value) {
   const category = String(value ?? "").trim().toLowerCase();
   return HANDOFF_CATEGORIES.includes(category) ? category : "other";
-}
-
-export function loadBusinessInfo(api) {
-  const pluginCfg = getPluginConfig(api);
-  const configuredPath =
-    typeof pluginCfg.businessInfoPath === "string" && pluginCfg.businessInfoPath.trim()
-      ? pluginCfg.businessInfoPath.trim()
-      : DEFAULT_BUSINESS_INFO_PATH;
-  try {
-    const text = fs.readFileSync(expandHome(configuredPath), "utf8").trim();
-    return text || BUSINESS_INFO_UNAVAILABLE;
-  } catch (err) {
-    api.logger?.warn?.(`public-service-gate: failed to read business info (${String(err)})`);
-    return BUSINESS_INFO_UNAVAILABLE;
-  }
 }
 
 async function forwardToPartner(api, customer, category, details) {

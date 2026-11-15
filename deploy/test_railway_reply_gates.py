@@ -136,6 +136,7 @@ class ReplyGateSyncTests(unittest.TestCase):
         w["accounts"]["default"]["enabled"] = False
         w["accounts"]["ads"]["dmPolicy"] = "disabled"
         entries = expected["plugins"]["entries"]
+        entries["public-service-gate"]["hooks"] = {"allowConversationAccess": True, "allowPromptInjection": True}
         entries["public-service-gate"]["config"]["enabled"] = True
         entries["public-service-gate"]["config"]["cvMakerPaymentDetails"] = (
             "EcoCash +263775489417 (Noriah Mzenda)"

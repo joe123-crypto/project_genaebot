@@ -104,6 +104,7 @@ COPY deploy/railway/report-release-ready.py /usr/local/bin/report-release-ready.
 COPY deploy/railway/gateway-standby.py /usr/local/bin/gateway-standby.py
 COPY deploy/railway/console-api.py /usr/local/bin/console-api.py
 COPY deploy/railway/console_accounts.py /usr/local/bin/console_accounts.py
+COPY deploy/railway/console_customer_bot.py /usr/local/bin/console_customer_bot.py
 # The R2 signer, which deploy/ holds and stage-openclaw-source.sh never stages.
 # Nothing else from deploy/ is baked any more: the cron manifest and the mirror
 # of the ad-asset index were operator data and are gone, so the campaigns and

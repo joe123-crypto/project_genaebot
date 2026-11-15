@@ -1,4 +1,5 @@
 import { getPluginConfig } from "./lib/config.js";
+import { buildCustomerBotContext, loadBusinessInfo } from "./lib/customer-bot.js";
 import { trackStandbyActivity } from "./lib/standby-activity.js";
 import {
   getEventAccountId,
@@ -60,7 +61,6 @@ import { handleIntake } from "./services/intake.js";
 import {
   HANDOFF_CATEGORIES,
   handleHandoff,
-  loadBusinessInfo,
   parseResumeCommand,
 } from "./services/handoff.js";
 import {
@@ -202,6 +202,8 @@ export default {
   description: "Handles WhatsApp public-user safety and admin-managed member access control before agent dispatch.",
   version: "0.1.0",
   register(api) {
+    api.on("before_prompt_build", (_event, ctx) => buildCustomerBotContext(api, ctx));
+
     watchTakeovers(api);
 
     // A chat the operator answered by hand is theirs. The bot says nothing there

@@ -15,10 +15,10 @@ model-visible operational tool is `public_service`, declared by the
   reference, command, or filesystem path.
 - Actions:
   - `borehole_info`: asks for customer location and requirements, then returns suitable anonymized borehole offers and prices. Supplier identities and bases stay private. Unknown details require handoff.
-  - `business_info`: returns `workspace/docs/business-info.md` (plugin config
-    `businessInfoPath`), the single source for products, prices and what the
-    bot may answer. It is read on every call, so editing that page changes the
-    bot's answers on the next deploy with no code or prompt change.
+  - `business_info`: returns the current general business reference that also
+    appears in the prompt for each public WhatsApp DM turn. It comes from the
+    Customer Bot editor's published revision or, before the first publish,
+    from `workspace/docs/business-info.md` (plugin config `businessInfoPath`).
   - `handoff`: passes the customer to a person. It takes a `category` and short
     `details`, forwards fruit-tree and building-material requests to the partner
     on WhatsApp +263775489417 (nothing is forwarded for other categories),
@@ -55,10 +55,9 @@ above is actually in force:
   number first messages the bot.
 - The agent chats like the business owner: short, natural replies in the
   customer's language (English, Shona or a mix), rarely any emoji, and answers
-  only from `business_info`. Anything not on that page is never guessed; the
-  customer is handed off instead. The prompt carries real chats as tone
-  references; they show wording only, and `business_info` remains the only
-  source for facts and prices.
+  general questions from the current business reference. Anything absent from
+  the reference is never guessed; the customer is handed off instead. The reply
+  instructions carry tone examples; they do not override current facts.
 - Location questions: say "All our services operate all around Zimbabwe. Where
   are you from?" in the customer's language, including when asked where we are
   based, where exactly we are, or whether we serve their area. Do not describe
@@ -86,7 +85,7 @@ above is actually in force:
 
 ## Service Catalog
 
-General facts live in `workspace/docs/business-info.md`. Borehole offers live in the private provider catalog `workspace/data/borehole-providers.json` and are retrieved through `borehole_info`, which returns only anonymized offers matched to customer location and requirements. Skylight Solar is excluded from this catalog. In summary:
+General facts live in the current Customer Bot publication, seeded by `workspace/docs/business-info.md`. Borehole offers live in the private provider catalog `workspace/data/borehole-providers.json` and are retrieved through `borehole_info`, which returns only anonymized offers matched to customer location and requirements. Skylight Solar is excluded from this catalog. The default catalog includes:
 
 1. Building materials (partner, forwarded): bricks, quarry stones, sand, gravel.
 2. Fruit trees (partner, forwarded): grafted mango, pawpaw, orange, naartjie, lemon.
@@ -99,8 +98,8 @@ General facts live in `workspace/docs/business-info.md`. Borehole offers live in
 6. A job-vacancy WhatsApp group (Vacancy Lamp) that job seekers can be added
    to. We do not search for jobs or send applications for anyone.
 
-That list is the whole catalogue. Anything else is out of scope: say what we
-do offer and ask what the customer needs.
+Use the current reference when listing services. Anything it does not offer is
+out of scope: say what we offer and ask what the customer needs.
 
 ## Request Handling
 
@@ -175,4 +174,4 @@ Never use one line to test the other: that is what started the loop on
 (the `env -u` is required; see README), or message it from a
 third number.
 
-Borehole-specific questions use `borehole_info` on every relevant turn, overriding the general one-lookup business information rule. Keep enquiries through Genaie; hand off when the requested answer is unavailable.
+Borehole-specific questions use `borehole_info` on every relevant turn. Keep enquiries through Genaie; hand off when the requested answer is unavailable.

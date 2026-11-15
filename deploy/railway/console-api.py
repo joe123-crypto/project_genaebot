@@ -98,6 +98,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 # Also works when loaded by importlib in the deployment tests.
 sys.path.insert(0, os.path.dirname(__file__))
 from console_accounts import AccountControls
+from console_customer_bot import BODY_LIMIT as CUSTOMER_BOT_BODY_LIMIT, Conflict as CustomerBotConflict, CustomerBot
 
 PREFIX = "/internal/console/"
 DATA_ROUTES = ("overview", "groups", "campaigns", "capabilities", "settings", "navigation")
@@ -431,6 +432,40 @@ class Handler(BaseHTTPRequestHandler):
             bridge.invalidate(config=False)
         self.send_any(status, body, with_body)
 
+    def customer_bot_request(self, query, method, with_body=True):
+        def respond(status, payload):
+            self.send_any(status, json.dumps(payload, ensure_ascii=False).encode("utf-8"), with_body)
+
+        if query:
+            return respond(400, {"error": "The customer bot route takes no query parameters."})
+        store = CustomerBot(os.environ.get("OPENCLAW_STATE_DIR") or DEFAULT_STATE_DIR)
+        if method == "GET":
+            try:
+                current = store.read()
+            except (OSError, ValueError, AttributeError):
+                return respond(503, {"error": "The customer bot's live content is unavailable."})
+            return respond(200, current)
+        try:
+            size = int(self.headers.get("Content-Length") or "0")
+            content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+            if self.headers.get("Transfer-Encoding") or not 0 < size <= CUSTOMER_BOT_BODY_LIMIT or content_type != "application/json":
+                raise ValueError()
+            raw = self.rfile.read(size)
+            if len(raw) != size:
+                raise ValueError()
+            payload = json.loads(raw.decode("utf-8"))
+        except (ValueError, RecursionError, TimeoutError):
+            return respond(400, {"error": "Invalid customer bot request."})
+        try:
+            published = store.publish(payload)
+        except CustomerBotConflict as error:
+            return respond(409, {"current": error.current})
+        except ValueError as error:
+            return respond(400, {"error": str(error)})
+        except OSError:
+            return respond(503, {"error": "The publish could not be confirmed. Check the live content before retrying."})
+        return respond(200, published)
+
     def config_request(self, route, query, with_body=True):
         """POST /internal/console/config/<collection>/<id>
 
@@ -644,6 +679,14 @@ class Handler(BaseHTTPRequestHandler):
         self.send_any(status, body, with_body)
 
     def do_POST(self):
+        split = urlsplit(self.path)
+        if split.path == PREFIX + "customer-bot":
+            if not authorized(self.headers.get("Authorization"), self.server.console["token"]):
+                self.send_any(401, b'{"error":"unauthorized"}', True)
+                return
+            # This copy is on the volume and has no effect on the Firestore index.
+            self.customer_bot_request(split.query, "POST")
+            return
         live = self.server.console.get("live")
         if live is not None:
             live.begin_write()
@@ -714,6 +757,10 @@ class Handler(BaseHTTPRequestHandler):
         if not authorized_read(self.headers.get("Authorization"), config, route):
             self.send_any(401, b'{"error": "unauthorized"}', with_body,
                           headers=(("WWW-Authenticate", "Bearer"),))
+            return
+
+        if route == "customer-bot":
+            self.customer_bot_request(split.query, "GET", with_body)
             return
 
         if route == "accounts" or route.startswith("accounts/"):

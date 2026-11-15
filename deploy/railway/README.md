@@ -63,17 +63,22 @@ syncs it onto the persistent volume at boot. The source marker records the teste
 SHA, and the release verifies that marker instead of trusting a mutable checkout.
 
 To change what the gateway ships (workspace code, cron jobs like the CV-promo ad targets,
-agent context markdown, the public WhatsApp system prompt, the business info page):
+agent context markdown, the public WhatsApp service policy, or the shipped reply and business defaults):
 edit it in this repo, open a PR, merge. That's the whole flow. Three sets of
 `openclaw.json` settings are synced on every boot by scripts baked at `/usr/local/bin/`:
 
 - `deploy/railway/sync-public-prompt.py` copies
   `workspace/docs/public-whatsapp-system-prompt.txt` into
   `channels.whatsapp.direct["*"].systemPrompt`.
+- The Customer Bot editor publishes one live revision of reply instructions and
+  business knowledge to `runtime/customer-bot/published.json` on the state volume.
+  The workspace overlay does not overwrite it. Restore the state volume to
+  recover this content when moving the gateway. Rolling back to an older image
+  ignores the published revision without deleting it.
 - `deploy/railway/sync-reply-gates.py` sets the eight WhatsApp reply gates
   (`channels.whatsapp.enabled`, `dmPolicy`, `accounts.default.enabled`,
   `plugins.entries.whatsapp.enabled`, both `public-service-gate` `enabled` flags
-  and the two `whatsapp-relevance-gate` ones) plus the CV payment details
+  and the two `whatsapp-relevance-gate` ones), the two public prompt hook settings, plus the CV payment details
   (`public-service-gate` `cvMakerPaymentDetails`) to their
   `config/openclaw.template.json` values, and appends `"*"` to
   `channels.whatsapp.allowFrom` when `dmPolicy` is `"open"` — without it every DM

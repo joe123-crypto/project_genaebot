@@ -53,6 +53,8 @@ GATED_PATHS: list[list[str]] = [
     ["plugins", "entries", "whatsapp", "enabled"],
     ["plugins", "entries", "public-service-gate", "enabled"],
     ["plugins", "entries", "public-service-gate", "config", "enabled"],
+    ["plugins", "entries", "public-service-gate", "hooks", "allowConversationAccess"],
+    ["plugins", "entries", "public-service-gate", "hooks", "allowPromptInjection"],
     ["plugins", "entries", "whatsapp-relevance-gate", "config", "enabled"],
     ["plugins", "entries", "whatsapp-relevance-gate", "config", "relevanceMode"],
     # Where CV buyers are told to pay. Governed so a payee change in the template
