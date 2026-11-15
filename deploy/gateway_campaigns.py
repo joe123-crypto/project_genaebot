@@ -209,13 +209,17 @@ def enabled(rows):
 
 
 def job_names(rows):
-    """The cron jobs an enabled campaign must have, for the startup check.
+    """The primary jobs required by the release startup check.
 
     A campaign converted from a script keeps its original ``<slug>-promo`` job;
     one created in the console has ``console-<slug>-promo``. Either way the
-    gateway reports the name, so this never has to guess it."""
+    gateway reports the name. Its campaign switch can be on while its primary
+    entry is paused, so also honor the last confirmed primary pause."""
     names = set()
     for row in enabled(rows):
+        if any(entry.get("entryId") == "primary" and (entry.get("confirmed") or {}).get("paused") is True
+               for entry in row.get("scheduleEntries") or []):
+            continue
         name = row.get("jobName")
         if not isinstance(name, str) or not name:
             raise Unavailable("campaign %r has no job name" % row.get("slug"))

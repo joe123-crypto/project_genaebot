@@ -54,6 +54,19 @@ class ParseTest(unittest.TestCase):
                                row("web-design", jobName="console-web-design-promo")]))
         self.assertEqual(gc.job_names(rows), {"a-promo", "console-web-design-promo"})
 
+    def test_release_does_not_require_a_confirmed_paused_primary_job(self):
+        rows = gc.parse(reply([
+            row("paused", scheduleEntries=[{"entryId": "primary", "paused": True,
+                                            "confirmed": {"paused": True}}]),
+            row("pending", scheduleEntries=[{"entryId": "primary", "paused": True,
+                                             "confirmed": {"paused": False}}]),
+            row("active", scheduleEntries=[{"entryId": "primary", "paused": False,
+                                            "confirmed": {"paused": False}},
+                                           {"entryId": "extra", "paused": True,
+                                            "confirmed": {"paused": True}}]),
+        ]))
+        self.assertEqual(gc.job_names(rows), {"active-promo", "pending-promo"})
+
     def test_an_error_reply_is_unavailable_not_an_empty_list(self):
         # console-read reports a failed read as {"error": ...} with exit 0, so
         # this is the shape most likely to be mistaken for "no campaigns".
