@@ -463,5 +463,7 @@ runuser -u joseph -- python3 /usr/local/bin/report-release-ready.py &
 # force-kills its child after two seconds, defeating the gateway's drain budget.
 # HOME is already /home/joseph in the runtime image; supplementary groups are
 # initialized for the same unprivileged account used by all setup commands.
+export GENAIE_CV_ACCEPT_NEW_ORDERS=0
+log "new WhatsApp CV orders paused; existing CV orders can continue"
 exec setpriv --reuid=joseph --regid=joseph --init-groups python3 /usr/local/bin/gateway-standby.py --port "$PORT" \
   -- openclaw gateway --port "$PORT" --bind lan --tailscale off

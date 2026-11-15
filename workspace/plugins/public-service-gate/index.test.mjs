@@ -1105,17 +1105,24 @@ test("with the kill switch off, nothing is delayed", async () => {
 
 const CV_ORDER_ID = "Ab3-_x";
 
-function cvMakerCli() {
+function cvMakerCli(statusByAccount = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "public-service-gate-cv-"));
   const script = path.join(dir, "cv-maker");
   const log = path.join(dir, "cv-calls.log");
+  const status = (account) => JSON.stringify(statusByAccount[account] ??
+    { ok: true, orderId: "", status: "" });
   writeExecutable(
     script,
     `#!/usr/bin/env bash
 set -eu
 printf '%s\\n' "$*" >> "${log}"
 case "$1" in
-  status) printf '{"ok":true,"orderId":"","status":""}\\n' ;;
+  status)
+    case "$*" in
+      *--account=ads*) printf '%s\\n' '${status("ads")}' ;;
+      *) printf '%s\\n' '${status("default")}' ;;
+    esac
+    ;;
   interview-turn)
     case "$*" in
       *--message=done*)
@@ -1138,8 +1145,8 @@ esac
   };
 }
 
-function cvHandler(extraConfig = {}) {
-  const cli = cvMakerCli();
+function cvHandler(extraConfig = {}, statusByAccount = {}) {
+  const cli = cvMakerCli(statusByAccount);
   const serviceStatePath = path.join(cli.dir, "state.json");
   const memberStoreScript = path.join(cli.dir, "whatsapp-invite");
   writeExecutable(memberStoreScript, intakeStore(path.join(cli.dir, "member-args.txt")));
@@ -1182,6 +1189,91 @@ test("cv_maker_start is refused while the CV maker is disabled", async () => {
   const result = await handler.startCv();
   assert.match(result.content[0].text, /isn't available here right now/i);
   assert.deepEqual(handler.cvCalls(), []);
+});
+
+async function withCvIntakePaused(run) {
+  const flag = "GENAIE_CV_ACCEPT_NEW_ORDERS";
+  const previous = process.env[flag];
+  process.env[flag] = "0";
+  try {
+    await run();
+  } finally {
+    if (previous === undefined) delete process.env[flag];
+    else process.env[flag] = previous;
+  }
+}
+
+function cvMessage(handler, text, accountId = "default") {
+  return handler(eventFor(text, UNKNOWN), { channelId: "whatsapp", senderId: UNKNOWN, accountId });
+}
+
+test("paused CV intake refuses direct quotes and removes start and handoff even for stale tool calls", async () => {
+  await withCvIntakePaused(async () => {
+    const handler = cvHandler();
+    const tool = publicToolFor(handler, UNKNOWN);
+    const paused = "We aren’t taking new CV orders.";
+    assert.deepEqual(tool.parameters.properties.action.enum, ["business_info", "borehole_info", "handoff"]);
+    assert.doesNotMatch(tool.description, /cv_maker_start|CV/);
+    assert.ok(!tool.parameters.properties.category.enum.includes("cv"));
+    for (const params of [{ action: "cv_maker_start" }, { action: "handoff", category: " CV " }]) {
+      const refused = await tool.execute("test", params);
+      assert.equal(refused.content[0].text, paused);
+    }
+    assert.equal(await cvMessage(handler, "What services do you offer?"), undefined);
+    assert.equal(await cvMessage(handler, "Do you make CVs? How much are bricks?"), undefined);
+    assert.deepEqual(handler.cvCalls(), []);
+    for (const inquiry of ["Do you make CVs?", "How much does a CV cost?", "Where is my CV order?"]) {
+      assert.equal((await cvMessage(handler, inquiry)).text, paused);
+    }
+    assert.deepEqual(handler.cvCalls(), Array(3).fill(`status --phone=${UNKNOWN}`));
+    assert.equal(fs.existsSync(handler.serviceStatePath), false);
+  });
+});
+
+test("paused CV intake resumes an expired interview only on its original line and uses its saved ID", async () => {
+  await withCvIntakePaused(async () => {
+    const handler = cvHandler({}, { ads: { ok: true, orderId: CV_ORDER_ID, status: "interviewing" } });
+    assert.equal((await cvMessage(handler, "Can I continue my CV?")).text, "We aren’t taking new CV orders.");
+    assert.match((await cvMessage(handler, "Can I continue my CV?", "ads")).text, /interview is still open/);
+    assert.equal(await cvMessage(handler, "Jane"), undefined);
+    assert.match((await cvMessage(handler, "Jane", "ads")).text, /full name/);
+    assert.deepEqual(handler.cvCalls(), [
+      `status --phone=${UNKNOWN}`,
+      `status --phone=${UNKNOWN} --account=ads`,
+      `status --phone=${UNKNOWN} --account=ads`,
+      `interview-turn --phone=${UNKNOWN} --message=Jane --account=ads --order=${CV_ORDER_ID}`,
+    ]);
+  });
+});
+
+test("paused CV intake handles a returning customer's payment on the original line", async () => {
+  await withCvIntakePaused(async () => {
+    const handler = cvHandler({}, { ads: { ok: true, orderId: CV_ORDER_ID, status: "awaiting_payment" } });
+    assert.equal(await cvMessage(handler, "paid"), undefined);
+    assert.match((await cvMessage(handler, "paid", "ads")).text, /confirming your payment/i);
+    assert.deepEqual(handler.cvCalls(), [
+      `status --phone=${UNKNOWN}`, `status --phone=${UNKNOWN} --account=ads`, `paid --phone=${UNKNOWN} --account=ads`,
+    ]);
+    await withAdminMode("true", async () => {
+      const admin = cvHandler({ whatsappAdminUsers: [ADMIN] });
+      const reply = await admin(eventFor(`cv approve ${CV_ORDER_ID}`, ADMIN), { channelId: "whatsapp", senderId: ADMIN });
+      assert.match(reply.text, /approved and sent/);
+      assert.deepEqual(admin.cvCalls(), [`approve --order=${CV_ORDER_ID}`]);
+    });
+  });
+});
+
+test("paused CV intake never starts an interview from an old intro or failed lookup", async () => {
+  for (const status of [{ ok: true, orderId: "", status: "" }, { ok: false }]) {
+    const handler = cvHandler({}, { default: status });
+    // Simulate a pre-pause intro, before the customer entered any details.
+    await handler.startCv();
+    await withCvIntakePaused(async () => {
+      const reply = await cvMessage(handler, "Jane");
+      assert.equal(reply?.text, status.ok ? undefined : "I couldn't reach the CV maker. Try again later.");
+    });
+    assert.deepEqual(handler.cvCalls(), Array(2).fill(`status --phone=${UNKNOWN}`));
+  }
 });
 
 test("CV flow turns relay to the CLI and the payment message uses the configured values", async () => {

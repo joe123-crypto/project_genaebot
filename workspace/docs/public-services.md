@@ -24,8 +24,6 @@ model-visible operational tool is `public_service`, declared by the
     on WhatsApp +263775489417 (nothing is forwarded for other categories),
     records the customer as handed off, and returns the reply the agent sends
     verbatim: "Got it, your request is in. Someone will contact you soon."
-  - `cv_maker_start`: starts the automated CV order (AI interview, EcoCash
-    payment, admin approval, PDF delivered in the chat).
 - If trusted WhatsApp sender context is missing, tool execution fails closed
   with a generic user-facing failure.
 - General shell, filesystem, browser, gateway, cron, cross-session, delegation,
@@ -78,10 +76,10 @@ above is actually in force:
   account, which makes that outgoing message invisible to the gate; see
   `deploy/railway/whatsapp-human-takeover.mjs` and `lib/takeover.js`.
   `GENAIE_HUMAN_TAKEOVER=0` switches the whole thing off.
-- CVs: the agent states the $5 EcoCash price and asks whether the customer wants
-  the automated AI interview. Yes starts `cv_maker_start`, after which the gate
-  relays every turn to the CV maker until the order settles ("cancel" returns
-  to the normal chat). No hands the customer off with category `cv`.
+- New CV orders are paused. The gate answers new CV inquiries directly and
+  resumes saved interviews, payments, and approvals on the original WhatsApp
+  line. Buyers whose chat state expired can mention their CV order or reply
+  "paid" to resume. The order store must confirm an active order first.
 
 ## Service Catalog
 
@@ -90,12 +88,9 @@ General facts live in the current Customer Bot publication, seeded by `workspace
 1. Building materials (partner, forwarded): bricks, quarry stones, sand, gravel.
 2. Fruit trees (partner, forwarded): grafted mango, pawpaw, orange, naartjie, lemon.
 3. Borehole drilling and solar installation packages (partner, not forwarded).
-4. CV writing and revamping, US$5 by EcoCash. Follow
-   `/home/joseph/.openclaw/workspace/docs/cv-maker-onboarding.md` for the
-   automated order.
-5. Business services: lead generation and WhatsApp group ads. Quoted per
+4. Business services: lead generation and WhatsApp group ads. Quoted per
    customer, so handed off.
-6. A job-vacancy WhatsApp group (Vacancy Lamp) that job seekers can be added
+5. A job-vacancy WhatsApp group (Vacancy Lamp) that job seekers can be added
    to. We do not search for jobs or send applications for anyone.
 
 Use the current reference when listing services. Anything it does not offer is

@@ -1759,8 +1759,9 @@ kept its schedule and its runtime delivery history.
 
 The `cv` campaign is intentionally switched off: `enabled: false` on
 `campaigns/cv`, which also leaves its `cv-promo` cron job disabled on the
-gateway. Customer CV requests remain available during normal gateway hours, and
-release checks only require the campaigns that are enabled. The original CV
+gateway. New CV orders via WhatsApp are paused separately. Customers with an
+open CV order can finish it on the original WhatsApp line. Release checks only
+require the campaigns that are enabled. The original CV
 poster still carries the offline ads contact number and must be corrected before
 this campaign is turned back on. Switching it on is a console edit; the
 reconciler enables the job.
