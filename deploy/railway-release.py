@@ -76,8 +76,9 @@ def validate_readiness(report, deployment_id, sha, profile, jobs, settings=None)
     if {"vacancy-lamp-feed", "hustlers-feed", "job-scout-group-feed",
         "job-scout-hustlers-feed"}.intersection(report.get("enabledJobs", [])):
         raise ValueError("retired job feeds must not be enabled")
-    if not jobs.issubset(set(report.get("enabledJobs", []))):
-        raise ValueError("required campaigns are not enabled")
+    missing = jobs.difference(report.get("enabledJobs", []))
+    if missing:
+        raise ValueError("required campaigns are not enabled: " + ", ".join(sorted(missing)))
 
 
 def required_campaigns(rows):
