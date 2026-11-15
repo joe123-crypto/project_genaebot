@@ -75,6 +75,8 @@ edit it in this repo, open a PR, merge. That's the whole flow. Three sets of
   The workspace overlay does not overwrite it. Restore the state volume to
   recover this content when moving the gateway. Rolling back to an older image
   ignores the published revision without deleting it.
+- The entrypoint pauses new WhatsApp CV orders with `GENAIE_CV_ACCEPT_NEW_ORDERS=0`.
+  The CV maker continues processing saved orders on their original WhatsApp lines.
 - `deploy/railway/sync-reply-gates.py` sets the eight WhatsApp reply gates
   (`channels.whatsapp.enabled`, `dmPolicy`, `accounts.default.enabled`,
   `plugins.entries.whatsapp.enabled`, both `public-service-gate` `enabled` flags

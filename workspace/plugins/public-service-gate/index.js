@@ -64,8 +64,11 @@ import {
   parseResumeCommand,
 } from "./services/handoff.js";
 import {
+  CV_INTAKE_PAUSED_REPLY,
   handleCvDecision,
   handleCvMakerRequest,
+  handlePausedCvConversation,
+  isCvIntakePaused,
   isCvMakerRequest,
   parseCvDecisionCommand,
   startCvOrder,
@@ -133,7 +136,7 @@ export function stopTakeoverWatch() {
 // CV maker disabled never offers a CV in the same breath as declining one.
 function serviceDisabledReply(api) {
   const offers = [];
-  if (isServiceEnabled(api, "cvMaker")) offers.push("making a CV");
+  if (!isCvIntakePaused() && isServiceEnabled(api, "cvMaker")) offers.push("making a CV");
   if (!offers.length) return SERVICE_DISABLED_UNAVAILABLE;
   return `${SERVICE_DISABLED_UNAVAILABLE} This chat can help with ${offers.join(" or ")}.`;
 }
@@ -152,7 +155,7 @@ function isServiceEnabled(api, service) {
 
 function publicServiceActions(api) {
   return PUBLIC_SERVICE_ACTIONS
-    .filter((action) => isServiceEnabled(api, action.service))
+    .filter((action) => isServiceEnabled(api, action.service) && !(action.service === "cvMaker" && isCvIntakePaused()))
     .map((action) => action.name);
 }
 
@@ -166,6 +169,10 @@ function toolText(reply) {
 }
 
 async function runPublicServiceAction(api, sender, action, text, params = {}) {
+  if (isCvIntakePaused() && (action === "cv_maker_start" ||
+      (action === "handoff" && params.category?.trim().toLowerCase() === "cv"))) {
+    return toolText({ text: CV_INTAKE_PAUSED_REPLY });
+  }
   const service = actionService(action);
   if (!service || !isServiceEnabled(api, service)) return toolText({ text: serviceDisabledReply(api) });
   switch (action) {
@@ -292,7 +299,7 @@ export default {
         const authorized = Boolean(sender && channel.includes("whatsapp"));
         return {
           name: "public_service",
-          description: "Perform one supported Genaie public-service action for the authenticated WhatsApp sender: business_info returns general business facts; borehole_info matches borehole offers to customer location and requirements and returns current prices; handoff passes the customer to a person (send its reply text exactly); cv_maker_start starts the automated CV interview. Identity is bound by the runtime and cannot be supplied by the model.",
+          description: "Perform one supported Genaie public-service action for the authenticated WhatsApp sender. business_info returns general business facts. borehole_info matches offers to customer requirements and returns current prices. handoff passes the customer to a person (send its reply text exactly). Identity is bound by the runtime.",
           parameters: {
             type: "object",
             additionalProperties: false,
@@ -311,7 +318,7 @@ export default {
               },
               category: {
                 type: "string",
-                enum: HANDOFF_CATEGORIES,
+                enum: isCvIntakePaused() ? HANDOFF_CATEGORIES.filter((category) => category !== "cv") : HANDOFF_CATEGORIES,
                 description: "handoff only: what the customer wants.",
               },
               details: {
@@ -572,7 +579,10 @@ export default {
       if (!member) return; // leave to core access control
       // The handoff action is exposed in this mode too, so its silence must hold.
       if (isHandedOff(api, sender) || isTakenOverNow(api, sender)) return { handled: true };
-      if (isDisabledServiceRequestText(api, text)) {
+      if (isCvIntakePaused()) {
+        const reply = await handlePausedCvConversation(api, sender, text, accountId);
+        if (reply !== undefined) return reply;
+      } else if (isDisabledServiceRequestText(api, text)) {
         return { handled: true, text: serviceDisabledReply(api) };
       }
       api.logger?.info?.(

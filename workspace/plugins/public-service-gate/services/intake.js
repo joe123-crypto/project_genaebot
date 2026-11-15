@@ -4,7 +4,7 @@ import { isTakenOverNow } from "../lib/takeover.js";
 import { clearServiceState, loadServiceState } from "../lib/state.js";
 import { isStateResetRequest } from "./greeting.js";
 import { notifyAdminOfLead, recordLead } from "./membership.js";
-import { CV_SERVICE, handleCvOrder } from "./cv-maker.js";
+import { CV_SERVICE, handleCvOrder, handlePausedCvConversation, isCvIntakePaused } from "./cv-maker.js";
 
 // Open-DM intake. Everyone who DMs gets a real conversation with the public
 // agent, which answers from the business info page and hands customers off when
@@ -39,6 +39,8 @@ export async function handleIntake(api, sender, text, accountId = "default") {
     api.logger?.info?.("public-service-gate: handed-off customer message held silently");
     return { handled: true };
   }
+
+  if (isCvIntakePaused()) return handlePausedCvConversation(api, sender, text, accountId);
 
   // The automated CV order is a multi-turn flow driven by the CV maker CLI, so
   // once a sender is pinned to it every turn is relayed there. "cancel" (see

@@ -9,7 +9,7 @@
   "Munowanikwa muBindura papi?"), in the customer's language. Do not describe
   us as based in Bindura or give a suburb, street, address, office or yard.
 - Genaie advertises three partner businesses (fruit trees, borehole drilling,
-  building materials) and also offers its own services (CVs, marketing).
+  building materials) and also offers marketing services.
 
 ## Building materials
 
@@ -59,14 +59,6 @@ same supplier. Missing prices, travel charges, timing or site-specific details
 require a borehole handoff. Continue all enquiries through Genaie.
 Company identities and base locations are private and must not be disclosed.
 
-## CVs
-
-- Professional CV writing and CV revamping: $5, paid by EcoCash.
-- The customer can pick a template from the catalogue, or send one they like,
-  plus the details they want on the CV. They pay, then the CV is made.
-- An automated AI interview can collect the details for the CV right here in
-  the chat.
-
 ## Business services (Genaie)
 
 - Lead generation: we find potential customers for a business. The business
@@ -80,8 +72,7 @@ need.
 
 - We run a WhatsApp group that posts job vacancies. Job seekers can be added if
   they want.
-- We do not search for jobs or send applications for anyone. We can make or
-  revamp their CV.
+- We do not search for jobs or send applications for anyone.
 
 ## Website
 

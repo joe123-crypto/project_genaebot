@@ -7,10 +7,16 @@ import {
   runJsonCommand,
   sanitizeLogText,
 } from "../lib/runtime.js";
-import { clearServiceState, saveServiceState } from "../lib/state.js";
+import { clearServiceState, loadServiceState, saveServiceState } from "../lib/state.js";
+import { isStateResetRequest } from "./greeting.js";
 import { notifyAdminOfIntake } from "./membership.js";
 
 const CV_MAKER_UNAVAILABLE = "The CV maker isn't available here right now. Try again later.";
+export const CV_INTAKE_PAUSED_REPLY = "We aren’t taking new CV orders.";
+
+export function isCvIntakePaused() {
+  return process.env.GENAIE_CV_ACCEPT_NEW_ORDERS === "0";
+}
 
 // Defaults mirror openclaw.plugin.json / config/openclaw.template.json. The
 // payment destination is configuration, so it is never written anywhere else.
@@ -28,8 +34,8 @@ const DEFAULT_CV_PAYMENT_METHOD = "EcoCash";
 // The verb stems carry a trailing \w* so inflected forms match too (revamp ->
 // revamped/revamping, write -> writing, and the writ/wrote stems cover written).
 const CV_MAKER_REQUEST_PATTERNS = [
-  /\b(?:make|create|build|writ|wrote|design|revamp|redo|redesign|update|fix|improve|format|polish|prepare)\w*\b[^.!?]*\b(?:cv|résumé|resume|curriculum\s+vitae)\b/i,
-  /\b(?:cv|résumé|resume|curriculum\s+vitae)\b[^.!?]*\b(?:make|create|build|writ|wrote|design|revamp|redo|redesign|update|fix|improve|format|polish|prepare|help|need|want|service|maker|builder)\w*\b/i,
+  /\b(?:make|create|build|writ|wrote|design|revamp|redo|redesign|update|fix|improve|format|polish|prepare)\w*\b[^.!?]*\b(?:cvs?|résumés?|resumes?|curriculum\s+vitae)\b/i,
+  /\b(?:cvs?|résumés?|resumes?|curriculum\s+vitae)\b[^.!?]*\b(?:make|create|build|writ|wrote|design|revamp|redo|redesign|update|fix|improve|format|polish|prepare|help|need|want|service|maker|builder)\w*\b/i,
   /\b(?:cv|résumé|resume)\s+(?:maker|builder|writer|writing|service|help)\b/i,
 ];
 
@@ -37,6 +43,19 @@ export function isCvMakerRequest(text) {
   const compact = String(text ?? "").trim().replace(/\s+/g, " ");
   if (!compact || compact.length > 420) return false;
   return CV_MAKER_REQUEST_PATTERNS.some((pattern) => pattern.test(compact));
+}
+
+const CV_MENTION = /\b(?:cvs?|résumés?|resumes?|curriculum\s+vitae)\b/i;
+const CV_QUESTION = /\b(?:how\s+much|prices?|costs?|charges?|offer|sell|available|do\s+you\s+do|can\s+you\s+do)\b/i;
+const CV_ONLY = /^(?:cvs?|résumés?|resumes?|curriculum\s+vitae)[?!.,\s]*$/i;
+const CV_ORDER_FOLLOWUP = /(?:\b(?:continue|where|update|status|order)\b|\bresume\s+(?:my|the)\b)/i;
+
+export function isCvInquiry(text) {
+  const questions = String(text ?? "").split(/[;?!\n]+|\band\s+(?=(?:do|can|could|what|how|where|when)\b)/i)
+    .map((part) => part.trim()).filter(Boolean);
+  return questions.length > 0 && questions.every((question) =>
+    CV_ONLY.test(question) || isCvMakerRequest(question) ||
+    (CV_MENTION.test(question) && CV_QUESTION.test(question)));
 }
 
 function cvMakerIntro() {
@@ -51,6 +70,7 @@ Which would you like?`;
 // Classic allowlist mode only: the `cv_maker_start` agent tool. The open-DM gate
 // never reaches this, it runs the automated order flow below instead.
 export async function handleCvMakerRequest(api, sender, text = "") {
+  if (isCvIntakePaused()) return { handled: true, text: CV_INTAKE_PAUSED_REPLY };
   if (getPluginConfig(api).cvMakerEnabled !== true) {
     return { handled: true, text: CV_MAKER_UNAVAILABLE };
   }
@@ -114,6 +134,7 @@ const PAID_CLAIM_PATTERN =
 // anchor "cv approve --anything" would satisfy the character class and inject
 // an argparse flag into the CLI call below.
 const CV_DECISION_PATTERN = /^cv\s+(approve|deny)\s+([A-Za-z0-9][A-Za-z0-9_-]{5,11})$/i;
+const CV_ORDER_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{5,11}$/;
 
 export function isCvMakerEnabled(api) {
   return getPluginConfig(api).cvMakerEnabled === true;
@@ -215,6 +236,7 @@ async function resolveCvStep(api, sender, accountId = "default") {
 }
 
 export async function startCvOrder(api, sender, accountId = "default") {
+  if (isCvIntakePaused()) return { handled: true, text: CV_INTAKE_PAUSED_REPLY };
   let step = CV_STEP_INTERVIEW;
   try {
     step = await resolveCvStep(api, sender, accountId);
@@ -228,7 +250,7 @@ export async function startCvOrder(api, sender, accountId = "default") {
   return { handled: true, text: cvIntroText(api) };
 }
 
-async function relayInterviewTurn(api, sender, text, accountId) {
+async function relayInterviewTurn(api, sender, text, accountId, orderId) {
   let result;
   try {
     result = await runCvMaker(
@@ -236,7 +258,8 @@ async function relayInterviewTurn(api, sender, text, accountId) {
       // Single-argv "--opt=value" form: the message is whatever the user typed,
       // and argparse reads an option-lookalike token ("--skip", "-n/a") as a flag
       // when it arrives as its own argv entry, breaking the turn.
-      ["interview-turn", `--phone=${sender}`, `--message=${String(text ?? "")}`, ...accountArgs(accountId)],
+      ["interview-turn", `--phone=${sender}`, `--message=${String(text ?? "")}`, ...accountArgs(accountId),
+        ...(orderId ? [`--order=${orderId}`] : [])],
       CV_TURN_TIMEOUT_MS,
     );
   } catch (err) {
@@ -281,9 +304,63 @@ async function claimCvPayment(api, sender, accountId) {
   return { handled: true, text: CV_PAID_ACK };
 }
 
+// Resume using the durable order on the receiving line. A cached step may
+// belong to the old intro (which never created an order) or to a settled order.
+export async function handlePausedCvConversation(api, sender, text, accountId = "default") {
+  const state = loadServiceState(api, sender);
+  const pinned = state?.service === CV_SERVICE && (state.data?.accountId || "default") === accountId;
+  if (isStateResetRequest(text)) {
+    if (pinned) clearServiceState(api, sender);
+    return;
+  }
+
+  const inquiry = isCvInquiry(text);
+  const paid = isCvPaidClaim(text);
+  const followup = CV_MENTION.test(text) && CV_ORDER_FOLLOWUP.test(text);
+  // Bare CV follow-ups and payment claims can restore a lapsed pointer. Other
+  // chats do not incur an order-store lookup.
+  if (!pinned && !paid && !inquiry && !followup) return;
+
+  if (!isCvMakerEnabled(api)) {
+    return inquiry || followup ? { handled: true, text: CV_INTAKE_PAUSED_REPLY } : undefined;
+  }
+
+  let order;
+  try {
+    order = await runCvMaker(api, ["status", `--phone=${sender}`, ...accountArgs(accountId)], HELPER_TIMEOUT_MS);
+  } catch (error) {
+    if (isQueueFullError(error)) return busyReply();
+    logCvFailure(api, "resume status lookup", error);
+  }
+  if (order?.ok !== true) {
+    if (pinned || inquiry) return { handled: true, text: CV_MAKER_FAILED };
+    return;
+  }
+
+  const step = order.status === "interviewing" ? CV_STEP_INTERVIEW
+    : Object.hasOwn(STEP_FOR_STATUS, order.status) ? STEP_FOR_STATUS[order.status] : undefined;
+  if (typeof order.orderId !== "string" || !CV_ORDER_ID.test(order.orderId) || !step) {
+    if (pinned) clearServiceState(api, sender);
+    return inquiry || followup ? { handled: true, text: CV_INTAKE_PAUSED_REPLY } : undefined;
+  }
+
+  saveServiceState(api, sender, CV_SERVICE, step, { accountId });
+  if (step === CV_STEP_APPROVAL) return { handled: true, text: CV_REVIEW_PENDING };
+  if (step === CV_STEP_PAYMENT) {
+    return paid ? claimCvPayment(api, sender, accountId) : { handled: true, text: cvPaymentText(api) };
+  }
+  if (paid || inquiry || followup) {
+    return { handled: true, text: "Your CV interview is still open. Send your answer to continue." };
+  }
+  // The explicit ID makes a concurrent settlement safe. The CLI either finds
+  // this sender's old order or errors. It cannot create one on this path.
+  return relayInterviewTurn(api, sender, text, accountId, order.orderId);
+}
+
 // One user turn inside the CV flow. `state` is the sender's service-state slot,
 // already known to belong to this flow.
 export async function handleCvOrder(api, sender, text = "", state = null, accountId = "default") {
+  if (isCvIntakePaused()) return handlePausedCvConversation(api, sender, text, accountId);
   if (!isCvMakerEnabled(api)) {
     clearServiceState(api, sender);
     return { handled: true, text: CV_MAKER_UNAVAILABLE };
