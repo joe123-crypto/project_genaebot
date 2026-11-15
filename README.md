@@ -188,8 +188,9 @@ After the [one-time cutover](deploy/railway/README.md#one-time-wiring), the
 serialized `Deploy verified production commit` job is the production gate even
 when branch protection is unavailable. Superseded commits are skipped. The job
 archives the tested SHA, records the new deployment ID and image digest, and
-checks the baked source marker, selected runtime flags, both connected accounts
-and all ten campaigns. A failed release restores the exact
+checks the baked source marker, selected runtime flags, the main WhatsApp
+connection, and the required campaign jobs. A confirmed primary schedule pause
+removes that job from the startup requirement. A failed release restores the exact
 previous image and owned runtime settings, then checks its startup. Verification
 allows time for the entrypoint's 330-second stale-lease handoff before the gateway
 can begin connecting its accounts.

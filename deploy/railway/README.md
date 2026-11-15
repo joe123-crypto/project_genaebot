@@ -360,6 +360,10 @@ railway logs        # expect: [whatsapp] ... starting provider, [gateway] ready,
 
 The release artifact also retains the `GENAIE_RELEASE_READY` record emitted once
 at startup; it contains no credentials, phone numbers or raw account bindings.
+The startup check requires the primary job for each enabled campaign unless
+its primary schedule entry has a confirmed pause. A pause awaiting confirmation
+still requires the job. If any required jobs are missing, the check names them
+in the workflow log and rolls back the release.
 
 A `reply gates updated: ...` line instead means the live config had drifted and was
 corrected; `reply gates NOT synced: ...` means it was left alone and the previous
