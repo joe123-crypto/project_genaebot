@@ -483,6 +483,36 @@ class CacheTest(Harness):
         self.assertEqual(os.path.basename(path), "%s-cv-ad.png" % digest(PNG))
         self.assertEqual(os.path.basename(os.path.dirname(path)), "cv")
 
+    def test_a_filename_named_after_the_whole_advert_is_trimmed_to_fit(self):
+        # An operator's upload can be named after the advert it illustrates.
+        # 255 bytes is the kernel's limit on one path component, and the cached
+        # file is written through a ".<pid>.<hex>.tmp" sibling, so the name has
+        # to leave room for that too.
+        long_name = "Borehole-Drilling---Solar-Installation_-%s.jpeg" % ("x" * 200)
+        item = entry("cv", long_name, JPG)
+        name = os.path.basename(aa.cache_path(item, self.env))
+        self.assertLessEqual(len(name.encode("utf-8")) + aa.TMP_SUFFIX_BYTES,
+                             aa.NAME_MAX_BYTES)
+        # The digest still proves the content and the picture still reads as one.
+        self.assertTrue(name.startswith("%s-Borehole-Drilling" % digest(JPG)))
+        self.assertTrue(name.endswith(".jpeg"))
+
+    def test_an_asset_named_after_the_whole_advert_is_still_cached(self):
+        # The campaign this came from failed every send with ENAMETOOLONG.
+        long_name = "Are-you-ready-to-transition-to-complete-utility-independence_-%s.jpeg" % ("y" * 180)
+        item = entry("cv", long_name, JPG)
+        self.hold(JPG)
+        path = aa.ensure(item, self.env, opener=self.world, sleep=lambda _s: None)
+        with open(path, "rb") as handle:
+            self.assertEqual(handle.read(), JPG)
+
+    def test_a_filename_with_no_extension_is_trimmed_as_well(self):
+        item = entry("cv", "z" * 300, JPG)
+        name = os.path.basename(aa.cache_path(item, self.env))
+        self.assertLessEqual(len(name.encode("utf-8")) + aa.TMP_SUFFIX_BYTES,
+                             aa.NAME_MAX_BYTES)
+        self.assertTrue(name.startswith("%s-zzz" % digest(JPG)))
+
     def test_the_cache_lives_under_the_state_volumes_media_tree(self):
         # openclaw only reads outbound local media from an allowlist of roots.
         # <state>/media is on it; <state>/runtime is not.

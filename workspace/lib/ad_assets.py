@@ -549,14 +549,38 @@ def catalogue(env=None, *, max_age=CATALOGUE_MAX_AGE_SECONDS, now=None, log=None
 
 
 # ------------------------------------------------------------------- bytes ----
+# One path component cannot exceed this many bytes, and the cached file is
+# written through a ``.<pid>.<hex>.tmp`` sibling, so the name has to leave room
+# for that suffix as well as itself.
+NAME_MAX_BYTES = 255
+TMP_SUFFIX_BYTES = 24
+
+
+def _fit(name, budget=NAME_MAX_BYTES - TMP_SUFFIX_BYTES):
+    """``name`` shortened until it and its temp sibling fit one component.
+
+    Only the readable tail gives way: the digest stays whole, so the name still
+    proves the content, and the extension stays on the end, so the run log and
+    the gateway still see a picture. Operators name an upload after the whole
+    advert it illustrates, and such a name made every send of that campaign die
+    with ENAMETOOLONG -- losing the campaign rather than one picture."""
+    if len(name.encode("utf-8")) <= budget:
+        return name
+    stem, dot, extension = name.rpartition(".")
+    if not stem or len(extension) > 10:
+        stem, dot, extension = name, "", ""
+    room = max(1, budget - len((dot + extension).encode("utf-8")))
+    return stem.encode("utf-8")[:room].decode("utf-8", "ignore") + dot + extension
+
+
 def cache_path(entry, env=None):
-    """``<cache>/<campaign>/<sha256>-<filename>``.
+    """``<cache>/<campaign>/<sha256>-<filename>``, trimmed to fit the filesystem.
 
     The digest makes the name prove the content; the filename is kept after it
     because every dry-run line and every SEND FAILED line in the run log prints
     this path, and a bare hex blob would make those logs unreadable."""
     return os.path.join(cache_dir(env), entry["campaign"],
-                        "%s-%s" % (entry["sha256"], entry["filename"]))
+                        _fit("%s-%s" % (entry["sha256"], entry["filename"])))
 
 
 def _digest(path):
