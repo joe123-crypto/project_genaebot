@@ -236,8 +236,18 @@ class LiveViews:
                     return {"campaign": {key: campaign[key] for key in ("slug", "name", "source")} if campaign else None,
                             "captions": campaign["captions"] if campaign else [], "writes": model["context"]["writes"], "sync": sync}
                 if route == "detail":
-                    records = self.bridge.campaign_records(day, only_slug=slug, include_assets=True)
-                    return {"campaign": records[0] if records else None, "adAssets": self.bridge.ad_assets_status(), "sync": sync}
+                    records = self.bridge.campaign_records(day, only_slug=slug, include_assets=False)
+                    campaign = records[0] if records else None
+                    config = model["config"]
+                    root, note = ad_assets.display_origin(self.env)
+                    if campaign is not None:
+                        campaign["assets"] = [
+                            ad_assets.console_asset(entry, ad_assets.public_url(entry, self.env) if root else None)
+                            for entry in config["assets"].get(slug, [])
+                        ]
+                    return {"campaign": campaign, "sync": sync,
+                            "adAssets": {"mode": "r2", "source": "snapshot", "fetchedAt": config["fetchedAt"],
+                                         "warning": None, "lastCheck": None, "note": note}}
                 preview = self.bridge.preview(slug, day)
                 rows = preview.pop("groups")
                 return self.page("preview", rows, params, digest(preview | {"groups": rows}), sync,

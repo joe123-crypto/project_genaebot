@@ -1,6 +1,5 @@
 """Live display budgets and durable synchronization behavior, without network."""
 import datetime
-import importlib.machinery
 import json
 import os
 from pathlib import Path
@@ -21,13 +20,6 @@ class LiveIndexTests(Harness):
     def setUp(self):
         super().setUp()
         self.env["GENAIE_CONFIG_SOURCE"] = "firestore"
-        # console_campaigns.image_url addresses a campaign's pictures from the
-        # process environment, as it does in the gateway, so listing a campaign
-        # needs the origin set there and not only in the harness dict.
-        origin = patch.dict(os.environ, {
-            "GENAIE_AD_ASSETS_BASE_URL": self.env["GENAIE_AD_ASSETS_BASE_URL"]})
-        origin.start()
-        self.addCleanup(origin.stop)
         self.index = live.Index(self.env, clock=lambda: self.clock[0])
         self.addCleanup(self.index.close)
         self.index.touch = Mock()
@@ -181,11 +173,19 @@ class LiveIndexTests(Harness):
         self.firestore.store["assets"] = {"first": self.picture()}
         view = self.service()
         for origin in ("", "http://invalid.test"):
-            view.env["GENAIE_AD_ASSETS_BASE_URL"] = origin
-            view.cache = None
-            row = view.handle("campaigns", "q=cv")["rows"][0]
-            self.assertEqual(row["imageCount"], 1)
-            self.assertIsNone(row["thumbnailUrl"])
+            with self.subTest(origin=origin), patch.dict(os.environ, {"GENAIE_AD_ASSETS_BASE_URL": origin}):
+                view.env["GENAIE_AD_ASSETS_BASE_URL"] = origin
+                view.cache = None
+                campaigns = view.handle("campaigns", "q=cv")
+                row = campaigns["rows"][0]
+                self.assertEqual(row["imageCount"], 1)
+                self.assertIsNone(row["thumbnailUrl"])
+                self.assertFalse(campaigns["context"]["writes"]["campaignCreation"]["images"])
+                detail = view.handle("detail", "slug=cv")
+                self.assertEqual(detail["campaign"]["images"], ["cv-1.jpg"])
+                self.assertTrue(detail["campaign"]["captions"])
+                self.assertEqual([asset["url"] for asset in detail["campaign"]["assets"]], [None])
+                self.assertIn("GENAIE_AD_ASSETS_BASE_URL", detail["adAssets"]["note"])
 
     def test_summary_without_pictures_reports_zero_and_no_url(self):
         view = self.service()
@@ -218,6 +218,59 @@ class LiveIndexTests(Harness):
         # The thumbnail comes from the streamed asset document, not the gallery.
         self.assertTrue(row["thumbnailUrl"].startswith(
             self.env["GENAIE_AD_ASSETS_BASE_URL"] + "/ads/demo/"), row["thumbnailUrl"])
+
+    def test_campaign_detail_uses_assets_published_after_gallery_opened(self):
+        import console_campaigns
+        from test_ad_assets import entry
+        from test_console_campaigns import MemoryStore, payload
+
+        origin = self.env["GENAIE_AD_ASSETS_BASE_URL"]
+        existing = config.decode_fields(self.picture())
+        existing_url = origin + "/" + existing["key"]
+        self.firestore.store["assets"] = {"first": config.encode_fields(existing)}
+        view = self.service()
+
+        data = payload()
+        data["images"].extend(console_campaigns.images_from_assets([entry("demo", "two.png", b"second")]))
+        store = MemoryStore()
+        console_campaigns.create(data, store, env=self.env, verify=lambda *args: None)
+        asset_docs = store.docs["assets"]
+        asset_docs["disabled"] = config.encode_fields(entry("demo", "disabled.png", b"disabled", enabled=False))
+        asset_docs["invalid"] = config.encode_fields({"campaign": "demo", "filename": "invalid.png"})
+        changes = [("campaigns", "demo", store.docs["campaigns"]["demo"])]
+        changes.extend(("assets", name, fields) for name, fields in asset_docs.items())
+
+        # The separate catalogue would still have only the first campaign.
+        old_catalogue = {"source": "firestore", "fetchedAt": "2026-11-10T10:00:00Z", "note": None,
+                         "campaigns": {"cv": [dict(existing, url=existing_url)]}}
+        with patch.object(api.ad_assets, "catalogue", return_value=old_catalogue) as catalogue, \
+             patch.object(config, "fetch", side_effect=AssertionError("Firestore fetch")), \
+             patch.object(config, "get_document", side_effect=AssertionError("Firestore point read")), \
+             patch.object(config, "list_documents", side_effect=AssertionError("Firestore scan")), \
+             patch.object(config, "query_documents", side_effect=AssertionError("Firestore query")):
+            first = view.handle("detail", "slug=cv")
+            self.assertEqual([asset["url"] for asset in first["campaign"]["assets"]], [existing_url])
+            self.assertIsNone(view.handle("detail", "slug=demo")["campaign"])
+
+            stamp = "2026-11-10T10:01:00Z"
+            self.index.publish(changes, stamp, {})
+            detail = view.handle("detail", "slug=demo")
+            self.assertEqual(detail["campaign"]["images"], ["one.png", "two.png"])
+            self.assertEqual(detail["campaign"]["assets"], [
+                {"filename": image["filename"], "url": origin + "/" + image["key"],
+                 "sha256": image["sha256"], "bytes": image["bytes"],
+                 "contentType": image["contentType"], "rank": (index + 1) * 10}
+                for index, image in enumerate(data["images"])
+            ])
+            self.assertEqual(detail["adAssets"], {
+                "mode": "r2", "source": "snapshot", "fetchedAt": stamp,
+                "warning": None, "lastCheck": None, "note": None,
+            })
+            self.assertEqual(detail["sync"]["syncedAt"], stamp)
+            row = view.handle("campaigns", "q=demo")["rows"][0]
+            self.assertEqual(row["thumbnailUrl"], detail["campaign"]["assets"][0]["url"])
+            self.assertEqual(view.handle("detail", "slug=cv")["campaign"]["assets"], first["campaign"]["assets"])
+            catalogue.assert_not_called()
 
     def test_a_switched_off_campaign_keeps_its_slot_until_the_run_is_deleted(self):
         # cv is the fixture's switched-off campaign. The timeline shows such a
