@@ -266,19 +266,8 @@ def asset_catalogue():
 
 
 def asset_entries(slug):
-    """A campaign's pictures as the console displays them: the index's own
-    rotation order, each with the address its bytes are served from.
-
-    Separate from ``images`` rather than replacing it. ``images`` is what the
-    campaign's own ``post_ad.py`` declares and, until the R2 cutover, still what
-    a run attaches; this is what the index says. They agree today, and the
-    console is the right place to notice the day they stop."""
-    return [{"filename": entry["filename"],
-             "url": entry.get("url"),
-             "sha256": entry["sha256"],
-             "bytes": entry["bytes"],
-             "contentType": entry["content_type"],
-             "rank": entry["rank"]}
+    """Return picture metadata from the legacy bridge's asset catalogue."""
+    return [ad_assets.console_asset(entry, entry.get("url"))
             for entry in asset_catalogue()["campaigns"].get(slug, [])]
 
 
@@ -296,7 +285,7 @@ def campaign_records(day, only_slug=None, include_assets=True):
         # assemble() lifts the campaign switch out of the definition, so put it
         # back: the schedule fields read it as a plain document field.
         doc = {**(m.get("promos") or {}).get(row["slug"], {}), "enabled": row["storeEnabled"]}
-        row["assets"] = asset_entries(row["slug"]) if include_assets else row.get("assets", [])
+        row["assets"] = asset_entries(row["slug"]) if include_assets else []
         row.update(console_schedule.read_fields(doc, day, row["slug"]))
     records.sort(key=lambda row: (row["hour"] if row["hour"] is not None else 99, row["minute"] or 0))
     return records
@@ -474,7 +463,7 @@ def write_capabilities():
         "scheduleEditing": {"edit": os.path.isfile(str(Path(__file__).with_name("console-schedule"))),
                             "entries": os.path.isfile(str(Path(__file__).with_name("run-schedule-entry")))},
         "campaignCreation": {"create": True,
-                             "images": bool(ad_assets.base_url()),
+                             "images": ad_assets.display_origin()[0] is not None,
                              "scheduling": True},
     }
 

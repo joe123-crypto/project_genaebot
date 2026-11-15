@@ -185,6 +185,24 @@ def public_url(entry, env=None):
     return None if root is None else "%s/%s" % (root, entry["key"])
 
 
+def display_origin(env=None):
+    """Return the configured origin and a diagnostic for console reads."""
+    try:
+        root = base_url(env)
+    except AssetsUnavailable as ex:
+        return None, str(ex)
+    if root is None:
+        return None, ("%s is not set, so the index names each campaign's pictures but no "
+                      "address to fetch them from" % BASE_VAR)
+    return root, None
+
+
+def console_asset(entry, url):
+    """Format a validated index entry for the console's picture gallery."""
+    return {"filename": entry["filename"], "url": url, "sha256": entry["sha256"],
+            "bytes": entry["bytes"], "contentType": entry["content_type"], "rank": entry["rank"]}
+
+
 def index_path(env=None):
     env = os.environ if env is None else env
     slug = env.get("GENAIE_AD_ASSETS_SCOPE")
@@ -519,17 +537,7 @@ def catalogue(env=None, *, max_age=CATALOGUE_MAX_AGE_SECONDS, now=None, log=None
         if current is None:
             return {"campaigns": {}, "source": None, "fetchedAt": None, "note": why}
 
-    # Resolved once, outside the loop: a bad setting is one answer about the
-    # whole index, not the same complaint repeated per picture.
-    try:
-        root = base_url(env)
-    except AssetsUnavailable as ex:
-        root, setting = None, str(ex)
-    else:
-        setting = None if root is not None else (
-            "%s is not set, so the index names each campaign's pictures but no "
-            "address to fetch them from" % BASE_VAR)
-
+    root, setting = display_origin(env)
     campaigns = dict(
         (slug, [dict(entry, url=None if root is None else public_url(entry, env))
                 for entry in entries])
