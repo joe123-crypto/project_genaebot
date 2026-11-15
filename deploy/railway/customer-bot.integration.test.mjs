@@ -15,6 +15,11 @@ if (process.env.GENAIE_REQUIRE_INTEGRATION === '1' && !root) throw new Error('Pi
 const token = 'customer-bot-fixture-token-000000';
 const gatewayToken = 'fixture-gateway-token';
 
+function isActivityRecap(call) {
+  return call.messages.some((entry) =>
+    entry.role === 'system' && String(entry.content).startsWith('Write an Activity recap'));
+}
+
 async function temporaryPort() {
   const server = http.createServer();
   server.listen(0, '127.0.0.1');
@@ -84,7 +89,8 @@ test('published content reaches the next model call in the same customer WhatsAp
       requests.push(call);
       outgoing.writeHead(200, { 'content-type': 'text/event-stream' });
       const lastUser = call.messages.findLast((message) => message.role === 'user');
-      const reply = JSON.stringify(lastUser?.content ?? '').includes('What services do you offer?') ? legacyQuote : 'fixture-ok';
+      const reply = !isActivityRecap(call) && JSON.stringify(lastUser?.content ?? '').includes('What services do you offer?')
+        ? legacyQuote : 'fixture-ok';
       for (const [delta, finish_reason] of [[{ role: 'assistant', content: reply }, null], [{}, 'stop']]) {
         outgoing.write('data: ' + JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk', created: 1,
           model: 'customer-fixture', choices: [{ index: 0, delta, finish_reason }] }) + '\n\n');
@@ -154,45 +160,54 @@ test('published content reaches the next model call in the same customer WhatsAp
     await ready;
     const infer = async (agentId, target, isGroup = false, message = 'What do you sell and what do the bricks cost?') => {
       const previousCount = requests.length;
+      const turnTag = `fixture-turn-${randomUUID()}`;
       const response = await client.request('agent', {
-        message, agentId, to: target, channel: 'whatsapp', deliver: false,
+        message: `${message}\n${turnTag}`, agentId, to: target, channel: 'whatsapp', deliver: false,
         sessionKey: `agent:${agentId}:whatsapp:${isGroup ? 'group' : 'direct'}:${target}`,
         idempotencyKey: randomUUID(),
       }, { expectFinal: true, timeoutMs: 45_000 }).catch((error) => {
         throw new Error(`${error.message}\n${gateway.logs()}`, { cause: error });
       });
       assert.equal(response.status, 'ok', JSON.stringify(response));
-      assert.ok(requests.length > previousCount, gateway.logs());
-      return requests.at(-1).messages.filter((message) => message.role === 'system').map((message) => message.content).join('\n');
+      // Background recaps can include the turn's text as input. Select the
+      // conversation request for this turn, excluding those recaps.
+      const calls = requests.slice(previousCount);
+      const call = calls.find((request) => !isActivityRecap(request) && JSON.stringify(request.messages).includes(turnTag));
+      assert.ok(call, gateway.logs());
+      return {
+        system: call.messages.filter((message) => message.role === 'system').map((message) => message.content).join('\n'),
+        priorReplies: call.messages.filter((message) => message.role === 'assistant'),
+        tools: call.tools,
+      };
     };
 
     const initial = await read();
     const draft = { instructions: initial.instructions + '\nStart with the words: Fixture short reply.',
       knowledge: initial.knowledge.replace('$95 per 1000', '$107 per 1000'), expectedRevision: initial.revision,
       actor: 'Fixture operator' };
-    const before = await infer('public', '+19995550123', false, 'What services do you offer?');
+    const { system: before, tools: beforeTools } = await infer('public', '+19995550123', false, 'What services do you offer?');
     assert.match(before, /\$95 per 1000/, gateway.logs());
     assert.doesNotMatch(before, /Fixture short reply|\$107 per 1000/);
     assert.match(before, /New CV orders are closed/);
+    assert.match(before, /One or two short sentences is a whole reply/);
     assert.doesNotMatch(before, /CV[^\n]*\$5|\$5[^\n]*CV|cv_maker_start/);
-    assert.doesNotMatch(JSON.stringify(requests.at(-1).tools), /cv_maker_start/);
+    assert.doesNotMatch(JSON.stringify(beforeTools), /cv_maker_start/);
     const published = await read(draft);
     assert.notEqual(published.revision, initial.revision);
-    const after = await infer('public', '+19995550123');
+    const { system: after, priorReplies, tools: afterTools } = await infer('public', '+19995550123');
     assert.match(after, /Fixture short reply/);
     assert.match(after, /\$107 per 1000/);
     assert.doesNotMatch(after, /\$95 per 1000/);
-    const priorReplies = requests.at(-1).messages.filter((message) => message.role === 'assistant');
     assert.match(JSON.stringify(priorReplies), /We make CVs for US\$5\./);
     assert.match(after, /A past offer, quote, or acceptance in the conversation does not change this/);
     assert.doesNotMatch(after, /CV[^\n]*\$5|\$5[^\n]*CV|cv_maker_start/);
-    assert.doesNotMatch(JSON.stringify(requests.at(-1).tools), /cv_maker_start/);
-    assert.doesNotMatch(await infer('main', '+19995550124'), /Fixture short reply|\$107 per 1000/);
-    assert.doesNotMatch(await infer('public', '1234@g.us', true), /Fixture short reply|\$107 per 1000/);
+    assert.doesNotMatch(JSON.stringify(afterTools), /cv_maker_start/);
+    assert.doesNotMatch((await infer('main', '+19995550124')).system, /Fixture short reply|\$107 per 1000/);
+    assert.doesNotMatch((await infer('public', '1234@g.us', true)).system, /Fixture short reply|\$107 per 1000/);
 
     // Corrupt active knowledge must not quietly bring back a shipped price.
     await fs.writeFile(path.join(state, 'runtime', 'customer-bot', 'published.json'), '{');
-    const unavailable = await infer('public', '+19995550123');
+    const { system: unavailable } = await infer('public', '+19995550123');
     assert.match(unavailable, /use the handoff action instead/);
     assert.doesNotMatch(unavailable, /\$95 per 1000|\$107 per 1000/);
   });

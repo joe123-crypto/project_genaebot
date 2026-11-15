@@ -8,7 +8,6 @@ import { expandHome, getPluginConfig } from "./config.js";
 const TEXT_LIMIT = 16 * 1024;
 const SNAPSHOT_LIMIT = 256 * 1024;
 const unavailable = "Business info is unavailable right now. Do not quote any price or detail from chat history; use the handoff action instead.";
-const defaultInstructions = new URL("../../../docs/public-whatsapp-reply-instructions.txt", import.meta.url);
 const decoder = new TextDecoder("utf-8", { fatal: true });
 
 function stateDirectory() {
@@ -96,7 +95,8 @@ export function buildCustomerBotContext(api, ctx) {
   let instructions = snapshot?.instructions;
   if (!instructions) {
     try {
-      instructions = clean(readBounded(defaultInstructions, TEXT_LIMIT));
+      const file = path.join(stateDirectory(), "workspace", "docs", "public-whatsapp-reply-instructions.txt");
+      instructions = clean(readBounded(file, TEXT_LIMIT));
     } catch {
       api.logger?.warn?.("public-service-gate: default customer reply instructions unavailable");
     }
