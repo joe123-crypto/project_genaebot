@@ -44,14 +44,21 @@ import promo_membership as pm  # noqa: E402
 DAY = date(2026, 10, 15)
 
 
-def membership(groups, caps_enabled=True, bands=None, promos=("a", "b", "c", "d")):
+def membership(groups, caps_enabled=True, bands=None, promos=("a", "b", "c", "d"),
+               rotation_enabled=None):
+    defaults = {
+        "activity": "normal",
+        "caps_enabled": caps_enabled,
+        "bands": bands or {"busy": [6, 10], "normal": [4, 6], "quiet": [1, 3]},
+    }
+    # Left out entirely by default, which is the shape of every config written
+    # before the switch existed -- so the suite's other tests also pin that an
+    # absent key still rotates.
+    if rotation_enabled is not None:
+        defaults["rotation_enabled"] = rotation_enabled
     return {
         "version": 1,
-        "defaults": {
-            "activity": "normal",
-            "caps_enabled": caps_enabled,
-            "bands": bands or {"busy": [6, 10], "normal": [4, 6], "quiet": [1, 3]},
-        },
+        "defaults": defaults,
         "promos": dict((p, {}) for p in promos),
         "groups": groups,
     }
@@ -130,6 +137,107 @@ class RotationTests(unittest.TestCase):
     def test_rotation_order_is_a_permutation(self):
         order = pc.rotation_order(self.JID, self.PROMOS)
         self.assertEqual(sorted(order), sorted(self.PROMOS))
+
+
+class RotationSwitchTests(unittest.TestCase):
+    """The operator's rotation switch. On unless it is explicitly false, because
+    a config written before the key existed must not read as a request to pin
+    every capped group to one fixed set of campaigns."""
+
+    PROMOS = ["borehole-drilling", "fruit-trees", "cv", "genaie", "genaie-leads"]
+    JID = "120363292471414376@g.us"
+
+    def test_absent_means_on(self):
+        self.assertIs(pm.rotation_enabled(membership({})), True)
+        self.assertIs(pm.rotation_enabled({}), True)
+        self.assertIs(pm.rotation_enabled(None), True)
+
+    def test_false_means_off(self):
+        self.assertIs(pm.rotation_enabled(membership({}, rotation_enabled=False)), False)
+
+    def test_true_means_on(self):
+        self.assertIs(pm.rotation_enabled(membership({}, rotation_enabled=True)), True)
+
+    def test_switched_off_pins_the_same_set_every_day(self):
+        sets = set(tuple(pc.allowed_promos(self.JID, self.PROMOS, 2,
+                                           day=DAY + timedelta(days=offset),
+                                           rotate=False))
+                   for offset in range(len(self.PROMOS) * 2))
+        self.assertEqual(len(sets), 1, "the window still moves with rotation off")
+
+    def test_switched_off_starves_the_promos_past_the_cap(self):
+        """The cost of switching it off, pinned so it cannot be mistaken for a
+        cosmetic setting: the campaigns outside the window never post."""
+        seen = set()
+        for offset in range(len(self.PROMOS) * 2):
+            seen.update(pc.allowed_promos(self.JID, self.PROMOS, 2,
+                                          day=DAY + timedelta(days=offset),
+                                          rotate=False))
+        self.assertEqual(len(seen), 2)
+        self.assertTrue(set(self.PROMOS) - seen)
+
+    def test_switched_off_keeps_the_rotation_window_it_would_have_had(self):
+        """Off pins the window to the head of the same circular order, so
+        switching back on resumes mid-cycle instead of reshuffling."""
+        order = pc.rotation_order(self.JID, self.PROMOS)
+        pinned = pc.allowed_promos(self.JID, self.PROMOS, 2, day=DAY, rotate=False)
+        self.assertEqual(set(pinned), set(order[:2]))
+
+    def test_on_still_rotates(self):
+        sets = set(tuple(pc.allowed_promos(self.JID, self.PROMOS, 2,
+                                           day=DAY + timedelta(days=offset),
+                                           rotate=True))
+                   for offset in range(len(self.PROMOS)))
+        self.assertGreater(len(sets), 1)
+
+    def test_on_is_the_default_for_a_direct_call(self):
+        for offset in range(len(self.PROMOS)):
+            day = DAY + timedelta(days=offset)
+            self.assertEqual(pc.allowed_promos(self.JID, self.PROMOS, 2, day=day),
+                             pc.allowed_promos(self.JID, self.PROMOS, 2, day=day,
+                                               rotate=True))
+
+    def test_plan_reads_the_switch_off_the_membership(self):
+        groups = {"1@g.us": {"promos": ["a", "b", "c", "d"], "activity": "quiet"}}
+        rotating = membership(groups)
+        pinned = membership(groups, rotation_enabled=False)
+        days = [DAY + timedelta(days=offset) for offset in range(4)]
+        self.assertGreater(
+            len(set(tuple(pc.plan(rotating, ["1@g.us"], day=d, refs={})["1@g.us"]["allowed"])
+                    for d in days)), 1)
+        self.assertEqual(
+            len(set(tuple(pc.plan(pinned, ["1@g.us"], day=d, refs={})["1@g.us"]["allowed"])
+                    for d in days)), 1)
+
+    def test_an_explicit_rotate_overrides_the_membership(self):
+        m = membership({"1@g.us": {"promos": ["a", "b", "c", "d"], "activity": "quiet"}},
+                       rotation_enabled=False)
+        days = [DAY + timedelta(days=offset) for offset in range(4)]
+        self.assertGreater(
+            len(set(tuple(pc.plan(m, ["1@g.us"], day=d, refs={}, rotate=True)["1@g.us"]["allowed"])
+                    for d in days)), 1)
+
+    def test_filter_for_promo_honours_the_switch(self):
+        groups = {"1@g.us": {"promos": ["a", "b", "c", "d"], "activity": "quiet"}}
+        pinned = membership(groups, rotation_enabled=False)
+        answers = set()
+        for offset in range(8):
+            kept, _ = pc.filter_for_promo(pinned, "a", ["1@g.us"],
+                                          day=DAY + timedelta(days=offset), refs={})
+            answers.add(tuple(kept))
+        self.assertEqual(len(answers), 1, "a pinned group's answer must not move")
+
+    def test_a_send_run_obeys_the_switch_without_being_told(self):
+        """``apply_caps`` passes only the resolved membership, so the switch has
+        to travel with it rather than needing every caller to remember it."""
+        groups = {"1@g.us": {"promos": ["a", "b", "c", "d"], "activity": "quiet"}}
+        pinned = membership(groups, rotation_enabled=False)
+        answers = set()
+        for offset in range(8):
+            kept, _ = pb.apply_caps("a-promo", ["1@g.us"], DAY + timedelta(days=offset),
+                                    record=False, membership=pinned)
+            answers.add(tuple(kept))
+        self.assertEqual(len(answers), 1)
 
 
 class CapTests(unittest.TestCase):

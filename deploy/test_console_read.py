@@ -17,6 +17,7 @@ unittest-style so deploy/ci-check.sh, which runs each test file with plain
 ``python3``, executes them.
 """
 
+import datetime
 import json
 import os
 import subprocess
@@ -42,10 +43,11 @@ WRITE_KEY = "GCP_SERVICE_ACCOUNT_WRITE_B64"
 GROUP_KEYS = {
     "jid", "name", "source", "status", "activity", "account", "dailyCapOverride",
     "promos", "pausedPromos", "weekly", "note", "cap", "replyScore", "allowedToday", "metrics",
+    "rotation",
 }
 PREVIEW_KEYS = {
     "jid", "name", "account", "contactNumber", "ref", "variant", "caption",
-    "cap", "paused", "sendsToday", "allowedToday", "weekly",
+    "cap", "paused", "sendsToday", "allowedToday", "nextDay", "weekly",
 }
 CAMPAIGN_KEYS = {
     "slug", "name", "cron", "hour", "minute", "timezone",
@@ -473,8 +475,9 @@ class ConsoleReadTests(BridgeCase):
 
     def test_cap_settings_come_in_the_shape_a_form_edits(self):
         settings = self.ok("overview", "--date", DAY)["capSettings"]
-        self.assertEqual(set(settings), {"enabled", "defaultActivity", "bands"})
+        self.assertEqual(set(settings), {"enabled", "rotation", "defaultActivity", "bands"})
         self.assertIs(settings["enabled"], promo_membership.caps_enabled(self.config))
+        self.assertIs(settings["rotation"], promo_membership.rotation_enabled(self.config))
         self.assertEqual(settings["bands"], dict(
             (tier, [low, high]) for tier, (low, high)
             in promo_membership.bands(self.config).items()))
@@ -483,6 +486,131 @@ class ConsoleReadTests(BridgeCase):
         assets = self.ok("campaigns", "--date", DAY)["adAssets"]
         self.assertEqual(assets["mode"], "r2")
         self.assertIsNone(assets["warning"])
+
+
+class RotationBlockTests(BridgeCase):
+    """What a group row says about the rotation that shares out its allowance.
+
+    The console shows a held-back campaign as held back *today*, not dropped, so
+    the bridge has to say when it next posts. The dates are checked by asking
+    the bridge itself for that day rather than by recomputing the rotation --
+    a look-ahead that agreed with a second implementation but not with the run
+    would be worse than none."""
+
+    def rows(self, date=DAY):
+        return {row["jid"]: row for row in self.ok("groups", "--date", date)["groups"]}
+
+    def over_cap(self, rows):
+        return {jid: row for jid, row in rows.items()
+                if row["rotation"] is not None}
+
+    def eligible(self, row, off):
+        """The campaigns that take a turn: the group's assignments less the ones
+        switched off and the ones it is paused for."""
+        return set(row["promos"]) - set(row["pausedPromos"]) - set(off)
+
+    def test_the_block_is_there_exactly_when_the_cap_bites(self):
+        payload = self.ok("groups", "--date", DAY)
+        off = payload["disabledPromos"]
+        under = 0
+        for row in payload["groups"]:
+            bites = (row["status"] == "active" and row["cap"] is not None
+                     and 0 < row["cap"] < len(self.eligible(row, off)))
+            self.assertEqual(row["rotation"] is not None, bites, row["jid"])
+            under += not bites
+        self.assertTrue(under, "expected the fixture to have groups inside their cap")
+
+    def test_the_fixture_has_a_group_whose_cap_bites(self):
+        over = self.over_cap(self.rows())
+        self.assertTrue(over, "expected the fixture to have a capped group")
+        for jid, row in over.items():
+            self.assertGreater(row["rotation"]["cycleDays"], row["cap"], jid)
+            self.assertLess(len(row["allowedToday"]), row["rotation"]["cycleDays"], jid)
+
+    def test_every_held_back_campaign_is_given_a_next_day(self):
+        for jid, row in self.over_cap(self.rows()).items():
+            held = set(row["promos"]) - set(row["allowedToday"]) - set(row["pausedPromos"])
+            held -= set(self.ok("groups", "--date", DAY)["disabledPromos"])
+            self.assertEqual(set(row["rotation"]["nextDay"]), held, jid)
+
+    def test_a_next_day_is_a_day_that_campaign_really_posts(self):
+        """The promise the tooltip makes, checked against the bridge's own
+        answer for that date."""
+        checked = 0
+        for jid, row in self.over_cap(self.rows()).items():
+            for promo, when in row["rotation"]["nextDay"].items():
+                ahead = self.rows(when)[jid]
+                self.assertIn(promo, ahead["allowedToday"],
+                              "%s was promised %s on %s" % (jid, promo, when))
+                checked += 1
+        self.assertTrue(checked, "no next-day promise was exercised")
+
+    def test_a_preview_row_says_when_this_campaign_returns_to_the_group(self):
+        """The campaigns screen asks a narrower question than the groups table:
+        not "who is held back here" but "when does this one post here again"."""
+        checked = 0
+        for slug in ("alpha", "beta"):
+            for row in self.ok("preview", slug, "--date", DAY)["groups"]:
+                if row["sendsToday"] or row["paused"] or row["cap"] is None:
+                    continue
+                if slug in row["allowedToday"] or not row["allowedToday"]:
+                    continue
+                self.assertIsNotNone(row["nextDay"], "%s/%s" % (slug, row["jid"]))
+                ahead = self.ok("preview", slug, "--date", row["nextDay"])["groups"]
+                posts = next(r for r in ahead if r["jid"] == row["jid"])
+                self.assertIn(slug, posts["allowedToday"])
+                checked += 1
+        self.assertTrue(checked, "no held-back preview row was exercised")
+
+    def test_a_preview_row_that_posts_today_is_promised_nothing(self):
+        for slug in ("alpha", "beta"):
+            for row in self.ok("preview", slug, "--date", DAY)["groups"]:
+                if slug in row["allowedToday"]:
+                    self.assertIsNone(row["nextDay"], "%s/%s" % (slug, row["jid"]))
+
+    def test_a_next_day_is_the_first_such_day(self):
+        for jid, row in self.over_cap(self.rows()).items():
+            for promo, when in row["rotation"]["nextDay"].items():
+                earlier = [d.isoformat() for d in
+                           (promo_fixture.DAY + datetime.timedelta(days=step)
+                            for step in range(1, row["rotation"]["cycleDays"] + 1))
+                           if d.isoformat() < when]
+                for day in earlier:
+                    self.assertNotIn(promo, self.rows(day)[jid]["allowedToday"],
+                                     "%s posts %s before the promised %s" % (jid, promo, when))
+
+
+class PinnedRotationTests(BridgeCase):
+    """The same rows with the operator's rotation switch off."""
+
+    @property
+    def CONFIG(self):
+        config = promo_fixture.membership()
+        config["defaults"]["rotation_enabled"] = False
+        return config
+
+    def test_the_switch_is_reported(self):
+        self.assertIs(self.ok("overview", "--date", DAY)["capSettings"]["rotation"], False)
+
+    def test_a_held_back_campaign_is_promised_no_day(self):
+        """Honest rather than helpful: with the rotation off, a campaign past
+        the cap does not post again until it is switched back on."""
+        rows = [row for row in self.ok("groups", "--date", DAY)["groups"]
+                if row["rotation"] is not None]
+        self.assertTrue(rows, "expected the fixture to have a capped group")
+        for row in rows:
+            self.assertEqual(row["rotation"]["nextDay"], {}, row["jid"])
+            self.assertGreater(row["rotation"]["cycleDays"], row["cap"], row["jid"])
+
+    def test_the_allowance_stops_moving(self):
+        days = [(promo_fixture.DAY + datetime.timedelta(days=step)).isoformat()
+                for step in range(4)]
+        answers = {}
+        for day in days:
+            for row in self.ok("groups", "--date", day)["groups"]:
+                answers.setdefault(row["jid"], set()).add(tuple(row["allowedToday"]))
+        pinned = [jid for jid, seen in answers.items() if len(seen) > 1]
+        self.assertEqual(pinned, [], "the allowance still rotates with the switch off")
 
 
 class UnverifiedScheduleTests(BridgeCase):

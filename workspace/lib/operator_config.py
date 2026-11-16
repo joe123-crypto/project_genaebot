@@ -9,7 +9,7 @@ so nothing downstream has to know where the data came from.
 Collections, one document per thing, field names identical to membership.json::
 
     settings/defaults   version, _comment, activity, caps_enabled,
-                        contact_account, bands
+                        rotation_enabled, contact_account, bands
     lines/<id>          number                       (defaults.accounts[id])
     campaigns/<slug>    enabled, comment, weekly_comment, dir?
                                                      (promos[slug] + the switch)
