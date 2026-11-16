@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """Act on one group's WhatsApp membership and local records.
 
-The third console bridge, beside ``console-read`` and ``console-write``, and the
-only one that does not touch Firestore. It covers the two things a config delete
-cannot do for itself:
+The console bridge for group actions on the gateway and its state volume:
 
 * **leave** -- take the account's number out of the WhatsApp group. Nothing in
   this process can do that: the gateway exposes no RPC for it and a second
@@ -13,6 +11,8 @@ cannot do for itself:
   result. This waits for that result.
 * **clearRecords** -- forget the per-campaign send history for the group. That is
   ordinary file work and happens here, in ``group_cleanup``.
+* **observedThrough** -- separately remove an observation from Unassigned.
+  This request records a cutoff in the discovery store.
 
 One request per run, read from stdin as JSON::
 
@@ -51,6 +51,7 @@ if LIB_DIR not in sys.path:
     sys.path.insert(0, LIB_DIR)
 
 import group_cleanup  # noqa: E402
+import group_discovery  # noqa: E402
 
 MAX_REQUEST_BYTES = 64 * 1024
 REQUIRED = ("jid",)
@@ -99,6 +100,10 @@ def parse_request(raw):
         raise Refused("request is not valid JSON: %s" % ex)
     if not isinstance(request, dict):
         raise Refused("request must be a JSON object")
+    if "observedThrough" in request:
+        if set(request) != {"jid", "observedThrough"}:
+            raise Refused("A discovery removal requires a group ID and observation time.")
+        return request
     missing = [name for name in REQUIRED if name not in request]
     if missing:
         raise Refused("request is missing %s" % ", ".join(missing))
@@ -194,23 +199,41 @@ def main(argv, stdin=None, stdout=None, env=None):
     stdout = stdout or sys.stdout
     try:
         request = parse_request(stdin.read(MAX_REQUEST_BYTES + 1))
-        jid, account = request["jid"], request["account"]
-        cleared = {"requested": False}
-        leave = {"requested": False}
-        # Records first: it cannot fail in a way that should stop a leave, and
-        # doing it after an unconfirmed leave would mean reporting two unknowns.
-        if request.get("clearRecords"):
-            cleared = dict(group_cleanup.clear_group(jid, env=env), requested=True)
-        if request.get("leave"):
-            leave = dict(request_leave(jid, account, env=env), requested=True)
+        if "observedThrough" in request:
+            result = remove_discovery(request, env)
+        else:
+            jid, account = request["jid"], request["account"]
+            cleared = {"requested": False}
+            leave = {"requested": False}
+            # Records first: it cannot fail in a way that should stop a leave, and
+            # doing it after an unconfirmed leave would mean reporting two unknowns.
+            if request.get("clearRecords"):
+                cleared = dict(group_cleanup.clear_group(jid, env=env), requested=True)
+            if request.get("leave"):
+                leave = dict(request_leave(jid, account, env=env), requested=True)
+            result = {"jid": jid, "account": account, "leave": leave, "cleared": cleared}
     except Refused as ex:
         payload = {"ok": False, "status": ex.status, "error": str(ex), "problems": []}
     else:
-        payload = {"ok": True, "status": 200, "jid": jid, "account": account,
-                   "leave": leave, "cleared": cleared}
+        payload = {"ok": True, "status": 200, **result}
     json.dump(payload, stdout, ensure_ascii=False)
     stdout.write("\n")
     return 0 if payload["ok"] else 1
+
+
+def remove_discovery(request, env):
+    env = os.environ if env is None else env
+    if (env.get("GENAIE_GROUP_ACTIONS") or "").strip() == "0":
+        raise Refused("Group actions are switched off on this gateway.", status=503)
+    try:
+        group_discovery.remove(request["jid"], request["observedThrough"], env)
+    except ValueError as exc:
+        raise Refused(str(exc)) from exc
+    except group_discovery.ObservationChanged as exc:
+        raise Refused(str(exc), status=409) from exc
+    except group_discovery.DiscoveryUnavailable as exc:
+        raise Refused(str(exc), status=503) from exc
+    return request
 
 
 if __name__ == "__main__":

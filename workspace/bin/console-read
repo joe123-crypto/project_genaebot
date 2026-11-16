@@ -487,6 +487,7 @@ def action_capabilities():
     return {
         "leaveGroup": bool(present and not switched_off),
         "clearRecords": bool(present and not switched_off),
+        "removeDiscovery": bool(present and not switched_off),
     }
 
 
@@ -669,7 +670,7 @@ def main(argv):
             payload = preview(slug, day)
         else:
             payload = overview(day)
-    except BridgeError as exc:
+    except (BridgeError, group_discovery.DiscoveryUnavailable) as exc:
         json.dump({"error": str(exc), **getattr(exc, "metadata", {})}, sys.stdout)
         sys.stdout.write("\n")
         return EXIT_NOT_FOUND if isinstance(exc, NotFound) else EXIT_ERROR

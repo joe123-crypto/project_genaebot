@@ -95,10 +95,10 @@ class Harness(unittest.TestCase):
         path.write_text(source, encoding="utf-8")
         return str(path)
 
-    def serve(self, action_source=ECHO_ACTION, token=TOKEN):
+    def serve(self, action_source=ECHO_ACTION, token=TOKEN, *, action_path=None):
         read_bridge = self.script("read.py", READ_ECHO)
         write_bridge = self.script("write.py", ECHO_ACTION)
-        action_bridge = self.script("action.py", action_source)
+        action_bridge = str(action_path) if action_path else self.script("action.py", action_source)
         server = API.build_server("127.0.0.1", 0, token, read_bridge, write_bridge,
                                   action_bridge)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -130,6 +130,34 @@ class Harness(unittest.TestCase):
 
 
 class GroupActionRouteTests(Harness):
+    def test_remove_discovery_validates_and_persists_without_fencing_configuration(self):
+        stamp = "2026-11-08T06:00:00.000Z"
+        payload = {"observedThrough": stamp}
+        directory = Path(self.directory.name) / "runtime/whatsapp-groups"
+        directory.mkdir(parents=True)
+        (directory / "ads.json").write_text(json.dumps({
+            "version": 1, "accountId": "ads", "lastSuccessAt": stamp,
+            "groups": {JID: {"name": "Market", "firstSeenAt": stamp, "lastSeenAt": stamp}},
+        }))
+        with unittest.mock.patch.dict(os.environ, {"OPENCLAW_STATE_DIR": self.directory.name}):
+            base = self.serve(action_path=ROOT / "workspace/bin/console-group-action")
+            live = self.server.console["live"] = unittest.mock.Mock()
+            route = self.route().removesuffix("actions") + "remove-discovery"
+            self.assertEqual(self.post(base, route, payload, token=None)[0], 401)
+            self.assertEqual(self.post(base, route, {**payload, "leave": True})[0], 400)
+            self.assertEqual(self.post(base, self.route(), payload)[0], 400)
+            self.assertEqual(self.post(base, route, {"observedThrough": "invalid"})[0], 400)
+            self.assertEqual(self.post(base, route, {"observedThrough": "2026-11-08T05:00:00Z"})[0], 409)
+            for _ in range(2):
+                status, body = self.post(base, route, payload)
+                self.assertEqual(status, 200)
+                self.assertEqual(json.loads(body), {"ok": True, "status": 200, "jid": JID, **payload})
+            self.switch("0")
+            self.assertEqual(self.post(base, route, payload)[0], 503)
+            # The legacy /actions validation path is separate from the removal route.
+            self.assertEqual(live.fence.call_count, 1)
+            self.assertTrue((directory.parent / "whatsapp-group-removals/cutoffs.sqlite3").is_file())
+
     def test_a_request_reaches_the_bridge_as_sent(self):
         base = self.serve()
         status, body = self.post(base, self.route(),

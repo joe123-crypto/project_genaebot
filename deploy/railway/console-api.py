@@ -55,6 +55,8 @@ which is how the write surface ships inert.
 Group actions (bearer, no cache):
   POST /internal/console/groups/<jid>/actions
        {"leave": true, "clearRecords": true, "account": "ads", "actor": "..."}
+  POST /internal/console/groups/<jid>/remove-discovery
+       {"observedThrough": "2026-11-16T00:41:00.000Z"}
 
 The two things a config delete cannot do for itself: take the account's number
 out of the WhatsApp group, and forget the per-campaign send history for it. At
@@ -614,19 +616,8 @@ class Handler(BaseHTTPRequestHandler):
             self.server.console["reconcileWake"].set()
         self.send_any(status, body, True)
 
-    def group_action_request(self, route, query, with_body=True):
-        """POST /internal/console/groups/<jid>/actions
-
-        Body: {"leave": true, "clearRecords": true, "account": "ads",
-        "actor": "..."}. The jid is percent-encoded by the caller, because it
-        carries an "@".
-
-        Unlike the config route this writes no Firestore document and needs no
-        write key: it takes the account's number out of a WhatsApp group and
-        forgets what the bot stored about it. Both are the gateway's to do, so
-        what gates this route is whether group actions are switched on, and the
-        judgement about any particular value is console-group-action's.
-        """
+    def group_action_request(self, route, query, with_body=True, *, removal=False):
+        """Validate the envelope before handing a volume action to the bridge."""
         if query:
             self.send_any(400, b'{"error":"Group action routes take no query '
                                b'parameters."}', with_body)
@@ -640,7 +631,8 @@ class Handler(BaseHTTPRequestHandler):
             doc_id = unquote(parts[1]) if len(parts) == 3 else ""
         except UnicodeError:
             doc_id = ""
-        if not (len(parts) == 3 and parts[0] == "groups" and parts[2] == "actions"
+        operation = "remove-discovery" if removal else "actions"
+        if not (len(parts) == 3 and parts[0] == "groups" and parts[2] == operation
                 and DOC_ID_RE.match(doc_id)):
             self.send_any(404, b'{"error":"not found"}', with_body)
             return
@@ -652,34 +644,35 @@ class Handler(BaseHTTPRequestHandler):
             if self.headers.get("Content-Type", "").split(";", 1)[0].strip() != "application/json":
                 raise ValueError()
             payload = json.loads(self.rfile.read(size))
-            if not isinstance(payload, dict) or set(payload) - GROUP_ACTION_KEYS:
+            if not isinstance(payload, dict):
                 raise ValueError()
-            for name in ("leave", "clearRecords"):
-                if name in payload and not isinstance(payload[name], bool):
+            if removal:
+                if set(payload) != {"observedThrough"} or not isinstance(payload["observedThrough"], str):
                     raise ValueError()
-            # A request that asks for nothing is a mistake, not a no-op: the
-            # caller meant to tick something and would be told it was done.
-            if not (payload.get("leave") or payload.get("clearRecords")):
-                raise ValueError()
+            else:
+                if set(payload) - GROUP_ACTION_KEYS:
+                    raise ValueError()
+                for name in ("leave", "clearRecords"):
+                    if name in payload and not isinstance(payload[name], bool):
+                        raise ValueError()
+                if not (payload.get("leave") or payload.get("clearRecords")):
+                    raise ValueError()
         except (ValueError, TypeError, UnicodeError):
             self.send_any(400, b'{"error":"Invalid group action."}', True)
             return
 
-        request = {"jid": doc_id}
-        for name in ("leave", "clearRecords", "account", "actor"):
-            if name in payload:
-                request[name] = payload[name]
-
-        status, body = self.server.console["actions"].run(request)
-        # Leaving a group changes what discovery will list, so every cached read
-        # of the groups payload is now wrong.
-        bridge = self.server.console["bridge"]
-        with bridge.lock:
-            bridge.cache.clear()
+        status, body = self.server.console["actions"].run({"jid": doc_id, **payload})
+        self.server.console["bridge"].invalidate(config=False)
         self.send_any(status, body, with_body)
 
     def do_POST(self):
         split = urlsplit(self.path)
+        if split.path.startswith(PREFIX + "groups/") and split.path.endswith("/remove-discovery"):
+            if not authorized(self.headers.get("Authorization"), self.server.console["token"]):
+                self.send_any(401, b'{"error":"unauthorized"}', True)
+                return
+            self.group_action_request(split.path[len(PREFIX):], split.query, removal=True)
+            return
         if split.path == PREFIX + "customer-bot":
             if not authorized(self.headers.get("Authorization"), self.server.console["token"]):
                 self.send_any(401, b'{"error":"unauthorized"}', True)

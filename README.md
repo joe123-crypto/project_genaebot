@@ -431,6 +431,11 @@ visible beside the retained observations.
 needs no write key. Choose campaigns separately through the operator workflow. `GENAIE_GROUP_DISCOVERY=0` disables scanning while retaining saved data.
 The console can also run against an older bot that omits the new fields.
 
+Operators can remove a group from Unassigned using the
+[console discovery action](deploy/railway/README.md#removing-an-unassigned-group).
+The dismissal persists across bot restarts. A later scan that sees the group
+can bring it back.
+
 The scanner is integrated through the existing version-checked WhatsApp loader.
 The compatibility suite checks its hooks against the actual pinned adapter,
 executes the upstream lifecycle fixture, and tests discovery and persistence
