@@ -220,6 +220,17 @@ class Refusals(Harness):
         ex = self.refuse("settings", "defaults", {"caps_enabled": "false"})
         self.assertIn("caps_enabled must be true or false", ex.problems[0])
 
+    def test_a_rotation_switch_that_is_not_a_boolean_is_refused(self):
+        # The reader treats only an absent value as "on", so "false" would read
+        # as ON while the form showed it switched off.
+        ex = self.refuse("settings", "defaults", {"rotation_enabled": "false"})
+        self.assertIn("rotation_enabled must be true or false", ex.problems[0])
+
+    def test_the_rotation_switch_is_written(self):
+        result = self.write("settings", "defaults", {"rotation_enabled": False})
+        self.assertEqual(result["fields"], ["rotation_enabled"])
+        self.assertIs(self.stored("settings", "defaults")["rotation_enabled"], False)
+
     def test_a_band_the_reader_would_ignore_is_refused(self):
         # A malformed band silently falls back to the default when read.
         for bands in ({"busy": [10, 6]}, {"busy": [6]}, {"busy": [6.5, 10]},

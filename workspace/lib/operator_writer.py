@@ -71,7 +71,8 @@ EDITABLE = {
                "promos", "paused_promos", "weekly", "note"),
     "lines": ("number",),
     "campaigns": ("enabled", "comment", "weekly_comment", "dir", "captions"),
-    "settings": ("activity", "caps_enabled", "contact_account", "bands"),
+    "settings": ("activity", "caps_enabled", "rotation_enabled", "contact_account",
+                 "bands"),
 }
 # Generic document deletions. Campaign retirement uses campaign_deletion instead.
 DELETABLE = ("groups",)
@@ -230,6 +231,12 @@ def reinterpreted(collection, patch, fields):
     if "caps_enabled" in patch and not isinstance(patch["caps_enabled"], bool):
         problems.append("caps_enabled must be true or false, got %r"
                         % (patch["caps_enabled"],))
+    # Read with a None check rather than bool(), so a non-boolean is not merely
+    # coerced but inverts the default: rotation_enabled is ON when absent, and
+    # the string "false" would read as ON too while looking switched off.
+    if "rotation_enabled" in patch and not isinstance(patch["rotation_enabled"], bool):
+        problems.append("rotation_enabled must be true or false, got %r"
+                        % (patch["rotation_enabled"],))
     if "bands" in patch:
         bands = patch["bands"]
         if not isinstance(bands, dict) or not bands:

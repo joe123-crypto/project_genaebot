@@ -33,6 +33,13 @@ turns. It is a pure function of ``(day, jid, promo set, cap)`` -- identical in
 every cron process, with no shared state and no lock, which matters because
 :mod:`json_store` is last-writer-wins and the ten crons can overlap.
 
+The rotation is switchable (``defaults.rotation_enabled``, on unless it is
+explicitly false -- see :func:`promo_membership.rotation_enabled`). Switched off,
+the window stops sliding and stays at the head of the same circular order, so a
+capped group posts the same campaigns every day and the rest never post there.
+That is a real loss of reach, so nothing here turns it off by itself: the
+operator does, and the caller passes the answer down.
+
 Std-lib only (plus the sibling :mod:`promo_broadcast` and :mod:`json_store`), so
 it stays importable from the OpenClaw ``--command`` cron scripts.
 """
@@ -175,7 +182,7 @@ def rotation_order(jid, promos):
                   key=lambda p: (promo_broadcast._stable_hash("%s:%s" % (jid, p)), p))
 
 
-def allowed_promos(jid, promos, cap, day=None):
+def allowed_promos(jid, promos, cap, day=None, rotate=True):
     """The promos that may post to ``jid`` on ``day``, as a list in the order
     ``promos`` was given. Fewer promos than the cap -> all of them.
 
@@ -183,7 +190,14 @@ def allowed_promos(jid, promos, cap, day=None):
     ``day.toordinal() % n`` of the group's :func:`rotation_order`. The window
     slides by exactly one per day over a true permutation, so across ``n`` days
     every campaign gets exactly ``cap`` turns -- no campaign can starve on a
-    capped group, however its name sorts."""
+    capped group, however its name sorts.
+
+    ``rotate=False`` pins the window to the head of that same order instead of
+    sliding it, which is the operator switching the rotation off: the group
+    keeps the same campaigns every day and the ones past the cap never post
+    there. Only the start moves -- the order and the window size are the ones
+    the rotation would have used -- so turning it back on resumes mid-cycle
+    rather than reshuffling."""
     promos = list(promos or [])
     if cap is None or cap >= len(promos):
         return list(promos)
@@ -192,7 +206,7 @@ def allowed_promos(jid, promos, cap, day=None):
     day = day or date.today()
     order = rotation_order(jid, promos)
     n = len(order)
-    start = day.toordinal() % n
+    start = day.toordinal() % n if rotate else 0
     chosen = set(order[(start + i) % n] for i in range(cap))
     return [p for p in promos if p in chosen]
 
@@ -243,12 +257,14 @@ def previous_scores(jids, day, history=None, path=None):
 
 
 def plan(m, jids, day=None, refs=None, history=None, record=False,
-         disabled=None):
+         disabled=None, rotate=None):
     """``{jid: info}`` for one day, where info is
     ``{"tier", "score", "cap", "promos", "allowed"}``.
 
     ``promos`` leaves out the campaigns in ``disabled``, so the rotation only hands
     a group's allowance to campaigns that will actually post.
+
+    ``rotate`` is the operator's rotation switch; ``None`` reads it off ``m``.
 
     ``allowed`` is the promos that may post to that group today. Groups absent
     from membership.json are returned with ``cap=None`` and every promo allowed,
@@ -266,6 +282,8 @@ def plan(m, jids, day=None, refs=None, history=None, record=False,
     # membership, not a credential, so it must not guess -- and guessing
     # "nothing is off" would hand a paused campaign a group's daily turn.
     disabled = set(disabled or ())
+    if rotate is None:
+        rotate = promo_membership.rotation_enabled(m)
 
     out = {}
     for jid in jids:
@@ -286,14 +304,14 @@ def plan(m, jids, day=None, refs=None, history=None, record=False,
             "score": scores.get(jid, 0.0),
             "cap": cap,
             "promos": promos,
-            "allowed": allowed_promos(jid, promos, cap, day=day),
+            "allowed": allowed_promos(jid, promos, cap, day=day, rotate=rotate),
             "known": True,
         }
     return out
 
 
 def filter_for_promo(m, promo, jids, day=None, refs=None, history=None, record=False,
-                     disabled=None):
+                     disabled=None, rotate=None):
     """``(kept, decisions)``: the subset of ``jids`` that ``promo`` may post to
     today, plus the full per-group plan for logging. A group missing from
     membership.json is kept.
@@ -303,7 +321,7 @@ def filter_for_promo(m, promo, jids, day=None, refs=None, history=None, record=F
     rotation it would have if it were switched on."""
     disabled = set(disabled or ()) - {promo}
     decisions = plan(m, jids, day=day, refs=refs, history=history, record=record,
-                     disabled=disabled)
+                     disabled=disabled, rotate=rotate)
     kept = [j for j in jids
             if decisions[j]["allowed"] is None or promo in decisions[j]["allowed"]]
     return kept, decisions

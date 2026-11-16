@@ -23,6 +23,7 @@ Schema (``version: 1``)::
     {
       "version": 1,
       "defaults": {"activity": "normal", "caps_enabled": false,
+                   "rotation_enabled": true,   # absent means true
                    "contact_account": "ads",
                    "bands": {"busy": [6, 10], "normal": [4, 6], "quiet": [1, 3]},
                    "accounts": {"default": {"number": "+263785632943"},
@@ -132,6 +133,18 @@ def caps_enabled(m):
     """Whether the per-group daily cap is active. Defaults to False, so
     deploying membership.json alone changes no sending behaviour."""
     return bool(((m or {}).get("defaults") or {}).get("caps_enabled"))
+
+
+def rotation_enabled(m):
+    """Whether a capped group's campaigns take turns.
+
+    Absent means ON, unlike :func:`caps_enabled` above, which is ``bool()`` and
+    so defaults off. The asymmetry is deliberate: caps were new behaviour that
+    had to be opted into, whereas the rotation is what every capped group has
+    always done, and a config written before this key existed must not be read
+    as a request to pin every group to one fixed set of campaigns."""
+    value = ((m or {}).get("defaults") or {}).get("rotation_enabled")
+    return True if value is None else bool(value)
 
 
 def accounts(m):

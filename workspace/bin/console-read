@@ -36,7 +36,7 @@ import os
 import sys
 import time
 import urllib.request
-from datetime import date
+from datetime import date, timedelta
 from functools import partial
 from pathlib import Path
 
@@ -175,6 +175,53 @@ def disabled_promos(day=None):
 # groups
 # ---------------------------------------------------------------------------
 
+def rotation_of(jid, decision, day, rotate):
+    """``{"cycleDays", "nextDay"}`` for a group whose cap holds campaigns back,
+    or ``None`` for one it does not.
+
+    ``decision["promos"]`` is already the set the rotation runs over: a group's
+    assignments less the campaigns switched off and the ones it is paused for,
+    neither of which takes a turn."""
+    allowed = decision.get("allowed")
+    cap = decision.get("cap")
+    promos = decision.get("promos") or []
+    if allowed is None or cap is None or not 0 < cap < len(promos):
+        return None
+    held = [promo for promo in promos if promo not in set(allowed)]
+    return {
+        "cycleDays": len(promos),
+        "nextDay": next_allowed_days(jid, promos, cap, day, held, rotate),
+    }
+
+
+def next_allowed_days(jid, promos, cap, day, held, rotate):
+    """For each campaign held back on ``day``, the next day the group's rotation
+    lets it post, as ``{promo: "YYYY-MM-DD"}``.
+
+    Scanned with :func:`promo_caps.allowed_promos` itself rather than worked out
+    from the rotation's offset, so a screen can never name a day the run would
+    disagree with. ``cap`` is held at today's value across the scan: the real cap
+    moves by at most one a day with the group's reply score, so these are the
+    days today's allowance would fall on, which is what the console says on
+    screen.
+
+    With the rotation off the same window comes back every day, nothing is ever
+    found, and the answer is empty -- which is the honest one: a campaign past
+    the cap does not post again until the rotation is switched back on."""
+    out = {}
+    pending = set(held)
+    for step in range(1, len(promos) + 1):
+        if not pending:
+            break
+        ahead = day + timedelta(days=step)
+        for promo in promo_caps.allowed_promos(jid, promos, cap, day=ahead,
+                                               rotate=rotate):
+            if promo in pending:
+                out[promo] = ahead.isoformat()
+                pending.discard(promo)
+    return out
+
+
 def group_rows(day):
     """One record per known group: the membership fields plus today's cap and
     which campaigns today's rotation hands that allowance to. Mirrors
@@ -183,6 +230,7 @@ def group_rows(day):
     m = membership()
     groups = promo_membership.groups(m)
     disabled = disabled_promos(day)
+    rotate = promo_membership.rotation_enabled(m)
     decisions = promo_caps.plan(m, list(groups), day=day, record=False,
                                 disabled=disabled)
 
@@ -217,6 +265,10 @@ def group_rows(day):
                 "cap": decision.get("cap"),
                 "replyScore": decision.get("score"),
                 "allowedToday": [promo for promo in today if promo not in disabled],
+                # Only when the cap actually bites. A group inside its allowance
+                # holds nothing back, so there is no rotation to describe and
+                # the screen has nothing to explain.
+                "rotation": rotation_of(jid, decision, day, rotate),
             }
         )
     return rows
@@ -324,6 +376,7 @@ def preview(slug, day):
     all_jids = list(daily_jids) + list(weekly_jids)
     decisions = promo_caps.plan(m, list(promo_membership.groups(m)), day=day, record=False,
                                 disabled=disabled_promos(day))
+    rotate = promo_membership.rotation_enabled(m)
     numbers = promo_membership.account_numbers(m) or {}
     contact_account = (m.get("defaults") or {}).get("contact_account")
     entries = promo_membership.groups(m)
@@ -372,6 +425,12 @@ def preview(slug, day):
                                and (not weekdays or caption_day.weekday() in weekdays)
                                and (allowed is None or slug in allowed)),
                 "allowedToday": sorted(allowed) if allowed is not None else [],
+                # When this campaign's turn in THIS group comes round again,
+                # for a row the cap holds back today. None whenever there is no
+                # such day to name: the campaign posts today, the group is not
+                # capped, or the rotation is switched off and it never returns.
+                "nextDay": (rotation_of(jid, decision, day, rotate) or {})
+                           .get("nextDay", {}).get(slug),
                 "weekly": [str(token) for token in (weekly_jids.get(jid) or [])],
             }
         )
@@ -492,11 +551,13 @@ def action_capabilities():
 
 def cap_settings(m):
     """The settings every group's daily allowance is derived from, in the shape a
-    form edits them: the switch, the tier a group without one falls into, and each
-    tier's band as ``[low, high]``."""
+    form edits them: the switch, whether a capped group's campaigns take turns,
+    the tier a group without one falls into, and each tier's band as
+    ``[low, high]``."""
     defaults = (m or {}).get("defaults") or {}
     return {
         "enabled": promo_membership.caps_enabled(m),
+        "rotation": promo_membership.rotation_enabled(m),
         "defaultActivity": defaults.get("activity") or promo_membership.DEFAULT_ACTIVITY,
         "bands": dict((tier, [low, high]) for tier, (low, high)
                       in sorted(promo_membership.bands(m).items())),
