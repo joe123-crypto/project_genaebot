@@ -58,6 +58,43 @@ class GroupDiscoveryTests(unittest.TestCase):
         self.assertEqual(self.m, before)
         self.assertNotIn("promos", row)
 
+    def test_removal_covers_all_lines_and_a_newer_observation_returns(self):
+        entry = {"name": "Discovered", "firstSeenAt": STAMP, "lastSeenAt": STAMP}
+        self.save(groups={"1@g.us": entry, "2@g.us": entry, "3@g.us": entry})
+        self.save("default", {"1@g.us": {**entry, "lastSeenAt": LATER}})
+        inventory = {file: file.read_bytes() for file in self.directory.glob("*.json")}
+        discovery.remove("1@g.us", LATER, self.env)
+        discovery.remove("2@g.us", STAMP, self.env)
+        self.assertEqual([row["jid"] for row in self.read()["discoveredGroups"]], ["3@g.us"])
+        self.assertEqual({file: file.read_bytes() for file in inventory}, inventory)
+
+        self.save(groups={"1@g.us": entry, "2@g.us": entry, "3@g.us": entry}, lastError="lookup_failed")
+        self.assertEqual([row["jid"] for row in self.read()["discoveredGroups"]], ["3@g.us"])
+        newer = "2026-11-08T08:00:00.000Z"
+        self.save(groups={"1@g.us": {**entry, "lastSeenAt": newer}, "3@g.us": entry})
+        discovery.remove("1@g.us", LATER, self.env)  # A retry of the original removal.
+        one = next(row for row in self.read()["discoveredGroups"] if row["jid"] == "1@g.us")
+        self.assertEqual(one["lastSeenAt"], newer)
+        self.assertEqual([account["accountId"] for account in one["accounts"]], ["ads"])
+
+    def test_stale_confirmation_is_refused_and_a_scan_during_write_stays_visible(self):
+        self.save()
+        entry = {"name": "Discovered", "firstSeenAt": STAMP, "lastSeenAt": LATER}
+        self.save("default", {"1@g.us": entry})
+        with self.assertRaises(discovery.ObservationChanged):
+            discovery.remove("1@g.us", STAMP, self.env)
+        current_read = discovery._read
+
+        def scan_after_validation(*args, **kwargs):
+            result = current_read(*args, **kwargs)
+            self.save("default", {"1@g.us": {**entry, "lastSeenAt": "2026-11-08T08:00:00Z"}})
+            return result
+
+        with patch.object(discovery, "_read", side_effect=scan_after_validation):
+            discovery.remove("1@g.us", LATER, self.env)
+        row, = self.read()["discoveredGroups"]
+        self.assertEqual(row["lastSeenAt"], "2026-11-08T08:00:00Z")
+
     def test_every_configured_status_is_excluded_without_overwriting_operator_choices(self):
         self.save(groups={str(i) + "@g.us": {"name": "WhatsApp", "firstSeenAt": STAMP, "lastSeenAt": STAMP}
                           for i in range(5)})
@@ -146,6 +183,17 @@ await d.scan(); d.stop();''' % (json.dumps(helper), json.dumps(STAMP))
                 payload = json.loads(raw)
                 self.assertEqual([g["jid"] for g in payload["discoveredGroups"]], ["2@g.us"])
                 self.assertFalse(any(g["jid"] == "2@g.us" for g in payload["groups"]))
+
+        discovery.remove("2@g.us", STAMP, self.env)
+        with patch.dict(os.environ, self.env), \
+             patch.object(console.promo_config, "resolve", return_value={
+                 "membership": membership, "mode": "firestore", "source": "firestore",
+                 "switches": {}, "storeSwitches": {}, "report": {}, "notes": []}), \
+             patch.object(console.sys, "stdout") as output:
+            console._RESOLVED.clear()
+            self.assertEqual(console.main(["group", "2@g.us", "--date", "2026-11-08"]), 0)
+            raw = "".join(call.args[0] for call in output.write.call_args_list)
+            self.assertEqual(json.loads(raw)["discoveredGroups"], [])
 
 
 if __name__ == "__main__":

@@ -436,11 +436,12 @@ class ConsoleReadTests(BridgeCase):
         # no Firestore document, so they must not disappear when the write key
         # is absent -- a console would then hide a working control.
         payload = self.ok("overview", "--date", DAY)
-        self.assertEqual(set(payload["actions"]), {"leaveGroup", "clearRecords"})
+        self.assertEqual(set(payload["actions"]), {"leaveGroup", "clearRecords", "removeDiscovery"})
         without = json.loads(
             self.run_bridge("overview", "--date", DAY, **{WRITE_KEY: ""}).stdout)
         self.assertIs(without["writes"]["enabled"], False)
         self.assertIs(without["actions"]["leaveGroup"], True)
+        self.assertIs(without["actions"]["removeDiscovery"], True)
 
     def test_the_group_actions_switch_is_reported(self):
         # GENAIE_GROUP_ACTIONS=0 is the gateway's way of turning the surface
@@ -450,6 +451,7 @@ class ConsoleReadTests(BridgeCase):
         actions = json.loads(done.stdout)["actions"]
         self.assertIs(actions["leaveGroup"], False)
         self.assertIs(actions["clearRecords"], False)
+        self.assertIs(actions["removeDiscovery"], False)
 
     def test_the_write_key_is_reported_by_presence_never_by_value(self):
         # A canary rather than anything key-shaped: the bridge checks presence

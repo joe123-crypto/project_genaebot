@@ -1095,6 +1095,17 @@ the others and degrades to a `[whatsapp-group-actions]` warning rather than
 blocking connect if the adapter's anchors move. `CONSOLE_GROUP_ACTION_BIN`
 overrides the bridge path, as `CONSOLE_WRITE_BIN` does for writes.
 
+### Removing an Unassigned group
+
+The write token authorizes
+`POST /internal/console/groups/<urlencoded jid>/remove-discovery` with an
+`observedThrough` timestamp from the discovery row. The bot advertises
+`actions.removeDiscovery` when group actions are available. The route
+dismisses observations up to that timestamp across accounts. A later scan
+can bring the group back. Keep
+`$OPENCLAW_STATE_DIR/runtime/whatsapp-group-removals/cutoffs.sqlite3`
+on the persistent volume so removals survive restarts.
+
 ## The operator data in Firestore and R2
 
 Production has read its operator config from Firestore since 2026-11-08 and its

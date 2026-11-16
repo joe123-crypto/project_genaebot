@@ -295,6 +295,37 @@ class LiveIndexTests(Harness):
             self.assertEqual(len(view.handle("metrics", "ids=" + JID_A)["rows"]), 1)
             self.assertEqual(view.handle("discoveries", "")["rows"], [])
 
+    def test_discovery_revision_total_and_cursor_reflect_removal_across_processes(self):
+        import subprocess
+
+        self.env["OPENCLAW_STATE_DIR"] = self.dir
+        view = self.service()
+        stamp = "2026-11-10T10:00:00.000Z"
+        inventory = Path(self.env["OPENCLAW_STATE_DIR"]) / "runtime/whatsapp-groups"
+        inventory.mkdir(parents=True, exist_ok=True)
+        jids = ["%s@g.us" % n for n in range(9000, 9012)]
+        (inventory / "default.json").write_text(json.dumps({
+            "version": 1, "accountId": "default", "lastSuccessAt": stamp,
+            "groups": {jid: {"name": jid, "firstSeenAt": stamp, "lastSeenAt": stamp} for jid in jids},
+        }))
+        before = view.handle("discoveries", "")
+        self.assertEqual(before["total"], 12)
+        self.assertEqual(len(before["rows"]), 10)
+        bridge = Path(__file__).resolve().parents[1] / "bin/console-group-action"
+        result = subprocess.run(
+            [sys.executable, "-I", bridge], input=json.dumps({
+                "jid": jids[0], "observedThrough": stamp,
+            }), env={**os.environ, **self.env, "GENAIE_GROUP_ACTIONS": "1"}, capture_output=True,
+            text=True, timeout=5, check=True,
+        )
+        self.assertTrue(json.loads(result.stdout)["ok"])
+        after = view.handle("discoveries", "since=" + before["revision"])
+        self.assertEqual(after["total"], 11)
+        self.assertNotIn(jids[0], [row["jid"] for row in after["rows"]])
+        self.assertTrue(view.handle("discoveries", "cursor=" + before["nextCursor"])["reset"])
+        restarted = self.service()
+        self.assertEqual(restarted.handle("discoveries", "")["rows"], after["rows"])
+
     def test_stale_cursor_resets_and_filter_bound_cursor_is_refused(self):
         view = self.service()
         rows = [{"jid": str(i), "name": "Group"} for i in range(25)]
