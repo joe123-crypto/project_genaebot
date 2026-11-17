@@ -1,12 +1,14 @@
 """Durable WhatsApp CTA destinations and aggregate click counts."""
 
 from contextlib import closing
+from datetime import datetime
 import os
 from pathlib import Path
 import re
 import secrets
 import sqlite3
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo
 
 
 BASE_URL_VAR = "GENAIE_CAMPAIGN_CLICK_BASE_URL"
@@ -18,6 +20,8 @@ PREVIEW_AGENT = re.compile(
     r"|^whatsapp/", re.IGNORECASE,
 )
 PREFETCH = re.compile(r"\b(?:prefetch|prerender)\b", re.IGNORECASE)
+CAMPAIGN_TIMEZONE = ZoneInfo("Africa/Harare")
+GROUP_SUFFIX = "@g.us"
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS click_groups (
     campaign TEXT NOT NULL,
@@ -34,6 +38,7 @@ CREATE TABLE IF NOT EXISTS click_links (
     UNIQUE (campaign, jid, destination)
 );
 """
+DAILY_SCHEMA = "CREATE TABLE click_daily (day TEXT PRIMARY KEY, clicks INTEGER NOT NULL)"
 
 
 def base_url(env=None):
@@ -59,10 +64,11 @@ def is_preview(headers):
 
 
 class ClickStore:
-    def __init__(self, env=None):
+    def __init__(self, env=None, *, now=None):
         env = os.environ if env is None else env
         root = env.get("OPENCLAW_STATE_DIR") or "/home/joseph/.openclaw"
         self.path = (Path(root) / "runtime" / "campaign-clicks.sqlite").absolute()
+        self.now = now or (lambda: datetime.now(CAMPAIGN_TIMEZONE))
 
     def _connect(self, mode):
         return closing(sqlite3.connect(self.path.as_uri() + "?mode=" + mode,
@@ -106,8 +112,51 @@ class ClickStore:
         return row[0] if row and WHATSAPP_URL.fullmatch(row[0]) else None
 
     def increment(self, link_id):
+        day = self._day()
         with self._connect("rw") as db, db:
-            db.execute("UPDATE click_links SET clicks = clicks + 1 WHERE id = ?", (link_id,))
+            with closing(db.execute(
+                "UPDATE click_links SET clicks = clicks + 1 WHERE id = ? RETURNING jid", (link_id,)
+            )) as result:
+                link = result.fetchone()
+            if link and link[0].endswith(GROUP_SUFFIX):
+                self._ensure_daily(db, day)
+                db.execute("""
+                    INSERT INTO click_daily (day, clicks) VALUES (?, 1)
+                    ON CONFLICT (day) DO UPDATE SET clicks = clicks + 1
+                    """, (day,))
+
+    def _day(self):
+        return self.now().astimezone(CAMPAIGN_TIMEZONE).date().isoformat()
+
+    @staticmethod
+    def _has_daily(db):
+        return db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'click_daily'").fetchone()
+
+    def _ensure_daily(self, db, day):
+        if not self._has_daily(db):
+            db.execute(DAILY_SCHEMA)
+            # The first row marks the start of dated counting. Legacy counts stay all-time.
+            db.execute("INSERT INTO click_daily (day, clicks) VALUES (?, 0)", (day,))
+
+    def start_daily(self, day=None):
+        if self._created():
+            with self._connect("rw") as db, db:
+                db.execute("BEGIN IMMEDIATE")
+                self._ensure_daily(db, day or self._day())
+
+    def totals(self):
+        if not self._created():
+            return {"totalClicks": 0, "todayClicks": 0, "todayPartial": False}
+        day = self._day()
+        with self._connect("ro") as db:
+            if not self._has_daily(db):
+                self.start_daily(day)
+            total, today, first_day = db.execute("""
+                SELECT (SELECT COALESCE(SUM(clicks), 0) FROM click_links WHERE jid GLOB ?),
+                       (SELECT COALESCE(SUM(clicks), 0) FROM click_daily WHERE day = ?),
+                       (SELECT MIN(day) FROM click_daily)
+                """, ("*" + GROUP_SUFFIX, day)).fetchone()
+        return {"totalClicks": total, "todayClicks": today, "todayPartial": first_day == day}
 
     def report(self, campaign):
         rows = []

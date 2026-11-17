@@ -802,7 +802,10 @@ Reaching it from outside needs a Railway domain whose target port is
 Ship the console API with `GENAIE_CAMPAIGN_CLICK_BASE_URL` unset. Verify that
 `GET /internal/console/live/campaign-clicks?slug=appliance-repairs` requires the
 operator bearer token and returns an empty report for a campaign with no tracked
-links. A registered `/go/<id>` serves a temporary, non-cacheable redirect
+links. Omit `slug` for the all-time total and today's count across campaigns.
+The daily count uses Africa/Harare and is marked partial when dated counting
+starts. Rollout test links are excluded from both Home counts.
+A registered `/go/<id>` serves a temporary, non-cacheable redirect
 without a token. Check both a bot and a third-party destination from a test
 WhatsApp chat on Android, iOS and WhatsApp Web. Check the prefilled message and
 that previews alone add zero before clicking. The companion console can ship

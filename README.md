@@ -763,6 +763,8 @@ When `GENAIE_CAMPAIGN_CLICK_BASE_URL` is configured, new campaign posts wrap
 that CTA in a tracked link. The redirect counts estimated taps for the
 campaign and group before opening the configured WhatsApp chat, including
 the repair shop's number. Campaign Details shows the total and group counts.
+Home shows all-time and daily clicks across campaigns. The daily count uses
+the campaign day in Africa/Harare and starts when dated counting goes live.
 Repeated taps count individually. Posts already using direct `wa.me` links
 have no click history. [Rollout instructions](deploy/railway/README.md#campaign-click-tracking).
 
