@@ -657,10 +657,10 @@ def caption_for(jid, variants, day=None, allowed=None, tracking=None,
     idx = variant_index(jid, len(variants), day=day, allowed=allowed)
     ref, link = tracking_for(tracking, jid, bot_number=bot_number)
     line = (tracking or {}).get("link_line") or DEFAULT_LINK_LINE
-    if link and wrap_link and ("{ref_link}" in variants[idx] or "{ref_link}" in line):
-        link = wrap_link(link)
-    return (idx, render_caption(variants[idx], ref, link, line,
-                                bot_number=bot_number), ref)
+    caption = render_caption(variants[idx], ref, link, line, bot_number=bot_number)
+    if wrap_link:
+        caption = campaign_clicks.wrap_caption_links(caption, wrap_link)
+    return (idx, caption, ref)
 
 
 def _tracked_link(base, store, campaign, jid, name, destination):
@@ -1295,7 +1295,7 @@ def broadcast(*, text, image, state_file, promo_name, send_delay=None, argv=None
     import campaign_deletion
     campaign_slug = promo_config.promo_key(promo_name)
     try:
-        click_base = campaign_clicks.base_url() if tracking else None
+        click_base = campaign_clicks.base_url()
     except ValueError:
         sys.stderr.write("WARN: Invalid campaign click base URL; using direct WhatsApp links.\n")
         click_base = None

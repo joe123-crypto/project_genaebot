@@ -752,15 +752,16 @@ groups are spread across variants on a given day. A promo may pass
 while other variants keep the daily image rotation. `--dry-run` shows each group's variant, ref and any pinned
 image.
 
-Each promo also passes a `TRACKING` config (opt-in; a promo without one sends
-exactly its caption). Every group gets a stable ref code: a promo prefix plus
+Promos can opt in to generated contact links with a `TRACKING` config.
+Every group gets a stable ref code: a promo prefix plus
 three characters derived from the group JID, e.g. `BH-VD4`. The caption is sent
 with an extra line `Tap to chat on WhatsApp: https://wa.me/<number>?text=...`
 whose prefilled text reads `Hi, I saw your borehole ad (ref BH-VD4)`. A caption
 may instead place the link itself with the `{ref_link}` / `{ref}` placeholders.
 
 When `GENAIE_CAMPAIGN_CLICK_BASE_URL` is configured, new campaign posts wrap
-that CTA in a tracked link. The redirect counts estimated taps for the
+generated and pasted `wa.me` phone links and WhatsApp Business short links.
+The redirect counts estimated taps for the
 campaign and group before opening the configured WhatsApp chat, including
 the repair shop's number. Campaign Details shows the total and group counts.
 Home shows all-time and daily clicks across campaigns. The daily count uses

@@ -813,9 +813,11 @@ once the report route is live.
 
 After those checks, set `GENAIE_CAMPAIGN_CLICK_BASE_URL` to the public HTTPS
 origin for the console API, currently
-`https://gateway-production-feba.up.railway.app` in production. New generated CTAs
-will start using it on the next deployment. To pause new tracked links, unset
-that variable and keep the API and its domain serving existing links. The
+`https://gateway-production-feba.up.railway.app` in production. New posts
+wrap generated CTAs and pasted `wa.me` phone and business short links. To pause
+new tracked links, unset that variable and keep the API and its domain serving
+existing links. Use a build that supports all published destinations when
+rolling back after the first pasted links have been sent. The
 redirect targets and counters live in `runtime/campaign-clicks.sqlite` on the
 mounted state volume. Preserve that database during a redeploy or restore.
 

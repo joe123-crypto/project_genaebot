@@ -132,12 +132,13 @@ class ConsoleApiTests(unittest.TestCase):
         self.assertEqual(json.loads(self.fetch(report)[1]), {"totalClicks": 0, "groups": []})
 
         original = "https://wa.me/26370000001?text=Repairs%20ref%20AR-AAA"
-        updated = "https://wa.me/26370000002?text=New%20number"
+        updated = "https://wa.me/26370000002"
+        business = "https://wa.me/message/Example12345"
         old_id = store.register("repairs", "1@g.us", "Old name", original)
         self.assertEqual(store.register("repairs", "1@g.us", "Market", original), old_id)
         new_id = store.register("repairs", "1@g.us", "Market", updated)
         self.assertNotEqual(old_id, new_id)
-        second_id = store.register("repairs", "2@g.us", "Town", original)
+        second_id = store.register("repairs", "2@g.us", "Town", business)
         self.assertNotEqual(old_id, second_id)
         self.assertNotEqual(old_id, store.register("other", "1@g.us", "Market", original))
 
@@ -169,7 +170,7 @@ class ConsoleApiTests(unittest.TestCase):
         self.assertEqual(json.loads(self.fetch(report)[1])["totalClicks"], 0)
 
         self.assertEqual(request(new_id), (302, updated, "no-store"))
-        self.assertEqual(request(second_id), (302, original, "no-store"))
+        self.assertEqual(request(second_id), (302, business, "no-store"))
         with ThreadPoolExecutor(max_workers=4) as pool:
             results = list(pool.map(lambda _: request(old_id), range(12)))
         self.assertEqual(results, [(302, original, "no-store")] * 12)
