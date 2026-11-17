@@ -749,11 +749,12 @@ class Handler(BaseHTTPRequestHandler):
     def campaign_click_report(self, query, with_body):
         fields = parse_qs(query, keep_blank_values=True)
         slugs = fields.get("slug", [])
-        if set(fields) != {"slug"} or len(slugs) != 1 or not SLUG_RE.fullmatch(slugs[0]):
-            self.send_any(400, b'{"error":"Campaign click counts require one valid slug."}', with_body)
+        if query and (set(fields) != {"slug"} or len(slugs) != 1 or not SLUG_RE.fullmatch(slugs[0])):
+            self.send_any(400, b'{"error":"Use one valid campaign slug, or omit it for totals."}', with_body)
             return
         try:
-            payload = self.server.console["campaignClicks"].report(slugs[0])
+            clicks = self.server.console["campaignClicks"]
+            payload = clicks.report(slugs[0]) if slugs else clicks.totals()
         except (OSError, sqlite3.Error) as exc:
             log("campaign click report unavailable (%s)" % type(exc).__name__)
             self.send_any(503, b'{"error":"Campaign click counts are unavailable."}', with_body)
@@ -960,6 +961,10 @@ def main():
         log("cannot bind %s:%d (%s); refusing to start" % (bind, port, exc))
         return 78
 
+    try:
+        server.console["campaignClicks"].start_daily()
+    except (OSError, sqlite3.Error) as exc:
+        log("campaign click daily initialization unavailable (%s)" % type(exc).__name__)
     if not os.path.exists(bridge_path):
         log("warning: bridge not found at %s; requests will answer 502" % bridge_path)
     # A durable Firestore desired schedule is retried after API/gateway restart.

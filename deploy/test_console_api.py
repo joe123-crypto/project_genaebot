@@ -10,6 +10,7 @@ no network and no genaebot checkout.
 
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
+import datetime as dt
 import http.client
 import importlib.util
 import json
@@ -178,6 +179,9 @@ class ConsoleApiTests(unittest.TestCase):
             {"jid": "1@g.us", "name": "Market", "clicks": 13},
             {"jid": "2@g.us", "name": "Town", "clicks": 1},
         ]})
+        self.assertEqual(json.loads(self.fetch(base + "/live/campaign-clicks")[1]), {
+            "totalClicks": 14, "todayClicks": 14, "todayPartial": True,
+        })
         reopened = API.campaign_clicks.ClickStore({"OPENCLAW_STATE_DIR": self.directory.name})
         self.assertEqual(reopened.report("repairs"), json.loads(body))
         self.assertEqual(reopened.destination(old_id), original)
@@ -187,6 +191,47 @@ class ConsoleApiTests(unittest.TestCase):
         self.assertEqual(self.fetch(report + "&extra=1")[0], 400)
         self.assertEqual(self.server.console["bridge"].runs, 0)
         self.assertIsNone(self.server.console["live"])
+
+    def test_campaign_click_totals_preserve_legacy_counts_and_reset_at_harare_midnight(self):
+        with unittest.mock.patch.dict(os.environ, {"OPENCLAW_STATE_DIR": self.directory.name}):
+            base = self.serve(gate_token=GATE)
+        store = self.server.console["campaignClicks"]
+        now = dt.datetime(2026, 11, 17, 21, 59, tzinfo=dt.timezone.utc)
+        store.now = lambda: now
+        totals_url = base + "/live/campaign-clicks"
+        self.assertEqual(self.fetch(totals_url, token=None)[0], 401)
+        self.assertEqual(self.fetch(totals_url, token=GATE)[0], 401)
+        self.assertEqual(self.fetch(totals_url + "?slug=")[0], 400)
+        self.assertEqual(json.loads(self.fetch(totals_url)[1]), {
+            "totalClicks": 0, "todayClicks": 0, "todayPartial": False,
+        })
+
+        destination = "https://wa.me/26370000001?text=Example"
+        first = store.register("old-campaign", "1@g.us", "Old group", destination)
+        second = store.register("another-campaign", "2@g.us", "Other group", destination)
+        smoke = store.register("click-tracking-smoke", "smoke-bot-number", "Test", destination)
+        with closing(sqlite3.connect(store.path)) as db, db:
+            db.execute("UPDATE click_links SET clicks = 8 WHERE id = ?", (first,))
+        store.start_daily()
+        self.assertEqual(json.loads(self.fetch(totals_url)[1]), {
+            "totalClicks": 8, "todayClicks": 0, "todayPartial": True,
+        })
+        for link in (first, second, smoke):
+            store.increment(link)
+        self.assertEqual(json.loads(self.fetch(totals_url)[1]), {
+            "totalClicks": 10, "todayClicks": 2, "todayPartial": True,
+        })
+        self.assertEqual(json.loads(self.fetch(totals_url + "?slug=old-campaign")[1])["totalClicks"], 9)
+
+        now += dt.timedelta(minutes=1)
+        self.assertEqual(json.loads(self.fetch(totals_url)[1]), {
+            "totalClicks": 10, "todayClicks": 0, "todayPartial": False,
+        })
+        store.increment(second)
+        store.start_daily()
+        self.assertEqual(json.loads(self.fetch(totals_url)[1]), {
+            "totalClicks": 11, "todayClicks": 1, "todayPartial": False,
+        })
 
     def test_account_routes_use_separate_uncached_controls(self):
         base = self.serve()
