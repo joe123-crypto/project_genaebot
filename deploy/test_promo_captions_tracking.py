@@ -16,6 +16,7 @@ file with plain ``python3``, actually executes these.
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -399,8 +400,42 @@ class ClickLinkTests(unittest.TestCase):
     def test_preview_runs_create_no_click_links(self):
         for flag in ("--refs", "--dry-run"):
             with self.subTest(flag=flag), redirect_stdout(io.StringIO()):
-                self.assertIsNone(self.broadcast({"prefix": "GN"}, "Chat", (flag,)))
+                self.assertIsNone(self.broadcast({"prefix": "GN"}, "Chat https://wa.me/26370000001", (flag,)))
         self.assertFalse(campaign_clicks.ClickStore(self.env).path.exists())
+
+    def test_pasted_links_track_without_generated_reference_settings(self):
+        destinations = [
+            "https://wa.me/26370000001",
+            "https://wa.me/26370000002?text=Hello+from%20POS",
+            "https://wa.me/message/Example12345",
+        ]
+        caption = "WhatsApp " + "\n".join(destinations)
+        sent = self.broadcast(None, caption)
+        links = re.findall(re.escape(self.BASE) + r"/go/([a-f0-9]{32})", sent)
+        store = campaign_clicks.ClickStore(self.env)
+        self.assertEqual([store.destination(link) for link in links], destinations)
+        self.assertEqual(len(set(links)), 3)
+
+        (self.root / "sent.json").unlink()
+        self.assertEqual(self.broadcast(None, caption), sent)
+
+    def test_mixed_caption_keeps_both_destinations_and_ignores_other_urls(self):
+        pasted = "https://wa.me/26370000001"
+        untouched = " ".join((
+            "https://wa.me.example/26370000001", "https://chat.whatsapp.com/Example",
+            "https://wa.me/26370000001?text=Hi&other=value",
+            "https://wa.me/message/Example?other=value",
+            "https://example.test/?next=(https://wa.me/26370000001)",
+        ))
+        tracking = {"prefix": "GN"}
+        caption = f"*{{ref_link}}* [Call here]({pasted}) {untouched}"
+        sent = self.broadcast(tracking, caption)
+        links = re.findall(re.escape(self.BASE) + r"/go/([a-f0-9]{32})", sent)
+        store = campaign_clicks.ClickStore(self.env)
+        self.assertEqual([store.destination(link) for link in links], [
+            pb.tracking_for(tracking, self.JID, bot_number=BOT_NUMBER)[1], pasted,
+        ])
+        self.assertEqual(sent, f"*{self.BASE}/go/{links[0]}* [Call here]({self.BASE}/go/{links[1]}) {untouched}")
 
     def test_sender_falls_back_when_store_is_unavailable(self):
         store = campaign_clicks.ClickStore(self.env)
@@ -409,6 +444,9 @@ class ClickLinkTests(unittest.TestCase):
         tracking = {"prefix": "AR", "number": APPLIANCE_REPAIRS_NUMBER}
         caption = self.broadcast(tracking, "{ref_link}")
         self.assertEqual(caption, pb.tracking_for(tracking, self.JID)[1])
+        (self.root / "sent.json").unlink()
+        pasted = "Chat https://wa.me/message/Example12345"
+        self.assertEqual(self.broadcast(None, pasted), pasted)
 
 
 class AccountRoutingTests(unittest.TestCase):

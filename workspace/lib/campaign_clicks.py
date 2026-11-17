@@ -13,7 +13,12 @@ from zoneinfo import ZoneInfo
 
 BASE_URL_VAR = "GENAIE_CAMPAIGN_CLICK_BASE_URL"
 LINK_ID = re.compile(r"[a-f0-9]{32}")
-WHATSAPP_URL = re.compile(r"https://wa\.me/[0-9]{7,15}\?text=(?:[A-Za-z0-9_.~-]|%[0-9A-Fa-f]{2})*")
+WHATSAPP_URL = re.compile(
+    r"https://wa\.me/(?:[0-9]{7,15}(?:\?text=(?:[A-Za-z0-9_.~+-]|%[0-9A-Fa-f]{2})*)?"
+    r"|message/[A-Za-z0-9]+)"
+)
+CAPTION_TOKEN = re.compile(r"\S+")
+LINK_WRAPPERS = {"(": ")", "[": "]", "<": ">", '"': '"', "'": "'", "*": "*", "_": "_", "~": "~"}
 PREVIEW_AGENT = re.compile(
     r"\b(?:facebookexternalhit|facebot|meta-externalagent|meta-externalfetcher|"
     r"slackbot|discordbot|telegrambot|twitterbot|linkedinbot|googlebot|bingbot)\b"
@@ -61,6 +66,31 @@ def is_preview(headers):
     return bool(PREVIEW_AGENT.search(headers.get("User-Agent", "")) or any(
         PREFETCH.search(headers.get(header, "")) for header in ("Sec-Purpose", "Purpose")
     ))
+
+
+def wrap_caption_links(caption, wrap):
+    """Wrap complete WhatsApp links while preserving surrounding caption formatting."""
+    def replace(match):
+        token = match[0]
+        before, scheme, rest = token.partition("https://")
+        if not scheme:
+            return token
+        after = ""
+        if before:
+            # Keep paired caption formatting, including Markdown label](URL).
+            if before.endswith("](") and "://" not in before:
+                after = ")"
+            elif len(before) == 1:
+                after = LINK_WRAPPERS.get(before, "")
+            if not after or not rest.endswith(after):
+                return token
+            rest = rest[:-len(after)]
+        destination = scheme + rest
+        if WHATSAPP_URL.fullmatch(destination):
+            return before + wrap(destination) + after
+        return token
+
+    return CAPTION_TOKEN.sub(replace, caption)
 
 
 class ClickStore:
