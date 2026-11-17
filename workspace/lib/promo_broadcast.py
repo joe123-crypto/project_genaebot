@@ -61,13 +61,16 @@ import math
 import random
 import re
 import hashlib
+import sqlite3
 import subprocess
 import urllib.parse
 from datetime import date
+from functools import partial
 
 import json_store
 from gateway_campaign import active_client, campaign_transport
 import ad_assets
+import campaign_clicks
 import operator_config
 import promo_config
 
@@ -648,14 +651,26 @@ def render_caption(caption, ref=None, link=None, link_line=DEFAULT_LINK_LINE,
 
 
 def caption_for(jid, variants, day=None, allowed=None, tracking=None,
-                bot_number=None):
+                bot_number=None, wrap_link=None):
     """(variant_index, rendered caption, ref) for one group on ``day``.
     ``bot_number`` is the advertised number of the account that posts to ``jid``."""
     idx = variant_index(jid, len(variants), day=day, allowed=allowed)
     ref, link = tracking_for(tracking, jid, bot_number=bot_number)
     line = (tracking or {}).get("link_line") or DEFAULT_LINK_LINE
+    if link and wrap_link and ("{ref_link}" in variants[idx] or "{ref_link}" in line):
+        link = wrap_link(link)
     return (idx, render_caption(variants[idx], ref, link, line,
                                 bot_number=bot_number), ref)
+
+
+def _tracked_link(base, store, campaign, jid, name, destination):
+    try:
+        link_id = store.register(campaign, jid, name, destination)
+    except (OSError, sqlite3.Error, ValueError):
+        sys.stderr.write("WARN: Campaign click link unavailable for %s in %s; using direct WhatsApp link.\n"
+                         % (campaign, jid))
+        return destination
+    return "%s/go/%s" % (base, link_id)
 
 
 def ref_map(jids, tracking, promo_name, number_for=None):
@@ -1277,6 +1292,15 @@ def broadcast(*, text, image, state_file, promo_name, send_delay=None, argv=None
     queued = 0
     sent = 0
     attempted = 0
+    import campaign_deletion
+    campaign_slug = promo_config.promo_key(promo_name)
+    try:
+        click_base = campaign_clicks.base_url() if tracking else None
+    except ValueError:
+        sys.stderr.write("WARN: Invalid campaign click base URL; using direct WhatsApp links.\n")
+        click_base = None
+    click_store = campaign_clicks.ClickStore() if click_base else None
+    group_config = source["membership"].get("groups") or {}
     for position, jid in enumerate(pending):
         account = account_for(jid)
         if account in unavailable:
@@ -1297,13 +1321,16 @@ def broadcast(*, text, image, state_file, promo_name, send_delay=None, argv=None
                 "SEND FAILED for %s: no advertised number for account %r "
                 "(check membership.json defaults.accounts)\n" % (jid, account))
             continue
-        idx, caption, _ = caption_for(jid, variants, day=day, allowed=weekly.get(jid),
-                                      tracking=tracking, bot_number=number)
-        import campaign_deletion
-        with campaign_deletion.submission(promo_config.promo_key(promo_name)) as active:
+        with campaign_deletion.submission(campaign_slug) as active:
             if not active:
                 print("Campaign deleted; stopping remaining sends.")
                 break
+            wrap_link = None
+            if click_store is not None:
+                name = (group_config.get(jid) or {}).get("name")
+                wrap_link = partial(_tracked_link, click_base, click_store, campaign_slug, jid, name)
+            idx, caption, _ = caption_for(jid, variants, day=day, allowed=weekly.get(jid),
+                                          tracking=tracking, bot_number=number, wrap_link=wrap_link)
             ok, out = send_ad(jid, caption, variant_images.get(idx, image_path),
                               account=account)
         attempted += 1

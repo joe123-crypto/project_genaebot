@@ -20,6 +20,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 import urllib.parse
 from contextlib import redirect_stdout
 from datetime import date, timedelta
@@ -32,6 +33,7 @@ for _path in (str(LIB_DIR), str(ROOT / "deploy")):
     if _path not in sys.path:
         sys.path.insert(0, _path)
 import promo_broadcast as pb  # noqa: E402
+import campaign_clicks  # noqa: E402
 import json_store  # noqa: E402
 import gateway_campaigns  # noqa: E402
 import promo_fixture  # noqa: E402
@@ -347,6 +349,66 @@ class LinkAndPlaceholderTests(unittest.TestCase):
                                  argv=[], start_jitter=0, caps=None)
         finally:
             pb.send_ad = saved
+
+
+class ClickLinkTests(unittest.TestCase):
+    JID = "1@g.us"
+    BASE = "https://cta.example"
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.env = {"OPENCLAW_STATE_DIR": directory.name, campaign_clicks.BASE_URL_VAR: self.BASE}
+        self.image = self.root / "ad.png"
+        self.image.write_bytes(b"img")
+
+    def broadcast(self, tracking, text, args=()):
+        with patch.dict(os.environ, self.env), patch.object(pb, "send_ad", return_value=(True, "sent")) as send:
+            code = pb.broadcast(
+                text=text, image=str(self.image), state_file=str(self.root / "sent.json"),
+                promo_name="alpha-promo", tracking=tracking, argv=list(args), send_delay=0,
+                start_jitter=0, caps=None, account_status=lambda accounts: {a: True for a in accounts},
+                resolve_config=promo_fixture.resolver_for(
+                    [self.JID], entries={self.JID: {"name": "Market"}},
+                    numbers={"default": BOT_NUMBER}, captions=[text]),
+            )
+            self.assertEqual(code, 0)
+            return send.call_args.args[1] if send.called else None
+
+    def test_send_uses_the_same_destination_and_prefill_for_both_contact_types(self):
+        store = campaign_clicks.ClickStore(self.env)
+        cases = (({"prefix": "GN", "label": "Genaie"}, "Chat at {ref_link}", BOT_NUMBER),
+                 ({"prefix": "AR", "label": "repairs", "number": APPLIANCE_REPAIRS_NUMBER},
+                  "Repairs", APPLIANCE_REPAIRS_NUMBER))
+        ids = []
+        for tracking, text, number in cases:
+            with self.subTest(prefix=tracking["prefix"]):
+                caption = self.broadcast(tracking, text)
+                link = caption.rsplit(" ", 1)[-1]
+                self.assertTrue(link.startswith(self.BASE + "/go/"))
+                link_id = link.rsplit("/", 1)[-1]
+                self.assertEqual(store.destination(link_id),
+                                 pb.tracking_for(tracking, self.JID, bot_number=number)[1])
+                ids.append(link_id)
+                (self.root / "sent.json").unlink()
+        self.assertEqual(len(set(ids)), 2)
+        self.assertEqual(store.report("alpha")["groups"], [
+            {"jid": self.JID, "name": "Market", "clicks": 0}])
+
+    def test_preview_runs_create_no_click_links(self):
+        for flag in ("--refs", "--dry-run"):
+            with self.subTest(flag=flag), redirect_stdout(io.StringIO()):
+                self.assertIsNone(self.broadcast({"prefix": "GN"}, "Chat", (flag,)))
+        self.assertFalse(campaign_clicks.ClickStore(self.env).path.exists())
+
+    def test_sender_falls_back_when_store_is_unavailable(self):
+        store = campaign_clicks.ClickStore(self.env)
+        store.path.parent.mkdir()
+        store.path.write_bytes(b"invalid SQLite file")
+        tracking = {"prefix": "AR", "number": APPLIANCE_REPAIRS_NUMBER}
+        caption = self.broadcast(tracking, "{ref_link}")
+        self.assertEqual(caption, pb.tracking_for(tracking, self.JID)[1])
 
 
 class AccountRoutingTests(unittest.TestCase):

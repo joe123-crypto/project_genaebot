@@ -90,6 +90,7 @@ import json
 import os
 import re
 import secrets
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -99,6 +100,8 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 # Also works when loaded by importlib in the deployment tests.
 sys.path.insert(0, os.path.dirname(__file__))
+sys.path.append(os.path.normpath(os.path.join(os.path.dirname(__file__), "../../workspace/lib")))
+import campaign_clicks
 from console_accounts import AccountControls
 from console_customer_bot import BODY_LIMIT as CUSTOMER_BOT_BODY_LIMIT, Conflict as CustomerBotConflict, CustomerBot
 
@@ -724,6 +727,39 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.account_request(split.path[len(PREFIX):], split.query, "POST")
 
+    def campaign_click_redirect(self, link_id, with_body):
+        store = self.server.console["campaignClicks"]
+        try:
+            destination = store.destination(link_id) if campaign_clicks.LINK_ID.fullmatch(link_id) else None
+        except (OSError, sqlite3.Error) as exc:
+            log("campaign click destination unavailable (%s)" % type(exc).__name__)
+            self.send_any(503, b'{"error":"Campaign link unavailable."}', with_body)
+            return
+        if destination is None:
+            self.send_any(404, b'{"error":"not found"}', with_body)
+            return
+        if with_body and not campaign_clicks.is_preview(self.headers):
+            try:
+                store.increment(link_id)
+            except (OSError, sqlite3.Error) as exc:
+                log("campaign click increment unavailable (%s)" % type(exc).__name__)
+        self.send_any(302, b"", with_body, headers=(("Location", destination),
+                                                   ("Referrer-Policy", "no-referrer")))
+
+    def campaign_click_report(self, query, with_body):
+        fields = parse_qs(query, keep_blank_values=True)
+        slugs = fields.get("slug", [])
+        if set(fields) != {"slug"} or len(slugs) != 1 or not SLUG_RE.fullmatch(slugs[0]):
+            self.send_any(400, b'{"error":"Campaign click counts require one valid slug."}', with_body)
+            return
+        try:
+            payload = self.server.console["campaignClicks"].report(slugs[0])
+        except (OSError, sqlite3.Error) as exc:
+            log("campaign click report unavailable (%s)" % type(exc).__name__)
+            self.send_any(503, b'{"error":"Campaign click counts are unavailable."}', with_body)
+            return
+        self.send_any(200, json.dumps(payload).encode(), with_body)
+
     def respond(self, with_body):
         config = self.server.console
         split = urlsplit(self.path)
@@ -736,6 +772,10 @@ class Handler(BaseHTTPRequestHandler):
             declared = -1
         if declared != 0 or self.headers.get("Transfer-Encoding", "").lower() == "chunked":
             self.send_any(400, b'{"error": "unexpected request body"}', with_body)
+            return
+
+        if split.path.startswith("/go/"):
+            self.campaign_click_redirect(split.path[len("/go/"):], with_body)
             return
 
         if not split.path.startswith(PREFIX):
@@ -761,6 +801,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_any(405, b'{"error":"Use GET for account status."}', False)
                 return
             self.account_request(route, split.query, "GET", with_body)
+            return
+
+        if route == "live/campaign-clicks":
+            self.campaign_click_report(split.query, with_body)
             return
 
         if route.startswith("live/"):
@@ -881,6 +925,7 @@ def build_server(bind, port, token, bridge_path, write_path=None,
     server.console = {"live": None, "liveLock": threading.Lock(), "token": token,
                       "gateToken": gate_token or "", "bridge": Bridge(bridge_path, **kwargs),
                       "accounts": AccountControls(),
+                      "campaignClicks": campaign_clicks.ClickStore(),
                       "writes": WriteBridge(write_path or default_write_bridge()),
                       "schedules": WriteBridge(_volume_bin("console-schedule"), timeout=30),
                       "campaigns": WriteBridge(_volume_bin("console-campaign-create"), timeout=120),

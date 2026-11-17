@@ -8,9 +8,13 @@ stand-in script in a temporary directory, so these tests need no WhatsApp state,
 no network and no genaebot checkout.
 """
 
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
+import http.client
 import importlib.util
 import json
 import os
+import sqlite3
 import tempfile
 import threading
 import unittest
@@ -118,6 +122,71 @@ class ConsoleApiTests(unittest.TestCase):
         status, body, _ = self.fetch(base + "/live/groups")
         self.assertEqual(status, 503)
         self.assertNotIn(b"private detail", body)
+
+    def test_campaign_click_redirects_count_taps_and_skip_previews(self):
+        with unittest.mock.patch.dict(os.environ, {"OPENCLAW_STATE_DIR": self.directory.name}):
+            base = self.serve(gate_token=GATE)
+        store = self.server.console["campaignClicks"]
+        report = base + "/live/campaign-clicks?slug=repairs"
+        self.assertEqual(json.loads(self.fetch(report)[1]), {"totalClicks": 0, "groups": []})
+
+        original = "https://wa.me/26370000001?text=Repairs%20ref%20AR-AAA"
+        updated = "https://wa.me/26370000002?text=New%20number"
+        old_id = store.register("repairs", "1@g.us", "Old name", original)
+        self.assertEqual(store.register("repairs", "1@g.us", "Market", original), old_id)
+        new_id = store.register("repairs", "1@g.us", "Market", updated)
+        self.assertNotEqual(old_id, new_id)
+        second_id = store.register("repairs", "2@g.us", "Town", original)
+        self.assertNotEqual(old_id, second_id)
+        self.assertNotEqual(old_id, store.register("other", "1@g.us", "Market", original))
+
+        def request(link_id, method="GET", headers=None):
+            conn = http.client.HTTPConnection("127.0.0.1", self.server.server_address[1], timeout=5)
+            try:
+                # A supplied destination must have no effect.
+                conn.request(method, "/go/" + link_id + "?url=https://example.com", headers=headers or {})
+                response = conn.getresponse()
+                response.read()
+                return response.status, response.getheader("Location"), response.getheader("Cache-Control")
+            finally:
+                conn.close()
+
+        self.assertEqual(request("0" * 32)[0], 404)
+        self.assertEqual(request(old_id + "/other")[0], 404)
+        self.assertEqual(request(old_id, method="POST")[0], 405)
+        self.assertEqual(request(old_id, method="HEAD"), (302, original, "no-store"))
+        for headers in ({"User-Agent": "facebookexternalhit/1.1"},
+                        {"User-Agent": "WhatsApp/2.26 A"},
+                        {"Sec-Purpose": "prefetch;prerender"},
+                        {"Purpose": "prefetch"}):
+            self.assertEqual(request(old_id, headers=headers), (302, original, "no-store"))
+        self.assertEqual(json.loads(self.fetch(report)[1])["totalClicks"], 0)
+
+        with closing(sqlite3.connect(store.path)) as busy, busy:
+            busy.execute("BEGIN IMMEDIATE")
+            self.assertEqual(request(old_id), (302, original, "no-store"))
+        self.assertEqual(json.loads(self.fetch(report)[1])["totalClicks"], 0)
+
+        self.assertEqual(request(new_id), (302, updated, "no-store"))
+        self.assertEqual(request(second_id), (302, original, "no-store"))
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(lambda _: request(old_id), range(12)))
+        self.assertEqual(results, [(302, original, "no-store")] * 12)
+        status, body, headers = self.fetch(report)
+        self.assertEqual((status, headers["Cache-Control"]), (200, "no-store"))
+        self.assertEqual(json.loads(body), {"totalClicks": 14, "groups": [
+            {"jid": "1@g.us", "name": "Market", "clicks": 13},
+            {"jid": "2@g.us", "name": "Town", "clicks": 1},
+        ]})
+        reopened = API.campaign_clicks.ClickStore({"OPENCLAW_STATE_DIR": self.directory.name})
+        self.assertEqual(reopened.report("repairs"), json.loads(body))
+        self.assertEqual(reopened.destination(old_id), original)
+        self.assertEqual(self.fetch(report, token=None)[0], 401)
+        self.assertEqual(self.fetch(report, token=GATE)[0], 401)
+        self.assertEqual(self.fetch(report + "&slug=other")[0], 400)
+        self.assertEqual(self.fetch(report + "&extra=1")[0], 400)
+        self.assertEqual(self.server.console["bridge"].runs, 0)
+        self.assertIsNone(self.server.console["live"])
 
     def test_account_routes_use_separate_uncached_controls(self):
         base = self.serve()
