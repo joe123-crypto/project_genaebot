@@ -15,8 +15,8 @@ is posted to only on its configured weekdays; groups only under the flat
 ``groups`` list are posted to daily). Weekly support is inert when a targets file
 has no ``weekly_groups`` key, so it is transparent for the daily-only promos.
 
-Caption rotation: ``text`` may be a single string (sent verbatim, unchanged
-behavior) or a list of caption variants. A group's variant is
+Caption rotation: ``text`` may be a single string or a list of caption
+variants. A group's variant is
 ``(post counter + stable hash of the group JID) % len(variants)``: the counter
 advances by one per post (per day for daily groups, per configured weekday for
 weekly-limited groups), so a group never gets the identical caption on two
@@ -24,14 +24,14 @@ consecutive posts, and the per-JID offset spreads groups across variants on any
 given day. The hash is ``hashlib.sha256`` -- NOT Python's per-process salted
 ``hash()`` -- so the choice is identical across runs and retries.
 
-Tracking links (opt-in per promo via ``tracking=``): each group gets a short,
+Generated contact links (opt-in per promo via ``tracking=``): each group gets a short,
 stable ref code (promo prefix + 3 chars derived from the group JID, e.g.
 ``BH-7K2``) inside a ``wa.me`` click-to-chat link whose prefilled text names the
 ad and the ref. A caption may place it with ``{ref_link}`` / ``{ref}``
-placeholders; otherwise a "tap to chat" line is appended. A promo that passes no
-``tracking`` sends exactly the caption it supplies. ``--refs`` prints the
-ref -> promo + group JID mapping (no sends, no state mutation) so codes seen in
-DMs can be decoded later.
+placeholders; otherwise a "tap to chat" line is appended. ``--refs`` prints the
+ref -> promo + group JID mapping so codes seen in DMs can be decoded later.
+When ``GENAIE_CAMPAIGN_CLICK_BASE_URL`` is configured, real sends wrap supported
+WhatsApp links in the rendered caption for click tracking.
 
 Send spacing: consecutive group sends are spaced by a random gap drawn
 uniformly from [``send_delay_min``, ``send_delay_max``] seconds (default 20-60,
@@ -1055,7 +1055,7 @@ def broadcast(*, text, image, state_file, promo_name, send_delay=None, argv=None
     committing state per group so a crash or retry never double-posts. Returns a
     process exit code: 0 on success, 1 if any hard (non-permission) send failed.
 
-    ``text`` is one caption (str, sent as-is) or a list of caption variants that
+    ``text`` is one caption or a list of caption variants that
     rotate per group per post (see :func:`variant_index`). ``tracking`` is
     optional: ``{"prefix": "BH", "number": "+263...", "label": "borehole"}`` plus
     optional ``prefill`` / ``link_line`` templates; when set, each group's caption
