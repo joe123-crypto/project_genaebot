@@ -759,6 +759,13 @@ with an extra line `Tap to chat on WhatsApp: https://wa.me/<number>?text=...`
 whose prefilled text reads `Hi, I saw your borehole ad (ref BH-VD4)`. A caption
 may instead place the link itself with the `{ref_link}` / `{ref}` placeholders.
 
+When `GENAIE_CAMPAIGN_CLICK_BASE_URL` is configured, new campaign posts wrap
+that CTA in a tracked link. The redirect counts estimated taps for the
+campaign and group before opening the configured WhatsApp chat, including
+the repair shop's number. Campaign Details shows the total and group counts.
+Repeated taps count individually. Posts already using direct `wa.me` links
+have no click history. [Rollout instructions](deploy/railway/README.md#campaign-click-tracking).
+
 | Promo | Prefix | Link target |
 |---|---|---|
 | appliance-repairs-promo | AR | +263713911390 (the repair shop, pinned) |

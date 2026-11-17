@@ -797,6 +797,25 @@ railway ssh -- python3 -c 'import urllib.request as u; print(u.urlopen("http://1
 Reaching it from outside needs a Railway domain whose target port is
 `CONSOLE_API_PORT`. That exposes only this API; 18789 stays private.
 
+### Campaign click tracking
+
+Ship the console API with `GENAIE_CAMPAIGN_CLICK_BASE_URL` unset. Verify that
+`GET /internal/console/live/campaign-clicks?slug=appliance-repairs` requires the
+operator bearer token and returns an empty report for a campaign with no tracked
+links. A registered `/go/<id>` serves a temporary, non-cacheable redirect
+without a token. Check both a bot and a third-party destination from a test
+WhatsApp chat on Android, iOS and WhatsApp Web. Check the prefilled message and
+that previews alone add zero before clicking. The companion console can ship
+once the report route is live.
+
+After those checks, set `GENAIE_CAMPAIGN_CLICK_BASE_URL` to the public HTTPS
+origin for the console API, currently
+`https://gateway-production-feba.up.railway.app` in production. New generated CTAs
+will start using it on the next deployment. To pause new tracked links, unset
+that variable and keep the API and its domain serving existing links. The
+redirect targets and counters live in `runtime/campaign-clicks.sqlite` on the
+mounted state volume. Preserve that database during a redeploy or restore.
+
 ### The release gates' read-scoped token
 
 The two release gates need one read -- the campaign list -- and must not be able
