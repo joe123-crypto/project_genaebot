@@ -95,6 +95,7 @@ def validate_definition(slug, data):
     campaign (``deploy/migrate-campaigns-to-firestore.py``)."""
     need(isinstance(data.get("name"), str) and 0 < len(data["name"].strip()) <= 120, "enter a campaign name (at most 120 characters)")
     need(type(data.get("enabled")) is bool, "enabled must be boolean")
+    need(type(data.get("trackClicks", True)) is bool, "trackClicks must be boolean")
     captions = data.get("captions")
     need(isinstance(captions, list) and captions and all(isinstance(text, str) and text.strip() for text in captions), "keep at least one nonblank caption")
     schedule = data.get("schedule")
@@ -127,20 +128,24 @@ def validate_definition(slug, data):
     need(isinstance(data.get("failureAlertTo", ""), str), "invalid failure alert number")
     if data.get("failureAlertTo"):
         need(re.fullmatch(phone, data["failureAlertTo"]), "use an international failure alert number")
-    tracking = data.get("tracking", {})
+    validate_tracking(data.get("tracking", {}))
+    return data
+
+
+def validate_tracking(tracking):
+    """Validate reference-link settings on creation and operator edits."""
     need(isinstance(tracking, dict) and not set(tracking) - {"prefix", "label", "number", "prefill", "link_line"}, "invalid tracking settings")
     if tracking:
         need(isinstance(tracking.get("prefix"), str) and re.fullmatch(r"[A-Za-z0-9-]{1,64}", tracking["prefix"]), "tracking requires a ref prefix")
         need(all(isinstance(value, str) and len(value) <= 1000 for value in tracking.values()), "invalid tracking text")
         if tracking.get("number"):
-            need(re.fullmatch(phone, tracking["number"]), "use an international contact number")
-    return data
+            need(re.fullmatch(r"\+[1-9][0-9]{6,14}", tracking["number"]), "use an international contact number")
 
 
 def validate(data):
     need(isinstance(data, dict), "campaign must be an object")
     allowed = {"requestId", "slug", "name", "enabled", "captions", "images", "schedule", "groups",
-               "tracking", "comment", "weeklyComment", "timeoutSeconds", "failureAlertTo", "actor"}
+               "tracking", "trackClicks", "comment", "weeklyComment", "timeoutSeconds", "failureAlertTo", "actor"}
     need(not set(data) - allowed, "campaign has unexpected fields")
     need(len(json.dumps(data).encode()) <= MAX_REQUEST, "campaign configuration exceeds 60 KiB")
     need(isinstance(data.get("requestId"), str) and re.fullmatch(r"[a-f0-9-]{36}", data["requestId"]), "invalid request ID")
@@ -312,7 +317,7 @@ def create(data, store, env=None, verify=verify_image, reconcile=None):
                 raw["groups"].append((selection["jid"], config.encode_fields(group)))
         need(slug not in dict(raw["campaigns"]), "a campaign with this ID already exists; choose a different name")
         campaign = {"kind": "console", "name": data["name"].strip(), "enabled": data["enabled"],
-                    "captions": data["captions"], "schedule": data["schedule"], "tracking": data.get("tracking", {}),
+                    "captions": data["captions"], "schedule": data["schedule"], "tracking": data.get("tracking", {}), "trackClicks": data.get("trackClicks", True),
                     "comment": data.get("comment", ""), "weekly_comment": data.get("weeklyComment", ""),
                     "timeoutSeconds": data.get("timeoutSeconds", 7200), "failureAlertTo": data.get("failureAlertTo", ""),
                     "images": data["images"], "scheduleStatus": "pending",
@@ -554,7 +559,7 @@ def records(membership, day, switches=None, only_slug=None):
                        "cron": cron_expression(campaign["schedule"]), "hour": hour, "minute": minute,
                        "scheduleMinutes": schedule_minutes(campaign, day), "timezone": campaign["schedule"]["timezone"],
                        "failureAlertTo": campaign.get("failureAlertTo", ""),
-                       "timeoutSeconds": campaign["timeoutSeconds"], "captions": campaign["captions"], "tracking": campaign.get("tracking", {}),
+                       "timeoutSeconds": campaign["timeoutSeconds"], "captions": campaign["captions"], "tracking": campaign.get("tracking", {}), "trackClicks": campaign.get("trackClicks", True),
                        "images": [image["filename"] for image in campaign["images"]],
                        "targetCount": len(daily) + len(weekly), "weeklyCount": len(weekly), "accounts": accounts,
                        "source": "console", "jobName": job_name(slug, campaign),
@@ -594,5 +599,5 @@ def run_campaign(slug, argv=None, now=None, resolve=None, broadcast=None, ensure
             return 0
         return (broadcast or promo_broadcast.broadcast)(text=campaign["captions"], image=paths,
                     state_file=str(state / "state.json"),
-                    tracking=campaign.get("tracking") or None, promo_name=slug + "-promo", argv=argv or [],
+                    tracking=campaign.get("tracking") or None, track_clicks=campaign.get("trackClicks", True), promo_name=slug + "-promo", argv=argv or [],
                     cron_timeout=campaign["timeoutSeconds"], run_day=day, cap_day=now.astimezone(ZoneInfo("Africa/Harare")).date(), resolve_config=lambda *args, **kwargs: source)

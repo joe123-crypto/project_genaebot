@@ -170,6 +170,7 @@ class Creation(unittest.TestCase):
         self.assertFalse(campaign["enabled"])
         self.assertEqual(campaign["timeoutSeconds"], 7200)
         self.assertEqual(campaign["tracking"], {})
+        self.assertIs(campaign["trackClicks"], True)
         self.assertEqual(campaign["failureAlertTo"], "")
         group = self.store.get("groups", JID_A)
         self.assertEqual(group["promos"], before["promos"] + ["demo"])
@@ -178,6 +179,41 @@ class Creation(unittest.TestCase):
         self.assertTrue(self.store.docs["audit"])
         self.assertTrue(self.store.docs["assets"])
         self.assertFalse(self.store.in_transaction)
+    def test_click_tracking_setting_round_trips_and_reaches_sender(self):
+        for value in (None, False, True):
+            with self.subTest(trackClicks=value):
+                self.store = MemoryStore()
+                if value is None:
+                    self.data.pop("trackClicks", None)
+                else:
+                    self.data["trackClicks"] = value
+                self.data["enabled"] = True
+                self.create()
+                self.store.docs["campaigns"]["demo"].update(config.encode_fields({"scheduleStatus": "ready"}))
+                if value is None:
+                    self.store.docs["campaigns"]["demo"].pop("trackClicks", None)
+                expected = True if value is None else value
+                membership, enabled, _ = config.assemble({name: self.store.list(name) for name in config.COLLECTIONS})
+                source = {"mode": "firestore", "enabled": True, "membership": membership}
+                row = next(row for row in cc.records(membership, dt.date(2026, 11, 9), enabled) if row["slug"] == "demo")
+                self.assertIs(row["trackClicks"], expected)
+                engine = Mock(return_value=0)
+                cc.run_campaign("demo", resolve=lambda _: source, ensure=lambda _: "one.png", broadcast=engine)
+                self.assertIs(engine.call_args.kwargs["track_clicks"], expected)
+
+    def test_direct_link_edit_commits_caption_and_tracking_together(self):
+        self.create()
+        before = self.store.get("campaigns", "demo")
+        other = self.store.get("campaigns", "cv")
+        fields = {"captions": ["Chat https://wa.me/263785632943"], "tracking": {}, "trackClicks": False}
+        commits = len(self.store.commits)
+        with patch.object(cc, "Store", return_value=self.store):
+            result = writer.write("campaigns", "demo", fields, "operator", {**ENV, "GENAIE_CAMPAIGN_DELETION": "1"})
+        self.assertEqual(len(self.store.commits), commits + 1)
+        self.assertEqual(self.store.get("campaigns", "demo"), dict(before, **fields))
+        self.assertEqual(self.store.get("campaigns", "cv"), other)
+        self.assertEqual(self.store.get("audit", result["audit"])["after"], dict(before, **fields))
+
     def test_same_operation_retries_without_writes_and_changed_payload_is_refused(self):
         self.create()
         self.create()
@@ -204,7 +240,7 @@ class Creation(unittest.TestCase):
         self.assertIn("demo", self.store.get("groups", JID_A)["paused_promos"])
         self.assertEqual(self.store.get("groups", JID_B)["weekly"]["demo"], ["Mon", "Wed", "Fri"])
     def test_invalid_inputs_are_refused_before_any_write(self):
-        for changes in [{"captions": [" "]}, {"images": []}, {"groups": []}, {"timeoutSeconds": True}, {"tracking": {"number": "+10000000000"}}, {"schedule": {"time": "25:00", "timezone": "Africa/Harare", "weekdays": [0]}}]:
+        for changes in [{"trackClicks": "false"}, {"trackClicks": None}, {"captions": [" "]}, {"images": []}, {"groups": []}, {"timeoutSeconds": True}, {"tracking": {"number": "+10000000000"}}, {"schedule": {"time": "25:00", "timezone": "Africa/Harare", "weekdays": [0]}}]:
             with self.subTest(changes=changes), self.assertRaises(writer.WriteRefused): cc.validate({**payload(), **changes})
         self.assertEqual(self.store.commits, [])
     def test_saved_pending_recovers_after_lost_gateway_ack_and_restart(self):

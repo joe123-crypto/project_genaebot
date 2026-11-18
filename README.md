@@ -764,6 +764,13 @@ generated and pasted `wa.me` phone links and WhatsApp Business short links.
 The redirect counts estimated taps for the
 campaign and group before opening the configured WhatsApp chat, including
 the repair shop's number. Campaign Details shows the total and group counts.
+Campaigns default to `trackClicks: true`. Set `trackClicks: false` on a campaign
+to keep its WhatsApp links direct without issuing redirect tokens. To use only a
+literal link, also replace `{ref_link}` in its captions and clear `tracking` to
+`{}`; otherwise the reference-link renderer can append a second link. Save these
+fields together through the audited `config/campaigns/<slug>` API after deploying
+the sender support. Existing links and historical counts remain available.
+
 Home shows all-time and daily clicks across campaigns. The daily count uses
 the campaign day in Africa/Harare and starts when dated counting goes live.
 Repeated taps count individually. Posts already using direct `wa.me` links

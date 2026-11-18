@@ -1045,7 +1045,7 @@ def apply_caps(promo_name, jids, day, caps=_PROBE_CAPS, record=True,
 
 @campaign_transport
 def broadcast(*, text, image, state_file, promo_name, send_delay=None, argv=None,
-              tracking=None, variant_images=None,
+              tracking=None, track_clicks=True, variant_images=None,
               send_delay_min=None, send_delay_max=None, rng=None, sleep=None,
               cron_timeout=None, start_jitter=None,
               caps=_PROBE_CAPS, account_status=None,
@@ -1054,6 +1054,8 @@ def broadcast(*, text, image, state_file, promo_name, send_delay=None, argv=None
     off their configured weekday), then send the advert to each pending group,
     committing state per group so a crash or retry never double-posts. Returns a
     process exit code: 0 on success, 1 if any hard (non-permission) send failed.
+
+    ``track_clicks=False`` keeps WhatsApp links direct and issues no click tokens.
 
     ``text`` is one caption or a list of caption variants that
     rotate per group per post (see :func:`variant_index`). ``tracking`` is
@@ -1295,7 +1297,7 @@ def broadcast(*, text, image, state_file, promo_name, send_delay=None, argv=None
     import campaign_deletion
     campaign_slug = promo_config.promo_key(promo_name)
     try:
-        click_base = campaign_clicks.base_url()
+        click_base = campaign_clicks.base_url() if track_clicks else None
     except ValueError:
         sys.stderr.write("WARN: Invalid campaign click base URL; using direct WhatsApp links.\n")
         click_base = None
