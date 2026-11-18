@@ -51,7 +51,7 @@ PREVIEW_KEYS = {
 }
 CAMPAIGN_KEYS = {
     "slug", "name", "cron", "hour", "minute", "timezone",
-    "failureAlertTo", "timeoutSeconds", "captions", "tracking",
+    "failureAlertTo", "timeoutSeconds", "captions", "tracking", "trackClicks",
     "images", "assets", "targetCount", "weeklyCount", "accounts", "source",
     "error", "enabled", "storeEnabled", "cronEnabled", "scheduleMinutes", "scheduleEdit",
     "jobName", "scheduleStatus", "scheduleEntries",
