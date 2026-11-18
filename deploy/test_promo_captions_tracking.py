@@ -364,11 +364,11 @@ class ClickLinkTests(unittest.TestCase):
         self.image = self.root / "ad.png"
         self.image.write_bytes(b"img")
 
-    def broadcast(self, tracking, text, args=()):
+    def broadcast(self, tracking, text, args=(), **options):
         with patch.dict(os.environ, self.env), patch.object(pb, "send_ad", return_value=(True, "sent")) as send:
             code = pb.broadcast(
                 text=text, image=str(self.image), state_file=str(self.root / "sent.json"),
-                promo_name="alpha-promo", tracking=tracking, argv=list(args), send_delay=0,
+                promo_name="alpha-promo", tracking=tracking, argv=list(args), send_delay=0, **options,
                 start_jitter=0, caps=None, account_status=lambda accounts: {a: True for a in accounts},
                 resolve_config=promo_fixture.resolver_for(
                     [self.JID], entries={self.JID: {"name": "Market"}},
@@ -396,6 +396,16 @@ class ClickLinkTests(unittest.TestCase):
         self.assertEqual(len(set(ids)), 2)
         self.assertEqual(store.report("alpha")["groups"], [
             {"jid": self.JID, "name": "Market", "clicks": 0}])
+
+    def test_campaign_can_opt_out_without_changing_other_campaign_tracking(self):
+        caption = "Tap to chat on WhatsApp: https://wa.me/263785632943"
+        with patch.object(campaign_clicks, "ClickStore", side_effect=AssertionError("no click store for opted-out campaign")):
+            self.assertEqual(self.broadcast(None, caption, track_clicks=False), caption)
+        self.assertFalse(campaign_clicks.ClickStore(self.env).path.exists())
+        (self.root / "sent.json").unlink()
+        sent = self.broadcast(None, caption)
+        self.assertIn(self.BASE + "/go/", sent)
+        self.assertNotIn("wa.me", sent)
 
     def test_preview_runs_create_no_click_links(self):
         for flag in ("--refs", "--dry-run"):

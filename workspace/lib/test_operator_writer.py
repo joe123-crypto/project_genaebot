@@ -162,6 +162,21 @@ class AppliedChanges(Harness):
         self.assertEqual((stored["promos"], stored["paused_promos"], stored["weekly"]),
                          (["genaie"], [], {}))
 
+    def test_campaign_direct_link_edit_is_atomic_and_preserves_other_fields(self):
+        self.env["GENAIE_CONFIG_SOURCE"] = "firestore"
+        before = self.stored("campaigns", "cv")
+        patch = {"trackClicks": False, "tracking": {}, "captions": ["Chat https://wa.me/263785632943"]}
+        result = self.write("campaigns", "cv", patch)
+        self.assertEqual(self.stored("campaigns", "cv"), dict(before, **patch))
+        self.assertEqual(set(result["fields"]), set(patch))
+        self.assertIsNotNone(result["audit"])
+        for invalid in ({"trackClicks": "false"}, {"trackClicks": 0}, {"trackClicks": None},
+                        {"tracking": None}, {"tracking": {"number": "+263785632943"}},
+                        {"tracking": {"prefix": "GN", "number": "invalid"}}):
+            with self.assertRaises(ow.WriteRefused):
+                self.write("campaigns", "cv", invalid)
+        self.assertEqual(self.stored("campaigns", "cv"), dict(before, **patch))
+
     def test_a_campaign_can_be_switched_off(self):
         self.write("campaigns", "cv", {"enabled": False})
         self.assertIs(self.stored("campaigns", "cv")["enabled"], False)

@@ -821,6 +821,13 @@ rolling back after the first pasted links have been sent. The
 redirect targets and counters live in `runtime/campaign-clicks.sqlite` on the
 mounted state volume. Preserve that database during a redeploy or restore.
 
+Campaigns default to `trackClicks: true`. Set `trackClicks: false` on a campaign
+to keep its WhatsApp links direct without issuing redirect tokens. To use only a
+literal link, also replace `{ref_link}` in its captions and clear `tracking` to
+`{}`; otherwise the reference-link renderer can append a second link. Save these
+fields together through the audited `config/campaigns/<slug>` API after deploying
+the sender support. Existing links and historical counts remain available.
+
 ### The release gates' read-scoped token
 
 The two release gates need one read -- the campaign list -- and must not be able

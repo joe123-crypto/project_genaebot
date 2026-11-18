@@ -70,7 +70,7 @@ EDITABLE = {
     "groups": ("name", "source", "status", "activity", "account", "daily_cap",
                "promos", "paused_promos", "weekly", "note"),
     "lines": ("number",),
-    "campaigns": ("enabled", "comment", "weekly_comment", "dir", "captions"),
+    "campaigns": ("enabled", "comment", "weekly_comment", "dir", "captions", "tracking", "trackClicks"),
     "settings": ("activity", "caps_enabled", "rotation_enabled", "contact_account",
                  "bands"),
 }
@@ -226,6 +226,15 @@ def reinterpreted(collection, patch, fields):
     if collection == "campaigns" and "enabled" in patch:
         if not isinstance(patch["enabled"], bool):
             problems.append("enabled must be true or false, got %r" % (patch["enabled"],))
+    if collection == "campaigns":
+        if "trackClicks" in patch and type(patch["trackClicks"]) is not bool:
+            problems.append("trackClicks must be true or false")
+        if "tracking" in patch:
+            import console_campaigns
+            try:
+                console_campaigns.validate_tracking(patch["tracking"])
+            except WriteRefused as ex:
+                problems.append(str(ex))
     if collection != "settings":
         return problems
     if "caps_enabled" in patch and not isinstance(patch["caps_enabled"], bool):
