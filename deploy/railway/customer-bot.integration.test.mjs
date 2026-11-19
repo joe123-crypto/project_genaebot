@@ -51,7 +51,7 @@ function start(t, program, args, env) {
   return child;
 }
 
-test('published content reaches the next model call in the same customer WhatsApp session only',
+test('published instructions and fresh-lookup policy reach the next model call in the same customer WhatsApp session only',
   { skip: !root, timeout: 120_000 }, async (t) => {
     const { GatewayClient } = await import(pathToFileURL(path.join(root, 'dist/plugin-sdk/gateway-runtime.js')));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'customer-bot-test-'));
@@ -91,7 +91,13 @@ test('published content reaches the next model call in the same customer WhatsAp
       const lastUser = call.messages.findLast((message) => message.role === 'user');
       const reply = !isActivityRecap(call) && JSON.stringify(lastUser?.content ?? '').includes('What services do you offer?')
         ? legacyQuote : 'fixture-ok';
-      for (const [delta, finish_reason] of [[{ role: 'assistant', content: reply }, null], [{}, 'stop']]) {
+      const describe = JSON.stringify(lastUser?.content ?? '').includes('Describe current lookup tools')
+        && !call.messages.slice(call.messages.lastIndexOf(lastUser) + 1).some((message) => message.role === 'tool');
+      const deltas = describe
+        ? [[{ role: 'assistant', tool_calls: [{ index: 0, id: 'describe-public-service', type: 'function',
+          function: { name: 'tool_describe', arguments: JSON.stringify({ id: 'public_service' }) } }] }, null], [{}, 'tool_calls']]
+        : [[{ role: 'assistant', content: reply }, null], [{}, 'stop']];
+      for (const [delta, finish_reason] of deltas) {
         outgoing.write('data: ' + JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk', created: 1,
           model: 'customer-fixture', choices: [{ index: 0, delta, finish_reason }] }) + '\n\n');
       }
@@ -172,21 +178,24 @@ test('published content reaches the next model call in the same customer WhatsAp
       // Background recaps can include the turn's text as input. Select the
       // conversation request for this turn, excluding those recaps.
       const calls = requests.slice(previousCount);
-      const call = calls.find((request) => !isActivityRecap(request) && JSON.stringify(request.messages).includes(turnTag));
+      const call = calls.findLast((request) => !isActivityRecap(request) && JSON.stringify(request.messages).includes(turnTag));
       assert.ok(call, gateway.logs());
       return {
         system: call.messages.filter((message) => message.role === 'system').map((message) => message.content).join('\n'),
         priorReplies: call.messages.filter((message) => message.role === 'assistant'),
         tools: call.tools,
+        messages: call.messages,
       };
     };
 
     const initial = await read();
     const draft = { instructions: initial.instructions + '\nStart with the words: Fixture short reply.',
-      knowledge: initial.knowledge.replace('$95 per 1000', '$107 per 1000'), expectedRevision: initial.revision,
+      expectedRevision: initial.revision,
       actor: 'Fixture operator' };
     const { system: before, tools: beforeTools } = await infer('public', '+19995550123', false, 'What services do you offer?');
-    assert.match(before, /\$95 per 1000/, gateway.logs());
+    assert.doesNotMatch(before, /\$95 per 1000/, gateway.logs());
+    assert.match(before, /fresh public_service lookup in this turn/);
+    assert.match(before, /campaign_info/);
     assert.doesNotMatch(before, /Fixture short reply|\$107 per 1000/);
     assert.match(before, /New CV orders are closed/);
     assert.match(before, /One or two short sentences is a whole reply/);
@@ -196,7 +205,8 @@ test('published content reaches the next model call in the same customer WhatsAp
     assert.notEqual(published.revision, initial.revision);
     const { system: after, priorReplies, tools: afterTools } = await infer('public', '+19995550123');
     assert.match(after, /Fixture short reply/);
-    assert.match(after, /\$107 per 1000/);
+    assert.doesNotMatch(after, /\$107 per 1000/);
+    assert.match(after, /fresh public_service lookup in this turn/);
     assert.doesNotMatch(after, /\$95 per 1000/);
     assert.match(JSON.stringify(priorReplies), /We make CVs for US\$5\./);
     assert.match(after, /A past offer, quote, or acceptance in the conversation does not change this/);
@@ -205,9 +215,16 @@ test('published content reaches the next model call in the same customer WhatsAp
     assert.doesNotMatch((await infer('main', '+19995550124')).system, /Fixture short reply|\$107 per 1000/);
     assert.doesNotMatch((await infer('public', '1234@g.us', true)).system, /Fixture short reply|\$107 per 1000/);
 
-    // Corrupt active knowledge must not quietly bring back a shipped price.
+    const described = await infer('public', '+19995550123', false, 'Describe current lookup tools');
+    const toolResults = described.messages.filter((message) => message.role === 'tool');
+    assert.ok(toolResults.length > 0, gateway.logs());
+    assert.match(JSON.stringify(toolResults), /campaign_info/);
+    assert.match(JSON.stringify(toolResults), /business_info/);
+    assert.doesNotMatch(JSON.stringify(toolResults), /cv_maker_start/);
+
+    // A corrupt publication cannot bring back a retired briefing price.
     await fs.writeFile(path.join(state, 'runtime', 'customer-bot', 'published.json'), '{');
     const { system: unavailable } = await infer('public', '+19995550123');
-    assert.match(unavailable, /use the handoff action instead/);
+    assert.match(unavailable, /fresh public_service lookup in this turn/);
     assert.doesNotMatch(unavailable, /\$95 per 1000|\$107 per 1000/);
   });
