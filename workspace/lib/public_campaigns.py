@@ -58,7 +58,7 @@ def live_documents(env, campaign_id, *, opener, signer, now, sleep):
 def public_schedule(doc, day):
     result = []
     desired = entries.entries(doc)
-    if not isinstance(desired, dict) or not 0 < len(desired) <= MAX_MATCHES:
+    if not isinstance(desired, dict) or not desired:
         raise ValueError("Invalid schedule entries")
     for entry in desired.values():
         if entry.get("deleted", False):
@@ -97,25 +97,27 @@ def project(slug, doc, *, day, cv_available):
         captions = [text for text in captions if not CV.search(text)]
     captions = list(dict.fromkeys(text.strip() for text in captions if text.strip()))
     schedules = public_schedule(doc, day)
+    edit = doc.get("scheduleEdit", {})
+    if not isinstance(edit, dict) or type(edit.get("pending", False)) is not bool:
+        raise ValueError("Invalid schedule confirmation")
     status = "enabled"
     if not doc["enabled"]:
         status = "disabled"
-    elif doc["scheduleStatus"] != "ready":
+    elif doc["scheduleStatus"] != "ready" or edit.get("pending", False) or any(row["pending"] for row in schedules):
         status = "pending"
     elif not any(not row["paused"] for row in schedules):
         status = "paused"
     borehole = bool(BOREHOLE.search(doc["name"] + " " + slug + " " + " ".join(captions)))
-    value = {"campaign_id": slug, "name": "Borehole services" if borehole else doc["name"].strip(), "advertising_status": status}
-    if status != "enabled":
-        return value  # Old offers and schedules are not a current promotion.
-    # Supplier identities and original borehole captions must never enter the
-    # public model context. The existing matching tool owns those facts.
+    value = {"name": "Borehole services" if borehole else doc["name"].strip(), "advertising_status": status}
+    # Campaign slugs can be supplier names too. Borehole enquiries route to the
+    # dedicated tool and must not expose the original identifier in model data.
+    if not borehole:
+        value["campaign_id"] = slug
     if borehole:
         value["requires_action"] = "borehole_info"
-    else:
-        if len(json.dumps(captions).encode()) > CONTENT_LIMIT:
-            raise ValueError("Offer too large; never truncate price conditions")
-        value["advertised_content"] = captions
+    if status != "enabled" or borehole:
+        return value  # Inactive offers and supplier schedules are not public facts.
+    value["advertised_content"] = captions
     value["schedule"] = schedules
     return value
 
@@ -136,6 +138,7 @@ def lookup(env=None, *, query="", campaign_id="", discover=False, cv_available=F
         fetched = dt.datetime.fromtimestamp(now(), dt.timezone.utc)
         day = fetched.astimezone(ZoneInfo(schedule.DISPLAY_ZONE)).date()
         matches = []
+        routes = set()
         invalid = False
         for slug, fields in docs:
             try:
@@ -150,14 +153,25 @@ def lookup(env=None, *, query="", campaign_id="", discover=False, cv_available=F
             if public["advertising_status"] != "enabled" and not exact:
                 continue
             searchable = " ".join([slug, public["name"], *public.get("advertised_content", [])])
+            if public.get("requires_action") == "borehole_info":
+                searchable += " borehole drilling survey casing installation solar flushing deepening repair capacity testing pump retrieval"
             if query and not exact and not terms(query).issubset(terms(searchable)):
                 continue
-            matches.append(public)
-        matches.sort(key=lambda row: row["campaign_id"])
+            if public.get("requires_action"):
+                route = (public["requires_action"], public["advertising_status"])
+                if route in routes:
+                    continue
+                routes.add(route)
+            matches.append((slug, public))
+        matches.sort(key=lambda row: row[0])
+        matches = [row for _, row in matches]
         multiple = bool(query and len(matches) > 1)
         if discover or (not query and not campaign_id) or multiple:
             matches = [{k: v for k, v in row.items() if k not in ("advertised_content", "schedule")}
                        for row in matches]
+        if any(len(json.dumps(row.get("advertised_content", [])).encode()) > CONTENT_LIMIT
+               or len(row.get("schedule", [])) > MAX_MATCHES for row in matches):
+            raise ValueError("Offer too large; never truncate content or schedules")
         more = len(matches) > MAX_MATCHES
         status = "ok" if matches else "unavailable" if invalid else "not_found"
         if multiple or more:

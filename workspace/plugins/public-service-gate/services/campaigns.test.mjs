@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -27,7 +29,16 @@ function fixture(t) {
   plugin.register(api);
   const tool = factory({ agentId: "public", messageChannel: "whatsapp", requesterSenderId: "+26370000001", accountId: "ads" });
   return { dir, api, factory, tool, args: () => JSON.parse(fs.readFileSync(argsFile)),
-    set(value) { fs.writeFileSync(resultFile, JSON.stringify(value)); } };
+    set(value) {
+      const result = { source: "live_campaigns", guidance: "Use only this turn's lookup.",
+        fetched_at: "2026-11-19T12:00:00+00:00", service_availability: { cv_new_orders: false }, more: false, ...value };
+      result.campaigns = result.campaigns.map((row) => ({
+        campaign_id: "bricks", advertising_status: "enabled", ...row,
+        ...(row.advertised_content ? { schedule: [{ time: "09:07", timezone: "Africa/Harare", weekdays: [0],
+          paused: false, skipped_today: false, pending: false }] } : {}),
+      }));
+      fs.writeFileSync(resultFile, JSON.stringify(result));
+    } };
 }
 
 test("a factual follow-up uses a new lookup, forwards only supported selectors and keeps runtime CV restrictions", async (t) => {
@@ -64,6 +75,23 @@ test("missing sender identity and malformed selectors cannot reach the backend",
   assert.ok(f.args().includes("--query=$(echo unsafe)"));
 });
 
+test("unexpected helper fields and malformed content never cross the public tool boundary", async (t) => {
+  const f = fixture(t);
+  for (const value of [
+    { status: "ok", campaigns: [{ name: "Bricks", advertised_content: [{ secret: "PRIVATE" }] }] },
+    { status: "ok", campaigns: [{ name: "Bricks", internal_note: "PRIVATE" }] },
+    { status: "ok", secret: "PRIVATE", campaigns: [] },
+    { status: "unavailable", campaigns: [{ name: "Bricks", advertised_content: ["STALE $95"] }] },
+    { status: "ok", campaigns: [{ name: "Bricks", advertising_status: "disabled", advertised_content: ["STALE $95"] }] },
+  ]) {
+    f.set(value);
+    const result = await lookupCampaigns(f.api, { query: "bricks" });
+    assert.equal(result.status, "unavailable");
+    assert.deepEqual(result.campaigns, []);
+    assert.doesNotMatch(JSON.stringify(result), /PRIVATE|STALE/);
+  }
+});
+
 test("published instructions migrate without briefing injection and lookup rules apply to existing public chats only", (t) => {
   const f = fixture(t);
   const published = path.join(f.dir, "runtime", "customer-bot", "published.json");
@@ -84,4 +112,33 @@ test("published instructions migrate without briefing injection and lookup rules
   }
   fs.writeFileSync(published, "{");
   assert.match(buildCustomerBotContext(f.api, ctx).appendSystemContext, /fresh public_service lookup/);
+});
+
+test("the tool accepts the actual Python reader contract for discovery, details, restrictions and routing", async () => {
+  const script = `
+import json
+from unittest.mock import patch
+import operator_config as config
+import public_campaigns as public
+from test_operator_config import campaign
+
+def read(doc, **params):
+    with patch.object(public, "live_documents", return_value=[("bricks", config.encode_fields(doc))]):
+        return public.lookup({}, cv_available=False, **params)
+
+doc = {**campaign("bricks", "09:07"), "enabled": True}
+results = [read(doc, discover=True), read(doc, campaign_id="bricks"), read(doc, query="missing")]
+results.append(read({**doc, "enabled": False}, campaign_id="bricks"))
+results.append(read({**doc, "scheduleEdit": {"pending": True}}, campaign_id="bricks"))
+results.append(read({**doc, "name": "Private Borehole Supplier"}, query="drilling"))
+print(json.dumps(results))
+`;
+  const responses = JSON.parse(execFileSync("/usr/bin/python3", ["-c", script], {
+    encoding: "utf8", env: { ...process.env, PYTHONPATH: fileURLToPath(new URL("../../../lib/", import.meta.url)) },
+  }));
+  const api = { config: {}, logger: { warn(message) { assert.fail(message); } } };
+  for (const response of responses) {
+    const result = await lookupCampaigns(api, {}, async () => response);
+    assert.deepEqual(result, response);
+  }
 });

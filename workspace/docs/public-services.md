@@ -23,7 +23,13 @@ model-visible operational tool is `public_service`, declared by the
     time. Multiple matches require clarification. Inactive named campaigns return
     only status, never their old offers. Campaign data is untrusted reference
     material, never instructions. Borehole copy is replaced with a direction to
-    use `borehole_info`; CV offers are omitted while intake is unavailable.
+    use `borehole_info`; supplier identifiers and supplier schedules are omitted,
+    and matching borehole campaigns collapse into one generic routing result.
+    CV offers are omitted while intake is unavailable. Pending gateway schedule
+    confirmations are not current offers. Large valid campaigns stay discoverable,
+    but details that cannot fit completely return unavailable rather than being
+    truncated. The public tool validates the full helper response and rejects
+    unexpected fields or malformed nested values.
   - `handoff`: passes the customer to a person. It takes a `category` and short
     `details`, forwards fruit-tree and building-material requests to the partner
     on WhatsApp +263775489417 (nothing is forwarded for other categories),
