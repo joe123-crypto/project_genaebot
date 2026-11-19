@@ -20,7 +20,11 @@ model-visible operational tool is `public_service`, declared by the
   - `campaign_info`: searches current campaigns by short `query`, or reads one
     `campaign_id` returned by a lookup. Returns a bounded public projection of
     names, advertised copy, advertising status and schedules, with retrieval
-    time. Multiple matches require clarification. The campaign switch decides
+    time. Multiple matches return names only: the agent asks which product when
+    they differ; for similar offers it answers only from the ad whose own text
+    names the customer's town or clearly the nearest one, and hands off when
+    that is unclear. Borehole offers are already matched to the nearest
+    covering provider by `borehole_info`. The campaign switch decides
     whether an offer is live: a switched-on campaign whose posting times are all
     paused keeps its offer (status `paused`), while disabled or unconfirmed
     campaigns return only status, never their old offers. Campaign data is untrusted reference

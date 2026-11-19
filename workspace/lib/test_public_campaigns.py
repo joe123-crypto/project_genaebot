@@ -67,6 +67,8 @@ class PublicCampaignTests(Harness):
         detailed = self.lookup(campaign_id="bricks")
         self.assertEqual(detailed["campaigns"][0]["advertised_content"], ["Bricks $95", "Bricks $107"])
         self.assertIn("Hand off missing or conflicting facts", detailed["guidance"])
+        self.assertIn("nearest town", result["guidance"])
+        self.assertIn("Hand off anything you are not sure about", result["guidance"])
 
     def test_allowlist_excludes_private_fields_and_content_stays_untrusted(self):
         self.put("bricks", comment="PRIVATE NOTE", failureAlertTo="+26370000001",
