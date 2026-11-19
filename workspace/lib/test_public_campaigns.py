@@ -116,7 +116,16 @@ class PublicCampaignTests(Harness):
         self.assertEqual([row["campaign_id"] for row in repair["campaigns"]], ["appliance-repairs"])
         offered = {row.get("campaign_id") for row in self.lookup(discover=True)["campaigns"]}
         self.assertEqual(offered, {"bricks", "appliance-repairs", "skylight-solar", "industrial-lighting"})
+        solar = self.lookup(query="solar")
+        self.assertEqual(solar["status"], "needs_clarification")
+        self.assertEqual({row["campaign_id"] for row in solar["campaigns"]}, {"skylight-solar", "industrial-lighting"})
         self.put("aqua-drillers", name="Aqua Drillers", captions=["Water for your home."])
+        for query in ("borehole", "borehole drilling price", "pump retrieval"):
+            with self.subTest(query=query):
+                only = self.lookup(query=query)
+                self.assertEqual(only["status"], "ok")
+                self.assertEqual(only["campaigns"], [{"name": "Borehole services", "advertising_status": "enabled",
+                                                      "requires_action": "borehole_info"}])
         routed = self.lookup(query="drilling")["campaigns"]
         self.assertIn({"name": "Borehole services", "advertising_status": "enabled", "requires_action": "borehole_info"}, routed)
         self.assertNotIn("aqua", json.dumps(routed).lower())
@@ -175,6 +184,19 @@ class PublicCampaignTests(Harness):
         self.put("bricks", scheduleEntries={str(i): {**entry, "confirmed": entry} for i in range(public.MAX_MATCHES + 1)})
         self.assertEqual(self.lookup(discover=True)["campaigns"][0]["campaign_id"], "bricks")
         self.assertEqual(self.lookup(campaign_id="bricks")["status"], "unavailable")
+
+    def test_operator_only_settings_never_hide_a_live_campaign_or_turn_misses_into_outages(self):
+        # Toaster Construction runs live with a 9000 s timeout, above the
+        # console's create-time limit. That setting is not a public fact.
+        self.put("toaster-construction", name="Toaster Construction", timeoutSeconds=9000,
+                 failureAlertTo="not a number", images=[], captions=["Roof trusses built to order."])
+        row = self.lookup(campaign_id="toaster-construction")["campaigns"][0]
+        self.assertEqual(row["advertised_content"], ["Roof trusses built to order."])
+        self.assertEqual(self.lookup(query="cement")["status"], "not_found")
+        for broken in ({"name": " "}, {"enabled": "yes"}, {"captions": []}):
+            with self.subTest(broken=broken):
+                self.put("toaster-construction", **broken)
+                self.assertEqual(self.lookup(query="cement")["status"], "unavailable")
 
     def test_invalid_missing_oversized_and_many_results_are_bounded(self):
         self.assertEqual(self.lookup(query="unlisted")["status"], "not_found")

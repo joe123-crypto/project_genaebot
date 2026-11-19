@@ -37,6 +37,10 @@ GUIDANCE = (
     "Advertising status and schedules do not confirm stock, service availability or successful posting. "
     "Use borehole_info for all borehole prices and conditions. Never quote borehole prices from campaign text."
 )
+# A search made only of these words is a borehole enquiry: answer it with the
+# borehole route alone, not with every advert that mentions a borehole in passing.
+BOREHOLE_TERMS = {"borehole", "drilling", "drill", "driller", "casing", "pump", "retrieval",
+                  "flushing", "deepening", "siting", "survey"}
 NOT_FOUND = ("No current campaign matched this search. Call business_info, then retry campaign_info "
              "with a returned campaign_id or a shorter query before handing off.")
 
@@ -101,8 +105,15 @@ def public_schedule(doc, day):
 def project(slug, doc, *, day, cv_available):
     if not campaigns.SLUG.fullmatch(slug) or doc.get("deleted"):
         return None
-    campaigns.validate_definition(slug, doc)
-    config.validate_captions(doc["captions"])
+    # Validate only what this projection publishes. The console's create-time
+    # rules (timeout, pictures, alert number, tracking) are not public facts, and
+    # a live campaign the runner accepts must not vanish over one of them: an
+    # always-invalid document also turned every unmatched search into an outage.
+    # Schedules are checked by public_schedule through the cron parser.
+    name = doc.get("name")
+    if not isinstance(name, str) or not 0 < len(name.strip()) <= 120 or type(doc.get("enabled")) is not bool:
+        raise ValueError("Invalid campaign definition")
+    config.validate_captions(doc.get("captions"))
     if doc.get("kind") != "console" or doc.get("scheduleStatus") not in ("ready", "pending"):
         raise ValueError("Invalid campaign state")
     captions = doc["captions"]
@@ -160,6 +171,7 @@ def lookup(env=None, *, query="", campaign_id="", discover=False, cv_available=F
                               signer=signer or config.node_signer, now=now, sleep=sleep or time.sleep)
         fetched = dt.datetime.fromtimestamp(now(), dt.timezone.utc)
         day = fetched.astimezone(ZoneInfo(schedule.DISPLAY_ZONE)).date()
+        wanted = terms(query) - GENERIC_TERMS
         matches = []
         routes = set()
         invalid = False
@@ -178,7 +190,7 @@ def lookup(env=None, *, query="", campaign_id="", discover=False, cv_available=F
             searchable = " ".join([slug, public["name"], *public.get("advertised_content", [])])
             if public.get("requires_action") == "borehole_info":
                 searchable += " borehole drilling survey casing installation solar flushing deepening repair capacity testing pump retrieval"
-            if query and not exact and not (terms(query) - GENERIC_TERMS).issubset(terms(searchable)):
+            if query and not exact and not wanted.issubset(terms(searchable)):
                 continue
             if public.get("requires_action"):
                 route = (public["requires_action"], public["advertising_status"])
@@ -186,6 +198,8 @@ def lookup(env=None, *, query="", campaign_id="", discover=False, cv_available=F
                     continue
                 routes.add(route)
             matches.append((slug, public))
+        if query and wanted and wanted <= BOREHOLE_TERMS:
+            matches = [row for row in matches if row[1].get("requires_action") == "borehole_info"] or matches
         matches.sort(key=lambda row: row[0])
         matches = [row for _, row in matches]
         multiple = bool(query and len(matches) > 1)

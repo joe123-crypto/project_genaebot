@@ -30,7 +30,8 @@ model-visible operational tool is `public_service`, declared by the
     them still go to `borehole_info`. Caption placeholders (`{bot_number}`,
     `{ref_link}`, `{ref}`) are resolved before the model sees them, and question
     words such as "price" or "delivery" do not have to appear in the copy. A
-    search with no match suggests discovery and a retry by `campaign_id`.
+    search with no match suggests discovery and a retry by `campaign_id`. A search made
+    only of borehole words returns the borehole route alone.
     CV offers are omitted while intake is unavailable. Pending gateway schedule
     confirmations are not current offers. Large valid campaigns stay discoverable,
     but details that cannot fit completely return unavailable rather than being
@@ -100,7 +101,7 @@ above is actually in force:
 
 ## Service Catalog
 
-General offers live in the existing Firestore campaign records. `workspace/bin/public-read` reuses the runtime read-only authentication and campaign validators, reads only campaigns, and never uses display caches or outage snapshots. It never reads groups, audit trails or customer orders. The Customer Bot publication holds reply instructions only; version 1 knowledge is ignored and retained in publication history when replaced. Borehole offers live in the private provider catalog `workspace/data/borehole-providers.json` and are retrieved through `borehole_info`, which returns only anonymized offers matched to customer location and requirements. Skylight Solar is excluded from this catalog. The default catalog includes:
+General offers live in the existing Firestore campaign records. `workspace/bin/public-read` reuses the runtime read-only authentication, validates only the fields it publishes (name, switch, captions, schedule) so operator-only settings such as the run timeout never hide a live campaign, reads only campaigns, and never uses display caches or outage snapshots. It never reads groups, audit trails or customer orders. The Customer Bot publication holds reply instructions only; version 1 knowledge is ignored and retained in publication history when replaced. Borehole offers live in the private provider catalog `workspace/data/borehole-providers.json` and are retrieved through `borehole_info`, which returns only anonymized offers matched to customer location and requirements. Skylight Solar is excluded from this catalog. The default catalog includes:
 
 1. Building materials (partner, forwarded): bricks, quarry stones, sand, gravel.
 2. Fruit trees (partner, forwarded): grafted mango, pawpaw, orange, naartjie, lemon.
