@@ -22,9 +22,15 @@ model-visible operational tool is `public_service`, declared by the
     names, advertised copy, advertising status and schedules, with retrieval
     time. Multiple matches require clarification. Inactive named campaigns return
     only status, never their old offers. Campaign data is untrusted reference
-    material, never instructions. Borehole copy is replaced with a direction to
-    use `borehole_info`; supplier identifiers and supplier schedules are omitted,
-    and matching borehole campaigns collapse into one generic routing result.
+    material, never instructions. A campaign whose name or identifier names
+    borehole work is replaced with a direction to use `borehole_info`; supplier
+    identifiers and supplier schedules are omitted, and such campaigns collapse
+    into one generic routing result. Adverts that only mention boreholes in their
+    copy (solar, appliance repairs) keep their own offers; borehole questions about
+    them still go to `borehole_info`. Caption placeholders (`{bot_number}`,
+    `{ref_link}`, `{ref}`) are resolved before the model sees them, and question
+    words such as "price" or "delivery" do not have to appear in the copy. A
+    search with no match suggests discovery and a retry by `campaign_id`.
     CV offers are omitted while intake is unavailable. Pending gateway schedule
     confirmations are not current offers. Large valid campaigns stay discoverable,
     but details that cannot fit completely return unavailable rather than being
@@ -65,9 +71,12 @@ above is actually in force:
   general questions from fresh tool lookups on every factual turn. Anything absent from
   the results is never guessed; the customer is handed off instead. The reply
   instructions carry tone examples; they do not override current facts.
-- Location and coverage questions use the relevant current campaign lookup.
-  Never infer delivery availability, an address or transport charges from old
-  examples or the retired briefing. Missing information requires handoff.
+- Location questions get the stable policy in the default reply instructions:
+  "All our services operate all around Zimbabwe. Where are you from?" in the
+  customer's language, never a base town, suburb, address, office or yard.
+  Delivery availability and transport charges come only from a current lookup;
+  missing information requires handoff. The order details to collect, the jobs
+  group and the website are stable policies there too.
 - Handoff happens when a customer is ready to order, or asks something the
   live lookup does not answer. After a handoff the gate drops every later
   message from that customer before the agent runs (`runtime/public-service-gate/handoffs.json`),

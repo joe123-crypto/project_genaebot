@@ -93,6 +93,50 @@ class PublicCampaignTests(Harness):
         self.put("genaie", captions=["Need a CV? Just $5. Pay now.", "Bricks for sale."])
         self.assertEqual(self.lookup(campaign_id="genaie")["campaigns"][0]["advertised_content"], ["Bricks for sale."])
 
+    def test_adverts_that_only_mention_boreholes_keep_their_own_offers(self):
+        # Caption shapes from the live Appliance Repairs, Skylight Solar and
+        # Industrial Lighting adverts. Only the name or identifier routes a
+        # campaign to borehole_info; copy that mentions boreholes does not.
+        self.put("appliance-repairs", name="Appliance Repairs",
+                 captions=["Is your TV, Inverter, Welding Machine, Borehole Drive or Microwave broken? We repair them."])
+        self.put("skylight-solar", name="Skylight Solar",
+                 captions=["Solar packages: run your TV, fridge, lights, fan & borehole uninterrupted. "
+                           "Water solutions: Survey, Drilling, Flushing & Installation."])
+        self.put("industrial-lighting", name="Industrial Lighting",
+                 captions=["Reliable solar for homes, businesses and boreholes."])
+        for slug, name in (("appliance-repairs", "Appliance Repairs"), ("skylight-solar", "Skylight Solar"),
+                           ("industrial-lighting", "Industrial Lighting")):
+            with self.subTest(slug=slug):
+                row = self.lookup(campaign_id=slug)["campaigns"][0]
+                self.assertEqual((row["campaign_id"], row["name"]), (slug, name))
+                self.assertNotIn("requires_action", row)
+                self.assertTrue(row["advertised_content"])
+        repair = self.lookup(query="tv repair")
+        self.assertEqual(repair["status"], "ok")
+        self.assertEqual([row["campaign_id"] for row in repair["campaigns"]], ["appliance-repairs"])
+        offered = {row.get("campaign_id") for row in self.lookup(discover=True)["campaigns"]}
+        self.assertEqual(offered, {"bricks", "appliance-repairs", "skylight-solar", "industrial-lighting"})
+        self.put("aqua-drillers", name="Aqua Drillers", captions=["Water for your home."])
+        routed = self.lookup(query="drilling")["campaigns"]
+        self.assertIn({"name": "Borehole services", "advertising_status": "enabled", "requires_action": "borehole_info"}, routed)
+        self.assertNotIn("aqua", json.dumps(routed).lower())
+
+    def test_caption_placeholders_never_reach_the_model(self):
+        self.put("bricks", captions=["Bricks $95 per 1000.\nCalls: {bot_number}\nChat: {ref_link} (ref {ref})"])
+        content = self.lookup(campaign_id="bricks")["campaigns"][0]["advertised_content"]
+        self.assertEqual(content, ["Bricks $95 per 1000.\nCalls: this WhatsApp number\nChat:"])
+
+    def test_question_words_do_not_hide_a_matching_offer_and_misses_suggest_discovery(self):
+        for query in ("brick price", "how much for bricks", "bricks delivery"):
+            with self.subTest(query=query):
+                result = self.lookup(query=query)
+                self.assertEqual(result["status"], "ok")
+                self.assertIn("$95", json.dumps(result))
+        missing = self.lookup(query="cement")
+        self.assertEqual(missing["status"], "not_found")
+        self.assertIn("Call business_info", missing["guidance"])
+        self.assertNotIn("Call business_info", self.lookup(campaign_id="bricks")["guidance"])
+
     def test_schedule_uses_independent_entries_including_pending_and_skipped_state(self):
         day = public.dt.datetime.fromtimestamp(self.clock[0], public.dt.timezone.utc).astimezone(public.ZoneInfo("Africa/Harare")).date()
         entry = {"cron": "19 14 * * *", "timezone": "Africa/Harare", "skipDates": [str(day)], "paused": False}
