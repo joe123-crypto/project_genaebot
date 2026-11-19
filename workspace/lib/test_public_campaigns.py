@@ -31,7 +31,7 @@ class PublicCampaignTests(Harness):
         self.assertTrue(second["fetched_at"])
         self.assertTrue(all("/campaigns" in url or url == config.TOKEN_URL for url in self.firestore.requests))
 
-    def test_discovery_is_lightweight_and_disabled_deleted_and_paused_offers_disappear(self):
+    def test_discovery_is_lightweight_and_disabled_and_deleted_offers_disappear(self):
         self.assertNotIn("advertised_content", self.lookup(discover=True)["campaigns"][0])
         self.put("bricks", enabled=False)
         self.assertEqual(self.lookup(discover=True)["campaigns"], [])
@@ -40,10 +40,22 @@ class PublicCampaignTests(Harness):
         self.assertEqual(self.lookup(query="bricks")["campaigns"], [inactive])
         self.put("bricks", deleted=True)
         self.assertEqual(self.lookup(campaign_id="bricks")["campaigns"], [])
-        paused = {"cron": "7 9 * * *", "timezone": "Africa/Harare", "paused": True}
-        self.put("bricks", scheduleEntries={"primary": {**paused, "confirmed": paused}})
-        self.assertEqual(self.lookup(discover=True)["campaigns"], [])
-        self.assertEqual(self.lookup(campaign_id="bricks")["campaigns"][0]["advertising_status"], "paused")
+
+    def test_switched_on_campaign_with_paused_posting_times_keeps_its_offer(self):
+        # Live building-materials state: switch on, its only posting time paused
+        # on the Schedule screen. The offer stands; only the posting stopped.
+        paused = {"cron": "5 13 * * *", "timezone": "Africa/Harare", "paused": True, "deleted": False, "skipDates": []}
+        self.put("bricks", captions=["Red commons: $95 per 1000."], scheduleEntries={"primary": {**paused, "confirmed": paused}})
+        self.assertEqual(self.lookup(discover=True)["campaigns"],
+                         [{"name": "Bricks", "advertising_status": "paused", "campaign_id": "bricks"}])
+        row = self.lookup(query="brick price")["campaigns"][0]
+        self.assertEqual(row["advertising_status"], "paused")
+        self.assertIn("$95", row["advertised_content"][0])
+        self.assertTrue(all(entry["paused"] for entry in row["schedule"]))
+        self.assertIn("A paused campaign is switched on but not posting", self.lookup(campaign_id="bricks")["guidance"])
+        self.put("bricks", enabled=False, scheduleEntries={"primary": {**paused, "confirmed": paused}})
+        self.assertEqual(self.lookup(campaign_id="bricks")["campaigns"][0],
+                         {"campaign_id": "bricks", "name": "Bricks", "advertising_status": "disabled"})
 
     def test_ambiguous_offers_require_clarification_and_conflicting_captions_stay_separate(self):
         self.put("brick-sale", captions=["Red bricks $90 per 1000"])

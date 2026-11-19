@@ -131,6 +131,9 @@ results = [read(doc, discover=True), read(doc, campaign_id="bricks"), read(doc, 
 results.append(read({**doc, "enabled": False}, campaign_id="bricks"))
 results.append(read({**doc, "scheduleEdit": {"pending": True}}, campaign_id="bricks"))
 results.append(read({**doc, "name": "Private Borehole Supplier"}, query="drilling"))
+paused = {"cron": "7 9 * * *", "timezone": "Africa/Harare", "paused": True, "deleted": False, "skipDates": []}
+results.append(read({**doc, "scheduleEntries": {"primary": {**paused, "confirmed": paused}}}, campaign_id="bricks"))
+assert results[-1]["campaigns"][0]["advertising_status"] == "paused" and results[-1]["campaigns"][0]["advertised_content"]
 print(json.dumps(results))
 `;
   const responses = JSON.parse(execFileSync("/usr/bin/python3", ["-c", script], {

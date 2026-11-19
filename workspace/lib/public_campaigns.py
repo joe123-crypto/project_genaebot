@@ -19,6 +19,7 @@ import operator_config as config
 import operator_writer as writer
 
 MAX_MATCHES = 20
+LIVE = ("enabled", "paused")
 CONTENT_LIMIT = 16 * 1024
 CV = re.compile(r"\b(?:cvs?|résumés?|resumes?|curriculum vitae)\b", re.I)
 BOREHOLE = re.compile(r"\b(?:boreholes?|drill(?:ing|ers?)|casing|pump retrieval)\b", re.I)
@@ -35,6 +36,7 @@ GUIDANCE = (
     "Use only results retrieved in this turn. Ask which campaign when status is needs_clarification. "
     "Hand off missing or conflicting facts; do not pick one conflicting price or merge offers. "
     "Advertising status and schedules do not confirm stock, service availability or successful posting. "
+    "A paused campaign is switched on but not posting right now; its offer still stands. "
     "Use borehole_info for all borehole prices and conditions. Never quote borehole prices from campaign text."
 )
 # A search made only of these words is a borehole enquiry: answer it with the
@@ -149,7 +151,10 @@ def project(slug, doc, *, day, cv_available):
         value["campaign_id"] = slug
     if borehole:
         value["requires_action"] = "borehole_info"
-    if status != "enabled" or borehole:
+    # The campaign switch says whether an offer is live. Pausing every posting
+    # time on the Schedule screen only stops posting, so a paused campaign keeps
+    # its offer. Disabled and unconfirmed (pending) campaigns do not.
+    if status not in LIVE or borehole:
         return value  # Inactive offers and supplier schedules are not public facts.
     value["advertised_content"] = captions
     value["schedule"] = schedules
@@ -185,7 +190,7 @@ def lookup(env=None, *, query="", campaign_id="", discover=False, cv_available=F
             if not public:
                 continue
             exact = bool(campaign_id or (query and words(query) in (words(slug), words(public["name"]))))
-            if public["advertising_status"] != "enabled" and not exact:
+            if public["advertising_status"] not in LIVE and not exact:
                 continue
             searchable = " ".join([slug, public["name"], *public.get("advertised_content", [])])
             if public.get("requires_action") == "borehole_info":

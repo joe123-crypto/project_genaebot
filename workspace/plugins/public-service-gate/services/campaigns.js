@@ -27,7 +27,7 @@ function validCampaign(row) {
   if (row.requires_action === "borehole_info") {
     if (row.name !== "Borehole services" || row.campaign_id !== undefined || row.advertised_content !== undefined || row.schedule !== undefined) return false;
   } else if (row.requires_action !== undefined || typeof row.campaign_id !== "string" || !identifier.test(row.campaign_id)) return false;
-  if (row.advertising_status !== "enabled") return row.advertised_content === undefined && row.schedule === undefined;
+  if (!["enabled", "paused"].includes(row.advertising_status)) return row.advertised_content === undefined && row.schedule === undefined;
   if (row.schedule === undefined && row.advertised_content === undefined) return true;
   if (!Array.isArray(row.schedule) || row.schedule.length > 20 || !row.schedule.every((entry) => validSchedule(entry) && !entry.pending)) return false;
   return Array.isArray(row.advertised_content)
