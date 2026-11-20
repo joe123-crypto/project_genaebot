@@ -498,8 +498,24 @@ def deletion_records():
     token = operator_config.access_token(creds, operator_config.token_cache_path(operator_config.state_dir(env)),
         opener=urllib.request.urlopen,
         signer=operator_config.node_signer, now=time.time, sleep=time.sleep)
-    rows = operator_config.list_documents(creds["project_id"], "campaign_deletions", token, opener=urllib.request.urlopen, sleep=time.sleep)
+    rows = operator_config.list_documents(creds["project_id"], "campaign_deletions", token, opener=urllib.request.urlopen, sleep=time.sleep, env=env)
     return [campaign_deletion.summary(slug, operator_config.decode_fields(fields)) for slug, fields in rows]
+
+
+def workspace_identity():
+    """Which workspace this bot serves, and where its new pictures go. The
+    console checks the first against the workspace it meant to reach and builds
+    upload keys from the second. ``None`` for either means misconfigured: the
+    console then refuses rather than guessing."""
+    try:
+        workspace = operator_config.workspace_id()
+    except operator_config.ConfigUnavailable:
+        workspace = None
+    try:
+        prefix = ad_assets.key_prefix()
+    except ad_assets.AssetsUnavailable:
+        prefix = None
+    return workspace, prefix
 
 
 def write_capabilities():
@@ -512,9 +528,11 @@ def write_capabilities():
     presence is checked, never its value. ``affectsProduction`` stays in the
     payload, and is now always true: a saved change lands in the store the runs
     act on, because there is no longer anywhere else for them to read."""
+    workspace, prefix = workspace_identity()
     return {
         "enabled": bool((os.environ.get("GCP_SERVICE_ACCOUNT_WRITE_B64") or "").strip()),
         "affectsProduction": True,
+        "workspace": workspace,
         "fields": dict((collection, list(names))
                        for collection, names in operator_writer.EDITABLE.items()),
         "delete": list(operator_writer.DELETABLE),
@@ -522,8 +540,9 @@ def write_capabilities():
         "scheduleEditing": {"edit": os.path.isfile(str(Path(__file__).with_name("console-schedule"))),
                             "entries": os.path.isfile(str(Path(__file__).with_name("run-schedule-entry")))},
         "campaignCreation": {"create": True,
-                             "images": ad_assets.display_origin()[0] is not None,
-                             "scheduling": True},
+                             "images": ad_assets.display_origin()[0] is not None and prefix is not None,
+                             "scheduling": True,
+                             "keyPrefix": prefix},
     }
 
 

@@ -72,9 +72,10 @@ import operator_writer  # noqa: E402
 import r2_sigv4  # noqa: E402
 
 RANK_STEP = operator_writer.RANK_STEP
-# Every key this script writes lives under here, so it is also what --verify
-# lists: an object outside it is not an ad picture and is none of our business.
-KEY_PREFIX = "ads/"
+# Every key this script writes lives under the workspace's prefix
+# (``ad_assets.key_prefix``: ``ads/`` without GENAIE_WORKSPACE_ID), so it is
+# also what --verify lists: an object outside it is not this workspace's
+# picture and is none of our business.
 # Magic bytes, because content_type decides how the gateway treats the file and
 # a mislabelled image is refused at send time, long after the upload.
 MAGIC = ((b"\xff\xd8\xff", "image/jpeg"), (b"\x89PNG\r\n\x1a\n", "image/png"))
@@ -150,7 +151,7 @@ def describe(slug, path, rank, doc_id):
                           "dash, underscore)" % filename)
     entry = {"id": doc_id,
              "campaign": slug, "filename": filename,
-             "key": "ads/%s/%s%s" % (slug, digest, extension),
+             "key": "%s%s/%s%s" % (ad_assets.key_prefix(), slug, digest, extension),
              "sha256": digest, "bytes": len(body), "content_type": content_type,
              "rank": rank, "enabled": True, "comment": None}
     # Validate through exactly the code production validates with, so nothing
@@ -228,7 +229,7 @@ def bodies_for(campaigns, paths):
 def bucket_keys(endpoint, bucket, *, access_key, secret_key, opener=None):
     """``{key: size}`` for every ad object in the bucket."""
     return dict((obj["key"], obj["bytes"]) for obj in r2_sigv4.list_objects(
-        endpoint, bucket, prefix=KEY_PREFIX, access_key=access_key,
+        endpoint, bucket, prefix=ad_assets.key_prefix(), access_key=access_key,
         secret_key=secret_key, opener=opener))
 
 

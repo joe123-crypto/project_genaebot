@@ -79,7 +79,7 @@ def live_campaign(slug, env=None):
     token = config.access_token(creds, config.token_cache_path(config.state_dir(env)),
                                 opener=urllib.request.urlopen, signer=config.node_signer,
                                 now=time.time, sleep=time.sleep)
-    row = config._request(config.documents_url(creds["project_id"], "campaigns", valid_slug(slug)),
+    row = config._request(config.documents_url(creds["project_id"], "campaigns", valid_slug(slug), env),
                           headers=config._auth(token), opener=urllib.request.urlopen,
                           sleep=time.sleep, missing_ok=True)
     return config.decode_fields(row.get("fields", {})) if row else {}

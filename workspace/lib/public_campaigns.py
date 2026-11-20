@@ -76,10 +76,10 @@ def live_documents(env, campaign_id, *, opener, signer, now, sleep):
                                 opener=opener, signer=signer, now=now, sleep=sleep)
     if campaign_id:
         value = config.get_document(creds["project_id"], "campaigns", campaign_id,
-                                    token, opener=opener, sleep=sleep, raw=True)
+                                    token, opener=opener, sleep=sleep, raw=True, env=env)
         return [] if value is None else [(campaign_id, value)]
     return config.list_documents(creds["project_id"], "campaigns", token,
-                                 opener=opener, sleep=sleep)
+                                 opener=opener, sleep=sleep, env=env)
 
 
 def public_schedule(doc, day):

@@ -28,7 +28,10 @@ def identity(env):
     creds = config.credentials(env)
     if not creds:
         raise config.ConfigUnavailable("no service account configured")
-    return hashlib.sha256(json.dumps([SCHEMA, config.API_ROOT, creds], sort_keys=True).encode()).hexdigest()
+    # The document tree is part of the identity: moving a bot to its workspace
+    # discards the old tree's rows and resume tokens, and bootstraps afresh.
+    return hashlib.sha256(json.dumps([SCHEMA, config.API_ROOT, creds, config.root_label(env)],
+                                     sort_keys=True).encode()).hexdigest()
 
 
 class Index:
@@ -258,12 +261,13 @@ def firestore_stream(index):
     creds = config.credentials(index.env)
     client = FirestoreClient(credentials=service_account.Credentials.from_service_account_info(creds))
     database = "projects/%s/databases/(default)" % creds["project_id"]
+    parent = config.documents_root(creds["project_id"], index.env)
     point = index.checkpoint()
     bootstrap = not point["readTime"] or point["tokens"].get("reset", False)
     tokens = {} if bootstrap else point["tokens"].copy()
     requests = []
     for number, collection in enumerate(COLLECTIONS, 1):
-        target = Target(target_id=number, query={"parent": database + "/documents",
+        target = Target(target_id=number, query={"parent": parent,
                         "structured_query": {"from_": [{"collection_id": collection}]}})
         if not bootstrap:
             if str(number) in tokens:

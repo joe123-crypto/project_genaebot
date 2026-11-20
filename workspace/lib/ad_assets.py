@@ -99,7 +99,12 @@ CONTENT_TYPES = {"image/jpeg": ".jpg", "image/png": ".png"}
 # than trusted: without this a row reading "//elsewhere.example/x.jpg" would
 # turn the index into a request-forgery primitive. Every key this repo writes is
 # content-addressed, so the pattern can be exact.
-KEY_RE = re.compile(r"^ads/[a-z0-9][a-z0-9-]*/([0-9a-f]{64})\.(jpg|png)$")
+# A workspace's pictures sit under ``w/<workspace>/ads/``; the single-operator
+# install's under plain ``ads/``. Both shapes are pinned; which one a bot may
+# create is :func:`key_prefix`.
+KEY_RE = re.compile(r"^(?:w/[A-Za-z0-9_-]{6,40}/)?ads/[a-z0-9][a-z0-9-]*/([0-9a-f]{64})\.(jpg|png)$")
+KEY_PREFIX_VAR = "GENAIE_ASSET_KEY_PREFIX"
+KEY_PREFIX_RE = re.compile(r"^(?:w/[A-Za-z0-9_-]{6,40}/)?ads/$")
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 FILENAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.(jpg|jpeg|png)$")
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
@@ -173,6 +178,25 @@ def base_url(env=None):
     return raw
 
 
+def key_prefix(env=None):
+    """Where this bot's new pictures go in the shared bucket.
+
+    A workspace bot defaults to ``w/<workspace>/ads/`` so two operators with the
+    same campaign slug can never share, or delete, each other's objects. The
+    install that predates workspaces keeps ``ads/`` by setting it explicitly."""
+    env = os.environ if env is None else env
+    explicit = (env.get(KEY_PREFIX_VAR) or "").strip()
+    if explicit:
+        if not KEY_PREFIX_RE.match(explicit):
+            raise AssetsUnavailable("%s must be ads/ or w/<workspace>/ads/" % KEY_PREFIX_VAR)
+        return explicit
+    try:
+        workspace = operator_config.workspace_id(env)
+    except operator_config.ConfigUnavailable as ex:
+        raise AssetsUnavailable(str(ex))
+    return "ads/" if workspace is None else "w/%s/ads/" % workspace
+
+
 def public_url(entry, env=None):
     """Where ``entry``'s bytes are served from, or ``None`` when :data:`BASE_VAR`
     is not set.
@@ -244,7 +268,7 @@ def _entry(doc_id, fields):
     key = need("key", str)
     matched = KEY_RE.match(key)
     if not matched:
-        raise ValueError("%s: key %r is not ads/<slug>/<sha256>.<ext>" % (doc_id, key))
+        raise ValueError("%s: key %r is not [w/<workspace>/]ads/<slug>/<sha256>.<ext>" % (doc_id, key))
     sha256 = need("sha256", str)
     if not SHA_RE.match(sha256):
         raise ValueError("%s: sha256 %r is not 64 hex characters" % (doc_id, sha256))
@@ -338,11 +362,11 @@ def index(env=None, *, opener=None, signer=None, now=None, sleep=None, log=None)
                 creds["project_id"], COLLECTION,
                 {"fieldFilter": {"field": {"fieldPath": "campaign"}, "op": "EQUAL",
                                  "value": {"stringValue": slug}}}, token,
-                opener=opener or urllib.request.urlopen, sleep=sleep)
+                opener=opener or urllib.request.urlopen, sleep=sleep, env=env)
         else:
             rows = operator_config.list_documents(
                 creds["project_id"], COLLECTION, token,
-                opener=opener or urllib.request.urlopen, sleep=sleep)
+                opener=opener or urllib.request.urlopen, sleep=sleep, env=env)
     except (operator_config.ConfigUnavailable, AssetsUnavailable) as ex:
         log("index unreadable (%s); using the last-known-good snapshot" % ex)
         return _from_snapshot(env, str(ex), now=now)
@@ -350,8 +374,8 @@ def index(env=None, *, opener=None, signer=None, now=None, sleep=None, log=None)
     campaigns, quarantined = _assemble(rows)
     for doc_id, problem in sorted(quarantined.items()):
         log("ignoring asset %s: %s" % (doc_id, problem))
-    current = {"fetchedAt": _stamp(now), "campaigns": campaigns,
-               "quarantined": quarantined}
+    current = {"fetchedAt": _stamp(now), "root": operator_config.root_label(env),
+               "campaigns": campaigns, "quarantined": quarantined}
     try:
         operator_config._write_private_json(index_path(env), current)
     except OSError as ex:
@@ -376,6 +400,15 @@ def _from_snapshot(env, why, now=None):
     if not isinstance(snapshot, dict) or not isinstance(snapshot.get("campaigns"), dict):
         raise AssetsUnavailable("the index is unreadable (%s) and there is no snapshot "
                                 "at %s" % (why, path))
+    try:
+        root = operator_config.root_label(env)
+    except operator_config.ConfigUnavailable as ex:
+        raise AssetsUnavailable(str(ex))
+    # Another tree's pictures belong to another operator's campaigns.
+    if operator_config.snapshot_root(snapshot) != root:
+        raise AssetsUnavailable("the index is unreadable (%s) and the snapshot at %s was "
+                                "read from %s, not %s"
+                                % (why, path, operator_config.snapshot_root(snapshot), root))
     age = operator_config._snapshot_age_seconds(snapshot, now)
     if age is None:
         raise AssetsUnavailable("the index is unreadable (%s) and the snapshot at %s "
