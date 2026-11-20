@@ -58,7 +58,7 @@ Durable state lives on a Railway volume mounted at `/home/joseph/.openclaw`:
 OpenClaw routes administrator DMs to the `main` agent and every other WhatsApp DM
 to the restricted `public` agent. There is no approval step and no service menu:
 every non-admin DM gets a conversational reply from the public agent, which
-answers from `workspace/docs/business-info.md` (edit prices there) and hands a
+answers from fresh live campaign lookups (edit advertised offers in Campaigns) and hands a
 customer off when they are ready to order or ask something the page does not
 cover. Fruit-tree and building-material handoffs are forwarded to the partner on
 WhatsApp; after any handoff the bot stays silent for that customer until an admin
@@ -1010,12 +1010,15 @@ config (peer overrides included). It logs `public WhatsApp prompt updated` or
 the service, handoff, and privacy rules outside the Customer Bot editor.
 
 Default reply guidance (`workspace/docs/public-whatsapp-reply-instructions.txt`)
-and business facts (`workspace/docs/business-info.md`, or the configured
-`businessInfoPath`) are used until an operator publishes from **Customer Bot**.
-The published revision lives outside the source overlay. The public agent's
-prompt hook reads it on each WhatsApp DM turn, and `business_info` reads the
-same copy. Published facts supersede older facts in the conversation; publishing
-does not restart the gateway, change routing, or send messages.
+is used until an operator publishes reply instructions from **Customer Bot**.
+General facts are no longer stored in the publication or injected into prompts.
+The public agent calls `business_info` for service discovery and `campaign_info`
+for relevant current campaign copy, with a fresh read each factual turn. The
+reader uses the existing read-only Firestore key, reads only campaigns, and
+returns public fields without operator notes, group identifiers or recipients.
+No display cache or outage snapshot can supply a current answer. Missing,
+conflicting or unavailable facts require handoff; borehole quotes still use
+`borehole_info`, and runtime service restrictions override campaign copy.
 
 The second exception is the WhatsApp **reply gates**. Right after the prompt sync
 the entrypoint runs `deploy/railway/sync-reply-gates.py`, which sets the managed
@@ -2042,3 +2045,22 @@ railway ssh -- env -u OPENCLAW_HOME HOME=/home/joseph \
 Pull a backup to your own machine with `railway ssh -- tar cz -C
 /home/joseph/.openclaw/runtime/backups .` and keep at least one copy off the
 volume: a backup that only exists beside the thing it is backing up is not one.
+
+## Customer live lookup rollout
+
+Deploy this bot support before the companion instructions-only console. The
+Customer Bot API returns `instructions`, revision/publisher metadata and a
+read-only `sources` list. Publishing accepts only `instructions`,
+`expectedRevision` and `actor`; old `knowledge` requests receive a 400 upgrade
+message. Existing v1 publications keep their reply instructions, but their
+knowledge is ignored. Replacing a publication writes v2 and preserves the prior
+file in `runtime/customer-bot/history/<revision>.json` on the private volume.
+The old console editor becomes unavailable until upgraded; no deploy publishes
+a draft or sends a customer message. Roll back the console before the bot; to
+restore an old v1 briefing, recover its archived publication deliberately.
+
+Validate with `python3 workspace/lib/test_public_campaigns.py`,
+`python3 deploy/test_console_customer_bot.py`, the public plugin tests and
+`deploy/ci-check.sh`. The installed-runtime customer-bot integration checks
+prompt freshness and instruction publishing in an existing WhatsApp session.
+Campaign ownership and private advert status remain deferred.

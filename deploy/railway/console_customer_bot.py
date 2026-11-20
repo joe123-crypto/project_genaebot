@@ -12,7 +12,12 @@ from uuid import uuid4
 
 TEXT_LIMIT = 16 * 1024
 BODY_LIMIT = 256 * 1024
-FIELDS = ("instructions", "knowledge")
+FIELDS = ("instructions",)
+SOURCES = [
+    {"id": "campaigns", "label": "Live campaigns", "description": "Current advertised offers and advertising schedules from the campaign store."},
+    {"id": "borehole", "label": "Borehole offers", "description": "Location-based prices and packages from the existing provider catalogue."},
+    {"id": "availability", "label": "Service availability", "description": "Runtime service restrictions take precedence over advertised offers."},
+]
 REVISION = re.compile(r"(?:default-[a-f0-9]{64}|[a-f0-9]{32})")
 
 
@@ -35,7 +40,7 @@ def clean_text(value, label):
 
 def copy_fields(data):
     return {field: clean_text(data.get(field), label) for field, label in
-            zip(FIELDS, ("Reply instructions", "Business knowledge"))}
+            zip(FIELDS, ("Reply instructions",))}
 
 
 class CustomerBot:
@@ -46,18 +51,11 @@ class CustomerBot:
         self.path = self.directory / "published.json"
 
     def defaults(self):
-        try:
-            config = json.loads((self.state / "openclaw.json").read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            config = {}
-        custom = config.get("plugins", {}).get("entries", {}).get("public-service-gate", {}).get("config", {}).get("businessInfoPath")
-        knowledge_path = Path(custom.strip()).expanduser() if isinstance(custom, str) and custom.strip() else self.docs / "business-info.md"
         values = copy_fields({
             "instructions": (self.docs / "public-whatsapp-reply-instructions.txt").read_text(encoding="utf-8"),
-            "knowledge": knowledge_path.read_text(encoding="utf-8"),
         })
         fingerprint = hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
-        return {**values, "revision": f"default-{fingerprint}", "publishedAt": None, "publishedBy": None}
+        return {**values, "revision": f"default-{fingerprint}", "publishedAt": None, "publishedBy": None, "sources": SOURCES}
 
     def read(self):
         try:
@@ -68,16 +66,18 @@ class CustomerBot:
         if len(raw) > BODY_LIMIT:
             raise ValueError("Invalid published copy size.")
         data = json.loads(raw)
-        if (not isinstance(data, dict) or data.get("version") != 1
+        if (not isinstance(data, dict) or data.get("version") not in (1, 2)
                 or not isinstance(data.get("revision"), str) or not re.fullmatch(r"[a-f0-9]{32}", data["revision"])
                 or not isinstance(data.get("publishedAt"), str)
                 or not isinstance(data.get("publishedBy"), str) or not data["publishedBy"]):
             raise ValueError("Invalid published copy.")
         if datetime.fromisoformat(data["publishedAt"]).utcoffset() is None:
             raise ValueError("Invalid publish time.")
-        return {**copy_fields(data), **{key: data[key] for key in ("revision", "publishedAt", "publishedBy")}}
+        return {**copy_fields(data), **{key: data[key] for key in ("revision", "publishedAt", "publishedBy")}, "sources": SOURCES}
 
     def publish(self, request):
+        if isinstance(request, dict) and "knowledge" in request:
+            raise ValueError("Upgrade the console: business knowledge is now read from live tools. Publish reply instructions only.")
         if not isinstance(request, dict) or set(request) != {*FIELDS, "expectedRevision", "actor"}:
             raise ValueError("Invalid publish request.")
         expected = request["expectedRevision"]
@@ -107,10 +107,23 @@ class CustomerBot:
                 "publishedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "publishedBy": actor,
             }
+            # Preserve each replaced publication, including the retired briefing.
+            # A stable revision filename makes retrying archival idempotent.
+            if self.path.exists():
+                archive = self.directory / "history"
+                archive.mkdir(mode=0o700, exist_ok=True)
+                archived = archive / f"{current['revision']}.json"
+                if not archived.exists():
+                    os.link(self.path, archived)
+                    archive_fd = os.open(archive, os.O_RDONLY | os.O_DIRECTORY)
+                    try:
+                        os.fsync(archive_fd)
+                    finally:
+                        os.close(archive_fd)
             fd, temporary = tempfile.mkstemp(dir=self.directory, prefix=".publish-")
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                    json.dump({"version": 1, **published}, handle, ensure_ascii=False)
+                    json.dump({"version": 2, **published}, handle, ensure_ascii=False)
                     handle.flush()
                     os.fsync(handle.fileno())
                 os.replace(temporary, self.path)
@@ -121,4 +134,4 @@ class CustomerBot:
                     os.close(dir_fd)
             finally:
                 Path(temporary).unlink(missing_ok=True)
-            return published
+            return {**published, "sources": SOURCES}

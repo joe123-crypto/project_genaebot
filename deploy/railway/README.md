@@ -70,11 +70,10 @@ edit it in this repo, open a PR, merge. That's the whole flow. Three sets of
 - `deploy/railway/sync-public-prompt.py` copies
   `workspace/docs/public-whatsapp-system-prompt.txt` into
   `channels.whatsapp.direct["*"].systemPrompt`.
-- The Customer Bot editor publishes one live revision of reply instructions and
-  business knowledge to `runtime/customer-bot/published.json` on the state volume.
-  The workspace overlay does not overwrite it. Restore the state volume to
-  recover this content when moving the gateway. Rolling back to an older image
-  ignores the published revision without deleting it.
+- The Customer Bot editor publishes reply instructions to
+  `runtime/customer-bot/published.json` on the state volume. Live campaign tools
+  supply current facts; retired published knowledge is ignored. Prior revisions
+  are archived on replacement. Restore the state volume to recover publications.
 - The entrypoint pauses new WhatsApp CV orders with `GENAIE_CV_ACCEPT_NEW_ORDERS=0`.
   The CV maker continues processing saved orders on their original WhatsApp lines.
 - `deploy/railway/sync-reply-gates.py` sets the eight WhatsApp reply gates
@@ -1437,3 +1436,26 @@ manual poll. Production startup creates them asynchronously and starts its own
 poll only afterward; tests must not depend on the timing of that initialization.
 Run `node --test deploy/railway/whatsapp-group-actions.test.mjs` alongside the
 portable validation suite when changing those fixtures.
+
+## Public campaign lookup tools
+
+`public_service` actions `business_info` and `campaign_info` use the trusted
+`workspace/bin/public-read` bridge and its allowlisted `public_campaigns` reader.
+The gateway reuses `GCP_SERVICE_ACCOUNT_B64` for direct campaign reads; no write
+key or console bearer token is exposed to the customer agent. No groups are
+loaded and neither console display caches nor outage snapshots are used. The
+bridge is included by the existing workspace bin/lib staging rules. Each factual
+turn needs a new lookup. Errors return a generic unavailable result for handoff.
+Advertising enabled/paused/pending status is not proof of stock or successful
+posting; borehole quotes still use the private provider matching tool.
+
+Deploy the bot before the paired instructions-only console. The existing
+Customer Bot route now returns instructions, revision metadata and configured
+data sources, and accepts instructions-only publishes with optimistic revision
+checks. Old knowledge-bearing requests receive a 400 upgrade message. V1
+instructions remain readable; retired knowledge is never injected or returned.
+A replacement writes v2 and archives the prior publication under
+`runtime/customer-bot/history`, preserving the old briefing for deliberate
+recovery. Roll back the console first, then the bot; restore a v1 archive only
+when intentionally reverting to the old knowledge model. No new environment
+variables, database collections or customer ownership links are required.

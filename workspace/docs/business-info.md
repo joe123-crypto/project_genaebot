@@ -1,5 +1,10 @@
 # Genaie Business Info
 
+Historical reference only. The customer bot no longer reads this file or a
+published business briefing. General offers come from current campaign data
+through `business_info` / `campaign_info`; borehole quotes use `borehole_info`.
+Maintain advertised facts in Campaigns. Do not update this file to brief the bot.
+
 ## How we work (all businesses)
 
 - All our services operate all around Zimbabwe.

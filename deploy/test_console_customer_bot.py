@@ -59,51 +59,66 @@ class CustomerBotHttpTests(unittest.TestCase):
         self.assertEqual((status, cache), (200, "no-store"))
         self.assertIsNone(base["publishedAt"])
         self.assertIn("How to reply:", base["instructions"])
-        self.assertIn("$95 per 1000", base["knowledge"])
-        custom = self.state / "my-business.md"
-        custom.write_text("Custom active facts", encoding="utf-8")
-        config = {"plugins": {"entries": {"public-service-gate": {"config": {"businessInfoPath": str(custom)}}}}}
-        (self.state / "openclaw.json").write_text(json.dumps(config), encoding="utf-8")
-        customized = self.request()[1]
-        self.assertNotEqual(customized["revision"], base["revision"])
-        self.assertEqual(customized["knowledge"], "Custom active facts")
-
-        update = {"instructions": "Start with the answer.", "knowledge": "Bricks: $107 per 1000.",
-                  "expectedRevision": customized["revision"], "actor": "Fixture operator"}
+        self.assertNotIn("knowledge", base)
+        self.assertEqual([source["id"] for source in base["sources"]], ["campaigns", "borehole", "availability"])
+        (self.docs / "business-info.md").unlink()  # No factual briefing is required.
+        update = {"instructions": "Start with the answer.",
+                  "expectedRevision": base["revision"], "actor": "Fixture operator"}
         status, published, _ = self.request(update)
         self.assertEqual(status, 200)
-        self.assertNotEqual(published["revision"], customized["revision"])
+        self.assertNotEqual(published["revision"], base["revision"])
         self.assertEqual(published["publishedBy"], "Fixture operator")
         self.assertIsNotNone(published["publishedAt"])
         self.assertEqual(self.request(update)[1], published)  # retry after a lost response
         shutil.rmtree(self.state / "workspace")  # replace the baked source overlay
-        custom.unlink()
         self.serve()  # a new API instance reads the same volume, with no in-memory state
         self.assertEqual(self.request()[1], published)
         self.assertEqual(API.CustomerBot(self.state).path.stat().st_mode & 0o777, 0o600)
 
     def test_concurrent_publish_rejects_a_stale_revision(self):
         base = self.request()[1]
-        changes = [{"instructions": label, "knowledge": label, "expectedRevision": base["revision"], "actor": "Fixture operator"}
+        changes = [{"instructions": label, "expectedRevision": base["revision"], "actor": "Fixture operator"}
                    for label in ("first", "second")]
         with ThreadPoolExecutor(2) as pool:
             results = list(pool.map(self.request, changes))
         self.assertEqual(sorted(row[0] for row in results), [200, 409])
         current = self.request()[1]
         self.assertEqual(current, next(row[1]["current"] for row in results if row[0] == 409))
-        self.assertEqual(current["instructions"], current["knowledge"])
+        self.assertNotIn("knowledge", current)
 
     def test_invalid_or_unauthorized_requests_do_not_publish(self):
         for token in (GATE, "bad"):
             self.assertEqual(self.request(token=token)[0], 401)
             self.assertEqual(self.request({}, token=token)[0], 401)
         base = self.request()[1]
-        update = {"instructions": "New", "knowledge": "New", "expectedRevision": base["revision"], "actor": "Operator"}
+        update = {"instructions": "New", "expectedRevision": base["revision"], "actor": "Operator"}
         for invalid in (" ", "nul\0byte", "é" * 8193, "\ud800", None):
-            self.assertEqual(self.request({**update, "knowledge": invalid})[0], 400)
-        self.assertEqual(self.request({**update, "knowledge": "x" * (256 * 1024)})[0], 400)
+            self.assertEqual(self.request({**update, "instructions": invalid})[0], 400)
+        self.assertEqual(self.request({**update, "instructions": "x" * (256 * 1024)})[0], 400)
         self.assertEqual(self.request()[1], base)
         self.assertFalse(API.CustomerBot(self.state).path.exists())
+
+    def test_legacy_publication_preserves_instructions_and_archives_knowledge(self):
+        store = API.CustomerBot(self.state)
+        store.directory.mkdir(parents=True)
+        legacy = {"version": 1, "instructions": "Legacy voice.", "knowledge": "RETIRED $95",
+                  "revision": "a" * 32, "publishedAt": "2026-11-15T00:00:00+00:00", "publishedBy": "Operator"}
+        store.path.write_text(json.dumps(legacy), encoding="utf-8")
+        current = self.request()[1]
+        self.assertEqual(current["instructions"], "Legacy voice.")
+        self.assertNotIn("RETIRED", json.dumps(current))
+        status, result, _ = self.request({"instructions": "New voice.", "expectedRevision": current["revision"], "actor": "Operator"})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(store.path.read_text())["version"], 2)
+        self.assertEqual(json.loads((store.directory / "history" / (legacy["revision"] + ".json")).read_text()), legacy)
+        self.assertNotIn("knowledge", result)
+
+    def test_knowledge_publish_is_rejected_with_an_upgrade_message(self):
+        current = self.request()[1]
+        status, result, _ = self.request({"instructions": "Voice", "knowledge": "stale", "expectedRevision": current["revision"], "actor": "Operator"})
+        self.assertEqual(status, 400)
+        self.assertIn("Upgrade the console", result["error"])
+        self.assertEqual(self.request()[1], current)
 
     def test_corrupt_copy_is_not_mistaken_for_shipped_facts(self):
         store = API.CustomerBot(self.state)
@@ -111,7 +126,7 @@ class CustomerBotHttpTests(unittest.TestCase):
         store.directory.mkdir(parents=True)
         store.path.write_text("{", encoding="utf-8")
         self.assertEqual(self.request()[0], 503)
-        self.assertEqual(self.request({"instructions": "New", "knowledge": "New", "expectedRevision": base["revision"], "actor": "Operator"})[0], 503)
+        self.assertEqual(self.request({"instructions": "New", "expectedRevision": base["revision"], "actor": "Operator"})[0], 503)
         self.assertEqual(store.path.read_text(encoding="utf-8"), "{")
 
 

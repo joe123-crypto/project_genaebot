@@ -22,7 +22,7 @@ process.env[REPLY_PACING_ENV] = "0";
 const HANDOFF = /your request is in\. Someone will contact you soon/i;
 const PARTNER = "+263775489417";
 
-test("the public business_info action reads the active copy and does not fall back after corruption", async (t) => {
+test("the public business_info action never reads the retired briefing or published knowledge", async (t) => {
   const state = fs.mkdtempSync(path.join(os.tmpdir(), "customer-bot-tool-"));
   const previous = process.env.OPENCLAW_STATE_DIR;
   process.env.OPENCLAW_STATE_DIR = state;
@@ -35,15 +35,15 @@ test("the public business_info action reads the active copy and does not fall ba
   fs.writeFileSync(defaultFile, "Bricks: $95", "utf8");
   const tool = publicToolFor(registerHandler({ businessInfoPath: defaultFile }), MEMBER);
   const lookup = async () => (await tool.execute("test", { action: "business_info" })).content[0].text;
-  assert.equal(await lookup(), "Bricks: $95");
+  assert.doesNotMatch(await lookup(), /Bricks: \$95/);
   const published = path.join(state, "runtime", "customer-bot", "published.json");
   fs.mkdirSync(path.dirname(published), { recursive: true });
   fs.writeFileSync(published, JSON.stringify({ version: 1, revision: "a".repeat(32),
     publishedAt: "2026-11-15T00:00:00Z", publishedBy: "Fixture operator",
     instructions: "Start with the answer.", knowledge: "Bricks: $107" }));
-  assert.equal(await lookup(), "Bricks: $107");
+  assert.doesNotMatch(await lookup(), /Bricks: \$107/);
   fs.writeFileSync(published, "{");
-  assert.match(await lookup(), /use the handoff action/);
+  assert.doesNotMatch(await lookup(), /Bricks: \$95|Bricks: \$107/);
 });
 
 function registerHandler(config = {}, complete, relevanceConfig = {}) {
@@ -168,7 +168,7 @@ test("a disabled public service is omitted from the public service tool schema",
   const handler = registerHandler({ cvMakerEnabled: false });
   const tool = handler.publicTool({ agentId: "public", requesterSenderId: MEMBER, messageChannel: "whatsapp" });
 
-  assert.deepEqual(tool.parameters.properties.action.enum, ["business_info", "borehole_info", "handoff"]);
+  assert.deepEqual(tool.parameters.properties.action.enum, ["business_info", "campaign_info", "borehole_info", "handoff"]);
 
   const result = await tool.execute("test", { action: "cv_maker_start" });
   assert.match(result.content[0].text, /isn't available here right now/i);
@@ -546,7 +546,8 @@ test("an unmapped LID reaches public tools and cannot impersonate an admin phone
     fs.writeFileSync(infoPath, "Current prices for opaque contacts");
     const tool = publicToolFor(registerHandler({ businessInfoPath: infoPath }), lid);
     const result = await tool.execute("test", { action: "business_info" });
-    assert.match(result.content[0].text, /Current prices for opaque contacts/);
+    assert.doesNotMatch(result.content[0].text, /Current prices for opaque contacts/);
+    assert.ok(JSON.parse(result.content[0].text).campaigns);
     const handoff = await publicToolFor(handler, lid).execute("test", { action: "handoff", category: "building_materials", details: "5000 bricks" });
     assert.match(handoff.content[0].text, HANDOFF);
     assert.deepEqual(await handler(eventFor("hello again", lid), { channelId: "whatsapp", senderId: lid }), { handled: true });
@@ -572,14 +573,15 @@ test("greetings, digits and off-topic text all reach the agent", async () => {
   }
 });
 
-test("business_info returns the business info page", async () => {
+test("business_info no longer returns the retired business info page", async () => {
   const handler = intakeHandler();
   const infoPath = path.join(handler.dir, "business-info.md");
   fs.writeFileSync(infoPath, "# Info\nRed commons: $95 per 1000\n");
   const tool = publicToolFor(registerHandler({ businessInfoPath: infoPath }), UNKNOWN);
 
   const result = await tool.execute("test", { action: "business_info" });
-  assert.match(result.content[0].text, /Red commons: \$95 per 1000/);
+  assert.doesNotMatch(result.content[0].text, /Red commons: \$95 per 1000/);
+  assert.ok(JSON.parse(result.content[0].text).campaigns);
 });
 
 test("business_info fails soft and points at a handoff when the page is missing", async () => {
@@ -603,18 +605,6 @@ test("borehole_info uses the bound sender and hands internal provider context on
     assert.match(sent(), new RegExp(ADMIN.replace(/\+/g, "\\+")));
     assert.doesNotMatch(sent(), new RegExp(PARTNER.replace(/\+/g, "\\+")));
   });
-});
-
-test("the deployed business info page carries the core facts", () => {
-  const page = fs.readFileSync(new URL("../../docs/business-info.md", import.meta.url), "utf8");
-  assert.match(page, /All our services operate all around Zimbabwe\. Where are you from\?/);
-  assert.match(page, /Do not describe\s+us as based in Bindura/);
-  assert.match(page, /Transport within local Bindura: \$550/);
-  assert.match(page, /action `borehole_info`/);
-  assert.doesNotMatch(page, /Drilling, first 40m: \$950/);
-  assert.match(page, /Big: \$20 per tree/);
-  assert.match(page, /\$3 per tree, minimum 20 trees/);
-  assert.match(page, /medium or big: available from 100 trees/);
 });
 
 test("handoff of a partner product forwards to the partner, replies, then silences the customer", async () => {
@@ -1212,7 +1202,7 @@ test("paused CV intake refuses direct quotes and removes start and handoff even 
     const handler = cvHandler();
     const tool = publicToolFor(handler, UNKNOWN);
     const paused = "We aren’t taking new CV orders.";
-    assert.deepEqual(tool.parameters.properties.action.enum, ["business_info", "borehole_info", "handoff"]);
+    assert.deepEqual(tool.parameters.properties.action.enum, ["business_info", "campaign_info", "borehole_info", "handoff"]);
     assert.doesNotMatch(tool.description, /cv_maker_start|CV/);
     assert.ok(!tool.parameters.properties.category.enum.includes("cv"));
     for (const params of [{ action: "cv_maker_start" }, { action: "handoff", category: " CV " }]) {
