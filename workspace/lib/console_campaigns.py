@@ -118,7 +118,11 @@ def validate_definition(slug, data):
             ad_assets._entry("%s-%s" % (slug, index + 1), image_entry(slug, image, index))
         except (ValueError, TypeError):
             raise writer.WriteRefused("invalid JPEG/PNG picture metadata (maximum 6 MiB)")
-        need(image["key"].startswith("ads/%s/" % slug), "picture belongs to a different campaign")
+        try:
+            prefix = ad_assets.key_prefix()
+        except ad_assets.AssetsUnavailable as ex:
+            raise writer.WriteRefused(str(ex))
+        need(image["key"].startswith("%s%s/" % (prefix, slug)), "picture belongs to a different campaign")
         need(image["filename"] not in filenames and image["key"] not in keys, "duplicate picture or filename")
         filenames.add(image["filename"])
         keys.add(image["key"])
@@ -217,14 +221,18 @@ class Store:
         creds = config.credentials(self.env)
         need(creds is not None, "Firestore write credentials are unavailable")
         self.project = creds["project_id"]
-        self.base = "projects/%s/databases/(default)/documents" % self.project
+        self.base = config.documents_root(self.project, self.env)
         self.url = config.API_ROOT + "/" + self.base
+        self.database_url = config.API_ROOT + "/" + config.database_documents(self.project)
         self.token = config.access_token(creds, config.token_cache_path(config.state_dir(self.env)),
                                          opener=urllib.request.urlopen, signer=config.node_signer, now=time.time, sleep=time.sleep)
         self.transaction = None
 
     def request(self, suffix, body=None, missing=False):
-        return config._request(self.url + suffix, data=None if body is None else json.dumps(body).encode(),
+        # Reads and queries hang off the workspace; transactions and commits are
+        # database-wide calls whose document names already carry the workspace.
+        url = (self.database_url if suffix in config.DATABASE_CALLS else self.url) + suffix
+        return config._request(url, data=None if body is None else json.dumps(body).encode(),
                                method="GET" if body is None else "POST", missing_ok=missing,
                                headers=dict(config._auth(self.token), **{"Content-Type": "application/json"}),
                                opener=urllib.request.urlopen, sleep=time.sleep)
@@ -477,18 +485,18 @@ def mark_status(slug, store, status):
     return True
 
 
-def set_images(project, token, slug, images, *, opener=None, sleep=None):
+def set_images(project, token, slug, images, *, opener=None, sleep=None, env=None):
     """Replace one campaign's ``images`` and nothing else.
 
     A field mask for the reason :func:`mark_status` uses one: the caller read
     the document a moment ago, and a whole-document write would undo a caption
     or switch edit, or a schedule status, that landed in between."""
-    base = "projects/%s/databases/(default)/documents" % project
+    base = config.documents_root(project, env)
     body = {"writes": [{"update": {"name": "%s/campaigns/%s" % (base, slug),
                                    "fields": config.encode_fields({"images": images})},
                         "updateMask": {"fieldPaths": ["images"]},
                         "currentDocument": {"exists": True}}]}
-    config._request("%s/%s:commit" % (config.API_ROOT, base), data=json.dumps(body).encode(),
+    config._request("%s/%s:commit" % (config.API_ROOT, config.database_documents(project)), data=json.dumps(body).encode(),
                     method="POST", headers=dict(config._auth(token), **{"Content-Type": "application/json"}),
                     opener=opener or urllib.request.urlopen, sleep=sleep or time.sleep)
 

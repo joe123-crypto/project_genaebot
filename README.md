@@ -575,6 +575,18 @@ Neither variable is release-managed, so a deploy neither sets nor clears them.
 came from the snapshot, and any quarantined groups -- and `list-groups` names
 the store it read in its header.
 
+**Workspaces.** The console is per user, and each user's data is a workspace
+with its own bot deployment. With `GENAIE_WORKSPACE_ID` set, every collection
+above sits under `workspaces/<id>/` instead of at the root. That includes the
+picture index, the audit trail and the receipts. The bot then reads, writes and
+caches nothing else. Snapshots and display caches record their tree, and are
+never served across trees. New pictures go under `w/<id>/ads/` unless
+`GENAIE_ASSET_KEY_PREFIX` says otherwise. The console checks both through
+`capabilities` (`writes.workspace`, `writes.campaignCreation.keyPrefix`).
+`deploy/copy-workspace-data.py` moves an existing install's documents into its
+workspace and back, and `deploy/init-workspace.py` seeds a new one. See
+[A bot pinned to one workspace](deploy/railway/README.md#a-bot-pinned-to-one-workspace).
+
 ### The ad images in Cloudflare R2
 
 The images the campaigns post were the one thing in `workspace/` that only a

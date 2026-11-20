@@ -1249,6 +1249,66 @@ deploy/upload-ad-image.py --verify                                        # inde
 None of those credentials ever becomes a Railway variable: only the operator's
 machine signs anything, and the gateway only ever makes unauthenticated GETs.
 
+### A bot pinned to one workspace
+
+The Genaie console is per user. Each user's data is a **workspace**, and each
+workspace has its own bot deployment. Two variables pin a deployment to its
+workspace:
+
+| Variable | Unset | Set |
+|---|---|---|
+| `GENAIE_WORKSPACE_ID` | Root collections (`groups/…`), as before | Every document under `workspaces/<id>/…` |
+| `GENAIE_ASSET_KEY_PREFIX` | `ads/`, or `w/<id>/ads/` when a workspace is set | `ads/` or `w/<id>/ads/` only |
+
+Both are in the entrypoint's `SECRET_KEYS`. That isn't because they are secret.
+It is so they are sanitised and exported the same way for the console API and
+every cron run: a send must never read one workspace while the console edits
+another. A malformed `GENAIE_WORKSPACE_ID` fails closed. It is refused, and the
+root is never read in its place.
+
+The fallback snapshots, the scoped display caches and the live index all record
+which tree they were read from. A snapshot from the other tree is never used.
+So when a bot moves to its workspace, the first run has no snapshot until its
+first successful read, and the live index bootstraps once. Firebase Console
+edits for a workspace go under `workspaces/<id>/`.
+
+**Moving an existing install into its workspace.** Run from a checkout, with a
+Cloud Datastore User key:
+
+```sh
+deploy/backup-operator-data.py --key ~/.config/genaie/seed-key.json --no-r2
+deploy/copy-workspace-data.py --key ~/.config/genaie/seed-key.json --from root --to workspace:<id>           # dry run
+deploy/copy-workspace-data.py --key ~/.config/genaie/seed-key.json --from root --to workspace:<id> --write
+deploy/copy-workspace-data.py --key ~/.config/genaie/seed-key.json --from root --to workspace:<id> --verify  # must say identical
+```
+
+Then, in a window after the day's last run has **ended**:
+
+1. Freeze console edits.
+2. Run `--write` and `--verify` once more.
+3. Set the variables. `GENAIE_ASSET_KEY_PREFIX=ads/` keeps the existing
+   pictures where they are.
+4. Redeploy.
+
+```sh
+railway variable set GENAIE_WORKSPACE_ID=<id> GENAIE_ASSET_KEY_PREFIX=ads/ --skip-deploys && railway redeploy --yes
+```
+
+To roll back, delete both variables and redeploy. If edits were made after the
+cutover, first copy them back with `--from workspace:<id> --to root --write`.
+Once the workspace has run cleanly for a week, `--delete-source --confirm <id>`
+removes the root copy. It refuses while any root document has no copy in the
+workspace.
+
+**A new user's bot.** The steps:
+
+1. Create its own Railway service and volume, with
+   `GENAIE_WORKSPACE_ID=<id>` set from the start.
+2. Seed its settings and lines:
+   `deploy/init-workspace.py --workspace <id> --line default=+<number> --write`.
+   This copies `settings/defaults` from `--settings-from` (`root` by default;
+   once the root is retired, the first workspace's `workspace:<id>`).
+
 ## Retired daily job feeds: 2026-10-28
 
 Vacancy Lamp and Hustlers Marketplace job posting and the shared scraping/cache

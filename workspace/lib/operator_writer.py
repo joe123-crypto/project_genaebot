@@ -134,7 +134,7 @@ def plan_writes(desired, existing):
     return writes, strays, unchanged
 
 
-def commit(project, token, writes, deletes, *, opener=None, sleep=None):
+def commit(project, token, writes, deletes, *, opener=None, sleep=None, env=None):
     """Apply full-document replaces and deletes, ``COMMIT_BATCH`` at a time.
     A replace without an update mask overwrites the whole document, which is what
     makes re-running the seed idempotent.
@@ -144,13 +144,13 @@ def commit(project, token, writes, deletes, *, opener=None, sleep=None):
     the caller and not here."""
     opener = opener or urllib.request.urlopen
     sleep = sleep or time.sleep
-    base = "projects/%s/databases/(default)/documents" % project
+    base = operator_config.documents_root(project, env)
     operations = [{"update": {"name": "%s/%s/%s" % (base, write[0], write[1]),
                               "fields": operator_config.encode_fields(write[2])}}
                   for write in writes]
     operations += [{"delete": "%s/%s/%s" % (base, collection, doc_id)}
                    for collection, doc_id in deletes]
-    url = "%s/%s:commit" % (operator_config.API_ROOT, base)
+    url = "%s/%s:commit" % (operator_config.API_ROOT, operator_config.database_documents(project))
     for start in range(0, len(operations), COMMIT_BATCH):
         body = json.dumps({"writes": operations[start:start + COMMIT_BATCH]}).encode("utf-8")
         operator_config._request(url, opener=opener, sleep=sleep, data=body,
@@ -462,7 +462,7 @@ def write(collection, doc_id, patch, actor, env=None, *, opener=None, signer=Non
     commit(project, token,
            [(collection, doc_id, fields, before is not None),
             (AUDIT_COLLECTION, entry_id, entry, False)],
-           [], opener=opener, sleep=sleep)
+           [], opener=opener, sleep=sleep, env=env)
     result["audit"] = entry_id
     return result
 
@@ -597,6 +597,6 @@ def delete(collection, doc_id, actor, env=None, *, reason=None, opener=None,
         signer=signer or operator_config.node_signer,
         now=now, sleep=sleep or time.sleep)
     commit(project, token, [(AUDIT_COLLECTION, entry_id, entry, False)],
-           [(collection, doc_id)], opener=opener, sleep=sleep)
+           [(collection, doc_id)], opener=opener, sleep=sleep, env=env)
     result["audit"] = entry_id
     return result

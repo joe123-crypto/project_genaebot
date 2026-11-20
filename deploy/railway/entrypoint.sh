@@ -133,6 +133,11 @@ SECRET_KEYS=(
   PUBLIC_BASE_URL
   WHATSAPP_ADMIN_ENABLED
   WHATSAPP_RELEVANCE_MODE
+  # Not secrets, but every cron run must see the same document tree as the
+  # console API: sanitised and exported here, so a quoted Railway value cannot
+  # make a send read one workspace while the console edits another.
+  GENAIE_WORKSPACE_ID
+  GENAIE_ASSET_KEY_PREFIX
 )
 wrote_env=0
 tmp_env="$(mktemp)"

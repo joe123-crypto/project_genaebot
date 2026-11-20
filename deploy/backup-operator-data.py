@@ -24,7 +24,8 @@ renamed into place, so a half-written backup is never mistaken for a whole one.
 ``audit`` is included and is the real change history -- who changed what, when,
 and the before and after of every console write. The documents that only record
 that an operation already happened (``campaign_creations``,
-``campaign_deletions``, ``campaign_asset_uploads``) are included too, because
+``campaign_deletions``, ``campaign_asset_uploads``, ``schedule_operations``) are
+included too, because
 restoring the config without them would let a replayed request run a second
 time.
 
@@ -82,7 +83,8 @@ import r2_sigv4  # noqa: E402
 # it is a derived SQLite cache on the volume, rebuilt from these.
 COLLECTIONS = (operator_config.COLLECTIONS
                + (ad_assets.COLLECTION, operator_writer.AUDIT_COLLECTION,
-                  "campaign_creations", "campaign_deletions", "campaign_asset_uploads"))
+                  "campaign_creations", "campaign_deletions", "campaign_asset_uploads",
+                  "schedule_operations"))
 MANIFEST_NAME = "manifest.json"
 R2_NAME = "r2-objects.json"
 VERSION = 1
@@ -189,6 +191,7 @@ def assemble(directory, documents, objects, note, *, project, at):
         r2 = {"listed": True, "bucket": objects["bucket"],
               "objects": len(objects["objects"])}
     manifest = {"version": VERSION, "createdAt": at, "project": project,
+                "root": operator_config.root_label(),
                 "collections": list(sorted(documents)), "files": files, "r2": r2}
     _write(os.path.join(directory, MANIFEST_NAME), _dump(manifest))
     return manifest

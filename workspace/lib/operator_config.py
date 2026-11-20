@@ -16,6 +16,10 @@ Collections, one document per thing, field names identical to membership.json::
     groups/<jid>        name, source, status, activity, account, daily_cap,
                         promos, weekly, note
 
+With ``GENAIE_WORKSPACE_ID`` set, every one of these paths sits under
+``workspaces/<id>/`` instead: the bot belongs to that workspace and reads, writes
+and caches nothing else (see :func:`documents_root`).
+
 Every document may also carry ``rank``. Firestore lists documents by ID, but
 order here is not cosmetic: a run sends in targets order and, when it runs out
 of time, the groups it never reaches are the last ones. ``rank`` keeps that
@@ -55,6 +59,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import secrets
 import subprocess
 import sys
@@ -101,6 +106,13 @@ SIGNER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gcp_token.mjs
 
 DEFAULT_STATE_DIR = "/home/joseph/.openclaw"
 
+# A bot deployment belongs to one workspace. With ``GENAIE_WORKSPACE_ID`` set,
+# every document it reads or writes lives under ``workspaces/<id>/``; unset, it
+# uses the root collections, which is where a single-operator install keeps them.
+WORKSPACE_ENV = "GENAIE_WORKSPACE_ID"
+WORKSPACE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,40}$")
+LEGACY_ROOT = "root"
+
 
 class ConfigUnavailable(Exception):
     """No usable config: Firestore unreachable or refusing, and no snapshot."""
@@ -122,6 +134,47 @@ class ConfigUnavailable(Exception):
 
 class ConfigInvalid(Exception):
     """Firestore answered, but a document every group depends on is malformed."""
+
+
+def workspace_id(env=None):
+    """The workspace this bot is pinned to, or ``None`` for the root collections.
+
+    A malformed id is refused rather than ignored: falling back to the root would
+    act on whichever data happens to live there, which is the wrong operator's."""
+    env = os.environ if env is None else env
+    value = (env.get(WORKSPACE_ENV) or "").strip()
+    if not value:
+        return None
+    if not WORKSPACE_ID_RE.match(value):
+        raise ConfigUnavailable("%s is not a valid workspace id" % WORKSPACE_ENV)
+    return value
+
+
+def root_label(env=None):
+    """Which document tree this process reads: ``root`` or ``workspaces/<id>``.
+    Snapshots and caches record it, so data read from one tree is never served
+    as the other."""
+    wid = workspace_id(env)
+    return LEGACY_ROOT if wid is None else "workspaces/%s" % wid
+
+
+def database_documents(project):
+    """Where database-wide calls go: ``:commit``, ``:beginTransaction`` and
+    ``:rollback`` are addressed to the database, never to a parent document,
+    even when every name they carry sits under a workspace."""
+    return "projects/%s/databases/(default)/documents" % project
+
+
+# The calls Firestore only accepts on the database path.
+DATABASE_CALLS = (":beginTransaction", ":commit", ":rollback", ":batchGet", ":batchWrite")
+
+
+def documents_root(project, env=None):
+    """The parent every document name and list or query path hangs off
+    (unquoted). Database-wide calls go to :func:`database_documents` instead."""
+    base = database_documents(project)
+    wid = workspace_id(env)
+    return base if wid is None else "%s/workspaces/%s" % (base, wid)
 
 
 def state_dir(env=None):
@@ -322,9 +375,9 @@ def _auth(token):
     return {"Authorization": "Bearer %s" % token}
 
 
-def documents_url(project, collection, doc_id=None):
-    url = "%s/projects/%s/databases/(default)/documents/%s" % (
-        API_ROOT, urllib.parse.quote(project, safe=""), urllib.parse.quote(collection, safe=""))
+def documents_url(project, collection, doc_id=None, env=None):
+    root = documents_root(urllib.parse.quote(project, safe=""), env)
+    url = "%s/%s/%s" % (API_ROOT, root, urllib.parse.quote(collection, safe=""))
     if doc_id is not None:
         # A JID carries "@"; quote everything so no ID can change the path.
         url += "/" + urllib.parse.quote(doc_id, safe="")
@@ -336,7 +389,7 @@ def doc_id_of(name):
     return urllib.parse.unquote(name.rsplit("/", 1)[-1])
 
 
-def list_documents(project, collection, token, *, opener, sleep):
+def list_documents(project, collection, token, *, opener, sleep, env=None):
     """``[(doc_id, raw_fields)]`` for every document in ``collection``."""
     out = []
     page = None
@@ -344,7 +397,7 @@ def list_documents(project, collection, token, *, opener, sleep):
         query = {"pageSize": PAGE_SIZE}
         if page:
             query["pageToken"] = page
-        reply = _request("%s?%s" % (documents_url(project, collection),
+        reply = _request("%s?%s" % (documents_url(project, collection, env=env),
                                     urllib.parse.urlencode(query)),
                          opener=opener, sleep=sleep, headers=_auth(token))
         for doc in reply.get("documents") or []:
@@ -354,10 +407,10 @@ def list_documents(project, collection, token, *, opener, sleep):
             return out
 
 
-def get_document(project, collection, doc_id, token, *, opener, sleep, raw=False):
+def get_document(project, collection, doc_id, token, *, opener, sleep, raw=False, env=None):
     """One document's decoded fields, or ``None`` if it does not exist. The send
     loop re-reads a group with this just before posting to it."""
-    reply = _request(documents_url(project, collection, doc_id), opener=opener,
+    reply = _request(documents_url(project, collection, doc_id, env), opener=opener,
                      sleep=sleep, headers=_auth(token), missing_ok=True)
     if reply is None:
         return None
@@ -365,14 +418,14 @@ def get_document(project, collection, doc_id, token, *, opener, sleep, raw=False
     return fields if raw else decode_fields(fields)
 
 
-def query_documents(project, collection, where, token, *, opener, sleep):
+def query_documents(project, collection, where, token, *, opener, sleep, env=None):
     """Read matching documents on the server; never fall back to a collection scan.
 
     runQuery returns a JSON array, including a readTime-only row for an empty
     result. Firestore performs the filtering, so unrelated documents are not
     downloaded or billed as document reads.
     """
-    base = documents_url(project, collection).rsplit("/", 1)[0]
+    base = documents_url(project, collection, env=env).rsplit("/", 1)[0]
     body = {"structuredQuery": {"from": [{"collectionId": collection}], "where": where}}
     reply = _request(base + ":runQuery", data=json.dumps(body).encode(), method="POST",
                      headers=dict(_auth(token), **{"Content-Type": "application/json"}),
@@ -391,13 +444,13 @@ def campaign_groups_filter(slug):
                             "value": {"stringValue": slug}}}
 
 
-def count_documents(project, collection, token, *, where=None, opener, sleep):
+def count_documents(project, collection, token, *, where=None, opener, sleep, env=None):
     query = {"from": [{"collectionId": collection}]}
     if where is not None:
         query["where"] = where
     body = {"structuredAggregationQuery": {"structuredQuery": query,
             "aggregations": [{"alias": "total", "count": {}}]}}
-    base = documents_url(project, collection).rsplit("/", 1)[0]
+    base = documents_url(project, collection, env=env).rsplit("/", 1)[0]
     reply = _request(base + ":runAggregationQuery", data=json.dumps(body).encode(), method="POST",
                      headers=dict(_auth(token), **{"Content-Type": "application/json"}),
                      opener=opener, sleep=sleep)
@@ -412,7 +465,7 @@ def scope_directory(env=None, *, campaign=None, group_ids=None, include_groups=T
     if campaign is None and group_ids is None and include_groups and include_campaigns:
         return directory
     creds = credentials(env) or {}
-    identity = [creds.get("project_id"), creds.get("client_email"), campaign,
+    identity = [creds.get("project_id"), creds.get("client_email"), root_label(env), campaign,
                 sorted(set(group_ids)) if group_ids is not None else None, include_groups, include_campaigns]
     digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     return os.path.join(directory, "scopes", digest)
@@ -808,24 +861,27 @@ def fetch(env=None, *, opener=None, signer=None, now=None, sleep=None,
     token = access_token(creds, token_cache_path(state_dir(env)), opener=opener,
                          signer=signer, now=now, sleep=sleep)
     project = creds["project_id"]
-    settings = get_document(project, "settings", SETTINGS_DOC, token, opener=opener, sleep=sleep, raw=True)
+    settings = get_document(project, "settings", SETTINGS_DOC, token, opener=opener, sleep=sleep,
+                            raw=True, env=env)
     raw = {"settings": [] if settings is None else [(SETTINGS_DOC, settings)]}
     for collection in ("lines", "campaigns"):
         raw[collection] = [] if collection == "campaigns" and not include_campaigns else list_documents(
-            project, collection, token, opener=opener, sleep=sleep)
+            project, collection, token, opener=opener, sleep=sleep, env=env)
     if not include_groups:
         raw["groups"] = []
     elif group_ids is not None:
         raw["groups"] = []
         for jid in dict.fromkeys(group_ids):
-            fields = get_document(project, "groups", jid, token, opener=opener, sleep=sleep, raw=True)
+            fields = get_document(project, "groups", jid, token, opener=opener, sleep=sleep,
+                                  raw=True, env=env)
             if fields is not None:
                 raw["groups"].append((jid, fields))
     elif campaign is not None:
         raw["groups"] = query_documents(project, "groups", campaign_groups_filter(campaign),
-                                         token, opener=opener, sleep=sleep)
+                                         token, opener=opener, sleep=sleep, env=env)
     else:
-        raw["groups"] = list_documents(project, "groups", token, opener=opener, sleep=sleep)
+        raw["groups"] = list_documents(project, "groups", token, opener=opener, sleep=sleep,
+                                       env=env)
     return creds["project_id"], raw
 
 
@@ -868,13 +924,17 @@ def load(env=None, *, opener=None, signer=None, now=None, sleep=None, log=None,
     stamp = at.strftime("%Y-%m-%dT%H:%M:%SZ")
     import campaign_deletion
     deleted = sorted(campaign_deletion.deleted_slugs(raw))
-    current = {"fetchedAt": stamp, "membership": membership, "enabled": enabled, "deleted": deleted}
+    root = root_label(env)
+    current = {"fetchedAt": stamp, "root": root, "membership": membership, "enabled": enabled,
+               "deleted": deleted}
     try:
         previous = _read_json(snapshot_path(directory))
         # Snapshot first, change log second: if the log append fails we lose a
         # line of history; the other order would re-log the same change next run.
         _write_private_json(snapshot_path(directory), current)
-        if isinstance(previous, dict):
+        # A snapshot of the other tree is not "before": diffing against it would
+        # log every document as changed on the day a bot moves to its workspace.
+        if isinstance(previous, dict) and snapshot_root(previous) == root:
             _append_changes(directory, changes(previous, current, stamp), at)
     except OSError as ex:
         # The live read already succeeded; failing to keep a copy degrades the
@@ -898,7 +958,7 @@ def scope_snapshot(env, why, *, now=None, campaign=None, group_ids=None, include
         directory = None
     if directory is not None:
         try:
-            return _from_snapshot(directory, why, now=now)
+            return _from_snapshot(directory, why, now=now, root=root_label(env))
         except ConfigUnavailable as exc:
             if directory == state_dir(env):
                 raise
@@ -906,7 +966,7 @@ def scope_snapshot(env, why, *, now=None, campaign=None, group_ids=None, include
     # A previous full read can seed a scope during an outage, but a scoped
     # read must never replace the full snapshot or add unrelated groups.
     try:
-        result = _from_snapshot(state_dir(env), why, now=now)
+        result = _from_snapshot(state_dir(env), why, now=now, root=root_label(env))
     except ConfigUnavailable:
         if scoped_error is not None:
             raise scoped_error
@@ -941,13 +1001,25 @@ def _snapshot_age_seconds(snapshot, now):
     return now() - at.timestamp()
 
 
-def _from_snapshot(directory, why, now=None):
+def snapshot_root(snapshot):
+    """The tree a snapshot was read from. Snapshots written before workspaces
+    existed carry no ``root`` and were read from the root collections."""
+    root = snapshot.get("root", LEGACY_ROOT)
+    return root if isinstance(root, str) else None
+
+
+def _from_snapshot(directory, why, now=None, root=LEGACY_ROOT):
     now = now or time.time
     snapshot = _read_json(snapshot_path(directory))
     if (not isinstance(snapshot, dict) or not isinstance(snapshot.get("membership"), dict)
             or not isinstance(snapshot.get("enabled"), dict)):
         raise ConfigUnavailable("Firestore unusable (%s) and no snapshot at %s"
                                 % (why, snapshot_path(directory)))
+    # Another tree's targeting is another operator's: never a fallback.
+    if snapshot_root(snapshot) != root:
+        raise ConfigUnavailable("Firestore unusable (%s) and the snapshot at %s was read "
+                                "from %s, not %s" % (why, snapshot_path(directory),
+                                                     snapshot_root(snapshot), root))
     # Yesterday's targeting through a short outage is fine. Last week's is not:
     # it is how a group an operator paused gets advertised again, which is the
     # one failure this whole path exists to prevent. Past the bound there is no

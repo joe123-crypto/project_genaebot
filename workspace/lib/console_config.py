@@ -31,7 +31,8 @@ def _identity(env):
     creds = config.credentials(env)
     # Hash the credential context; no private key is persisted in this cache.
     return hashlib.sha256(json.dumps(
-        [config.API_ROOT, creds, env.get("GENAIE_CONSOLE_CONFIG_GENERATION", ""), env.get("GENAIE_CAMPAIGN_DELETION", "")],
+        [config.API_ROOT, creds, config.root_label(env), env.get("GENAIE_CONSOLE_CONFIG_GENERATION", ""),
+         env.get("GENAIE_CAMPAIGN_DELETION", "")],
         sort_keys=True).encode()).hexdigest()
 
 

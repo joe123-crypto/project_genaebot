@@ -298,8 +298,29 @@ class BucketParityTests(unittest.TestCase):
                                     access_key="a", secret_key="b")
         finally:
             TOOL.r2_sigv4.list_objects = saved
-        self.assertEqual(seen["prefix"], TOOL.KEY_PREFIX)
+        # Without a workspace the prefix is the single-operator install's.
+        self.assertEqual(seen["prefix"], "ads/")
         self.assertEqual(keys, {"ads/cv/a.png": 5})
+
+    def test_a_workspace_lists_and_writes_only_under_its_own_prefix(self):
+        seen = {}
+        def fake(endpoint, bucket, *, access_key, secret_key, prefix=None,
+                 opener=None):
+            seen["prefix"] = prefix
+            return []
+        saved = TOOL.r2_sigv4.list_objects
+        TOOL.r2_sigv4.list_objects = fake
+        saved_env = os.environ.get("GENAIE_WORKSPACE_ID")
+        os.environ["GENAIE_WORKSPACE_ID"] = "wk-alpha1"
+        try:
+            TOOL.bucket_keys("https://r2.example", "pictures", access_key="a", secret_key="b")
+        finally:
+            TOOL.r2_sigv4.list_objects = saved
+            if saved_env is None:
+                os.environ.pop("GENAIE_WORKSPACE_ID", None)
+            else:
+                os.environ["GENAIE_WORKSPACE_ID"] = saved_env
+        self.assertEqual(seen["prefix"], "w/wk-alpha1/ads/")
 
 
 if __name__ == "__main__":
