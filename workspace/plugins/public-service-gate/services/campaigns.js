@@ -1,9 +1,7 @@
-import { fileURLToPath } from "node:url";
-import { getPluginConfig } from "../lib/config.js";
+import { getPluginConfig, workspacePath } from "../lib/config.js";
 import { helperLimiter, isQueueFullError, runJsonCommand, sanitizeLogText } from "../lib/runtime.js";
 import { isCvIntakePaused } from "./cv-maker.js";
 
-const reader = fileURLToPath(new URL("../../../bin/public-read", import.meta.url));
 const unavailable = {
   status: "unavailable", campaigns: [],
   guidance: "Current campaign information is unavailable. Use handoff; never reuse facts from history or the retired briefing.",
@@ -83,7 +81,7 @@ export async function lookupCampaigns(api, params = {}, run = runJsonCommand) {
     warn("selector refused before reading");
     return unavailable;
   }
-  const args = [reader];
+  const args = [workspacePath(api, "bin", "public-read")];
   if (params.discover) args.push("--discover");
   if (params.query) args.push(`--query=${params.query}`);
   if (params.campaign_id) args.push(`--campaign-id=${params.campaign_id}`);

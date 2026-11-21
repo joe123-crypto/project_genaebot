@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -177,4 +177,34 @@ print(json.dumps(results))
     const result = await lookupCampaigns(api, {}, async () => response);
     assert.deepEqual(result, response);
   }
+});
+
+test("lookups find the workspace from the installed plugin when OpenClaw runs a captured copy", async (t) => {
+  // OpenClaw 2026.9 runs a package plugin from a copy of only its package
+  // (~/.openclaw/tmp/plugin-captures/.../package-N/). Paths taken from
+  // import.meta.url then miss the workspace's bin/ and data/, which on
+  // 2026-11-20 sent every product question to a silent handoff.
+  const installed = fileURLToPath(new URL("..", import.meta.url));
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "plugin-capture-"));
+  t.after(() => fs.rmSync(scratch, { recursive: true, force: true }));
+  const copy = path.join(scratch, "captures", "openclaw-plugin-build-test", "package-1");
+  fs.cpSync(installed, copy, { recursive: true });
+  const captured = (file) => import(pathToFileURL(path.join(copy, file)).href);
+  const { lookupCampaigns: capturedLookup } = await captured("services/campaigns.js");
+  const { loadCatalog: capturedCatalog } = await captured("services/borehole.js");
+
+  const warnings = [];
+  const api = { config: {}, rootDir: installed, logger: { warn: (line) => warnings.push(line) } };
+  let reader;
+  await capturedLookup(api, { discover: true }, async (_command, args) => {
+    reader = args[0];
+    return { status: "not_found", source: "live_campaigns", guidance: "Use only this turn's lookup.", more: false,
+      fetched_at: "2026-11-20T23:43:57+00:00", service_availability: { cv_new_orders: false }, campaigns: [] };
+  });
+  assert.equal(reader, path.resolve(installed, "../../bin/public-read"));
+  assert.ok(fs.existsSync(reader));
+  assert.ok(capturedCatalog(api).towns.length > 0);
+  assert.deepEqual(warnings, []);
+  // Without rootDir the copy can only find itself, which is what production hit.
+  assert.throws(() => capturedCatalog({ config: {} }), { code: "ENOENT" });
 });
