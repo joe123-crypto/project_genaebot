@@ -37,6 +37,7 @@ Std-lib only, like everything else the deploy job runs.
 
 import datetime as dt
 import json
+import math
 import os
 import re
 import subprocess
@@ -83,8 +84,15 @@ REQUIRED = ("slug", "enabled", "hour", "minute", "timezone", "targetCount",
 START_JITTER_SECONDS = 900.0
 SEND_GAP_MAX_SECONDS = 60.0
 SEND_ALLOWANCE_SECONDS = 12.0
+RUN_BUDGET_FRACTION = 0.9
+RUN_TIMEOUT_FLOOR_SECONDS = 7200
+RUN_TIMEOUT_STEP_SECONDS = 300
 DEFAULT_TIMEOUT_SECONDS = 7200.0
 DEFAULT_ACCOUNT = "default"
+# The clock schedule entries are reported on (console_schedule.DISPLAY_ZONE):
+# an entry row's ``minutes`` are minutes past midnight here, whatever zone its
+# own cron is in.
+DISPLAY_ZONE = "Africa/Harare"
 # The reply recorder only counts a ref code whose prefix it knows, and that list
 # is code, in this repository, while the prefixes themselves are campaign data in
 # Firestore. So the two can only be compared here, at gate time.
@@ -238,10 +246,61 @@ def worst_case_seconds(row, count=None):
             + max(sends - 1, 0) * SEND_GAP_MAX_SECONDS)
 
 
+def run_timeout_seconds(count):
+    """The job timeout the bot gives a ``count``-group campaign; a mirror of
+    ``promo_broadcast.run_timeout_seconds``, pinned by a test."""
+    count = max(int(count), 0)
+    sends = count * SEND_ALLOWANCE_SECONDS + max(count - 1, 0) * SEND_GAP_MAX_SECONDS
+    needed = START_JITTER_SECONDS + sends / RUN_BUDGET_FRACTION
+    steps = math.ceil(needed / RUN_TIMEOUT_STEP_SECONDS - 1e-9)
+    return max(RUN_TIMEOUT_FLOOR_SECONDS, int(steps * RUN_TIMEOUT_STEP_SECONDS))
+
+
 def run_budget_seconds(row):
     """The worst case, capped at the job timeout that kills the run anyway."""
     timeout = float(row.get("timeoutSeconds") or DEFAULT_TIMEOUT_SECONDS)
     return min(worst_case_seconds(row), timeout)
+
+
+def starts(row):
+    """``[(label, zone, hour, minute)]``: every time this campaign's crons fire.
+
+    A campaign with schedule entries fires once per live entry, at the entry's
+    time. Its own ``hour``/``minute`` used to be all this read, and they are
+    only where the campaign started: moving an entry on the timeline leaves
+    them behind, which is how genaie-marketing-software was held for at 03:50
+    while its jobs fired at 00:05 and 10:55. An entry whose move has not been
+    confirmed yet still has its old job, so the registered time counts too.
+    A paused or deleted entry fires nothing. A skip only covers one date, so it
+    still counts, in the same spirit as treating every day as a firing day.
+
+    A row without entries (an older bot) falls back to its own time."""
+    entries = row.get("scheduleEntries")
+    if not isinstance(entries, list) or not entries:
+        return [(row.get("jobName") or row["slug"], ZoneInfo(row["timezone"]),
+                 int(row["hour"]), int(row["minute"]))]
+    zone = ZoneInfo(DISPLAY_ZONE)
+    found = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise Unavailable("campaign %r has a schedule entry that is not an object"
+                              % row["slug"])
+        label = "%s (%s)" % (row["slug"], entry.get("entryId") or "entry")
+        times = []
+        if not entry.get("deleted") and not entry.get("paused"):
+            times.append(entry.get("minutes"))
+        confirmed = entry.get("confirmed")
+        if (isinstance(confirmed, dict) and not confirmed.get("deleted")
+                and not confirmed.get("paused")):
+            times.append(confirmed.get("minutes"))
+        for minutes in dict.fromkeys(times):
+            if minutes is None:
+                continue
+            if type(minutes) is not int or not 0 <= minutes < 24 * 60:
+                raise Unavailable("campaign %r has a schedule entry at %r minutes"
+                                  % (row["slug"], minutes))
+            found.append((label, zone, minutes // 60, minutes % 60))
+    return found
 
 
 def _per_account(row):
@@ -267,19 +326,27 @@ def recorder_prefixes(path=None):
 def problems(rows, *, prefixes=None):
     """``[(severity, message)]`` for schedules that cannot do what they promise.
 
-    Two guardrails that used to be repository tests, because every input was a
+    Guardrails that used to be repository tests, because every input was a
     committed file: the group lists, the schedules and the job timeouts. They are
     operator data now, so the only place they can be checked is against the live
     list -- which is also the only place worth checking, since the committed
     copies had drifted from what the bot was actually doing.
 
-    ``error`` is a campaign whose own run cannot finish inside its own job
-    timeout: the gateway kills it every day with groups unreached, and no deploy
-    changes that. ``warning`` is two campaigns on the same WhatsApp line where
-    the earlier may still be posting when the later starts -- the 20-60 s
-    spacing is per line, so two overlapping runs double that line's send rate
-    and defeat it. Spacing degrades; it does not break, hence the lesser
-    severity.
+    Every one is a ``warning``. None of them is something a release changes, and
+    none of them stops a campaign posting:
+
+    - A campaign whose job timeout is shorter than its groups need at full
+      spacing. The bot derives the timeout from the group count and its
+      reconciler keeps it there, so this is a timeout that has not caught up
+      yet; meanwhile the engine fits the run inside it by tightening the gaps.
+      This used to be an ``error`` that failed the release, and on 2026-11-20 it
+      held every release back for one campaign that had grown to 103 groups.
+    - Two campaigns on the same WhatsApp line where the earlier may still be
+      posting when the later starts. The 20-60 s spacing is per line, so two
+      overlapping runs double that line's send rate and defeat it.
+    - A campaign whose run may still be going when its own next entry starts.
+      That entry finds the run lock taken and posts nothing.
+    - A tracked campaign whose ref prefix the reply recorder does not count.
     """
     found = []
     live = enabled(rows)
@@ -287,39 +354,61 @@ def problems(rows, *, prefixes=None):
         timeout = float(row.get("timeoutSeconds") or DEFAULT_TIMEOUT_SECONDS)
         worst = worst_case_seconds(row)
         if worst > timeout:
-            found.append(("error",
-                          "%s sends to %d group(s), which needs up to %.0f min, "
-                          "but its job timeout is %.0f min: the run is killed with "
-                          "groups unreached. Raise the timeout or split the campaign."
+            found.append(("warning",
+                          "%s sends to %d group(s), which needs up to %.0f min at full "
+                          "spacing, but its job timeout is still %.0f min: until the "
+                          "bot's reconciler raises it to %.0f min, its runs tighten "
+                          "their send gaps to fit."
                           % (row["slug"], int(row["targetCount"]), worst / 60.0,
-                             timeout / 60.0)))
+                             timeout / 60.0, run_timeout_seconds(row["targetCount"]) / 60.0)))
     # Overlap is per line and per timezone-independent instant, so compare the
-    # start times as minutes from midnight UTC on one arbitrary day.
+    # start times as seconds from midnight UTC on one arbitrary day, around the
+    # clock: a run late in the day can still be posting after midnight.
     day = dt.date(2026, 1, 1)
     by_line = {}
     for row in live:
         try:
-            zone = ZoneInfo(row["timezone"])
+            fires = starts(row)
         except Exception as ex:
-            raise Unavailable("campaign %r has an unusable timezone %r (%s)"
-                              % (row["slug"], row["timezone"], ex))
-        start = dt.datetime(day.year, day.month, day.day, int(row["hour"]),
-                            int(row["minute"]), tzinfo=zone)
-        at = start.astimezone(dt.timezone.utc)
-        for line, count in _per_account(row).items():
-            by_line.setdefault(line, []).append(
-                (at.hour * 3600 + at.minute * 60, row["slug"], count, row))
+            if isinstance(ex, Unavailable):
+                raise
+            raise Unavailable("campaign %r has an unusable schedule (%s)" % (row["slug"], ex))
+        for _, zone, hour, minute in fires:
+            start = dt.datetime(day.year, day.month, day.day, hour, minute, tzinfo=zone)
+            at = start.astimezone(dt.timezone.utc)
+            when = "%02d:%02d" % (hour, minute)
+            for line, count in _per_account(row).items():
+                by_line.setdefault(line, []).append(
+                    (at.hour * 3600 + at.minute * 60, row["slug"], when, count, row))
+    seen = set()
     for line, runs in sorted(by_line.items()):
-        runs.sort()
-        for (at, slug, count, row), (next_at, next_slug, _, _) in zip(runs, runs[1:]):
+        if len(runs) < 2:
+            continue
+        runs.sort(key=lambda run: run[:3])
+        following = runs[1:] + [(runs[0][0] + 86400,) + runs[0][1:]]
+        for (at, slug, when, count, row), (next_at, next_slug, next_when, _, _) in zip(runs, following):
             latest = at + min(worst_case_seconds(row, count),
                               float(row.get("timeoutSeconds") or DEFAULT_TIMEOUT_SECONDS))
-            if latest > next_at:
+            if latest <= next_at:
+                continue
+            if slug == next_slug:
+                # One campaign's runs collide whatever line they are on; say it
+                # once, not once per line.
+                if slug in seen:
+                    continue
+                seen.add(slug)
                 found.append(("warning",
-                              "%s (%d group(s) on the %s line) can still be posting "
-                              "%.0f min after %s starts, and the send spacing is per "
-                              "line: move one of them."
-                              % (slug, count, line, (latest - next_at) / 60.0, next_slug)))
+                              "%s's %s run can still be posting %.0f min after its own "
+                              "%s entry starts, and that entry then posts nothing (the "
+                              "run lock is taken): move one of its entries."
+                              % (slug, when, (latest - next_at) / 60.0, next_when)))
+                continue
+            found.append(("warning",
+                          "%s's %s run (%d group(s) on the %s line) can still be posting "
+                          "%.0f min after %s starts at %s, and the send spacing is per "
+                          "line: move one of them."
+                          % (slug, when, count, line, (latest - next_at) / 60.0,
+                             next_slug, next_when)))
     known = recorder_prefixes() if prefixes is None else prefixes
     if known is not None:
         for row in sorted(live, key=lambda row: row["slug"]):

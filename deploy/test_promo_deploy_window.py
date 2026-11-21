@@ -36,6 +36,26 @@ def row(slug, hour, minute, *, count=TWENTY, enabled=True, timeout=7200,
             "targetCount": count, "timeoutSeconds": timeout, "source": "console"}
 
 
+def entry(entry_id, time, *, paused=False, deleted=False, confirmed=None):
+    """One schedule entry, as console-read reports it: Harare clock minutes."""
+    hour, minute = map(int, time.split(":"))
+    minutes = hour * 60 + minute
+    return {"entryId": entry_id, "minutes": minutes, "time": time, "paused": paused,
+            "skipped": False, "deleted": deleted,
+            "confirmed": {"minutes": minutes, "paused": paused, "skipped": False, "deleted": deleted}
+            if confirmed is None else confirmed}
+
+
+def marketing_software():
+    """genaie-marketing-software as the gateway reported it on 2026-11-21: its
+    own time still 03:50, its two entries at 00:05 and 10:55, 103 groups under
+    the 7200 s timeout it was created with."""
+    return dict(row("genaie-marketing-software", 3, 50, count=103,
+                    job="console-genaie-marketing-software-promo"),
+                accounts={"default": 57, "ads": 46},
+                scheduleEntries=[entry("ef525ebc", "10:55"), entry("primary", "00:05")])
+
+
 class GateTest(unittest.TestCase):
     def run_gate(self, rows, now, *extra):
         slept = []
@@ -157,12 +177,64 @@ class GateTest(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertIn("09:38 CAT", out.getvalue() + err.getvalue())
 
+    # ------------------------------------------------------ schedule entries --
+    def test_a_campaign_is_held_for_at_its_entries_not_its_own_time(self):
+        # The 2026-11-21 reading: the gate held releases for this campaign at
+        # 03:50, its own (stale) time, and waved one through at 11:30 Harare,
+        # half an hour into its 10:55 run.
+        rows = [marketing_software()]
+        code, _, out = self.run_gate(rows, "2026-11-21T09:30:00+00:00", "--check-only")
+        self.assertEqual(code, 1)
+        self.assertIn("genaie-marketing-software (ef525ebc) at 10:55 CAT", out)
+        code, _, out = self.run_gate(rows, "2026-11-21T02:30:00+00:00", "--check-only")
+        self.assertEqual(code, 0, "04:30 Harare is between its runs, not inside one")
+
+    def test_both_of_a_campaigns_entries_are_held_for(self):
+        rows = [marketing_software()]
+        code, _, out = self.run_gate(rows, "2026-11-20T23:00:00+00:00", "--check-only")
+        self.assertEqual(code, 1)
+        self.assertIn("(primary) at 00:05 CAT", out)
+
+    def test_a_paused_or_deleted_entry_holds_nothing(self):
+        rows = [dict(row("demo", 9, 5), scheduleEntries=[
+            entry("primary", "09:05", paused=True), entry("late", "15:05", deleted=True),
+            entry("noon", "12:05")])]
+        self.assertEqual(self.run_gate(rows, "2026-11-21T07:10:00+00:00", "--check-only")[0], 0)
+        self.assertEqual(self.run_gate(rows, "2026-11-21T10:10:00+00:00", "--check-only")[0], 1)
+
+    def test_a_move_not_yet_confirmed_is_held_for_at_both_times(self):
+        # The gateway still has the job at its old time until the reconciler
+        # confirms the move, so either time may fire.
+        moved = entry("primary", "15:05", confirmed={"minutes": 9 * 60 + 5, "paused": False,
+                                                     "skipped": False, "deleted": False})
+        rows = [dict(row("demo", 9, 5), scheduleEntries=[moved])]
+        self.assertEqual(self.run_gate(rows, "2026-11-21T07:10:00+00:00", "--check-only")[0], 1)
+        self.assertEqual(self.run_gate(rows, "2026-11-21T13:10:00+00:00", "--check-only")[0], 1)
+        self.assertEqual(self.run_gate(rows, "2026-11-21T10:30:00+00:00", "--check-only")[0], 0)
+
+    # -------------------------------------------- a campaign that outgrew its timeout --
+    def test_an_outgrown_timeout_warns_and_no_longer_holds_a_release(self):
+        # Every release from 2026-11-20 failed here because this one campaign
+        # had grown to 103 groups under a 7200 s timeout. The engine still
+        # reaches them all, the bot now raises the timeout itself, and a release
+        # changes neither, so it is a warning.
+        code, _, out = self.run_gate([marketing_software()], "2026-11-21T19:00:00+00:00", "--check-only")
+        self.assertEqual(code, 0)
+        self.assertIn("::warning::genaie-marketing-software sends to 103 group(s)", out)
+        self.assertIn("raises it to 155 min", out)
+        self.assertNotIn("::error::", out)
+
     # ------------------------------------------------------------- the wiring --
     def test_engine_timing_mirrors_match_promo_broadcast(self):
         mirror = gate.gateway_campaigns
         self.assertEqual(mirror.START_JITTER_SECONDS, promo_broadcast.DEFAULT_START_JITTER_SECONDS)
         self.assertEqual(mirror.SEND_GAP_MAX_SECONDS, promo_broadcast.DEFAULT_SEND_DELAY_MAX)
         self.assertEqual(mirror.SEND_ALLOWANCE_SECONDS, promo_broadcast.SEND_ALLOWANCE_SECONDS)
+        self.assertEqual(mirror.RUN_BUDGET_FRACTION, promo_broadcast.RUN_BUDGET_FRACTION)
+        self.assertEqual(mirror.RUN_TIMEOUT_FLOOR_SECONDS, promo_broadcast.RUN_TIMEOUT_FLOOR_SECONDS)
+        self.assertEqual(mirror.RUN_TIMEOUT_STEP_SECONDS, promo_broadcast.RUN_TIMEOUT_STEP_SECONDS)
+        for count in (0, 1, 20, 79, 80, 88, 103, 107, 250):
+            self.assertEqual(mirror.run_timeout_seconds(count), promo_broadcast.run_timeout_seconds(count))
 
     def test_deploy_job_gates_before_the_release(self):
         deploy = WORKFLOW[WORKFLOW.index("\n  deploy:\n"):]

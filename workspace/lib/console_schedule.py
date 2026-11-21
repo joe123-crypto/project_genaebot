@@ -87,11 +87,16 @@ def read_fields(doc, day, slug=""):
     edit = describe(doc, day)
     if not edit["editable"]:
         return {"scheduleEdit": edit}
-    parts = parse(value)
     import console_schedule_entries
     entry_rows = console_schedule_entries.rows(slug, doc, day)
     if "scheduleEntries" in doc:
         edit = {**edit, "editable": False, "reason": "Use the independent schedule entry controls."}
+        # The campaign's own time stopped firing anything when it got entries;
+        # report the entry that does, or every reader shows a stale time.
+        lead = console_schedule_entries.lead_entry(doc)
+        if lead is not None:
+            value = {"cron": lead["cron"], "timezone": lead["timezone"]}
+    parts = parse(value)
     return {"scheduleEntries": entry_rows, "cron": value["cron"], "timezone": value["timezone"],
             "hour": int(parts[1]), "minute": int(parts[0]), "scheduleMinutes": occurrence(value, day), "scheduleEdit": edit}
 

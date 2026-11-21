@@ -143,6 +143,12 @@ CACHE_TTL_SECONDS = 30.0
 CACHE_MAX_ENTRIES = 32
 BRIDGE_TIMEOUT_SECONDS = 60
 BRIDGE_EXIT_NOT_FOUND = 3  # console-read's EXIT_NOT_FOUND
+# Re-deriving the campaigns' run timeouts lists every group, and the project
+# lives on a Firestore read quota it has already run out of once. So the
+# reconciler does it when a write woke it, on its first pass after a start (which
+# is also what brings existing campaigns into line after a deploy), and
+# otherwise this often -- not on every five-minute (or one-minute) pass.
+TIMEOUT_SYNC_SECONDS = 3600
 DEFAULT_PORT = 18790  # beside the gateway's 18789, clear of common dev ports
 DEFAULT_BIND = "0.0.0.0"
 DEFAULT_STATE_DIR = "/home/joseph/.openclaw"
@@ -548,7 +554,10 @@ class Handler(BaseHTTPRequestHandler):
         # A change the caller can see means every cached read of it is wrong. An
         # uncertain write may still have landed, so clear on failure too.
         bridge.invalidate(config=not request.get("dryRun"))
-        if (status == 200 and request["collection"] == "campaigns" and not request.get("dryRun")
+        # A group write can change how many groups a campaign posts to, and its
+        # run timeout follows that count (console_campaigns.sync_run_timeouts),
+        # so it wakes the reconciler just as a campaign write does.
+        if (status == 200 and request["collection"] in ("campaigns", "groups") and not request.get("dryRun")
                 and self.server.console.get("reconcileWake") is not None):
             self.server.console["reconcileWake"].set()
         self.send_any(status, body, with_body)
@@ -882,6 +891,13 @@ def plan(route, query):
     return args
 
 
+def timeout_sync_due(woken, synced_at, now, interval=TIMEOUT_SYNC_SECONDS):
+    """Whether this reconciler pass re-derives the run timeouts (see
+    ``TIMEOUT_SYNC_SECONDS``): a write woke it, none has succeeded since the
+    start, or the last one is ``interval`` old."""
+    return bool(woken) or synced_at is None or now - synced_at >= interval
+
+
 def authorized(header, token):
     presented = ""
     if header:
@@ -974,10 +990,16 @@ def main():
     def reconcile_campaigns():
         delay = 300
         reported = None
+        woken, synced_at = False, None
         while not stop_reconcile.is_set():
             wake_reconcile.clear()
             if (os.environ.get(WRITE_KEY_VAR) or "").strip():
-                status, body = server.console["campaigns"].run({"reconcile": True})
+                now = time.monotonic()
+                sync = timeout_sync_due(woken, synced_at, now)
+                status, body = server.console["campaigns"].run(
+                    {"reconcile": True, **({"syncTimeouts": True} if sync else {})})
+                if sync and status == 200:
+                    synced_at = now
                 deletions_pending = schedule_pending = 0
                 problems = []
                 try:
@@ -1003,7 +1025,7 @@ def main():
                 else:
                     reported = None
                     delay = 300
-            wake_reconcile.wait(delay)
+            woken = wake_reconcile.wait(delay)
     threading.Thread(target=reconcile_campaigns, daemon=True).start()
     log("listening on %s:%d, bridge %s" % (bind, port, bridge_path))
     try:

@@ -31,10 +31,6 @@ SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 JOB_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}$")
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 MAX_REQUEST = 60 * 1024
-# Planning allowance per send for the spacing rule below. Deliberately the
-# pessimistic figure the repository's CI used while campaign target lists were
-# committed files, so moving the rule here changes no campaign's group ceiling.
-SPACING_SEND_SECONDS = 60
 
 
 def need(condition, message):
@@ -74,21 +70,6 @@ def state_directory(slug, campaign=None):
     return Path(config.state_dir()) / "runtime" / "cron-state" / name
 
 
-def spacing_problem(count, timeout):
-    """Why ``count`` groups cannot be reached at full send spacing inside a
-    ``timeout``-second job, or ``None`` when they can.
-
-    The engine would still deliver every group by tightening its gaps, and
-    tightened gaps are exactly the fixed cadence the spacing exists to avoid. So
-    the ceiling is enforced where a campaign is saved, not discovered in a run."""
-    import promo_broadcast
-    worst = max(count - 1, 0) * promo_broadcast.DEFAULT_SEND_DELAY_MAX + count * SPACING_SEND_SECONDS
-    if worst < timeout:
-        return None
-    return ("%d groups cannot be reached at full spacing within %d seconds; "
-            "choose fewer groups or a longer timeout" % (count, timeout))
-
-
 def validate_definition(slug, data):
     """The rules for a campaign's own fields, whoever is saving them: the
     console's create request, or the one-off conversion of a repository
@@ -126,8 +107,11 @@ def validate_definition(slug, data):
         need(image["filename"] not in filenames and image["key"] not in keys, "duplicate picture or filename")
         filenames.add(image["filename"])
         keys.add(image["key"])
-    timeout = data.get("timeoutSeconds", 7200)
-    need(type(timeout) is int and 60 <= timeout <= 7200, "timeout must be 60 to 7200 seconds")
+    # No ceiling: the stored timeout follows the group count (see
+    # sync_run_timeouts), so a big campaign's is well past the old two hours.
+    import promo_broadcast
+    timeout = data.get("timeoutSeconds", promo_broadcast.RUN_TIMEOUT_FLOOR_SECONDS)
+    need(type(timeout) is int and timeout >= 60, "timeout must be a whole number of seconds, at least 60")
     phone = r"\+[1-9][0-9]{6,14}"
     need(isinstance(data.get("failureAlertTo", ""), str), "invalid failure alert number")
     if data.get("failureAlertTo"):
@@ -157,7 +141,9 @@ def validate(data):
     validate_definition(data["slug"], data)
     schedule = data["schedule"]
     groups = data.get("groups")
-    need(isinstance(groups, list) and 0 < len(groups) <= 100, "choose between 1 and 100 active groups")
+    # No upper bound: a campaign's run is given as long as its groups need (see
+    # sync_run_timeouts). The request size cap above still bounds one request.
+    need(isinstance(groups, list) and len(groups) > 0, "choose at least one active group")
     seen = set()
     for group in groups:
         need(isinstance(group, dict) and not set(group) - {"jid", "weekdays", "paused"}, "invalid group assignment")
@@ -167,8 +153,6 @@ def validate(data):
         need(type(group.get("paused", False)) is bool, "group pause must be boolean")
         if "weekdays" in group:
             need(valid_days(group["weekdays"]) and set(group["weekdays"]) <= set(schedule["weekdays"]), "group weekdays must be a nonempty subset of campaign weekdays")
-    problem = spacing_problem(len(groups), data.get("timeoutSeconds", 7200))
-    need(problem is None, problem)
     for key in ("comment", "weeklyComment"):
         need(isinstance(data.get(key, ""), str) and len(data.get(key, "")) <= 2000, "notes must be at most 2000 characters")
     need(isinstance(data.get("actor", ""), str) and len(data.get("actor", "")) <= 200, "invalid actor")
@@ -327,7 +311,10 @@ def create(data, store, env=None, verify=verify_image, reconcile=None):
         campaign = {"kind": "console", "name": data["name"].strip(), "enabled": data["enabled"],
                     "captions": data["captions"], "schedule": data["schedule"], "tracking": data.get("tracking", {}), "trackClicks": data.get("trackClicks", True),
                     "comment": data.get("comment", ""), "weekly_comment": data.get("weeklyComment", ""),
-                    "timeoutSeconds": data.get("timeoutSeconds", 7200), "failureAlertTo": data.get("failureAlertTo", ""),
+                    # Derived from the groups, never the form: an older console
+                    # still sends its own figure, and it is not what the run needs.
+                    "timeoutSeconds": run_timeout(sum(1 for selection in data["groups"] if not selection.get("paused"))),
+                    "failureAlertTo": data.get("failureAlertTo", ""),
                     "images": data["images"], "scheduleStatus": "pending",
                     "rank": writer.next_rank(writer._decoded(raw, "campaigns"))}
         raw["campaigns"].append((slug, config.encode_fields(campaign)))
@@ -506,7 +493,69 @@ def reason(ex):
     return str(ex) if isinstance(ex, writer.WriteRefused) else type(ex).__name__
 
 
-def reconcile_all(store, problems=None):
+def run_timeout(count):
+    """The job timeout a campaign posting to ``count`` groups is given."""
+    import promo_broadcast
+    return promo_broadcast.run_timeout_seconds(count)
+
+
+def set_run_timeout(slug, store, seconds):
+    """Replace one campaign's ``timeoutSeconds`` and nothing else (a field mask,
+    for the reason :func:`mark_status` uses one)."""
+    import console_config
+    with console_config.mutation():
+        store.request(":commit", {"writes": [{"update": {"name": "%s/campaigns/%s" % (store.base, slug),
+                       "fields": config.encode_fields({"timeoutSeconds": seconds})}, "updateMask": {"fieldPaths": ["timeoutSeconds"]},
+                       "currentDocument": {"exists": True}}]})
+
+
+def sync_run_timeouts(store):
+    """Give every console campaign the job timeout its group count needs.
+
+    A campaign's run takes longer the more groups it posts to, and groups are
+    added from the Groups and campaign pages long after the campaign was
+    created. A fixed timeout let a campaign quietly outgrow its own run: on
+    2026-11-20 genaie-marketing-software reached 103 groups under a 7200 s
+    timeout, and the release gate refused every deploy because of it. So the
+    timeout is not an operator setting any more. It is derived here from the
+    groups the campaign posts to, counted exactly as a run counts them, and the
+    reconciliation that follows carries it to the cron jobs (the primary job and
+    every schedule entry compare it). Returns ``[(slug, was, now)]``.
+
+    Lowering is as safe as raising: the gateway reads a job's timeout when a run
+    starts, so an edit never shortens a run already in progress."""
+    raw = {collection: store.list(collection) for collection in config.COLLECTIONS}
+    membership, _, undecodable = config.assemble(raw)
+    clean, _ = config.quarantine(membership, undecodable)
+    changed = []
+    for slug, fields in raw["campaigns"]:
+        doc = config.decode_fields(fields)
+        if doc.get("kind") != "console" or doc.get("deleted"):
+            continue
+        daily, weekly = promo_membership.groups_for_promo(clean, slug)
+        count = len(daily) + len(weekly)
+        wanted = run_timeout(count)
+        if doc.get("timeoutSeconds") == wanted:
+            continue
+        set_run_timeout(slug, store, wanted)
+        sys.stderr.write("[console-campaign] run timeout for %s: %s -> %d s (%d groups)\n"
+                         % (slug, doc.get("timeoutSeconds"), wanted, count))
+        changed.append((slug, doc.get("timeoutSeconds"), wanted))
+    return changed
+
+
+def reconcile_all(store, problems=None, sync_timeouts=True):
+    # Before the jobs are compared, so a changed timeout reaches them this pass.
+    # The API's loop asks for it only some passes, since it lists every group
+    # (TIMEOUT_SYNC_SECONDS in deploy/railway/console-api.py). A failure leaves
+    # every stored timeout as it was: the engine still reaches every group under
+    # a short one, by tightening its gaps, and the release gate warns about it.
+    # It must not hold up the schedule reconciliation below.
+    if sync_timeouts:
+        try:
+            sync_run_timeouts(store)
+        except Exception as ex:
+            sys.stderr.write("[console-campaign] run timeouts not synced: %s\n" % reason(ex))
     failures = 0
     for slug, fields in store.list("campaigns", where={"fieldFilter": {
             "field": {"fieldPath": "kind"}, "op": "EQUAL", "value": {"stringValue": "console"}}}):

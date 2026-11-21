@@ -264,16 +264,36 @@ class Creation(unittest.TestCase):
         self.assertTrue(gateway.jobs[0]["enabled"])
         self.assertEqual(gateway.jobs[0]["schedule"]["expr"], "5 9 * * 1,3,5")
         self.assertFalse(any("run" in call for call in gateway.calls))
-    def test_on_the_hour_schedules_and_unreachable_group_counts_are_refused(self):
+    def test_on_the_hour_schedules_are_refused(self):
         on_the_hour = dict(payload(), schedule={"time": "09:00", "timezone": "Africa/Harare", "weekdays": [0]})
         with self.assertRaisesRegex(writer.WriteRefused, "not on the hour"): cc.validate(on_the_hour)
-        # The ceilings the repository's CI held campaigns to while their target
-        # lists were committed files: 30 groups an hour, 60 in the two-hour job.
-        for timeout, fits in ((3600, 30), (5400, 45), (7200, 60)):
-            self.assertIsNone(cc.spacing_problem(fits, timeout))
-            self.assertIn("full spacing", cc.spacing_problem(fits + 1, timeout))
-        crowded = dict(payload(), timeoutSeconds=600, groups=[{"jid": "1203630000000000%02d@g.us" % n} for n in range(6)])
-        with self.assertRaisesRegex(writer.WriteRefused, "full spacing"): cc.validate(crowded)
+    def big(self, count):
+        """``count`` active groups in the store, configured like JID_A."""
+        jids = ["1203639%011d@g.us" % n for n in range(count)]
+        for jid in jids:
+            self.store.docs["groups"][jid] = copy.deepcopy(self.store.docs["groups"][JID_A])
+        return jids
+    def test_a_campaign_may_have_as_many_groups_as_it_likes(self):
+        # There used to be two ceilings here: 100 groups a request, and the 60 a
+        # two-hour job could reach at full spacing. A campaign's run now gets as
+        # long as its groups need, so neither stands.
+        jids = self.big(150)
+        self.assertIs(cc.validate(dict(payload(), groups=[{"jid": jid} for jid in jids])).get("slug"), "demo")
+        # An older console still sends a short timeout of its own; it is no
+        # reason to refuse the campaign any more.
+        self.assertIs(cc.validate(dict(payload(), timeoutSeconds=600, groups=[{"jid": jid} for jid in jids])).get("slug"), "demo")
+        with self.assertRaisesRegex(writer.WriteRefused, "at least one"): cc.validate(dict(payload(), groups=[]))
+    def test_the_run_timeout_follows_the_groups_not_the_form(self):
+        self.data["timeoutSeconds"] = 600
+        self.create()
+        self.assertEqual(self.store.get("campaigns", "demo")["timeoutSeconds"], 7200)
+        # genaie-marketing-software's 103 groups need 155 minutes. A paused
+        # assignment sends nothing, so it does not lengthen the run.
+        self.data = dict(payload(), slug="wide", requestId="22345678-1234-1234-1234-123456789abc",
+                         groups=[{"jid": jid} for jid in self.big(103)] + [{"jid": JID_A, "paused": True}])
+        self.data["images"] = [dict(self.data["images"][0], key="ads/wide/%s.png" % SHA)]
+        self.create()
+        self.assertEqual(self.store.get("campaigns", "wide")["timeoutSeconds"], 9300)
     def test_converted_campaign_keeps_its_job_and_state_under_its_old_name(self):
         self.data["enabled"] = True
         self.create()

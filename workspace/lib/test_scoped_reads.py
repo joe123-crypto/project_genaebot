@@ -167,7 +167,8 @@ class SchedulerReads(unittest.TestCase):
         # One campaign, so the count is about the retry and not about how many
         # campaigns the shared fixture happens to carry.
         store.docs["campaigns"] = {
-            "demo": config.encode_fields({"kind": "console", "scheduleStatus": "pending"})}
+            "demo": config.encode_fields({"kind": "console", "scheduleStatus": "pending",
+                                          "timeoutSeconds": 7200})}
         listing = store.list
         store.list = Mock(side_effect=lambda collection, where=None: listing(collection))
         store.request = Mock()
