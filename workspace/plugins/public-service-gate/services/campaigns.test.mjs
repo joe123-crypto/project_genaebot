@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -92,6 +92,39 @@ test("unexpected helper fields and malformed content never cross the public tool
   }
 });
 
+test("a failed lookup names its cause in the operator log and gives the model only the generic fallback", async () => {
+  const logged = [];
+  const api = { config: {}, logger: { warn(message) { logged.push(message); } } };
+  const fail = (fields) => async () => { throw Object.assign(new Error("Command failed"), fields); };
+  const valid = { status: "ok", source: "live_campaigns", guidance: "Use only this turn's lookup.", fetched_at: "2026-11-19T12:00:00+00:00",
+    service_availability: { cv_new_orders: false }, more: false, campaigns: [{ campaign_id: "bricks", name: "Bricks", advertising_status: "enabled" }] };
+  const cases = [
+    [fail({ code: 1, stderr: "Traceback: ImportError at +263771234567" }), /\(reader exited 1; stderr: Traceback: ImportError at \[phone\]\)$/],
+    [fail({ code: null, killed: true, signal: "SIGTERM", stderr: "" }), /\(reader timed out or was killed \(SIGTERM\)\)$/],
+    [fail({ code: null, signal: "SIGKILL", stderr: "" }), /\(reader killed by SIGKILL\)$/],
+    [fail({ code: "ENOENT" }), /\(reader could not run \(ENOENT\)\)$/],
+    [fail({ message: "Command returned invalid JSON: Unexpected token", stdout: "warning: hello", stderr: "" }), /\(reader printed invalid JSON; stdout: warning: hello\)$/],
+    [async () => ({ ...valid, campaigns: [{ ...valid.campaigns[0], internal_note: "PRIVATE" }] }), /\(invalid result: campaigns\[0\] \(bricks\)\)$/],
+    [async () => ({ ...valid, service_availability: { cv_new_orders: true } }), /\(invalid result: service_availability\)$/],
+    [async () => ({ status: "unavailable", campaigns: [], reason: "ConfigUnavailable@operator_config.py:368: firestore.googleapis.com answered HTTP 403" }),
+      /\(reader: ConfigUnavailable@operator_config\.py:368: firestore\.googleapis\.com answered HTTP 403\)$/],
+    [async () => ({ status: "unavailable", campaigns: [] }), /\(reader: no reason given\)$/],
+  ];
+  for (const [run, expected] of cases) {
+    logged.length = 0;
+    const result = await lookupCampaigns(api, { discover: true }, run);
+    assert.equal(result.status, "unavailable");
+    assert.deepEqual(result.campaigns, []);
+    assert.doesNotMatch(JSON.stringify(result), /reason|stderr|PRIVATE|ENOENT|operator_config|403/);
+    assert.equal(logged.length, 1);
+    assert.match(logged[0], /^public-service-gate: live campaign lookup unavailable \(/);
+    assert.match(logged[0], expected);
+  }
+  logged.length = 0;
+  assert.deepEqual(await lookupCampaigns(api, { discover: true }, async () => valid), valid);
+  assert.deepEqual(logged, []);
+});
+
 test("published instructions migrate without briefing injection and lookup rules apply to existing public chats only", (t) => {
   const f = fixture(t);
   const published = path.join(f.dir, "runtime", "customer-bot", "published.json");
@@ -144,4 +177,34 @@ print(json.dumps(results))
     const result = await lookupCampaigns(api, {}, async () => response);
     assert.deepEqual(result, response);
   }
+});
+
+test("lookups find the workspace from the installed plugin when OpenClaw runs a captured copy", async (t) => {
+  // OpenClaw 2026.9 runs a package plugin from a copy of only its package
+  // (~/.openclaw/tmp/plugin-captures/.../package-N/). Paths taken from
+  // import.meta.url then miss the workspace's bin/ and data/, which on
+  // 2026-11-20 sent every product question to a silent handoff.
+  const installed = fileURLToPath(new URL("..", import.meta.url));
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "plugin-capture-"));
+  t.after(() => fs.rmSync(scratch, { recursive: true, force: true }));
+  const copy = path.join(scratch, "captures", "openclaw-plugin-build-test", "package-1");
+  fs.cpSync(installed, copy, { recursive: true });
+  const captured = (file) => import(pathToFileURL(path.join(copy, file)).href);
+  const { lookupCampaigns: capturedLookup } = await captured("services/campaigns.js");
+  const { loadCatalog: capturedCatalog } = await captured("services/borehole.js");
+
+  const warnings = [];
+  const api = { config: {}, rootDir: installed, logger: { warn: (line) => warnings.push(line) } };
+  let reader;
+  await capturedLookup(api, { discover: true }, async (_command, args) => {
+    reader = args[0];
+    return { status: "not_found", source: "live_campaigns", guidance: "Use only this turn's lookup.", more: false,
+      fetched_at: "2026-11-20T23:43:57+00:00", service_availability: { cv_new_orders: false }, campaigns: [] };
+  });
+  assert.equal(reader, path.resolve(installed, "../../bin/public-read"));
+  assert.ok(fs.existsSync(reader));
+  assert.ok(capturedCatalog(api).towns.length > 0);
+  assert.deepEqual(warnings, []);
+  // Without rootDir the copy can only find itself, which is what production hit.
+  assert.throws(() => capturedCatalog({ config: {} }), { code: "ENOENT" });
 });

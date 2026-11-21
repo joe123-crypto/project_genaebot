@@ -192,6 +192,22 @@ class PublicCampaignTests(Harness):
         self.assertEqual(result["campaigns"], [])
         self.assertNotIn("PRIVATE KEY", json.dumps(result))
         self.assertNotIn("$95", json.dumps(result))
+        # The operator log needs a cause; it names the failure, never a URL or key.
+        self.assertRegex(result["reason"], r"^ConfigUnavailable@operator_config\.py:\d+: ")
+        self.assertNotIn("http", result["reason"])
+        self.assertLessEqual(len(result["reason"]), public.REASON_LIMIT)
+
+    def test_an_unexpected_error_is_named_by_type_and_place_not_by_its_text(self):
+        def explode(*_args, **_kwargs):
+            raise KeyError("Red commons $95 PRIVATE")
+        original = public.live_documents
+        public.live_documents = explode
+        try:
+            result = self.lookup(discover=True)
+        finally:
+            public.live_documents = original
+        self.assertEqual(result["status"], "unavailable")
+        self.assertRegex(result["reason"], r"^KeyError@test_public_campaigns\.py:\d+$")
 
     def test_many_schedule_entries_stay_discoverable_without_truncating_details(self):
         entry = {"cron": "19 14 * * *", "timezone": "Africa/Harare", "paused": False, "skipDates": []}
@@ -210,7 +226,9 @@ class PublicCampaignTests(Harness):
         for broken in ({"name": " "}, {"enabled": "yes"}, {"captions": []}):
             with self.subTest(broken=broken):
                 self.put("toaster-construction", **broken)
-                self.assertEqual(self.lookup(query="cement")["status"], "unavailable")
+                result = self.lookup(query="cement")
+                self.assertEqual(result["status"], "unavailable")
+                self.assertRegex(result["reason"], r"^no usable campaign: .*toaster-construction \w+@\w+\.py:\d+")
 
     def test_invalid_missing_oversized_and_many_results_are_bounded(self):
         self.assertEqual(self.lookup(query="unlisted")["status"], "not_found")

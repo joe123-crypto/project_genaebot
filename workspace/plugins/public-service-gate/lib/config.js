@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 export const RELEVANCE_GATE_ID = "whatsapp-relevance-gate";
 
@@ -70,6 +71,19 @@ export function expandHome(input) {
   if (input === "~") return os.homedir();
   if (input.startsWith("~/")) return path.join(os.homedir(), input.slice(2));
   return input;
+}
+
+const PACKAGE_DIR = fileURLToPath(new URL("..", import.meta.url));
+
+// A path in the deployed workspace (bin/, data/), which lies outside this
+// plugin's package. OpenClaw 2026.9 runs a plugin from a captured copy of its
+// package under ~/.openclaw/tmp/plugin-captures/, so import.meta.url points into
+// that copy, where nothing outside the package exists. api.rootDir keeps the
+// folder OpenClaw found the plugin in. Hosts and tests that do not set it run
+// this code from that folder, so the module's own location is the fallback.
+export function workspacePath(api, ...parts) {
+  const root = typeof api?.rootDir === "string" && api.rootDir.trim() ? api.rootDir : PACKAGE_DIR;
+  return path.resolve(root, "..", "..", ...parts);
 }
 
 export function getCurrentConfig(api) {

@@ -1,18 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { expandHome, getPluginConfig } from "../lib/config.js";
+import { expandHome, getPluginConfig, workspacePath } from "../lib/config.js";
 import { getServiceStatePath } from "../lib/state.js";
 
-const DATA = fileURLToPath(new URL("../../../data/", import.meta.url));
 export const BOREHOLE_SERVICES = ["survey", "drilling", "casing", "installation", "drilling_and_installation", "flushing", "deepening", "capacity_testing", "repair", "pump_retrieval"];
 const TTL = 24 * 60 * 60 * 1000;
 const normalize = (s) => String(s || "").normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
 export function loadCatalog(api) {
   const config = getPluginConfig(api);
-  const data = JSON.parse(fs.readFileSync(expandHome(config.boreholeCatalogPath || path.join(DATA, "borehole-providers.json")), "utf8"));
-  const towns = JSON.parse(fs.readFileSync(path.join(DATA, "zimbabwe-towns.json"), "utf8")).towns;
+  const dataDir = workspacePath(api, "data");
+  const data = JSON.parse(fs.readFileSync(expandHome(config.boreholeCatalogPath || path.join(dataDir, "borehole-providers.json")), "utf8"));
+  const towns = JSON.parse(fs.readFileSync(path.join(dataDir, "zimbabwe-towns.json"), "utf8")).towns;
   if (data.version !== 1 || !Array.isArray(data.providers) || !data.providers.length || !Array.isArray(towns)) throw new Error("Invalid borehole catalog");
   const ids = new Set();
   for (const p of data.providers) {

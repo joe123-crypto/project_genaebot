@@ -1,9 +1,7 @@
-import { fileURLToPath } from "node:url";
-import { getPluginConfig } from "../lib/config.js";
-import { helperLimiter, runJsonCommand } from "../lib/runtime.js";
+import { getPluginConfig, workspacePath } from "../lib/config.js";
+import { helperLimiter, isQueueFullError, runJsonCommand, sanitizeLogText } from "../lib/runtime.js";
 import { isCvIntakePaused } from "./cv-maker.js";
 
-const reader = fileURLToPath(new URL("../../../bin/public-read", import.meta.url));
 const unavailable = {
   status: "unavailable", campaigns: [],
   guidance: "Current campaign information is unavailable. Use handoff; never reuse facts from history or the retired briefing.",
@@ -35,35 +33,73 @@ function validCampaign(row) {
     && Buffer.byteLength(JSON.stringify(row.advertised_content)) <= 16 * 1024;
 }
 
-function validResult(result, cvAvailable) {
-  return onlyKeys(result, ["status", "source", "guidance", "service_availability", "fetched_at", "campaigns", "more"])
-    && ["ok", "needs_clarification", "not_found"].includes(result.status) && result.source === "live_campaigns"
-    && shortText(result.guidance, 2000) && shortText(result.fetched_at, 64) && Number.isFinite(Date.parse(result.fetched_at))
-    && typeof result.more === "boolean" && Array.isArray(result.campaigns) && result.campaigns.length <= 20
-    && onlyKeys(result.service_availability, ["cv_new_orders"]) && result.service_availability.cv_new_orders === cvAvailable
-    && (result.status === "not_found" ? result.campaigns.length === 0 : result.campaigns.length > 0)
-    && result.campaigns.every(validCampaign);
+// The first check a reader result fails, or "" when it is publishable. Named so
+// the operator log says which part was refused; the customer never sees it.
+function resultProblem(result, cvAvailable) {
+  if (!onlyKeys(result, ["status", "source", "guidance", "service_availability", "fetched_at", "campaigns", "more"])) return "unexpected fields";
+  if (!["ok", "needs_clarification", "not_found"].includes(result.status)) return "status";
+  if (result.source !== "live_campaigns") return "source";
+  if (!shortText(result.guidance, 2000)) return "guidance";
+  if (!shortText(result.fetched_at, 64) || !Number.isFinite(Date.parse(result.fetched_at))) return "fetched_at";
+  if (typeof result.more !== "boolean") return "more";
+  if (!Array.isArray(result.campaigns) || result.campaigns.length > 20) return "campaigns";
+  if (!onlyKeys(result.service_availability, ["cv_new_orders"]) || result.service_availability.cv_new_orders !== cvAvailable) {
+    return "service_availability";
+  }
+  if (result.status === "not_found" ? result.campaigns.length !== 0 : result.campaigns.length === 0) return "campaign count";
+  const index = result.campaigns.findIndex((row) => !validCampaign(row));
+  if (index < 0) return "";
+  const id = result.campaigns[index]?.campaign_id;
+  return `campaigns[${index}]${typeof id === "string" && identifier.test(id) ? ` (${id})` : ""}`;
+}
+
+class LookupRefused extends Error {}
+
+// Operator-facing only. Each branch maps one way the reader can fail onto a
+// short cause, so a handoff in the logs can be traced without a shell.
+function failureReason(error) {
+  let reason;
+  if (error instanceof LookupRefused) reason = `invalid result: ${error.message}`;
+  else if (isQueueFullError(error)) reason = "helper queue full";
+  else if (error?.killed) reason = `reader timed out or was killed (${error.signal ?? "no signal"})`;
+  else if (error?.signal) reason = `reader killed by ${error.signal}`;
+  else if (typeof error?.code === "number") reason = `reader exited ${error.code}`;
+  else if (typeof error?.code === "string") reason = `reader could not run (${error.code})`;
+  else if (/invalid JSON/.test(String(error?.message))) reason = "reader printed invalid JSON";
+  else reason = error?.name || "unknown error";
+  const stderr = sanitizeLogText(error?.stderr).slice(0, 300);
+  const stdout = reason === "reader printed invalid JSON" ? sanitizeLogText(error?.stdout).slice(0, 120) : "";
+  return [reason, stderr && `stderr: ${stderr}`, stdout && `stdout: ${stdout}`].filter(Boolean).join("; ");
 }
 
 export async function lookupCampaigns(api, params = {}, run = runJsonCommand) {
+  const warn = (reason) => api.logger?.warn?.(`public-service-gate: live campaign lookup unavailable (${reason})`);
   const cvAvailable = !isCvIntakePaused() && getPluginConfig(api).cvMakerEnabled === true;
   if ((params.query !== undefined && (typeof params.query !== "string" || params.query.length > 200))
       || (params.campaign_id !== undefined && (typeof params.campaign_id !== "string" || !identifier.test(params.campaign_id)))
-      || (params.query && params.campaign_id)) return unavailable;
-  const args = [reader];
+      || (params.query && params.campaign_id)) {
+    warn("selector refused before reading");
+    return unavailable;
+  }
+  const args = [workspacePath(api, "bin", "public-read")];
   if (params.discover) args.push("--discover");
   if (params.query) args.push(`--query=${params.query}`);
   if (params.campaign_id) args.push(`--campaign-id=${params.campaign_id}`);
   if (cvAvailable) args.push("--cv-available");
   try {
     const result = await helperLimiter(() => run("python3", args, { timeoutMs: 30_000, maxBuffer: 128 * 1024 }));
-    if (result?.status === "unavailable") return unavailable;
+    if (result?.status === "unavailable") {
+      // The reader's own reason is for the log only; the model gets the constant.
+      warn(`reader: ${sanitizeLogText(result.reason).slice(0, 300) || "no reason given"}`);
+      return unavailable;
+    }
     // This is a public boundary, not just a JSON parser. Reject accidental
     // operator fields, malformed nested values and stale offers on inactive rows.
-    if (!validResult(result, cvAvailable)) throw new Error("Invalid public lookup");
+    const problem = resultProblem(result, cvAvailable);
+    if (problem) throw new LookupRefused(problem);
     return result;
-  } catch {
-    api.logger?.warn?.("public-service-gate: live campaign lookup unavailable");
+  } catch (error) {
+    warn(failureReason(error));
     return unavailable;
   }
 }
