@@ -1058,6 +1058,11 @@ returns public fields without operator notes, group identifiers or recipients.
 No display cache or outage snapshot can supply a current answer. Missing,
 conflicting or unavailable facts require handoff; borehole quotes still use
 `borehole_info`, and runtime service restrictions override campaign copy.
+When a lookup fails, the gateway log names the cause on the same line, such as
+`live campaign lookup unavailable (reader exited 1; stderr: ...)`,
+`(invalid result: campaigns[3] (bricks))` or
+`(reader: ConfigUnavailable@operator_config.py:368: ... HTTP 403)`. The cause is
+sanitized and never reaches the model, which still sees only the generic result.
 
 The second exception is the WhatsApp **reply gates**. Right after the prompt sync
 the entrypoint runs `deploy/railway/sync-reply-gates.py`, which sets the managed

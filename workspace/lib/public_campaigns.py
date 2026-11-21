@@ -8,6 +8,7 @@ import json
 import os
 import re
 import time
+import traceback
 import unicodedata
 import urllib.request
 from zoneinfo import ZoneInfo
@@ -49,6 +50,28 @@ BOREHOLE_TERMS = {"borehole", "drilling", "drill", "driller", "casing", "pump", 
                   "flushing", "deepening", "siting", "survey"}
 NOT_FOUND = ("No current campaign matched this search. Call business_info, then retry campaign_info "
              "with a returned campaign_id or a shorter query before handing off.")
+
+
+REASON_LIMIT = 300
+
+
+def where(ex):
+    """``Type@file:line`` of the innermost frame. Names the failing check
+    without echoing the data that failed it."""
+    frames = traceback.extract_tb(ex.__traceback__)
+    if not frames:
+        return type(ex).__name__
+    return "%s@%s:%d" % (type(ex).__name__, os.path.basename(frames[-1].filename), frames[-1].lineno)
+
+
+def failure_reason(ex):
+    """Why the lookup gave up, for the operator log; the plugin never passes it
+    to the model. ConfigUnavailable text is written for logs already (host and
+    status, never a token); every other exception is named by type and place."""
+    reason = where(ex)
+    if isinstance(ex, config.ConfigUnavailable):
+        reason += ": " + re.sub(r"https?://\S+", "<url>", str(ex))
+    return reason[:REASON_LIMIT]
 
 
 def words(text):
@@ -183,13 +206,13 @@ def lookup(env=None, *, query="", campaign_id="", discover=False, cv_available=F
         wanted = terms(query) - GENERIC_TERMS
         matches = []
         routes = set()
-        invalid = False
+        invalid = []
         for slug, fields in docs:
             try:
                 doc = config.decode_fields(fields)
                 public = project(slug, doc, day=day, cv_available=cv_available)
-            except (ValueError, TypeError, KeyError, AttributeError, writer.WriteRefused, config.ConfigInvalid):
-                invalid = True
+            except (ValueError, TypeError, KeyError, AttributeError, writer.WriteRefused, config.ConfigInvalid) as ex:
+                invalid.append("%s %s" % (slug, where(ex)))
                 continue
             if not public:
                 continue
@@ -223,9 +246,13 @@ def lookup(env=None, *, query="", campaign_id="", discover=False, cv_available=F
         if multiple or more:
             status = "needs_clarification"
         guidance = GUIDANCE + " " + NOT_FOUND if status == "not_found" and query else GUIDANCE
-        return {**base, "status": status, "guidance": guidance,
-                "fetched_at": fetched.isoformat(), "campaigns": matches[:MAX_MATCHES], "more": more}
-    except Exception:
-        # Do not serialize exceptions, URLs, credential paths or outage snapshots.
-        return {**base, "status": "unavailable", "campaigns": [],
+        result = {**base, "status": status, "guidance": guidance,
+                  "fetched_at": fetched.isoformat(), "campaigns": matches[:MAX_MATCHES], "more": more}
+        if status == "unavailable":
+            result["reason"] = ("no usable campaign: " + ", ".join(invalid))[:REASON_LIMIT]
+        return result
+    except Exception as ex:
+        # Do not serialize exception text, URLs, credential paths or outage
+        # snapshots. ``reason`` is logged by the plugin and never reaches the model.
+        return {**base, "status": "unavailable", "campaigns": [], "reason": failure_reason(ex),
                 "guidance": "Current campaign information is unavailable. Use handoff; never reuse facts from history or the retired briefing."}

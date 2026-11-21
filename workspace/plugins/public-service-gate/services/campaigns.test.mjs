@@ -92,6 +92,39 @@ test("unexpected helper fields and malformed content never cross the public tool
   }
 });
 
+test("a failed lookup names its cause in the operator log and gives the model only the generic fallback", async () => {
+  const logged = [];
+  const api = { config: {}, logger: { warn(message) { logged.push(message); } } };
+  const fail = (fields) => async () => { throw Object.assign(new Error("Command failed"), fields); };
+  const valid = { status: "ok", source: "live_campaigns", guidance: "Use only this turn's lookup.", fetched_at: "2026-11-19T12:00:00+00:00",
+    service_availability: { cv_new_orders: false }, more: false, campaigns: [{ campaign_id: "bricks", name: "Bricks", advertising_status: "enabled" }] };
+  const cases = [
+    [fail({ code: 1, stderr: "Traceback: ImportError at +263771234567" }), /\(reader exited 1; stderr: Traceback: ImportError at \[phone\]\)$/],
+    [fail({ code: null, killed: true, signal: "SIGTERM", stderr: "" }), /\(reader timed out or was killed \(SIGTERM\)\)$/],
+    [fail({ code: null, signal: "SIGKILL", stderr: "" }), /\(reader killed by SIGKILL\)$/],
+    [fail({ code: "ENOENT" }), /\(reader could not run \(ENOENT\)\)$/],
+    [fail({ message: "Command returned invalid JSON: Unexpected token", stdout: "warning: hello", stderr: "" }), /\(reader printed invalid JSON; stdout: warning: hello\)$/],
+    [async () => ({ ...valid, campaigns: [{ ...valid.campaigns[0], internal_note: "PRIVATE" }] }), /\(invalid result: campaigns\[0\] \(bricks\)\)$/],
+    [async () => ({ ...valid, service_availability: { cv_new_orders: true } }), /\(invalid result: service_availability\)$/],
+    [async () => ({ status: "unavailable", campaigns: [], reason: "ConfigUnavailable@operator_config.py:368: firestore.googleapis.com answered HTTP 403" }),
+      /\(reader: ConfigUnavailable@operator_config\.py:368: firestore\.googleapis\.com answered HTTP 403\)$/],
+    [async () => ({ status: "unavailable", campaigns: [] }), /\(reader: no reason given\)$/],
+  ];
+  for (const [run, expected] of cases) {
+    logged.length = 0;
+    const result = await lookupCampaigns(api, { discover: true }, run);
+    assert.equal(result.status, "unavailable");
+    assert.deepEqual(result.campaigns, []);
+    assert.doesNotMatch(JSON.stringify(result), /reason|stderr|PRIVATE|ENOENT|operator_config|403/);
+    assert.equal(logged.length, 1);
+    assert.match(logged[0], /^public-service-gate: live campaign lookup unavailable \(/);
+    assert.match(logged[0], expected);
+  }
+  logged.length = 0;
+  assert.deepEqual(await lookupCampaigns(api, { discover: true }, async () => valid), valid);
+  assert.deepEqual(logged, []);
+});
+
 test("published instructions migrate without briefing injection and lookup rules apply to existing public chats only", (t) => {
   const f = fixture(t);
   const published = path.join(f.dir, "runtime", "customer-bot", "published.json");
