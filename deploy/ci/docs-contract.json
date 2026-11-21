@@ -41,8 +41,7 @@
     {
       "name": "public agent action surface",
       "paths": [
-        "workspace/plugins/public-service-gate/index.js",
-        "workspace/plugins/public-service-gate/services/*.js"
+        "workspace/plugins/public-service-gate/index.js"
       ],
       "requiredDocs": [
         "workspace/docs/public-whatsapp-system-prompt.txt"
