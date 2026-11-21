@@ -271,15 +271,33 @@ class ScheduleGuardrailTests(unittest.TestCase):
             pb.DEFAULT_START_JITTER_SECONDS + count * pb.SEND_ALLOWANCE_SECONDS
             + (count - 1) * pb.DEFAULT_SEND_DELAY_MAX)
 
-    def test_a_campaign_that_cannot_finish_inside_its_timeout_is_an_error(self):
-        # 51 groups needs ~75 min; the shared 3600 s timeout kills it at 60,
-        # which is the capacity ceiling the promo crons are sized against.
+    def test_a_campaign_that_outgrew_its_timeout_is_a_warning(self):
+        # 51 groups needs ~75 min; a 3600 s timeout makes the engine tighten the
+        # gaps to fit. That used to fail every release. The bot now derives the
+        # timeout from the group count, so this is one that has not caught up,
+        # and a release does nothing about it either way.
         found = gateway_campaigns.problems([self.row("borehole", 7, 15, 51, timeout=3600)])
-        self.assertEqual([severity for severity, _ in found], ["error"])
-        self.assertIn("killed with groups unreached", found[0][1])
+        self.assertEqual([severity for severity, _ in found], ["warning"])
+        self.assertIn("tighten their send gaps", found[0][1])
         # The same campaign fits the raised timeout.
         self.assertEqual(gateway_campaigns.problems(
             [self.row("borehole", 7, 15, 51, timeout=5400)]), [])
+
+    def test_the_timeout_the_bot_derives_always_fits(self):
+        for count in (1, 20, 60, 79, 80, 103, 107, 200, 400):
+            with self.subTest(count=count):
+                timeout = pb.run_timeout_seconds(count)
+                row = self.row("big", 7, 15, count, timeout=timeout)
+                self.assertEqual(gateway_campaigns.problems([row]), [])
+                # And the engine plans full spacing inside it, after the
+                # longest start jitter, so it never tightens the gaps.
+                budget = timeout - pb.DEFAULT_START_JITTER_SECONDS
+                with redirect_stderr(io.StringIO()) as err:
+                    bounds = pb.fit_gap_bounds(20.0, 60.0, count, budget)
+                self.assertEqual(bounds, (20.0, 60.0))
+                self.assertEqual(err.getvalue(), "")
+        self.assertEqual(pb.run_timeout_seconds(20), 7200, "small campaigns keep two hours")
+        self.assertEqual(pb.run_timeout_seconds(103), 9300)
 
     def test_two_campaigns_overlapping_on_one_line_are_a_warning(self):
         # The 2026-10-20 incident: fruit-trees (44 groups, 08:40) was still
@@ -296,6 +314,25 @@ class ScheduleGuardrailTests(unittest.TestCase):
         rows = [self.row("fruit-trees", 8, 40, 44, accounts={"default": 44}),
                 self.row("big-player", 9, 17, 2, accounts={"ads": 2})]
         self.assertEqual(gateway_campaigns.problems(rows), [])
+
+    def test_a_run_still_going_at_its_own_next_entry_is_a_warning(self):
+        # That entry finds the run lock taken and posts nothing. Said once,
+        # however many lines the campaign is on.
+        row = self.row("wide", 8, 5, 103, timeout=9300, accounts={"default": 57, "ads": 46})
+        row["scheduleEntries"] = [
+            {"entryId": "primary", "minutes": 8 * 60 + 5, "paused": False, "deleted": False},
+            {"entryId": "late", "minutes": 9 * 60 + 5, "paused": False, "deleted": False}]
+        found = gateway_campaigns.problems([row])
+        self.assertEqual(len(found), 1)
+        self.assertIn("wide's 08:05 run can still be posting", found[0][1])
+        self.assertIn("own 09:05 entry", found[0][1])
+
+    def test_an_overlap_across_midnight_is_seen(self):
+        rows = [self.row("late", 23, 35, 44), self.row("early", 0, 5, 24)]
+        found = gateway_campaigns.problems(rows)
+        self.assertEqual([severity for severity, _ in found], ["warning"])
+        self.assertIn("late's 23:35 run", found[0][1])
+        self.assertIn("early starts at 00:05", found[0][1])
 
     def test_a_disabled_campaign_holds_up_nothing(self):
         rows = [self.row("fruit-trees", 8, 40, 44),
@@ -340,7 +377,7 @@ class RunTimeoutFitTests(unittest.TestCase):
         self.assertGreater(lo, 0.0)
         worst = (20 - 1) * hi + 20 * pb.SEND_ALLOWANCE_SECONDS
         self.assertLessEqual(worst, 600)
-        self.assertIn("in the console", err.getvalue())  # names the remedy
+        self.assertIn("raises its run timeout to 7200 s", err.getvalue())  # names the remedy
 
     def test_every_promo_size_fits_the_legacy_timeout_when_tightened(self):
         for count in range(2, 26):

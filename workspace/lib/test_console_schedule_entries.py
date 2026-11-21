@@ -11,8 +11,10 @@ import console_schedule as schedule
 import operator_config as config
 import operator_writer as writer
 import promo_broadcast
-from test_console_schedule import Schedule, DAY, JOB, ALERT
+from test_console_schedule import Schedule, DAY, JOB, ALERT, campaign as campaign_doc
 from test_console_campaigns import FakeGateway
+from test_operator_config import JID_A
+import console_campaigns as campaigns
 
 
 class EntryGateway(FakeGateway):
@@ -122,6 +124,95 @@ class Entries(unittest.TestCase):
             entries.save(stale, self.store, self.env)
         entries.save(self.body(operation="second", time="12:45"), self.store, self.env)
         self.assertEqual(self.store.get("campaigns", self.slug)["scheduleEntries"]["repeat-1"]["cron"], "45 12 * * *")
+
+    def target(self, count):
+        """``count`` active groups posting this campaign, and nothing else."""
+        model = self.store.docs["groups"][JID_A]
+        groups = {jid: fields for jid, fields in self.store.docs["groups"].items()
+                  if self.slug not in (config.decode_fields(fields).get("promos") or [])}
+        for n in range(count):
+            fields = config.decode_fields(model)
+            fields.update(promos=[self.slug], weekly={}, paused_promos=[])
+            groups["1203638%011d@g.us" % n] = config.encode_fields(fields)
+        self.store.docs["groups"] = groups
+
+    def reconcile_all(self):
+        with patch.object(campaigns, "reconcile_one",
+                          lambda slug, store: campaigns._reconcile_one(slug, store, self.gateway)):
+            return campaigns.reconcile_all(self.store)
+
+    def test_the_run_timeout_follows_the_groups_to_every_job(self):
+        # genaie-marketing-software's case: groups added long after creation,
+        # under a timeout that stayed at 7200 s. The reconciler now raises it,
+        # and the primary job and every entry job are given the new one.
+        entries.save(self.body(), self.store, self.env)
+        self.target(103)
+        with patch("sys.stderr"):
+            self.assertEqual(self.reconcile_all(), 0)
+        self.assertEqual(self.store.get("campaigns", self.slug)["timeoutSeconds"], 9300)
+        jobs = [job for job in self.gateway.jobs if job["name"] in (JOB, "console-entry-%s-repeat-1" % self.slug)]
+        self.assertEqual(len(jobs), 2)
+        self.assertEqual({job["payload"]["timeoutSeconds"] for job in jobs}, {9300})
+        # The sync wrote only the timeout: nothing else on the document moved.
+        doc = self.store.get("campaigns", self.slug)
+        self.assertEqual(doc["scheduleEntries"]["repeat-1"]["cron"], "15 12 * * *")
+        # Groups leaving shorten it again, back to the two-hour floor.
+        self.target(10)
+        with patch("sys.stderr"):
+            self.reconcile_all()
+        self.assertEqual(self.store.get("campaigns", self.slug)["timeoutSeconds"], 7200)
+        self.assertEqual({job["payload"]["timeoutSeconds"] for job in self.gateway.jobs}, {7200})
+
+    def test_a_pass_not_asked_to_sync_leaves_the_timeouts_alone(self):
+        # The API's loop asks for the sync on a wake and hourly; the passes in
+        # between list no groups.
+        self.target(103)
+        listed = []
+        listing = self.store.list
+        self.store.list = lambda collection, where=None: listed.append(collection) or listing(collection, where)
+        with patch.object(campaigns, "reconcile_one",
+                          lambda slug, store: campaigns._reconcile_one(slug, store, self.gateway)):
+            campaigns.reconcile_all(self.store, sync_timeouts=False)
+        self.assertNotIn("groups", listed)
+        self.assertEqual(self.store.get("campaigns", self.slug)["timeoutSeconds"], 7200)
+
+    def test_a_timeout_already_in_step_is_not_rewritten(self):
+        self.target(10)
+        written = []
+        request = self.store.request
+        self.store.request = lambda suffix, body: written.append(body) or request(suffix, body)
+        changed = campaigns.sync_run_timeouts(self.store)
+        self.assertEqual(changed, [])
+        self.assertFalse([body for body in written
+                          if "timeoutSeconds" in json.dumps(body)])
+
+    def test_a_sync_that_cannot_read_the_config_holds_up_nothing(self):
+        # The stored timeouts stand (the engine still fits a run inside one by
+        # tightening its gaps); the schedule reconciliation goes on regardless.
+        self.target(103)
+        with patch.object(campaigns, "sync_run_timeouts", side_effect=config.ConfigUnavailable("offline")), \
+                patch("sys.stderr"):
+            self.assertEqual(self.reconcile_all(), 0)
+        self.assertEqual(self.store.get("campaigns", self.slug)["timeoutSeconds"], 7200)
+
+    def test_the_campaign_reports_the_time_its_entries_fire(self):
+        # A campaign's own schedule.time stops firing anything once it has
+        # entries. Reporting it is how the release gate came to hold releases at
+        # a time nothing ran.
+        entries.save(self.body(), self.store, self.env)
+        entries.save(self.body("primary", operation="move", time="16:25"), self.store, self.env)
+        doc = self.store.get("campaigns", self.slug)
+        self.assertEqual(doc["schedule"]["time"], "07:15", "the stale time the reader used to report")
+        fields = schedule.read_fields(doc, DAY, self.slug)
+        self.assertEqual((fields["hour"], fields["minute"]), (16, 25))
+        self.assertEqual(fields["scheduleMinutes"], 16 * 60 + 25)
+        # With the primary paused, the earliest live entry stands for it.
+        entries.save(self.body("primary", operation="pause", time="16:25", paused=True), self.store, self.env)
+        fields = schedule.read_fields(self.store.get("campaigns", self.slug), DAY, self.slug)
+        self.assertEqual((fields["hour"], fields["minute"]), (12, 15))
+        # A campaign without entries still reports its own time.
+        plain = schedule.read_fields(campaign_doc("09:35"), DAY, "other")
+        self.assertEqual((plain["hour"], plain["minute"]), (9, 35))
 
     def test_runner_checks_current_state_and_occurrence_day(self):
         entries.save(self.body(), self.store, self.env)

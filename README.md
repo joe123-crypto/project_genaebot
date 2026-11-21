@@ -261,8 +261,9 @@ deploys. All times are `Africa/Harare`.
 **Every campaign is one Firestore document and every job runs one shared
 runner.** There is no per-campaign script, installer or manifest in this
 repository any more. `campaigns/<slug>` carries the campaign's copy, its
-pictures, its schedule, its run timeout, its failure-alert number and its
-on/off switch; the groups it posts to are the `promos` lists on the
+pictures, its schedule, its run timeout (derived from its group count, not
+set by hand), its failure-alert number and its on/off switch; the groups it
+posts to are the `promos` lists on the
 `groups/<jid>` documents; and the job's command is always
 `workspace/bin/run-console-campaign <slug>`. All of that is edited in the
 console (see *Operator Console API*), which writes Firestore and lets the
@@ -293,27 +294,50 @@ link; see *Promo caption rotation and ad ref tracking* below. The group load is
 split across the bot's two WhatsApp lines per group, so a campaign can post from
 either or both.
 
-### Two things a campaign's schedule has to be able to deliver
+### What a campaign's schedule has to be able to deliver
 
-Both used to be repository tests, because every input was a committed file: the
-group counts from ten `targets.json`, the times and timeouts from
+These used to be repository tests, because every input was a committed file:
+the group counts from ten `targets.json`, the times and timeouts from
 `deploy/promo-crons.json`. They are operator data now, so they are checked
 against the live list instead -- by `deploy/gateway_campaigns.py`'s `problems()`,
-which `deploy/promo-deploy-window.py` runs on **every release**:
+which `deploy/promo-deploy-window.py` runs on **every release**. Every one of
+them is a **warning**: a release changes none of them, so none of them holds a
+release back.
 
-- **A campaign must finish inside its own job timeout.** The engine's worst case
-  is the full start jitter plus every gap at the top of its range plus a
-  per-send allowance, which at 20-60 s gaps is roughly `900 + 72n` seconds for
-  `n` groups. Past the timeout the gateway kills the run with groups unreached,
-  every day, and no deploy changes that -- so this **fails the release gate**.
-  The fix is to raise that campaign's run timeout in the console or to split it.
+- **A campaign's run gets as long as its groups need.** There is no ceiling on
+  how many groups a campaign has, and no fixed two-hour run. The job timeout is
+  derived from the group count (`promo_broadcast.run_timeout_seconds`): the
+  full start jitter plus every send at full 20-60 s spacing, planned inside the
+  engine's 90 % budget, rounded up to five minutes, and never under the
+  long-standing 7200 s. That is 9300 s (155 min) for 103 groups and 17100 s for
+  200. The campaign reconciler (`console_campaigns.sync_run_timeouts`) keeps
+  each campaign's `timeoutSeconds` there and carries it to the primary job and
+  every schedule entry job. It re-derives them when a group or campaign write
+  wakes it, on its first pass after the gateway starts (which brings existing
+  campaigns into line after a deploy) and otherwise hourly, not on every
+  five-minute pass: it lists every group, and the project's Firestore read
+  quota has run out before (`TIMEOUT_SYNC_SECONDS` in
+  `deploy/railway/console-api.py`). A timeout the gate finds short is one that has not caught up yet;
+  meanwhile the engine still reaches every group by tightening the gaps. This
+  used to be an error that **failed the release**, and from 2026-11-20 it held
+  every release back for one campaign, genaie-marketing-software, which had
+  grown to 103 groups under the 7200 s it was created with.
 - **Two campaigns must not overlap on one WhatsApp line.** The 20-60 s spacing
   is per account: two runs posting to the same line at once double its send rate
   and defeat the spacing, which is what happened on 2026-10-20 when fruit-trees
   (44 groups, 08:40) was still sending as skylight-solar started and the two
   interleaved two seconds apart. A campaign on the second line therefore never
-  has to clear the first line's slots. Spacing degrades rather than breaks, so
-  this is a **warning**, not a refusal.
+  has to clear the first line's slots.
+- **A campaign's run must be over before its own next entry starts.** The run
+  lock is per campaign, so an entry that fires while the previous run still
+  holds it posts nothing that time.
+
+Every one of these, like the quiet-window check below, reads the times a
+campaign's cron jobs actually fire: one per live schedule entry, plus an
+entry's previous time while a move is still unconfirmed. The campaign's own
+`hour`/`minute` are only where it started, and moving an entry on the timeline
+leaves them behind; the reader now reports the lead entry's time instead (the
+primary while it is live, else the earliest live entry).
 
 A third warning comes from the same place: a campaign whose `tracking.prefix`
 is not in `AD_REF_PREFIXES` in
@@ -351,7 +375,10 @@ their weekly day, and never on `--dry-run` / `--refs`. Override the bounds with
 
 The run is planned to fit the job timeout it is given, which is the
 `timeoutSeconds` on the campaign's own document -- the run has already read it,
-so nothing has to ask the gateway for it. If the run would not fit, the engine
+so nothing has to ask the gateway for it. The reconciler derives that timeout
+from the group count, so a full-spacing run always fits it; the case below is a
+timeout that has not caught up with groups added in the last few minutes. If
+the run would not fit, the engine
 tightens the gaps proportionally (keeping them random, never below 5 s) and logs
 a warning naming the remedy. A timeout too short to fit the group count even at
 the 5 s floor (under ~370 s for a 20-group campaign) is the one case that can
@@ -1854,13 +1881,13 @@ commit.
 caption-rotation counters carried across the conversion instead of every group
 getting the day's ad a second time.
 
-Two rules the conversion enforced apply to every campaign the console creates
-too (`console_campaigns.validate_definition` and `spacing_problem`): a schedule
-must not be on the hour, and a campaign must not have more groups than its
-timeout reaches at full spacing -- at most 30 groups per hour of timeout, 60 for
-the 7200 second job. The live schedules are checked against the same arithmetic
-on every release; see *Two things a campaign's schedule has to be able to
-deliver*.
+One rule the conversion enforced applies to every campaign the console creates
+too (`console_campaigns.validate_definition`): a schedule must not be on the
+hour. The conversion also capped a campaign's groups at what its timeout reached
+at full spacing (60 for the 7200 second job). That cap is gone: the timeout now
+follows the group count instead, and the converted campaigns' `timeoutSeconds`
+are rewritten to their derived value by the reconciler. See *What a campaign's
+schedule has to be able to deliver*.
 
 A run attaches the `images` on the campaign document, so
 `deploy/upload-ad-image.py --write` refreshes that list whenever it changes a

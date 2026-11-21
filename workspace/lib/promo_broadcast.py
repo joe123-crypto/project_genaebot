@@ -917,6 +917,30 @@ def start_jitter_bound(start_jitter=None):
 # ``console_campaigns.run_campaign`` passes it in, so there is nothing to ask.
 
 
+# A console campaign's job timeout is not an operator setting: it follows the
+# campaign's group count (console_campaigns.sync_run_timeouts keeps it there),
+# so adding groups lengthens the run instead of tightening its gaps. Small
+# campaigns keep the long-standing two hours; a bigger one gets what it needs,
+# in five-minute steps so a group or two does not rewrite its cron jobs.
+RUN_TIMEOUT_FLOOR_SECONDS = 7200
+RUN_TIMEOUT_STEP_SECONDS = 300
+
+
+def run_timeout_seconds(count):
+    """The job timeout a ``count``-group campaign is given: the shortest one in
+    which a full-spacing run still fits after the longest start jitter.
+
+    The engine plans a run inside ``RUN_BUDGET_FRACTION`` of what is left of
+    the timeout once the jitter is taken, and :func:`fit_gap_bounds` only
+    tightens the gaps when that is too short, so at this timeout it never has
+    to. The jitter cap (a quarter of the timeout) cannot bind above the floor."""
+    count = max(int(count), 0)
+    sends = count * SEND_ALLOWANCE_SECONDS + max(count - 1, 0) * DEFAULT_SEND_DELAY_MAX
+    needed = DEFAULT_START_JITTER_SECONDS + sends / RUN_BUDGET_FRACTION
+    steps = math.ceil(needed / RUN_TIMEOUT_STEP_SECONDS - 1e-9)
+    return max(RUN_TIMEOUT_FLOOR_SECONDS, int(steps * RUN_TIMEOUT_STEP_SECONDS))
+
+
 def min_timeout_seconds(count):
     """Shortest job timeout a ``count``-group run can fit in, even once its gaps
     are squeezed to ``MIN_SEND_DELAY``."""
@@ -958,18 +982,20 @@ def fit_gap_bounds(lo, hi, count, timeout):
         sys.stderr.write(
             "WARN: this cron job's timeout is %.0f s, too short for %d groups at "
             "%.0f-%.0f s gaps; spacing them %.0f-%.0f s instead so every group "
-            "still gets today's ad. Raise this campaign's run timeout in the "
-            "console to restore the full gaps.\n"
-            % (timeout, count, lo, hi, new_lo, allowed))
+            "still gets today's ad. The campaign reconciler raises its run "
+            "timeout to %.0f s to restore the full gaps; groups added since its "
+            "last pass are the usual reason it has not yet.\n"
+            % (timeout, count, lo, hi, new_lo, allowed, run_timeout_seconds(count)))
     else:
         sys.stderr.write(
             "WARN: this cron job's timeout is %.0f s, too short for %d groups "
             "even at the %.0f s gap floor; spacing them %.0f-%.0f s and the run "
             "may still be killed before the last groups (a re-run today resumes "
-            "where it stopped). Give this campaign a run timeout of at least "
-            "%.0f s in the console.\n"
+            "where it stopped). It needs at least %.0f s, and the campaign "
+            "reconciler gives it %.0f s: if this persists, check that the "
+            "reconciler is running.\n"
             % (timeout, count, MIN_SEND_DELAY, new_lo, allowed,
-               min_timeout_seconds(count)))
+               min_timeout_seconds(count), run_timeout_seconds(count)))
     return (new_lo, allowed)
 
 

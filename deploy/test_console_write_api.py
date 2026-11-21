@@ -162,6 +162,33 @@ class WriteRouteTests(Harness):
                          {"collection": "groups", "id": JID, "delete": True,
                           "reason": "bot removed", "actor": "joe"})
 
+    def test_a_group_write_wakes_the_campaign_reconciler(self):
+        # Adding a group to a campaign lengthens its run, and the reconciler is
+        # what carries the longer timeout to its cron jobs: it must not wait out
+        # its five-minute sleep. A dry run changed nothing, so it wakes nothing.
+        base = self.serve()
+        for route, payload, wakes in (
+                (self.route(), {"fields": {"note": "x"}, "dryRun": True}, False),
+                (self.route(), {"fields": {"promos": ["demo"]}}, True),
+                (self.route(), {"delete": True, "reason": "bot removed"}, True),
+                ("/config/batch/groups", {"changes": [{"id": JID, "fields": {"promos": ["demo"]}}]}, True),
+                (self.route("lines", "default"), {"fields": {"number": "+263700000000"}}, False)):
+            with self.subTest(route=route, payload=payload):
+                self.server.console["reconcileWake"] = threading.Event()
+                self.assertEqual(self.post(base, route, payload)[0], 200)
+                self.assertEqual(self.server.console["reconcileWake"].is_set(), wakes)
+
+    def test_the_run_timeouts_are_rederived_on_a_wake_or_hourly_not_every_pass(self):
+        # Re-deriving them lists every group, on a quota already exhausted once:
+        # on every five-minute pass that alone would be tens of thousands of
+        # reads a day.
+        due = API.timeout_sync_due
+        self.assertTrue(due(False, None, 10.0), "the first pass after a start backfills")
+        self.assertTrue(due(True, 100.0, 160.0), "a write woke it")
+        self.assertFalse(due(False, 100.0, 100.0 + API.TIMEOUT_SYNC_SECONDS - 1))
+        self.assertTrue(due(False, 100.0, 100.0 + API.TIMEOUT_SYNC_SECONDS))
+        self.assertEqual(API.TIMEOUT_SYNC_SECONDS, 3600)
+
     def test_a_request_with_both_or_neither_verb_is_refused(self):
         # Whether the request edits or deletes has to be unambiguous before it
         # is forwarded; which collections allow delete is the bridge's call.

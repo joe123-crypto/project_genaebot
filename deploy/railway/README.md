@@ -109,7 +109,8 @@ Cron job definitions (schedule, command, job timeout) are the exception to "merg
 and it ships": they live in the gateway's cron state on the volume. For the ad
 campaigns they are no longer in this repository at all. Each campaign is one
 `campaigns/<slug>` Firestore document carrying its schedule, timezone, run
-timeout, failure-alert number and switch, and the console API's reconciler
+timeout (derived from its group count; see below), failure-alert number and
+switch, and the console API's reconciler
 brings the gateway's cron into line with it -- normally within five minutes of
 the edit, and again on every boot. Nothing here has to be re-run after a merge.
 
@@ -1398,10 +1399,22 @@ write token. The gateway needs no R2 write credentials. `console-campaign-create
 checks uploaded bytes before saving; `run-console-campaign` uses the shared
 broadcast engine and the runtime read key. Caption overrides are also supported.
 
-Desired schedules reconcile when the console API starts, after a campaign config
-change, and every five minutes after a successful pass. Pending or failed passes
-back off up to one hour. Reconciliation queries only campaigns with `kind=console`
-and skips writes when `scheduleStatus` is unchanged.
+Desired schedules reconcile when the console API starts, after a campaign or
+group config change, and every five minutes after a successful pass. Pending or
+failed passes back off up to one hour. Reconciliation queries only campaigns with
+`kind=console` and skips writes when `scheduleStatus` is unchanged.
+
+Each campaign's run timeout follows its group count, so a campaign that gains
+groups gets a longer run rather than tightened gaps or a refused release
+(`console_campaigns.sync_run_timeouts`; the arithmetic is
+`promo_broadcast.run_timeout_seconds`, never under 7200 s). That sync lists every
+group, so the loop asks for it (`syncTimeouts`) only when a write woke it, on its
+first pass after a start and then hourly (`TIMEOUT_SYNC_SECONDS`), not on every
+pass. The first pass after a deploy is therefore what raises the existing
+campaigns' timeouts; a timeout write is a field-masked update of
+`timeoutSeconds` alone, and the job edits that follow are the usual reconcile.
+Editing a job's timeout never cuts short a run in progress: the gateway reads it
+when a run starts.
 Stable `console-<slug>-promo` names and a volume lock recover uncertain gateway
 acknowledgements without duplicate jobs. Read-back verifies the job; pending
 campaigns cannot post or consume caps. Creation never triggers an immediate send.

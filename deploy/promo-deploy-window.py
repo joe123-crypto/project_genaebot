@@ -28,18 +28,25 @@ cannot be reached the gate refuses rather than guesses -- a gate that cannot see
 must not wave a release through -- and the workflow's ignore_promo_window input
 is the deliberate override.
 
-Every campaign is treated as if it could fire at its time on any day. A campaign
+A campaign fires at each of its live schedule entries (``gateway_campaigns.starts``),
+not at its own ``hour``/``minute``: those are only where it started, and moving
+an entry on the timeline leaves them behind. Reading them alone held releases
+for genaie-marketing-software at 03:50 while its jobs fired at 00:05 and 10:55,
+and would have waved a release straight into its 10:55 run.
+
+Every campaign is treated as if it could fire at its times on any day. A campaign
 that skips some weekdays then holds a release slightly more often than it had
 to, which is the right direction for this to err in.
 
-It also reports the two schedule guardrails that used to be repository tests
-over the committed group lists and cron manifest (see
-``gateway_campaigns.problems``): a campaign that cannot finish inside its own
-job timeout fails this gate, and two campaigns overlapping on one WhatsApp line
-are a warning.
+It also reports the schedule guardrails that used to be repository tests over
+the committed group lists and cron manifest (see ``gateway_campaigns.problems``).
+They are all warnings: none of them is changed by a release, so none of them
+holds one. A campaign that outgrew its job timeout used to fail this gate, and
+on 2026-11-20 that stopped every release for one campaign; the bot now derives
+each campaign's timeout from its group count instead.
 
-Exit codes: 0 quiet (possibly after waiting), 1 busy beyond the wait bound, a
-campaign that cannot finish its own run, or the gateway unreachable; 2 bad input.
+Exit codes: 0 quiet (possibly after waiting), 1 busy beyond the wait bound or the
+gateway unreachable; 2 bad input.
 """
 
 import argparse
@@ -63,18 +70,19 @@ def run_budget_minutes(row):
 
 
 def daily_starts(rows):
-    """[(name, tz, hour, minute, run_minutes)] for every enabled campaign."""
+    """[(name, tz, hour, minute, run_minutes)]: every time an enabled campaign fires."""
     starts = []
     for row in gateway_campaigns.enabled(rows):
         hour, minute = int(row["hour"]), int(row["minute"])
         if not (0 <= minute < 60 and 0 <= hour < 24):
             raise ValueError("%s: bad schedule time %02d:%02d" % (row["slug"], hour, minute))
         try:
-            zone = ZoneInfo(row["timezone"])
+            ZoneInfo(row["timezone"])
         except Exception as ex:
             raise ValueError("%s: unusable timezone %r (%s)" % (row["slug"], row["timezone"], ex))
-        starts.append((row.get("jobName") or row["slug"], zone, hour, minute,
-                       run_budget_minutes(row)))
+        run_minutes = run_budget_minutes(row)
+        for name, zone, hour, minute in gateway_campaigns.starts(row):
+            starts.append((name, zone, hour, minute, run_minutes))
     return starts
 
 
@@ -159,15 +167,15 @@ def main(argv=None, clock=None, sleep=time.sleep, read=None):
     # The schedule guardrails. These used to be repository tests over the
     # committed group lists and cron manifest; the data is in Firestore now, so
     # this is where they are checked, against what the bot is actually doing.
-    found = gateway_campaigns.problems(rows)
+    # They are reported, never enforced: a release changes none of them, so
+    # holding one back for them only stops unrelated fixes going out.
+    try:
+        found = gateway_campaigns.problems(rows)
+    except gateway_campaigns.Unavailable as exc:
+        print("::error::promo deploy window: %s" % exc, file=sys.stderr)
+        return 2
     for severity, message in found:
         print("::%s::%s" % (severity, message), file=sys.stderr)
-    if any(severity == "error" for severity, _ in found):
-        print("::error::A campaign cannot finish inside its own job timeout, so it "
-              "loses groups every day. Fix it in the console (or raise the job "
-              "timeout) and re-run this job; dispatch with ignore_promo_window if "
-              "the release must go out first.", file=sys.stderr)
-        return 1
     if clock is None:
         clock = lambda: dt.datetime.now(UTC)
     if args.now:

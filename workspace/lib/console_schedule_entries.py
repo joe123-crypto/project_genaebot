@@ -21,6 +21,34 @@ def entries(doc):
         "primary": {**schedule.definition(doc), "paused": False, "deleted": False, "skipDates": []}})
 
 
+def lead_entry(doc):
+    """The entry whose time stands for the campaign's, or ``None`` when it has no
+    independent entries (its own ``schedule`` is then what fires).
+
+    Once a campaign has entries its ``schedule.time`` is only where it started:
+    moving an entry on the timeline rewrites that entry's cron and leaves
+    ``schedule.time`` alone. Reporting the stale time is how the release gate
+    came to hold releases for genaie-marketing-software at 03:50 while its jobs
+    fired at 00:05 and 10:55. So the primary entry stands for the campaign while
+    it is live, and otherwise the earliest live one does; with every entry
+    paused, the same choice among those not deleted."""
+    if "scheduleEntries" not in doc or not isinstance(doc["scheduleEntries"], dict):
+        return None
+    present = [(key, entry) for key, entry in doc["scheduleEntries"].items()
+               if isinstance(entry, dict) and not entry.get("deleted")]
+
+    def start(item):
+        parts = schedule.parse(item[1])
+        return (int(parts[1]), int(parts[0]), item[0])
+    for pool in ([item for item in present if not item[1].get("paused")], present):
+        for key, entry in pool:
+            if key == "primary":
+                return entry
+        if pool:
+            return min(pool, key=start)[1]
+    return None
+
+
 def revision(doc):
     """A precondition over the entries alone.
 
