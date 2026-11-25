@@ -300,6 +300,23 @@ pushed via the CLI; auto-seed extracts `openclaw-state.tgz` / `runtime-seed.tgz`
 volume root on boot. See the entrypoint (`deploy/railway/entrypoint.sh`, steps 0–1.6) and
 the project memory notes for the full seed/stuck-session recovery procedure.
 
+**`GENAIE_COLD_START=1`: a bot that starts from nothing.** A workspace's own bot is
+created by the Genaie console with a brand new, empty volume, and nothing can put a file
+on a Railway volume before its first boot — the public API has no volume-file call, and
+`railway volume files upload` wants a CLI and a human. With this set, the entrypoint
+installs the baked `config/openclaw.template.json` as the initial `openclaw.json` instead
+of refusing to boot. Nothing else on the boot path applies that template, so this is where
+a fresh volume's config comes from; the template is static configuration only, and the
+paths `patch-openclaw-config.py` would otherwise carry over from a live config are runtime
+state and personal data a new bot has none of. Secrets still come from `.env`:
+`gateway.auth.token` names `GATEWAY_AUTH_TOKEN`, set per bot.
+
+Set it only on a bot that is meant to have no state. **Do not set it on this gateway**, or
+on any bot with real state: the `exit 78` guard it bypasses is what catches an unmounted or
+mis-mounted volume, and losing that turns a mounting mistake into a silent fresh start on
+top of state the bot could not see. Leaving it set after the first boot is harmless (the
+config exists, so the branch is never taken), but clearing it restores the guard.
+
 ## WhatsApp stability and account recovery
 
 The checked-in Railway deploy configuration sets `overlapSeconds: 0` and
@@ -1303,7 +1320,11 @@ workspace.
 **A new user's bot.** The steps:
 
 1. Create its own Railway service and volume, with
-   `GENAIE_WORKSPACE_ID=<id>` set from the start.
+   `GENAIE_WORKSPACE_ID=<id>` and `GENAIE_COLD_START=1` set from the start. The
+   volume is empty and cannot be seeded before first boot, so the cold-start
+   flag is what lets the bot write its initial `openclaw.json` from the baked
+   template (see *Volume seeding & recovery*). The Genaie console's provisioner
+   sets both for a bot it creates itself.
 2. Seed its settings and lines:
    `deploy/init-workspace.py --workspace <id> --line default=+<number> --write`.
    This copies `settings/defaults` from `--settings-from` (`root` by default;
