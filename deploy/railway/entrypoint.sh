@@ -59,10 +59,37 @@ if [ ! -f "$OC_DIR/openclaw.json" ] && [ -f "$OC_DIR/openclaw-state.tgz" ]; then
 fi
 
 # 1. The volume must be seeded (see railway/README.md) before first boot.
+#
+# Except for a bot that is meant to start from nothing. A workspace's own bot is
+# created with a brand new, empty volume, and nothing can put a file on a
+# Railway volume before its first boot: the public API has no volume-file call,
+# and `railway volume files upload` wants a CLI and a human.
+#
+# So with GENAIE_COLD_START=1 the baked config template becomes the initial
+# config. Nothing else on this boot path applies that template (sync-public-prompt
+# writes one key and says so), which is exactly why this is where a fresh
+# volume's config has to come from. The template alone is enough to boot on:
+# patch-openclaw-config.py calls it the authoritative source of truth for static
+# configuration, and every path it carries over from a live config instead is
+# runtime state or personal data a new bot legitimately has none of -- admin
+# phone numbers, allowFrom lists, wizard timestamps. Secrets are not in it
+# either: gateway.auth.token names GATEWAY_AUTH_TOKEN, which step 2 puts in .env
+# from this service's own variables.
+#
+# The flag is opt-in, and deliberately not inferred from GENAIE_WORKSPACE_ID:
+# this guard is also what catches an unmounted or wrong volume on a bot that DOES
+# have state, and that bot names its workspace too. Losing that check would turn
+# a mis-mounted volume into a silent fresh start on top of the real one.
 if [ ! -f "$OC_DIR/openclaw.json" ]; then
-  echo "[entrypoint] FATAL: $OC_DIR/openclaw.json not found." >&2
-  echo "[entrypoint] Seed the Railway volume first (see railway/README.md)." >&2
-  exit 78
+  if [ "${GENAIE_COLD_START:-0}" = "1" ] && [ -f "$LIVE_SOURCE/config/openclaw.template.json" ]; then
+    log "cold start: installing the baked config template as $OC_DIR/openclaw.json"
+    install -m 600 "$LIVE_SOURCE/config/openclaw.template.json" "$OC_DIR/openclaw.json"
+  else
+    echo "[entrypoint] FATAL: $OC_DIR/openclaw.json not found." >&2
+    echo "[entrypoint] Seed the Railway volume first (see railway/README.md)," >&2
+    echo "[entrypoint] or set GENAIE_COLD_START=1 to start a new bot from the template." >&2
+    exit 78
+  fi
 fi
 
 # These paths may be volume subdirs that start empty. Ensure OpenClaw sees the

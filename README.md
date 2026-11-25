@@ -54,6 +54,12 @@ Durable state lives on a Railway volume mounted at `/home/joseph/.openclaw`:
 - `runtime/`, credentials, identity, state, and `openclaw.json` persist on the
   volume across deploys. `runtime/` is reseeded only by an explicit one-shot
   upload (see `deploy/railway/README.md`).
+- A volume with no `openclaw.json` stops the boot (`exit 78`), which is what
+  catches one that is unmounted or mis-mounted. The exception is a bot meant to
+  have no state: with `GENAIE_COLD_START=1` the entrypoint installs the baked
+  `config/openclaw.template.json` as its first config, because nothing can seed
+  a Railway volume before its first boot. The Genaie console sets that on a bot
+  it creates; do not set it on this gateway.
 
 OpenClaw routes administrator DMs to the `main` agent and every other WhatsApp DM
 to the restricted `public` agent. There is no approval step and no service menu:
@@ -611,8 +617,11 @@ never served across trees. New pictures go under `w/<id>/ads/` unless
 `GENAIE_ASSET_KEY_PREFIX` says otherwise. The console checks both through
 `capabilities` (`writes.workspace`, `writes.campaignCreation.keyPrefix`).
 `deploy/copy-workspace-data.py` moves an existing install's documents into its
-workspace and back, and `deploy/init-workspace.py` seeds a new one. See
-[A bot pinned to one workspace](deploy/railway/README.md#a-bot-pinned-to-one-workspace).
+workspace and back, and `deploy/init-workspace.py` seeds a new one. A bot the
+console creates for a new workspace starts on an empty volume, so it also needs
+`GENAIE_COLD_START=1` to write its first `openclaw.json`. See
+[A bot pinned to one workspace](deploy/railway/README.md#a-bot-pinned-to-one-workspace)
+and [Volume seeding & recovery](deploy/railway/README.md#volume-seeding--recovery).
 
 ### The ad images in Cloudflare R2
 
