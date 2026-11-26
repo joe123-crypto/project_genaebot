@@ -204,6 +204,15 @@ rm -f "$tmp_env"
 
 # 3. Make mutable volume paths owned by joseph (a foreign-uid seed is possible in
 # cloud). live-source is baked read-only, so we only chown the volume tree.
+#
+# The mount point itself first. A brand new Railway volume arrives owned by root,
+# and every path below is chowned only if it already exists -- while the dirs
+# OpenClaw makes for itself (state/, credentials/, identity/ ...) are created by
+# nobody. Without this nothing running as joseph can create them, and a bot with
+# no state of its own crash-loops on its first boot. Deliberately not recursive:
+# the tree below is covered path by path, and sweeping a whole volume on every
+# boot is not affordable.
+chown joseph:joseph "$OC_DIR"
 for path in \
   "$OC_DIR/.env" \
   "$OC_DIR/openclaw.json" \
@@ -230,58 +239,6 @@ for path in \
     chown -R joseph:joseph "$path" 2>/dev/null || log "skip ownership fix: $path"
   fi
 done
-
-# Secondary agents do not inherit model-provider environment keys at run time.
-# Materialize the OpenRouter key as a static profile for the restricted public
-# agent before the gateway opens and locks the auth store.
-# OpenClaw >=2026.9 keys agents under agents.entries; older configs used agents.list.
-if [ -n "${OPENROUTER_API_KEY:-}" ] && python3 -c '
-import json, sys
-agents = json.load(open(sys.argv[1])).get("agents", {})
-sys.exit(0 if "public" in (agents.get("entries") or {}) or any(a.get("id") == "public" for a in agents.get("list", [])) else 1)
-' "$OC_DIR/openclaw.json" 2>/dev/null; then
-  runuser -u joseph -- env PUBLIC_MODEL_API_KEY="$OPENROUTER_API_KEY" python3 - <<'PY'
-import json
-import os
-import sqlite3
-import time
-from pathlib import Path
-
-agent_dir = Path("/home/joseph/.openclaw/agents/public/agent")
-agent_dir.mkdir(parents=True, exist_ok=True)
-database_path = agent_dir / "openclaw-agent.sqlite"
-database = sqlite3.connect(database_path)
-database.execute("UPDATE schema_meta SET agent_id = 'public' WHERE role = 'agent'")
-database.execute(
-    "CREATE TABLE IF NOT EXISTS auth_profile_store ("
-    "store_key TEXT PRIMARY KEY, store_json TEXT NOT NULL, updated_at INTEGER NOT NULL)"
-)
-row = database.execute(
-    "SELECT store_json FROM auth_profile_store WHERE store_key = 'primary'"
-).fetchone()
-try:
-    payload = json.loads(row[0]) if row else {"version": 1, "profiles": {}}
-except (TypeError, json.JSONDecodeError):
-    payload = {"version": 1, "profiles": {}}
-payload.setdefault("version", 1)
-profiles = payload.setdefault("profiles", {})
-profiles["openrouter:public-env"] = {
-    "type": "api_key",
-    "provider": "openrouter",
-    "key": os.environ["PUBLIC_MODEL_API_KEY"],
-}
-database.execute(
-    "INSERT INTO auth_profile_store(store_key, store_json, updated_at) "
-    "VALUES ('primary', ?, ?) "
-    "ON CONFLICT(store_key) DO UPDATE SET store_json=excluded.store_json, updated_at=excluded.updated_at",
-    (json.dumps(payload, separators=(",", ":")), int(time.time() * 1000)),
-)
-database.commit()
-database.close()
-os.chmod(database_path, 0o600)
-PY
-  log "provisioned public agent model authentication (openrouter)"
-fi
 
 # If a command was passed (e.g. `railway ssh -- openclaw doctor`), run it as
 # joseph after the setup above instead of starting the gateway.
@@ -386,6 +343,97 @@ PY
     echo "[entrypoint] WARNING: plugins still not at $openclaw_installed: $openclaw_stale. They will fail to load (WhatsApp is unavailable if whatsapp is listed); retrying on the next boot." >&2
   else
     log "OpenClaw upgrade migration to $openclaw_installed complete"
+  fi
+fi
+
+# Secondary agents do not inherit model-provider environment keys at run time.
+# Materialize the OpenRouter key as a static profile for the restricted public
+# agent before the gateway opens and locks the auth store.
+#
+# AFTER the upgrade migration above, deliberately: this writes a database that
+# doctor inspects, so it must not land in the middle of a maintenance pass.
+# When it ran first and created that database itself, doctor found an agent
+# store nothing had registered and refused to converge on it
+# ("agent-deletion-journal (unverified-agent-databases)"), which crash-looped
+# the first bot the console provisioned just as surely as the PermissionError
+# before it. Doctor still runs before the gateway, so a key written here lands
+# before the auth store is locked.
+# OpenClaw >=2026.9 keys agents under agents.entries; older configs used agents.list.
+public_agent_db="$OC_DIR/agents/public/agent/openclaw-agent.sqlite"
+if [ -n "${OPENROUTER_API_KEY:-}" ] && python3 -c '
+import json, sys
+agents = json.load(open(sys.argv[1])).get("agents", {})
+sys.exit(0 if "public" in (agents.get("entries") or {}) or any(a.get("id") == "public" for a in agents.get("list", [])) else 1)
+' "$OC_DIR/openclaw.json" 2>/dev/null; then
+  # Only ever written into a database OpenClaw made. This used to create the
+  # file itself when it was missing -- which is what a bot with no state of its
+  # own always hits -- and a database holding nothing but auth_profile_store is
+  # one OpenClaw then refuses outright: assertCanonicalAgentPersistenceVersion
+  # treats user_version 0 plus any application table as a schema needing
+  # migration, so the public agent reported "uses schema version 0; run
+  # openclaw doctor --fix to migrate persisted media before using it. Sessions
+  # remain unavailable." for good. A key that cannot be written is recoverable;
+  # an agent store OpenClaw will not open is not, so the absent database is
+  # left to OpenClaw, which creates it when that agent is first used. The next
+  # boot after that provisions the key, and every boot from then on is the
+  # ordinary case.
+  if [ ! -f "$public_agent_db" ]; then
+    log "public agent model authentication deferred: OpenClaw has not created $public_agent_db yet; it is created when the public agent is first used, and the next boot provisions the key"
+  # Never fatal, the same policy the sync steps below follow. A failure here
+  # costs the public agent its model key until the next boot -- which retries
+  # it, since this runs on every boot -- where a non-zero exit under `set -e`
+  # would instead crash-loop the container and take the whole bot down.
+  elif runuser -u joseph -- env PUBLIC_MODEL_API_KEY="$OPENROUTER_API_KEY" python3 - <<'PY'
+import json
+import os
+import sqlite3
+import time
+from pathlib import Path
+
+# Both the directory and the database are OpenClaw's to create -- the shell
+# above has already checked that it did, so nothing here makes either.
+database_path = Path("/home/joseph/.openclaw/agents/public/agent/openclaw-agent.sqlite")
+database = sqlite3.connect(database_path)
+# OpenClaw owns this schema: ensureAgentSchema creates schema_meta and stamps
+# this agent's id. The database it has just created can still be reached here
+# before it has written that table, and updating it regardless raised
+# "no such table: schema_meta" and crash-looped the boot.
+if database.execute(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_meta'"
+).fetchone():
+    database.execute("UPDATE schema_meta SET agent_id = 'public' WHERE role = 'agent'")
+database.execute(
+    "CREATE TABLE IF NOT EXISTS auth_profile_store ("
+    "store_key TEXT PRIMARY KEY, store_json TEXT NOT NULL, updated_at INTEGER NOT NULL)"
+)
+row = database.execute(
+    "SELECT store_json FROM auth_profile_store WHERE store_key = 'primary'"
+).fetchone()
+try:
+    payload = json.loads(row[0]) if row else {"version": 1, "profiles": {}}
+except (TypeError, json.JSONDecodeError):
+    payload = {"version": 1, "profiles": {}}
+payload.setdefault("version", 1)
+profiles = payload.setdefault("profiles", {})
+profiles["openrouter:public-env"] = {
+    "type": "api_key",
+    "provider": "openrouter",
+    "key": os.environ["PUBLIC_MODEL_API_KEY"],
+}
+database.execute(
+    "INSERT INTO auth_profile_store(store_key, store_json, updated_at) "
+    "VALUES ('primary', ?, ?) "
+    "ON CONFLICT(store_key) DO UPDATE SET store_json=excluded.store_json, updated_at=excluded.updated_at",
+    (json.dumps(payload, separators=(",", ":")), int(time.time() * 1000)),
+)
+database.commit()
+database.close()
+os.chmod(database_path, 0o600)
+PY
+  then
+    log "provisioned public agent model authentication (openrouter)"
+  else
+    echo "[entrypoint] WARNING: could not provision public agent model authentication; the public agent has no model key until the next boot." >&2
   fi
 fi
 
