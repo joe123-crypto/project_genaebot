@@ -136,11 +136,14 @@ def _run(script=None, timeout=TIMEOUT_SECONDS, env=None, runner=None):
     return done.stdout
 
 
-def parse(text):
+def parse(text, allow_empty=False):
     """The campaign rows in one ``console-read campaigns`` reply.
 
     ``console-read`` reports a read it could not complete as ``{"error": ...}``
-    with a zero exit, so an error field is checked for before the rows."""
+    with a zero exit, so an error field is checked for before the rows.
+
+    ``allow_empty`` is for a bot asking about itself: a workspace's new bot has
+    no campaigns yet, which is quiet, not a sign of reading the wrong bot."""
     try:
         payload = json.loads(text)
     except ValueError as ex:
@@ -163,7 +166,7 @@ def parse(text):
         if row.get("error"):
             raise Unavailable("campaign %r cannot be read: %s" % (row["slug"], row["error"]))
         out.append(row)
-    if not out:
+    if not out and not allow_empty:
         # Every campaign disabled is normal; none existing at all means this is
         # not the gateway the release is about to replace.
         raise Unavailable("the gateway reports no campaigns at all")

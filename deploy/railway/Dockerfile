@@ -103,6 +103,9 @@ COPY deploy/railway/sync-runtime-plugins.py /usr/local/bin/sync-runtime-plugins.
 COPY deploy/railway/report-release-ready.py /usr/local/bin/report-release-ready.py
 COPY deploy/railway/gateway-standby.py /usr/local/bin/gateway-standby.py
 COPY deploy/railway/console-api.py /usr/local/bin/console-api.py
+# Its release-window route: whether this bot may be restarted now. The console
+# asks before rolling a new image out to a workspace's bot.
+COPY deploy/release_window.py deploy/gateway_campaigns.py /usr/local/bin/
 COPY --from=stage /opt/live-source/workspace/lib/campaign_clicks.py /usr/local/bin/campaign_clicks.py
 COPY deploy/railway/console_accounts.py /usr/local/bin/console_accounts.py
 COPY deploy/railway/console_customer_bot.py /usr/local/bin/console_customer_bot.py
