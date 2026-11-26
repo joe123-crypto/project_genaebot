@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "deploy/railway/sync-reply-gates.py"
@@ -191,12 +192,14 @@ class ReplyGateSyncTests(unittest.TestCase):
         self.assertEqual(w["groupPolicy"], "disabled")
         self.assertEqual(self.sync()[0], "unchanged")
 
-    def test_ads_replies_resume_only_when_template_policy_changes(self) -> None:
+    def test_ads_replies_resume_only_when_the_tracked_policy_changes(self) -> None:
+        # The value is held in ACCOUNT_GATES rather than read off the template:
+        # the template ships no accounts, because a workspace makes its own.
         self.sync()
-        template = tracked_template()
-        template["channels"]["whatsapp"]["accounts"]["ads"]["dmPolicy"] = "open"
-        self.template.write_text(json.dumps(template), encoding="utf-8")
-        self.sync()
+        opened = [(path, "open" if path == SYNC.ADS_DM_POLICY else want)
+                  for path, want in SYNC.ACCOUNT_GATES]
+        with mock.patch.object(SYNC, "ACCOUNT_GATES", opened):
+            self.sync()
         ads = self.read()["channels"]["whatsapp"]["accounts"]["ads"]
         self.assertEqual(ads["dmPolicy"], "open")
         self.assertTrue(ads["enabled"])
@@ -207,8 +210,22 @@ class ReplyGateSyncTests(unittest.TestCase):
         self.assertEqual(status, "updated")
         synced = self.read()
         self.assertEqual(synced["channels"]["whatsapp"]["dmPolicy"], "open")
-        self.assertTrue(synced["channels"]["whatsapp"]["accounts"]["default"]["enabled"])
         self.assertIn("<absent>", " ".join(lines))
+
+    def test_an_account_gate_never_creates_the_account(self) -> None:
+        # A workspace starts with no lines and makes its own from the console.
+        # Seeding "default" here would hand it back the line it never asked for.
+        self.config.write_text(json.dumps({"channels": {"whatsapp": {}}}), encoding="utf-8")
+        self.sync()
+        self.assertNotIn("accounts", self.read()["channels"]["whatsapp"])
+
+    def test_replies_disabled_creates_no_default_account(self) -> None:
+        self.config.write_text(json.dumps({"channels": {"whatsapp": {}}}), encoding="utf-8")
+        result = self.run_script(str(self.template), str(self.config),
+                                 env={"REPLIES_DISABLED": "1"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("accounts", self.read()["channels"]["whatsapp"])
+        self.assertIn("no default account to disable", result.stdout)
 
     # --- the allowFrom coupling -------------------------------------------
 
@@ -259,6 +276,9 @@ class ReplyGateSyncTests(unittest.TestCase):
             self.assertTrue(found, SYNC.dotted(path))
             self.assertIsInstance(value, (bool, str, int), SYNC.dotted(path))
             self.assertNotIsInstance(value, (dict, list))
+        for path, want in SYNC.ACCOUNT_GATES:
+            self.assertIsInstance(want, (bool, str, int), SYNC.dotted(path))
+            self.assertNotIsInstance(want, (dict, list))
 
     def test_never_write_covers_the_dangerous_paths(self) -> None:
         for blocked in (
@@ -267,7 +287,7 @@ class ReplyGateSyncTests(unittest.TestCase):
             "channels.whatsapp.accounts.ads.enabled",
         ):
             self.assertIn(blocked, SYNC.NEVER_WRITE)
-        governed = {SYNC.dotted(p) for p in SYNC.GATED_PATHS}
+        governed = {SYNC.dotted(p) for p in SYNC.GATED_PATHS + SYNC.ACCOUNT_GATED_PATHS}
         self.assertEqual(governed & set(SYNC.NEVER_WRITE), set())
 
     def test_tracked_template_has_every_gate_in_the_expected_state(self) -> None:
@@ -276,9 +296,13 @@ class ReplyGateSyncTests(unittest.TestCase):
         entries = t["plugins"]["entries"]
         self.assertIs(w["enabled"], True)
         self.assertEqual(w["dmPolicy"], "open")
-        self.assertIs(w["accounts"]["default"]["enabled"], True)
-        self.assertIs(w["accounts"]["ads"]["enabled"], True)
-        self.assertEqual(w["accounts"]["ads"]["dmPolicy"], "disabled")
+        # No account is seeded: a workspace makes its own lines from the
+        # console, and the account gates carry their own values instead.
+        self.assertNotIn("accounts", w)
+        self.assertEqual(w["defaultAccount"], "default")
+        wanted = {SYNC.dotted(path): want for path, want in SYNC.ACCOUNT_GATES}
+        self.assertEqual(wanted[SYNC.dotted(SYNC.ADS_DM_POLICY)], "disabled")
+        self.assertIs(wanted[SYNC.dotted(SYNC.DEFAULT_ACCOUNT_ENABLED)], True)
         self.assertIs(entries["whatsapp"]["enabled"], True)
         self.assertIs(entries["public-service-gate"]["enabled"], True)
         self.assertIs(entries["public-service-gate"]["config"]["enabled"], True)

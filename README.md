@@ -885,7 +885,8 @@ not confirmed deliveries.
 
 The next round is **ads group advertising without automated DM replies**.
 The tracked account override `channels.whatsapp.accounts.ads.dmPolicy: "disabled"`
-is enforced on every boot, while `ads.enabled` remains operator-controlled.
+is enforced on every boot by `sync-reply-gates.py`, which holds that value
+itself, while `ads.enabled` remains operator-controlled.
 The adapter's native inbound gate drops ads DMs before the agent, typing,
 service actions and enquiry-triggered admin alerts. It sends no pause notice or
 pairing challenge. This covers customer, administrator, self-chat and sibling-line
@@ -984,7 +985,8 @@ the switch governs **only** the `default` line, so a loop or flood that involves
 `ads` line and an outside party is not stopped by it.
 
 The `ads` line has no equivalent tracked switch on Railway. Nothing on the boot path
-applies `config/openclaw.template.json` (see **Deploying Changes**), and
+applies `config/openclaw.template.json` wholesale (see **Deploying Changes**), the
+template seeds no account for the sync to read, and
 `sync-reply-gates.py` deliberately never writes `accounts.ads.enabled`, so editing
 the template does **not** reach the live config here — it only matters for a Compose
 deploy or a fresh seed. To silence the `ads` line on Railway, hand-edit the live
@@ -1103,7 +1105,6 @@ the trusted public-service plugin's prompt hook:
 |---|---|
 | `channels.whatsapp.enabled` | `true` |
 | `channels.whatsapp.dmPolicy` | `"open"` |
-| `channels.whatsapp.accounts.default.enabled` | `true` |
 | `plugins.entries.whatsapp.enabled` | `true` |
 | `plugins.entries["public-service-gate"].enabled` | `true` |
 | `plugins.entries["public-service-gate"].config.enabled` | `true` |
@@ -1113,6 +1114,16 @@ the trusted public-service plugin's prompt hook:
 
 The last one is not a reply gate: it is where CV buyers are told to pay, governed
 so a change of payee reaches the live bot on the next deploy.
+
+Two more gates belong to one WhatsApp account each — `accounts.default.enabled`
+(`true`) and `accounts.ads.dmPolicy` (`"disabled"`) — and their values are held
+in the script's own `ACCOUNT_GATES` rather than read off the template, because
+the template seeds no WhatsApp account at all: a workspace makes its own lines
+from the console, and the first one it makes is called `default`. Each is forced
+only where the live config already has that account, so this install keeps
+exactly the enforcement it had and a bot whose user has not made that line is
+never handed one. `REPLIES_DISABLED` is guarded the same way: it silences a
+`default` account that exists and never creates one.
 
 It writes **scalar leaves only** -- no object or array is ever replaced -- so the
 live-only plugin keys the strict `configSchema` still requires survive untouched.

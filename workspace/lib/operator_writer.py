@@ -74,6 +74,9 @@ EDITABLE = {
     "settings": ("activity", "caps_enabled", "rotation_enabled", "contact_account",
                  "bands"),
 }
+# Collections a patch may bring into existence. A group is discovered on
+# WhatsApp and a line is linked to it; both exist before the document does.
+CREATABLE = ("groups", "lines")
 # Generic document deletions. Campaign retirement uses campaign_deletion instead.
 DELETABLE = ("groups",)
 # A patch value has to survive a Firestore round trip and be something
@@ -324,10 +327,12 @@ def prepare(raw, collection, doc_id, patch):
     if doc_id in rows and before is None:
         raise WriteRefused("%s/%s cannot be read; fix it in the Firebase Console"
                            % (collection, doc_id), status=409)
-    if before is None and collection != "groups":
-        # A line or a campaign is not something an operator invents from a form:
-        # a new line needs a WhatsApp login, a new campaign needs code, copy, a
-        # cron and an installer run.
+    if before is None and collection not in CREATABLE:
+        # A campaign is not something an operator invents from a form: it needs
+        # code, copy, a cron and an installer run. A line is created, but only
+        # once it HAS the WhatsApp login that used to be the reason it could
+        # not be: the console reads the gateway itself and sends the number
+        # that account reports, after the operator has scanned its QR code.
         raise WriteRefused("%s/%s does not exist, and this path does not create "
                            "%s documents" % (collection, doc_id, collection), status=404)
 

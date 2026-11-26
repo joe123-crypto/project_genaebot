@@ -318,10 +318,18 @@ class Refusals(Harness):
         ex = self.refuse("secrets", "x", {"a": 1})
         self.assertEqual(ex.status, 404)
 
-    def test_a_line_cannot_be_created_through_this_path(self):
-        # A new line needs a WhatsApp login, not a form.
-        ex = self.refuse("lines", "sales", {"number": "+263700000000"})
+    def test_a_campaign_cannot_be_created_through_this_path(self):
+        # A campaign is code, copy, a cron and an installer run, not a form.
+        ex = self.refuse("campaigns", "borehole", {"enabled": True})
         self.assertEqual(ex.status, 404)
+
+    def test_a_line_is_created_with_the_number_its_login_reports(self):
+        # A line used to be refused here because it needs a WhatsApp login.
+        # It is created now because it HAS one: the console reads the gateway
+        # itself and sends the number that linked account reports.
+        result = self.write("lines", "sales", {"number": "+263700000000"})
+        self.assertEqual(result["change"], "created")
+        self.assertEqual(self.stored("lines", "sales")["number"], "+263700000000")
 
     def test_an_outage_means_nothing_is_written(self):
         self.firestore.down = True

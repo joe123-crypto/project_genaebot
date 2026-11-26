@@ -524,15 +524,20 @@ class AccountRoutingTests(unittest.TestCase):
         finally:
             pb.subprocess.run = saved
 
-    def test_config_pins_the_default_account(self):
+    def test_config_pins_the_default_account_and_seeds_no_lines(self):
         # send_ad leaves the default account implicit, so the config must say
         # which account that is: without defaultAccount the gateway picks
-        # "default" if present else the first id sorted, and "ads" sorts first --
-        # which would post every untagged group from the second number.
+        # "default" if present else the first id sorted, so a second line named
+        # anything before "default" would post every untagged group.
+        #
+        # The template itself seeds no account. A workspace starts with no
+        # lines and makes its own from the console, which names the first one
+        # "default" -- so what defaultAccount pins is the line that is created,
+        # never one the template handed over.
         wa = json.loads((ROOT / "config/openclaw.template.json").read_text(
             encoding="utf-8"))["channels"]["whatsapp"]
         self.assertEqual(wa.get("defaultAccount"), pb.DEFAULT_ACCOUNT)
-        self.assertIn(pb.DEFAULT_ACCOUNT, wa.get("accounts") or {})
+        self.assertNotIn("accounts", wa)
 
     def test_each_group_posts_from_and_advertises_its_own_account(self):
         with tempfile.TemporaryDirectory() as tmp:

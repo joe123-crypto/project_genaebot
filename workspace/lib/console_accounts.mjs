@@ -116,9 +116,16 @@ export function createAccountController(gateway, { now = Date.now, killSwitch = 
   }
   function accountIds(config) {
     const channel = config.channels?.whatsapp;
-    const ids = Object.keys(channel?.accounts ?? {});
+    const ids = configuredIds(config);
     if (ids.length === 0 || typeof channel?.authDir === 'string' && channel.authDir.trim()) ids.push('default');
     return [...new Set(ids)];
+  }
+  // The ids somebody actually configured, as opposed to the implicit 'default'
+  // accountIds() falls back to. A workspace that has made no lines has none,
+  // and the console shows it an empty page rather than a line it never asked
+  // for -- so this, not accountIds(), is what says whether an id is taken.
+  function configuredIds(config) {
+    return Object.keys(config.channels?.whatsapp?.accounts ?? {});
   }
   function requireAccount(config, accountId) {
     if (typeof accountId !== 'string' || !ACCOUNT_ID.test(accountId)) throw new ControlError(400, 'Use an account ID of 1–64 lowercase letters, digits, underscores or hyphens.');
@@ -130,8 +137,7 @@ export function createAccountController(gateway, { now = Date.now, killSwitch = 
   }
   async function setEnabled(accountId, enabled, { create = false } = {}) {
     const snap = await snapshot();
-    const ids = accountIds(snap.config);
-    if (create && ids.includes(accountId)) throw new ControlError(409, 'This account already exists. Link it from its account card.');
+    if (create && configuredIds(snap.config).includes(accountId)) throw new ControlError(409, 'This account already exists. Link it from its account card.');
     if (!create) requireAccount(snap.config, accountId);
     if (enabled) checkStart(snap.config, accountId);
     // Use the authored object to preserve environment references and unknown fields.
@@ -142,8 +148,12 @@ export function createAccountController(gateway, { now = Date.now, killSwitch = 
     config.channels.whatsapp.accounts ??= {};
     const accounts = config.channels.whatsapp.accounts;
     if (!create && accounts[accountId]?.enabled === enabled && isApplied(snap)) return;
+    // A line the operator adds answers nobody until they say otherwise. The
+    // first one, 'default', is the exception: it inherits the channel's own
+    // policies, exactly as the config template's 'default' account used to, so
+    // a new workspace's only line still replies to its customers.
     accounts[accountId] = { ...accounts[accountId], enabled,
-      ...(create ? { dmPolicy: 'disabled', groupPolicy: 'disabled' } : {}) };
+      ...(create && accountId !== 'default' ? { dmPolicy: 'disabled', groupPolicy: 'disabled' } : {}) };
     await gateway.request('config.set', { baseHash: snap.hash, raw: JSON.stringify(config) });
     // Publication can be deferred while work drains. Never act on old runtime config.
     for (let attempt = 0; attempt < 30; attempt++) {
@@ -176,7 +186,8 @@ export function createAccountController(gateway, { now = Date.now, killSwitch = 
       const enabled = configured?.enabled !== false && snap.config.channels?.whatsapp?.enabled !== false;
       const identity = await readIdentity(snap.config, id);
       const number = row?.self?.e164 ?? identity.number;
-      return { id, number, enabled, linked: typeof row?.linked === 'boolean' ? row.linked : identity.linked,
+      return { id, number, enabled, configured: Boolean(configured),
+        linked: typeof row?.linked === 'boolean' ? row.linked : identity.linked,
         running: typeof row?.running === 'boolean' ? row.running : null,
         connected: typeof row?.connected === 'boolean' ? row.connected : null,
         repliesEnabled: (configured?.dmPolicy ?? snap.config.channels?.whatsapp?.dmPolicy) !== 'disabled',
