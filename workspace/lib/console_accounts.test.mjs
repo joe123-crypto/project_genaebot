@@ -6,14 +6,17 @@ import path from 'node:path';
 import { ACCOUNT_ID, createAccountController, ControlError, readAccountIdentity } from './console_accounts.mjs';
 
 function fixture(options = {}) {
+  // `accounts: {}` is a workspace that has made no lines: the gateway invents a
+  // `default` for it, which is exactly what the console has to tell apart.
+  const accounts = options.accounts ?? {
+    default: { enabled: true }, ads: { enabled: true, dmPolicy: 'disabled' },
+  };
   let config = { gateway: { auth: { token: '__OPENCLAW_REDACTED__' } },
-    channels: { whatsapp: { enabled: true, dmPolicy: 'open', accounts: {
-      default: { enabled: true }, ads: { enabled: true, dmPolicy: 'disabled' },
-    } } } };
+    channels: { whatsapp: { enabled: true, dmPolicy: 'open', accounts } } };
   let revision = 1;
   const calls = [];
   const pairing = new Set();
-  const states = { default: { linked: true, running: true, connected: true }, ads: { linked: true, running: true, connected: true } };
+  const states = options.states ?? { default: { linked: true, running: true, connected: true }, ads: { linked: true, running: true, connected: true } };
   const gateway = {
     async request(method, params) {
       calls.push({ method, params });
@@ -22,7 +25,7 @@ function fixture(options = {}) {
         if (options.conflict) throw new ControlError(409, 'Configuration changed. Refresh status before retrying.');
         assert.equal(params.baseHash, String(revision));
         config = JSON.parse(params.raw); revision++;
-        for (const id of Object.keys(config.channels.whatsapp.accounts)) states[id] ??= { linked: false, running: false, connected: false };
+        for (const id of Object.keys(config.channels.whatsapp.accounts ?? {})) states[id] ??= { linked: false, running: false, connected: false };
         return { ok: true };
       }
       if (method === 'channels.status') return { partial: options.partial, channelAccounts: { whatsapp: Object.entries(states).map(([accountId, row]) => ({ accountId, ...row, self: { e164: '+263123456789' } })) } };
@@ -209,4 +212,39 @@ test('external edits after runtime acknowledgement do not falsely confirm Start 
     };
     await assert.rejects(f.controller.dispatch({ action, accountId: 'ads' }), /operation is not confirmed/);
   }
+});
+
+test('a workspace with no lines is told its default account is not configured', async () => {
+  const f = fixture({ accounts: {}, states: {} });
+  const { accounts } = await f.controller.dispatch({ action: 'list' });
+  assert.deepEqual(accounts.map((a) => [a.id, a.configured]), [['default', false]]);
+});
+
+test('the template accounts of an existing bot are reported as configured', async () => {
+  const f = fixture();
+  const { accounts } = await f.controller.dispatch({ action: 'list' });
+  assert.deepEqual(accounts.map((a) => [a.id, a.configured]), [['default', true], ['ads', true]]);
+});
+
+test('the first line can be created even though the gateway already names it', async () => {
+  // accountIds() invents `default` for a bot with no accounts, so creating it
+  // must be judged on the configured ids -- otherwise the very first line a
+  // workspace makes would be refused as already existing.
+  const f = fixture({ accounts: {}, states: {} });
+  const session = await f.controller.dispatch({ action: 'link', accountId: 'default', create: true });
+  assert.equal(session.accountId, 'default');
+  // It inherits the channel's own policies, as the seeded `default` used to,
+  // so a new workspace's only line still answers its customers.
+  assert.deepEqual(f.config().channels.whatsapp.accounts.default, { enabled: false });
+  const { accounts } = await f.controller.dispatch({ action: 'list' });
+  assert.equal(accounts.find((a) => a.id === 'default').configured, true);
+});
+
+test('a line added after the first answers nobody until it is told to', async () => {
+  const f = fixture();
+  await f.controller.dispatch({ action: 'link', accountId: 'sales', create: true });
+  assert.deepEqual(f.config().channels.whatsapp.accounts.sales,
+    { enabled: false, dmPolicy: 'disabled', groupPolicy: 'disabled' });
+  await assert.rejects(f.controller.dispatch({ action: 'link', accountId: 'ads', create: true }),
+    (error) => error.status === 409 && /already exists/.test(error.message));
 });

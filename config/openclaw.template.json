@@ -139,17 +139,14 @@
         "config": {
           "enabled": true,
           "businessInfoPath": "/home/joseph/.openclaw/workspace/docs/business-info.md",
-          "botWhatsappNumber": "+263785632943",
+          "botWhatsappNumber": "",
           "memberGateEnabled": true,
           "cvMakerEnabled": true,
           "cvMakerPriceText": "US$5",
           "cvMakerPaymentDetails": "EcoCash +263775489417 (Noriah Mzenda)",
           "cvMakerPaymentMethod": "EcoCash",
           "siblingLineGuardEnabled": true,
-          "whatsappLines": {
-            "default": "+263785632943",
-            "ads": "+263790453292"
-          },
+          "whatsappLines": {},
           "siblingLineMaxEventsPerWindow": 8,
           "siblingLineWindowSeconds": 900,
           "siblingLineCooldownSeconds": 21600,
@@ -236,10 +233,6 @@
       "selfChatMode": true,
       "sendReadReceipts": false,
       "defaultAccount": "default",
-      "accounts": {
-        "default": { "enabled": true },
-        "ads": { "enabled": true, "dmPolicy": "disabled" }
-      },
       "streaming": {
         "block": {
           "enabled": true,

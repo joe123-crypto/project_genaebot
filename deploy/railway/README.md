@@ -76,15 +76,21 @@ edit it in this repo, open a PR, merge. That's the whole flow. Three sets of
   are archived on replacement. Restore the state volume to recover publications.
 - The entrypoint pauses new WhatsApp CV orders with `GENAIE_CV_ACCEPT_NEW_ORDERS=0`.
   The CV maker continues processing saved orders on their original WhatsApp lines.
-- `deploy/railway/sync-reply-gates.py` sets the eight WhatsApp reply gates
-  (`channels.whatsapp.enabled`, `dmPolicy`, `accounts.default.enabled`,
+- `deploy/railway/sync-reply-gates.py` sets the seven WhatsApp reply gates
+  (`channels.whatsapp.enabled`, `dmPolicy`,
   `plugins.entries.whatsapp.enabled`, both `public-service-gate` `enabled` flags
   and the two `whatsapp-relevance-gate` ones), the two public prompt hook settings, plus the CV payment details
   (`public-service-gate` `cvMakerPaymentDetails`) to their
   `config/openclaw.template.json` values, and appends `"*"` to
   `channels.whatsapp.allowFrom` when `dmPolicy` is `"open"` — without it every DM
-  is dropped. It writes scalar leaves only and never touches `bindings`,
-  `groupPolicy`, the `ads` account or any `PRESERVE_PATHS` entry. Set the Railway
+  is dropped. The two account-scoped gates — `accounts.default.enabled` and
+  `accounts.ads.dmPolicy` — are held in the script's own `ACCOUNT_GATES` rather
+  than read off the template, because the template seeds no WhatsApp account at
+  all: a workspace makes its own lines from the console, and the first one it
+  makes is called `default`. Each is forced only where the live config already
+  has that account, so a bot whose user has not made that line is never handed
+  one. It writes scalar leaves only and never touches `bindings`,
+  `groupPolicy`, the `ads` account's listener or any `PRESERVE_PATHS` entry. Set the Railway
   variable `REPLIES_DISABLED=1` to turn the `default` line's replies off instead of
   editing the volume; it does not touch the `ads` account, which has no tracked
   off-switch here (editing the template does not reach the live config on Railway —
@@ -361,8 +367,8 @@ account are deferred. Other accounts continue. Deferred work is not queued for a
 catch-up burst. Record seven days of authenticated operation, including nightly
 sleep/wake results and any separately captured phone restriction notice.
 
-For the next round, ads runs **group broadcasts only**. The template and boot
-reply-gate synchronizer enforce `channels.whatsapp.accounts.ads.dmPolicy="disabled"`
+For the next round, ads runs **group broadcasts only**. The boot reply-gate
+synchronizer enforces `channels.whatsapp.accounts.ads.dmPolicy="disabled"`
 without disabling its listener. Native DM admission blocks automated replies,
 typing, service actions and enquiry-triggered alerts, including administrator
 and sibling-line DMs. Default customer replies remain open. Keep enquiry links

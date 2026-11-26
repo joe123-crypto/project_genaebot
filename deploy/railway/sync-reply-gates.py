@@ -12,6 +12,15 @@ This sets reply policy gates to their template values on every boot. Default
 account enablement is seeded only when absent; an operator pause survives boot.
 The ads account's DM policy is disabled for the broadcast-only trial; its
 listener remains enabled so scheduled group advertising can continue.
+
+Those last two name one WhatsApp account each, and the template ships no
+accounts any more: a workspace makes its own lines from the console, and the
+first one it makes is called "default". Their wanted values are therefore held
+HERE, in ACCOUNT_GATES, rather than read off the template -- still tracked in
+the repo rather than living only on a volume, which is the whole point of this
+script -- and each is forced only where that account already exists in the live
+config. The install that has them keeps exactly the enforcement it had; a bot
+whose user has not made that line yet is never handed one.
 The two reply-timing settings (typing mode, WhatsApp inbound debounce) ride along
 for the same reason: nothing else carries a template change to the live config.
 Only scalar leaves are written -- no object or array is ever replaced -- so the
@@ -48,8 +57,6 @@ DEFAULT_APPLIER = Path(__file__).resolve().parent.parent / "patch-openclaw-confi
 GATED_PATHS: list[list[str]] = [
     ["channels", "whatsapp", "enabled"],
     ["channels", "whatsapp", "dmPolicy"],
-    ["channels", "whatsapp", "accounts", "ads", "dmPolicy"],
-    ["channels", "whatsapp", "accounts", "default", "enabled"],
     ["plugins", "entries", "whatsapp", "enabled"],
     ["plugins", "entries", "public-service-gate", "enabled"],
     ["plugins", "entries", "public-service-gate", "config", "enabled"],
@@ -67,6 +74,18 @@ GATED_PATHS: list[list[str]] = [
     ["agents", "defaults", "typingMode"],
     ["messages", "inbound", "byChannel", "whatsapp"],
 ]
+
+# Gates that belong to ONE WhatsApp account, with the value each is forced to.
+# Kept apart from GATED_PATHS, and carrying their own values, because the
+# template no longer ships any accounts: reading these off it would make
+# check_invariants() call them absent and leave the whole file unenforced (the
+# script is never fatal, so that failure would be silent). Each is forced only
+# where the live config already has that account -- see account_gates().
+ACCOUNT_GATES: list[tuple[list[str], object]] = [
+    (["channels", "whatsapp", "accounts", "ads", "dmPolicy"], "disabled"),
+    (["channels", "whatsapp", "accounts", "default", "enabled"], True),
+]
+ACCOUNT_GATED_PATHS: list[list[str]] = [path for path, _ in ACCOUNT_GATES]
 
 # Paths this script must never write, each for a reason a later edit could forget.
 NEVER_WRITE: frozenset[str] = frozenset(
@@ -124,7 +143,7 @@ def render(found: bool, value) -> str:
 
 
 def check_invariants(template: dict, preserve_paths: list[list[str]], get_path) -> None:
-    for path in GATED_PATHS:
+    for path in GATED_PATHS + ACCOUNT_GATED_PATHS:
         name = dotted(path)
         for blocked in NEVER_WRITE:
             parts = blocked.split(".")
@@ -133,6 +152,8 @@ def check_invariants(template: dict, preserve_paths: list[list[str]], get_path) 
         for preserve in preserve_paths:
             if covers(preserve, path) or covers(path, preserve):
                 raise ValueError(f"{name} overlaps the PRESERVE_PATHS entry {dotted(preserve)}")
+        if path in ACCOUNT_GATED_PATHS:
+            continue  # its value is held here, not read off the template
         found, value = get_path(template, path)
         if not found:
             raise ValueError(f"{name} is absent from the template")
@@ -140,10 +161,18 @@ def check_invariants(template: dict, preserve_paths: list[list[str]], get_path) 
             raise ValueError(f"{name} is not a scalar in the template; this writes leaves only")
 
 
+def account_gates(live: dict, get_path) -> list[tuple[list[str], object]]:
+    """The account-scoped gates that apply to THIS config: the ones whose account
+    the live config already has. Writing one for an account that is not there
+    would CREATE the account, which is how a workspace would get back the line it
+    never asked for."""
+    return [(path, want) for path, want in ACCOUNT_GATES if get_path(live, path[:-1])[0]]
+
+
 def plan_changes(live: dict, template: dict, get_path) -> list[tuple[list[str], bool, object, object]]:
     changes = []
-    for path in GATED_PATHS:
-        _, want = get_path(template, path)
+    wanted = [(path, get_path(template, path)[1]) for path in GATED_PATHS]
+    for path, want in wanted + account_gates(live, get_path):
         found, have = get_path(live, path)
         if path == DEFAULT_ACCOUNT_ENABLED and found and isinstance(have, bool):
             continue
@@ -241,8 +270,13 @@ def sync(
             note = f"{dotted(path)} {render(found, have)} -> {json.dumps(want)}"
             changed.append(note)
             lines.append("reply gates: " + note)
+        exists, _ = get_path(live, DEFAULT_ACCOUNT_ENABLED[:-1])
         found, have = get_path(live, DEFAULT_ACCOUNT_ENABLED)
-        if found and have is False:
+        if not exists:
+            # No default account to silence: this bot's user has not made that
+            # line yet, and writing the flag would create it.
+            lines.append(f"reply gates: {ENV_KILL_SWITCH} set; no default account to disable")
+        elif found and have is False:
             lines.append(f"reply gates: {ENV_KILL_SWITCH} set; replies already off")
         else:
             set_path(live, DEFAULT_ACCOUNT_ENABLED, False)
@@ -263,7 +297,8 @@ def sync(
             lines.append(f"reply gates: {appended}")
 
     if not changed:
-        lines.append(f"reply gates unchanged ({len(GATED_PATHS)} paths already match the template)")
+        applied = len(GATED_PATHS) + len(account_gates(live, get_path))
+        lines.append(f"reply gates unchanged ({applied} paths already match the template)")
         return "unchanged", lines
     if dry_run:
         lines.append("reply gates: DRY RUN, nothing written")

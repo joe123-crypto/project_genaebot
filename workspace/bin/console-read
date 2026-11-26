@@ -539,6 +539,9 @@ def write_capabilities():
         "campaignDeletion": __import__("campaign_deletion").capability(),
         "scheduleEditing": {"edit": os.path.isfile(str(Path(__file__).with_name("console-schedule"))),
                             "entries": os.path.isfile(str(Path(__file__).with_name("run-schedule-entry")))},
+        # A line is made when its WhatsApp account is linked, not typed into a
+        # form, so this says only that the writer will create the document.
+        "lineCreation": {"create": True},
         "campaignCreation": {"create": True,
                              "images": ad_assets.display_origin()[0] is not None and prefix is not None,
                              "scheduling": True,
