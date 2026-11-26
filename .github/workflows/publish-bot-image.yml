@@ -1,0 +1,71 @@
+name: Publish the bot image
+run-name: Bot image ${{ github.sha }}
+
+# The console creates a workspace's bot from a published image, by exact tag
+# (genaiebot-console's BOT_IMAGE, docs/provision-bot.md). Production itself is
+# released with `railway up` from uploaded source, so nothing else in this
+# repository ever produces a registry image.
+#
+# This workflow makes NO Railway call. It builds and pushes, and that is all:
+# the running gateway and every bot already provisioned keep serving while it
+# runs. Only deploy-main.yml deploys, and only on a push to main.
+#
+# On `main` the image is published for every release, so a newly created bot
+# can be given current code; which tag new bots actually get is the console's
+# BOT_IMAGE, rolled forward deliberately. The branch trigger is what let the
+# first image exist before any of this reached main.
+
+on:
+  push:
+    branches:
+      - main
+      - publish-bot-image
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-bot-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    name: Build and push the gateway image
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out the commit to publish
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Build and push to the container registry
+        shell: bash
+        env:
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/genaebot"
+          printf '%s' "$REGISTRY_PASSWORD" |
+            docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          # The same build the compatibility job exercises, with the commit
+          # baked in: the entrypoint reports it, so a bot never misreports which
+          # code it is running.
+          docker build \
+            --build-arg SOURCE_COMMIT="$GITHUB_SHA" \
+            -f deploy/railway/Dockerfile \
+            -t "$image:$GITHUB_SHA" \
+            .
+          docker push "$image:$GITHUB_SHA"
+          if [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            docker tag "$image:$GITHUB_SHA" "$image:main"
+            docker push "$image:main"
+          fi
+          # The console needs the exact tag, so say it where a human can copy it.
+          {
+            echo "### Bot image published"
+            echo
+            echo '```'
+            echo "BOT_IMAGE=$image:$GITHUB_SHA"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

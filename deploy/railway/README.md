@@ -150,6 +150,28 @@ Group membership and the per-group ad caps are NOT cron state either: they are
 the `groups/<jid>` documents and `settings/defaults` in Firestore, so turning
 the caps on (`caps_enabled`) is a console edit, not a deploy.
 
+## The published bot image
+
+Production is released with `railway up` from uploaded source, so nothing in that path
+ever produces a registry image. A bot the Genaie console creates for a workspace is
+different: the console gives a new Railway service an image **by exact tag**, so one has to
+exist. `.github/workflows/publish-bot-image.yml` is what makes it, building
+`deploy/railway/Dockerfile` and pushing `ghcr.io/<owner>/genaebot:<commit>` (plus
+`:main` on `main`). The commit is baked in as `SOURCE_COMMIT`, so a bot never misreports
+which code it runs, and the job summary prints the `BOT_IMAGE=` line to copy.
+
+It makes **no Railway call at all**. It only builds and pushes, so the running gateway and
+every bot already provisioned keep serving while it runs; only `deploy-main.yml` deploys.
+Publishing an image therefore never needs a quiet promo window.
+
+Which tag new bots actually get is the console's own `BOT_IMAGE` variable, rolled forward
+deliberately rather than automatically -- publishing is continuous, adopting is a decision.
+Prefer the exact commit tag over `:main` for that, so a bot's code does not change under a
+later release. Note that the console sets a service's image only once per run: a **Try
+again** on a failed run redeploys the image already pinned on that service, so moving a
+bot that was created before a fix to a newer image means updating that service's source,
+or clearing `sourceSetAt` on `workspaces/<id>.provisioning` so the run sets it again.
+
 ## One-time wiring
 
 1. Create a **project token** for `openclaw-gateway`, environment `production`,
