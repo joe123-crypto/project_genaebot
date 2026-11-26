@@ -214,6 +214,17 @@ def apply_jobs(slug, doc, call):
         # given its alert by the edit that follows, never by the add itself.
         alert_flags = ["--failure-alert", "--failure-alert-after", "1", "--failure-alert-channel", "whatsapp",
                        "--failure-alert-to", alert, "--failure-alert-cooldown", "1h"] if alert else []
+        def matches(job):
+            return (job.get("enabled") == enabled and job.get("schedule", {}).get("expr") == entry["cron"]
+                    and job.get("schedule", {}).get("tz") == entry["timezone"]
+                    and job.get("payload", {}).get("argv") == argv and job.get("payload", {}).get("timeoutSeconds") == timeout
+                    and job.get("payload", {}).get("cwd") == str(Path(argv[1]).parents[1])
+                    and (not alert or job.get("failureAlert", {}).get("to") == alert))
+        if found and matches(found[0]):
+            # The console API reconciles every campaign every five minutes.
+            # Editing a job that already matches rewrote every entry job on
+            # each pass (~20 CLI edits, about a minute holding the write lock).
+            continue
         if found:
             call(["edit", found[0]["id"]] + flags + alert_flags + (["--enable"] if enabled else ["--disable"]))
         else:
@@ -226,11 +237,7 @@ def apply_jobs(slug, doc, call):
                 call(["edit", found[0]["id"], "--enable"])
         verified = [job for job in call(["list", "--all", "--json"]).get("jobs", []) if job.get("name") == name]
         schedule.need(len(verified) == 1, "Entry job verification failed.", 503)
-        job = verified[0]
-        schedule.need(job.get("enabled") == enabled and job.get("schedule", {}).get("expr") == entry["cron"] and job.get("schedule", {}).get("tz") == entry["timezone"]
-                      and job.get("payload", {}).get("argv") == argv and job.get("payload", {}).get("timeoutSeconds") == timeout
-                      and job.get("payload", {}).get("cwd") == str(Path(argv[1]).parents[1])
-                      and (not alert or job.get("failureAlert", {}).get("to") == alert), "Entry job verification is pending.", 503)
+        schedule.need(matches(verified[0]), "Entry job verification is pending.", 503)
 
 
 def reconcile(slug, store, env=None, call=None):

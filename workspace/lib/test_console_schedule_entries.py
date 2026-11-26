@@ -96,6 +96,34 @@ class Entries(unittest.TestCase):
         entry = self.store.get("campaigns", self.slug)["scheduleEntries"]["repeat-1"]
         self.assertEqual(entry["confirmed"]["cron"], "15 12 * * *")
 
+    def test_a_pass_with_nothing_changed_edits_no_job(self):
+        entries.save(self.body(), self.store, self.env)
+        schedule.reconcile_one(self.slug, self.store, self.env, self.gateway)
+        self.assertEqual(len(self.gateway.jobs), 2)
+        before = copy.deepcopy(self.gateway.jobs)
+        self.gateway.calls.clear()
+        entries.reconcile(self.slug, self.store, self.env, self.gateway)
+        self.assertEqual([call[0] for call in self.gateway.calls if call[0] != "list"], [])
+        self.assertEqual(self.gateway.jobs, before)
+
+    def test_a_job_that_drifted_is_still_edited_back(self):
+        entries.save(self.body(), self.store, self.env)
+        schedule.reconcile_one(self.slug, self.store, self.env, self.gateway)
+        job = next(job for job in self.gateway.jobs if job["name"].startswith("console-entry"))
+        job["payload"]["timeoutSeconds"] += 60
+        job["enabled"] = False
+        legacy = next(job for job in self.gateway.jobs if job["name"] == JOB)
+        legacy["payload"]["argv"] = ["python3", str(Path(entries.__file__).resolve().parents[1] / "bin" / "run-console-campaign"), self.slug]
+        self.gateway.calls.clear()
+        entries.reconcile(self.slug, self.store, self.env, self.gateway)
+        edited = {call[1] for call in self.gateway.calls if call[0] == "edit"}
+        self.assertEqual(edited, {job["id"], legacy["id"]})
+        doc = self.store.get("campaigns", self.slug)
+        refreshed = {j["id"]: j for j in self.gateway.jobs}
+        self.assertTrue(refreshed[job["id"]]["enabled"])
+        self.assertEqual(refreshed[job["id"]]["payload"]["timeoutSeconds"], doc.get("timeoutSeconds", 7200))
+        self.assertEqual(refreshed[legacy["id"]]["payload"]["argv"][1], entries.command(self.slug, "primary")[1])
+
     def test_an_entry_may_not_be_created_or_moved_onto_the_hour(self):
         with self.assertRaisesRegex(writer.WriteRefused, "not on the hour"):
             entries.save(self.body(time="06:00"), self.store, self.env)
