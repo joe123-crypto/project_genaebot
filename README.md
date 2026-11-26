@@ -28,6 +28,13 @@ cutover is completed, the existing direct integration still deploys `main`
 without waiting for these checks. See [deployment setup](deploy/railway/README.md#one-time-wiring)
 for the credential, cutover and recovery procedure.
 
+A second workflow, `.github/workflows/publish-bot-image.yml`, builds and pushes
+`ghcr.io/<owner>/genaebot:<commit>` on every release. That image is not how this gateway
+is deployed -- it is what the Genaie console gives a workspace's own bot, which needs an
+image by exact tag. It makes no Railway call, so it neither waits for a quiet promo window
+nor disturbs anything already running. See
+[the published bot image](deploy/railway/README.md#the-published-bot-image).
+
 ## Runtime Layout
 
 The gateway runs as a single Railway service. There is no second container.
