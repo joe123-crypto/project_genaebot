@@ -60,6 +60,13 @@ Durable state lives on a Railway volume mounted at `/home/joseph/.openclaw`:
   `config/openclaw.template.json` as its first config, because nothing can seed
   a Railway volume before its first boot. The Genaie console sets that on a bot
   it creates; do not set it on this gateway.
+- A new volume also arrives owned by root, so the entrypoint takes its mount
+  point over before anything runs as `joseph`: the state tree OpenClaw makes for
+  itself (`state/`, `credentials/`, `agents/`) is created by nobody before it,
+  and without that the first boot crash-loops. The public agent's model key is
+  the one thing a first boot cannot finish -- it is written into an OpenClaw
+  database that does not exist until that agent is first used, and the entrypoint
+  will not fabricate one, so the boot after that provisions it.
 
 OpenClaw routes administrator DMs to the `main` agent and every other WhatsApp DM
 to the restricted `public` agent. There is no approval step and no service menu:
@@ -619,7 +626,8 @@ never served across trees. New pictures go under `w/<id>/ads/` unless
 `deploy/copy-workspace-data.py` moves an existing install's documents into its
 workspace and back, and `deploy/init-workspace.py` seeds a new one. A bot the
 console creates for a new workspace starts on an empty volume, so it also needs
-`GENAIE_COLD_START=1` to write its first `openclaw.json`. See
+`GENAIE_COLD_START=1` to write its first `openclaw.json`, and the entrypoint has
+to take that volume's root-owned mount point over before it can boot at all. See
 [A bot pinned to one workspace](deploy/railway/README.md#a-bot-pinned-to-one-workspace)
 and [Volume seeding & recovery](deploy/railway/README.md#volume-seeding--recovery).
 
