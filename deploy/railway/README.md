@@ -318,6 +318,27 @@ mis-mounted volume, and losing that turns a mounting mistake into a silent fresh
 top of state the bot could not see. Leaving it set after the first boot is harmless (the
 config exists, so the branch is never taken), but clearing it restores the guard.
 
+A new volume also arrives **owned by root**, and that is a separate problem from the config:
+the entrypoint runs as root but the gateway and every setup step that matters run as
+`joseph`, and the state tree OpenClaw makes for itself (`state/`, `credentials/`,
+`identity/`, `agents/`) is created by nobody before it. So step 3 hands the mount point
+itself to `joseph` before anything runs under that account. Without it the first boot
+crash-loops on a `PermissionError`, which is how the first bot the console provisioned
+failed (2026-11-26): the config template had installed fine and the boot still never
+reached the gateway. The chown is not recursive, deliberately -- the tree below it is
+covered path by path, and a whole-volume sweep on every boot is not affordable.
+
+One thing a cold-started bot does **not** get on its first boot: the public agent's
+OpenRouter profile. That is written into the public agent's own OpenClaw database, and on a
+fresh volume no such database exists yet -- OpenClaw creates it when that agent is first
+used. The entrypoint will not create it in OpenClaw's place: a database holding nothing but
+`auth_profile_store` is one OpenClaw refuses to open at all (`user_version` 0 plus an
+application table reads as a schema awaiting migration, so the agent reports "Sessions
+remain unavailable" permanently), which is strictly worse than a missing key. So the step
+logs that it deferred, and the first boot after the agent's database exists provisions the
+key. Watch for `public agent model authentication deferred` in the log of a newly created
+bot; it is expected there and nowhere else.
+
 ## WhatsApp stability and account recovery
 
 The checked-in Railway deploy configuration sets `overlapSeconds: 0` and
