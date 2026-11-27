@@ -248,6 +248,58 @@ class PutObjectTest(unittest.TestCase):
 LIST_NS = 'xmlns="http://s3.amazonaws.com/doc/2006-03-01/"'
 
 
+class GetAndDeleteObjectTest(unittest.TestCase):
+    KEY = "workspaces/wk-alpha1/campaigns/cv/%s.png" % ("3" * 64)
+
+    def opener(self, status=200, body=b"bytes", error=None):
+        self.seen = {}
+
+        class Response:
+            def __init__(self):
+                self.status = status
+
+            def read(self):
+                return body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        def open_(request, timeout=None):
+            self.seen["url"], self.seen["method"] = request.full_url, request.method
+            self.seen["headers"] = dict((k.lower(), v) for k, v in request.headers.items())
+            if error:
+                import io
+                import urllib.error
+                raise urllib.error.HTTPError(request.full_url, error, "x", {}, io.BytesIO(b""))
+            return Response()
+
+        return open_
+
+    def test_get_object_is_a_signed_get_of_the_one_key(self):
+        body = r2_sigv4.get_object("https://acc.r2.cloudflarestorage.com", "genaie-ads", self.KEY,
+                                   access_key="k", secret_key="s", opener=self.opener())
+        self.assertEqual(body, b"bytes")
+        self.assertEqual(self.seen["method"], "GET")
+        self.assertTrue(self.seen["url"].endswith("/genaie-ads/" + self.KEY))
+        self.assertTrue(self.seen["headers"]["authorization"].startswith("AWS4-HMAC-SHA256 "))
+
+    def test_delete_object_deletes_the_one_key_and_treats_absent_as_done(self):
+        r2_sigv4.delete_object("https://acc.r2.cloudflarestorage.com", "genaie-ads", self.KEY,
+                               access_key="k", secret_key="s", opener=self.opener(status=204))
+        self.assertEqual(self.seen["method"], "DELETE")
+        self.assertTrue(self.seen["url"].endswith("/genaie-ads/" + self.KEY))
+        r2_sigv4.delete_object("https://acc.r2.cloudflarestorage.com", "genaie-ads", self.KEY,
+                               access_key="k", secret_key="s", opener=self.opener(error=404))
+
+    def test_a_refused_delete_raises(self):
+        with self.assertRaisesRegex(r2_sigv4.R2Error, "403"):
+            r2_sigv4.delete_object("https://acc.r2.cloudflarestorage.com", "genaie-ads", self.KEY,
+                                   access_key="k", secret_key="s", opener=self.opener(error=403))
+
+
 def listing(contents, *, truncated=False, token=None):
     """A ListObjectsV2 reply, in the shape and namespace R2 answers with."""
     items = "".join(

@@ -54,7 +54,7 @@ def campaign(slug, time, *, weekdays=None, timezone="Africa/Harare"):
                      "weekdays": list(range(7)) if weekdays is None else list(weekdays)},
         "timeoutSeconds": 7200, "failureAlertTo": "+26370000001",
         "images": [{"filename": "%s-1.jpg" % slug,
-                    "key": "ads/%s/%s.jpg" % (slug, "1" * 64),
+                    "key": "workspaces/wk-alpha1/campaigns/%s/%s.jpg" % (slug, "1" * 64),
                     "sha256": "1" * 64, "bytes": 101, "contentType": "image/jpeg"}],
         "scheduleStatus": "ready",
     }

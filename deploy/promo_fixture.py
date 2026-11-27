@@ -75,7 +75,7 @@ def campaign(name, time, *, enabled=True, captions=None, prefix="XX",
            "schedule": schedule(time, weekdays=weekdays),
            "timeoutSeconds": timeout, "failureAlertTo": LINES["default"],
            "images": [{"filename": "%s-%d.jpg" % (name, n + 1),
-                       "key": "ads/%s/%s.jpg" % (name, "%064x" % (n + 1)),
+                       "key": "workspaces/wk-alpha1/campaigns/%s/%s.jpg" % (name, "%064x" % (n + 1)),
                        "sha256": "%064x" % (n + 1), "bytes": 100 + n,
                        "contentType": "image/jpeg"} for n in range(images)],
            "scheduleStatus": status}

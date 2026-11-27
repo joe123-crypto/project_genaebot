@@ -1276,7 +1276,7 @@ object must come back `404`, not a redirect or a sign-in page:
 
 ```sh
 curl -sS -o /dev/null -w '%{http_code}\n' \
-  https://pub-63be390258b5461e931301ca810b7a86.r2.dev/ads/cv/does-not-exist.png
+  https://pub-63be390258b5461e931301ca810b7a86.r2.dev/workspaces/does-not-exist.png
 ```
 
 `GENAIE_AD_ASSETS_BASE_URL` is not in the entrypoint's `SECRET_KEYS`, and does
@@ -1342,17 +1342,17 @@ machine signs anything, and the gateway only ever makes unauthenticated GETs.
 ### A bot pinned to one workspace
 
 The Genaie console is per user. Each user's data is a **workspace**, and each
-workspace has its own bot deployment. Two variables pin a deployment to its
+workspace has its own bot deployment. One variable pins a deployment to its
 workspace:
 
 | Variable | Unset | Set |
 |---|---|---|
-| `GENAIE_WORKSPACE_ID` | Root collections (`groups/…`), as before | Every document under `workspaces/<id>/…` |
-| `GENAIE_ASSET_KEY_PREFIX` | `ads/`, or `w/<id>/ads/` when a workspace is set | `ads/` or `w/<id>/ads/` only |
+| `GENAIE_WORKSPACE_ID` | Root collections (`groups/…`), and no new pictures | Every document under `workspaces/<id>/…`, every new picture under `workspaces/<id>/campaigns/` in R2 |
 
-Both are in the entrypoint's `SECRET_KEYS`. That isn't because they are secret.
-It is so they are sanitised and exported the same way for the console API and
-every cron run: a send must never read one workspace while the console edits
+`GENAIE_ASSET_KEY_PREFIX` is no longer read; delete it from any service that
+still has it. The workspace id is in the entrypoint's `SECRET_KEYS`. That isn't
+because it is secret. It is so it is sanitised and exported the same way for the
+console API and every cron run: a send must never read one workspace while the console edits
 another. A malformed `GENAIE_WORKSPACE_ID` fails closed. It is refused, and the
 root is never read in its place.
 
@@ -1376,15 +1376,26 @@ Then, in a window after the day's last run has **ended**:
 
 1. Freeze console edits.
 2. Run `--write` and `--verify` once more.
-3. Set the variables. `GENAIE_ASSET_KEY_PREFIX=ads/` keeps the existing
-   pictures where they are.
+3. Set the variable.
 4. Redeploy.
 
 ```sh
-railway variable set GENAIE_WORKSPACE_ID=<id> GENAIE_ASSET_KEY_PREFIX=ads/ --skip-deploys && railway redeploy --yes
+railway variable set GENAIE_WORKSPACE_ID=<id> --skip-deploys && railway redeploy --yes
 ```
 
-To roll back, delete both variables and redeploy. If edits were made after the
+The copied index still names the old `ads/` keys, which the bot still reads.
+Then move the pictures into the workspace's own prefix:
+
+```sh
+GENAIE_WORKSPACE_ID=<id> deploy/move-pictures-to-workspace-layout.py --key ~/.config/genaie/seed-key.json           # the plan
+GENAIE_WORKSPACE_ID=<id> deploy/move-pictures-to-workspace-layout.py --key ~/.config/genaie/seed-key.json --write
+GENAIE_WORKSPACE_ID=<id> deploy/move-pictures-to-workspace-layout.py --key ~/.config/genaie/seed-key.json --verify  # must say clean
+# after the 48-hour snapshot has rolled over, and a promo run has sent:
+GENAIE_WORKSPACE_ID=<id> deploy/move-pictures-to-workspace-layout.py --key ~/.config/genaie/seed-key.json --delete-old        # lists
+GENAIE_WORKSPACE_ID=<id> deploy/move-pictures-to-workspace-layout.py --key ~/.config/genaie/seed-key.json --delete-old --yes
+```
+
+To roll back, delete the variable and redeploy. If edits were made after the
 cutover, first copy them back with `--from workspace:<id> --to root --write`.
 Once the workspace has run cleanly for a week, `--delete-source --confirm <id>`
 removes the root copy. It refuses while any root document has no copy in the

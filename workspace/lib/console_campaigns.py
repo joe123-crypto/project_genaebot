@@ -70,7 +70,7 @@ def state_directory(slug, campaign=None):
     return Path(config.state_dir()) / "runtime" / "cron-state" / name
 
 
-def validate_definition(slug, data):
+def validate_definition(slug, data, env=None):
     """The rules for a campaign's own fields, whoever is saving them: the
     console's create request, or the one-off conversion of a repository
     campaign (``deploy/migrate-campaigns-to-firestore.py``)."""
@@ -101,7 +101,7 @@ def validate_definition(slug, data):
         except (ValueError, TypeError):
             raise writer.WriteRefused("invalid JPEG/PNG picture metadata (maximum 6 MiB)")
         try:
-            prefix = ad_assets.key_prefix()
+            prefix = ad_assets.key_prefix(env)
         except ad_assets.AssetsUnavailable as ex:
             raise writer.WriteRefused(str(ex))
         need(image["key"].startswith("%s%s/" % (prefix, slug)), "picture belongs to a different campaign")
@@ -131,7 +131,7 @@ def validate_tracking(tracking):
             need(re.fullmatch(r"\+[1-9][0-9]{6,14}", tracking["number"]), "use an international contact number")
 
 
-def validate(data):
+def validate(data, env=None):
     need(isinstance(data, dict), "campaign must be an object")
     allowed = {"requestId", "slug", "name", "enabled", "captions", "images", "schedule", "groups",
                "tracking", "trackClicks", "comment", "weeklyComment", "timeoutSeconds", "failureAlertTo", "actor"}
@@ -139,7 +139,7 @@ def validate(data):
     need(len(json.dumps(data).encode()) <= MAX_REQUEST, "campaign configuration exceeds 60 KiB")
     need(isinstance(data.get("requestId"), str) and re.fullmatch(r"[a-f0-9-]{36}", data["requestId"]), "invalid request ID")
     need(isinstance(data.get("slug"), str) and SLUG.fullmatch(data["slug"]) and data["slug"] != "new", "invalid or reserved campaign ID")
-    validate_definition(data["slug"], data)
+    validate_definition(data["slug"], data, env)
     schedule = data["schedule"]
     groups = data.get("groups")
     # No upper bound: a campaign's run is given as long as its groups need (see
@@ -283,7 +283,7 @@ def payload_digest(data):
 def create(data, store, env=None, verify=verify_image, reconcile=None):
     env = os.environ if env is None else env
     need(ad_assets.base_url(env) is not None, "campaign creation requires R2 assets")
-    validate(data)
+    validate(data, env)
     slug = data["slug"]
     digest = payload_digest(data)
     # Check before downloading again on retry, then recheck within transaction.

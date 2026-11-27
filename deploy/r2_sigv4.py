@@ -191,6 +191,40 @@ def _get(url, *, region, access_key, secret_key, opener, now):
         raise R2Error("%s unreachable: %s" % (url, getattr(ex, "reason", ex)))
 
 
+def get_object(endpoint, bucket, key, *, access_key, secret_key,
+               region=DEFAULT_REGION, opener=None, now=None):
+    """The bytes at ``key``, over the signed S3 API rather than the public URL,
+    so a copy reads exactly what the bucket holds. Raises :class:`R2Error`."""
+    return _get(object_url(endpoint, bucket, key), region=region, access_key=access_key,
+                secret_key=secret_key, opener=opener or urllib.request.urlopen, now=now)
+
+
+def delete_object(endpoint, bucket, key, *, access_key, secret_key,
+                  region=DEFAULT_REGION, opener=None, now=None):
+    """DELETE the one object at ``key``; an absent one is already deleted.
+    Never a prefix: S3 has no such call, and this adds none."""
+    opener = opener or urllib.request.urlopen
+    url = object_url(endpoint, bucket, key)
+    digest = _sha256(b"")
+    headers = signed_headers(
+        method="DELETE", url=url, region=region, access_key=access_key,
+        secret_key=secret_key, payload_sha256=digest, now=now,
+        headers={"host": urllib.parse.urlsplit(url).netloc,
+                 "x-amz-content-sha256": digest})
+    request = urllib.request.Request(url, headers=headers, method="DELETE")
+    try:
+        with opener(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
+            if response.status not in (200, 204):
+                raise R2Error("%s answered HTTP %d" % (bucket, response.status))
+    except urllib.error.HTTPError as ex:
+        status = ex.code
+        ex.close()
+        if status != 404:
+            raise R2Error("%s refused the delete of %s: HTTP %d" % (bucket, key, status))
+    except (urllib.error.URLError, TimeoutError, OSError) as ex:
+        raise R2Error("%s unreachable: %s" % (bucket, getattr(ex, "reason", ex)))
+
+
 def _text(element, name):
     found = element.find(S3_NS + name)
     return found.text if found is not None and found.text is not None else ""

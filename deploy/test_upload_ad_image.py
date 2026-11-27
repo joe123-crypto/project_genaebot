@@ -21,6 +21,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,12 +45,18 @@ TOOL = upload_module()
 PNG = b"\x89PNG\r\n\x1a\n" + b"first"
 PNG2 = b"\x89PNG\r\n\x1a\n" + b"second"
 PNG3 = b"\x89PNG\r\n\x1a\n" + b"third"
+# Pictures live under the workspace, so the script always runs pinned to one.
+WID = "wk-alpha1"
+PREFIX = "workspaces/%s/campaigns/" % WID
 
 
 class Harness(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.dir, True)
+        pinned = mock.patch.dict(os.environ, {"GENAIE_WORKSPACE_ID": WID})
+        pinned.start()
+        self.addCleanup(pinned.stop)
 
     def image(self, name, body):
         path = os.path.join(self.dir, name)
@@ -191,7 +198,7 @@ class DescribeTest(Harness):
         self.assertEqual(body, PNG)
         self.assertEqual(ad_assets._entry(entry["id"], entry)["filename"],
                          "cv-ad.png")
-        self.assertEqual(entry["key"], "ads/cv/%s.png" % entry["sha256"])
+        self.assertEqual(entry["key"], PREFIX + "cv/%s.png" % entry["sha256"])
 
     def test_a_file_that_is_not_a_jpeg_or_png_is_refused(self):
         with self.assertRaisesRegex(TOOL.UploadError, "not a JPEG or a PNG"):
@@ -215,7 +222,7 @@ class RotationTests(unittest.TestCase):
     def entry(self, index, filename, enabled=True):
         digest = "%064x" % index
         return {"id": "cv-%d" % index, "campaign": "cv", "filename": filename,
-                "key": "ads/cv/%s.png" % digest, "sha256": digest, "bytes": 10 + index,
+                "key": PREFIX + "cv/%s.png" % digest, "sha256": digest, "bytes": 10 + index,
                 "content_type": "image/png", "rank": index * 10, "enabled": enabled,
                 "comment": None}
 
@@ -236,6 +243,11 @@ class RotationTests(unittest.TestCase):
 
 
 class BucketParityTests(unittest.TestCase):
+    def setUp(self):
+        pinned = mock.patch.dict(os.environ, {"GENAIE_WORKSPACE_ID": WID})
+        pinned.start()
+        self.addCleanup(pinned.stop)
+
     """What ``--verify`` compares now.
 
     It used to diff the index against deploy/ad-assets.json, a committed mirror
@@ -249,7 +261,7 @@ class BucketParityTests(unittest.TestCase):
     def entry(self, index, filename, size=None):
         digest = "%064x" % index
         return {"id": "cv-%d" % index, "campaign": "cv", "filename": filename,
-                "key": "ads/cv/%s.png" % digest, "sha256": digest,
+                "key": PREFIX + "cv/%s.png" % digest, "sha256": digest,
                 "bytes": size if size is not None else 10 + index,
                 "content_type": "image/png", "rank": index * 10, "enabled": True,
                 "comment": None}
@@ -277,19 +289,19 @@ class BucketParityTests(unittest.TestCase):
     def test_an_object_nothing_names_is_spare_rather_than_drift(self):
         entry = self.entry(1, "one.png")
         missing, orphans = TOOL.bucket_diff(
-            {"cv": [entry]}, {entry["key"]: entry["bytes"], "ads/cv/old.png": 7})
+            {"cv": [entry]}, {entry["key"]: entry["bytes"], PREFIX + "cv/old.png": 7})
         # Expected for a while after a picture is replaced, so it must not fail
         # the gate on its own -- only waste space until cleanup catches up.
         self.assertEqual(missing, [])
         self.assertEqual(len(orphans), 1)
-        self.assertIn("ads/cv/old.png", orphans[0])
+        self.assertIn(PREFIX + "cv/old.png", orphans[0])
 
     def test_only_ad_objects_are_listed(self):
         seen = {}
         def fake(endpoint, bucket, *, access_key, secret_key, prefix=None,
                  opener=None):
             seen["prefix"] = prefix
-            return [{"key": "ads/cv/a.png", "bytes": 5, "etag": "x",
+            return [{"key": PREFIX + "cv/a.png", "bytes": 5, "etag": "x",
                      "modified": None}]
         saved = TOOL.r2_sigv4.list_objects
         TOOL.r2_sigv4.list_objects = fake
@@ -298,9 +310,14 @@ class BucketParityTests(unittest.TestCase):
                                     access_key="a", secret_key="b")
         finally:
             TOOL.r2_sigv4.list_objects = saved
-        # Without a workspace the prefix is the single-operator install's.
-        self.assertEqual(seen["prefix"], "ads/")
-        self.assertEqual(keys, {"ads/cv/a.png": 5})
+        self.assertEqual(seen["prefix"], PREFIX)
+        self.assertEqual(keys, {PREFIX + "cv/a.png": 5})
+
+    def test_without_a_workspace_nothing_is_listed_or_written(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("GENAIE_WORKSPACE_ID", None)
+            with self.assertRaises(ad_assets.AssetsUnavailable):
+                TOOL.bucket_keys("https://r2.example", "pictures", access_key="a", secret_key="b")
 
     def test_a_workspace_lists_and_writes_only_under_its_own_prefix(self):
         seen = {}
@@ -311,7 +328,7 @@ class BucketParityTests(unittest.TestCase):
         saved = TOOL.r2_sigv4.list_objects
         TOOL.r2_sigv4.list_objects = fake
         saved_env = os.environ.get("GENAIE_WORKSPACE_ID")
-        os.environ["GENAIE_WORKSPACE_ID"] = "wk-alpha1"
+        os.environ["GENAIE_WORKSPACE_ID"] = "wk-bravo1"
         try:
             TOOL.bucket_keys("https://r2.example", "pictures", access_key="a", secret_key="b")
         finally:
@@ -320,7 +337,7 @@ class BucketParityTests(unittest.TestCase):
                 os.environ.pop("GENAIE_WORKSPACE_ID", None)
             else:
                 os.environ["GENAIE_WORKSPACE_ID"] = saved_env
-        self.assertEqual(seen["prefix"], "w/wk-alpha1/ads/")
+        self.assertEqual(seen["prefix"], "workspaces/wk-bravo1/campaigns/")
 
 
 if __name__ == "__main__":

@@ -22,7 +22,10 @@ import operator_writer as writer
 import promo_broadcast
 from test_operator_config import seed_store, JID_A, JID_B, JID_C
 
-ENV = {"GENAIE_CONFIG_SOURCE": "firestore", "GENAIE_AD_ASSETS_SOURCE": "r2", "GENAIE_AD_ASSETS_BASE_URL": "https://assets.example.test"}
+# Pictures live under the workspace, so every test runs pinned to one.
+WID = "wk-alpha1"
+PREFIX = "workspaces/%s/campaigns/" % WID
+ENV = {"GENAIE_WORKSPACE_ID": WID, "GENAIE_CONFIG_SOURCE": "firestore", "GENAIE_AD_ASSETS_SOURCE": "r2", "GENAIE_AD_ASSETS_BASE_URL": "https://assets.example.test"}
 BODY = b"\x89PNG\r\n\x1a\nexample-image"
 SHA = hashlib.sha256(BODY).hexdigest()
 
@@ -31,7 +34,7 @@ def payload():
     return {"requestId": "12345678-1234-1234-1234-123456789abc", "slug": "demo", "name": "Demo Campaign", "enabled": False,
             "captions": ["Hello {bot_number}"], "schedule": {"time": "09:05", "timezone": "Africa/Harare", "weekdays": list(range(7))},
             "groups": [{"jid": JID_A}, {"jid": JID_B}],
-            "images": [{"filename": "one.png", "key": "ads/demo/%s.png" % SHA, "sha256": SHA, "bytes": len(BODY), "contentType": "image/png"}]}
+            "images": [{"filename": "one.png", "key": PREFIX + "demo/%s.png" % SHA, "sha256": SHA, "bytes": len(BODY), "contentType": "image/png"}]}
 
 
 class MemoryStore:
@@ -293,7 +296,7 @@ class Creation(unittest.TestCase):
         # assignment sends nothing, so it does not lengthen the run.
         self.data = dict(payload(), slug="wide", requestId="22345678-1234-1234-1234-123456789abc",
                          groups=[{"jid": jid} for jid in self.big(103)] + [{"jid": JID_A, "paused": True}])
-        self.data["images"] = [dict(self.data["images"][0], key="ads/wide/%s.png" % SHA)]
+        self.data["images"] = [dict(self.data["images"][0], key=PREFIX + "wide/%s.png" % SHA)]
         self.create()
         self.assertEqual(self.store.get("campaigns", "wide")["timeoutSeconds"], 9300)
     def test_converted_campaign_keeps_its_job_and_state_under_its_old_name(self):
@@ -389,7 +392,7 @@ class Creation(unittest.TestCase):
     def test_real_engine_rotates_one_picture_and_never_resends_same_day(self):
         self.data["enabled"] = True
         self.data["captions"] = ["Offer A {bot_number}", "Offer B {bot_number}"]
-        second = dict(self.data["images"][0], filename="two.png", sha256="b" * 64, key="ads/demo/%s.png" % ("b" * 64))
+        second = dict(self.data["images"][0], filename="two.png", sha256="b" * 64, key=PREFIX + "demo/%s.png" % ("b" * 64))
         self.data["images"].append(second)
         self.create()
         self.store.docs["campaigns"]["demo"].update(config.encode_fields({"scheduleStatus": "ready"}))
@@ -480,13 +483,13 @@ class Creation(unittest.TestCase):
                 self.store = MemoryStore()
                 self.data = payload()
                 self.data.update(slug="summer-promo", enabled=True, groups=[{"jid": JID_A}])
-                self.data["images"][0]["key"] = "ads/summer-promo/%s.png" % SHA
+                self.data["images"][0]["key"] = PREFIX + "summer-promo/%s.png" % SHA
                 self.create()
                 self.store.docs["campaigns"]["summer-promo"].update(config.encode_fields({"scheduleStatus": "ready"}))
                 if other_enabled is not None:
                     self.data.update(slug="summer", enabled=other_enabled, groups=[{"jid": JID_B}],
                                      requestId="abcdefab-1234-1234-1234-123456789abc")
-                    self.data["images"][0]["key"] = "ads/summer/%s.png" % SHA
+                    self.data["images"][0]["key"] = PREFIX + "summer/%s.png" % SHA
                     self.create()
                     self.store.docs["campaigns"]["summer"].update(config.encode_fields({"scheduleStatus": "ready"}))
                 membership, enabled, _ = config.assemble({name: self.store.list(name) for name in config.COLLECTIONS})

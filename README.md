@@ -635,9 +635,10 @@ with its own bot deployment. With `GENAIE_WORKSPACE_ID` set, every collection
 above sits under `workspaces/<id>/` instead of at the root. That includes the
 picture index, the audit trail and the receipts. The bot then reads, writes and
 caches nothing else. Snapshots and display caches record their tree, and are
-never served across trees. New pictures go under `w/<id>/ads/` unless
-`GENAIE_ASSET_KEY_PREFIX` says otherwise. The console checks both through
-`capabilities` (`writes.workspace`, `writes.campaignCreation.keyPrefix`).
+never served across trees. Pictures in R2 mirror the same tree, under
+`workspaces/<id>/campaigns/<slug>/`, so one workspace is one prefix in both
+stores; a bot with no workspace cannot add pictures. The console checks both
+through `capabilities` (`writes.workspace`, `writes.campaignCreation.keyPrefix`).
 `deploy/copy-workspace-data.py` moves an existing install's documents into its
 workspace and back, and `deploy/init-workspace.py` seeds a new one. A bot the
 console creates for a new workspace starts on an empty volume, so it also needs
@@ -708,10 +709,23 @@ include `<state>/runtime`, and `media/` is outside the `workspace/` tree the
 entrypoint wipes on every boot. So the cache survives deploys, and it is cold
 only once.
 
-Object keys are content-addressed -- `ads/<slug>/<sha256>.<ext>` -- so an object
+Object keys are content-addressed --
+`workspaces/<workspace>/campaigns/<slug>/<sha256>.<ext>` -- so an object
 is immutable, no edge cache can serve stale bytes, and a cached file's name
 proves its contents. The digest is re-checked on every run; a few milliseconds
 against broadcasting a corrupt image to thirty groups.
+
+**Older keys.** Pictures used to sit under `ads/<slug>/` (the install that
+predates workspaces) and `w/<id>/ads/<slug>/` (the first workspace bots). That
+`ads` was only ever a folder name, not the WhatsApp line called `ads`. Both
+shapes are still read, never written, until
+`deploy/move-pictures-to-workspace-layout.py` has moved a workspace's pictures:
+it copies each object, repoints `assets/*.key` and `campaigns/*.images` in one
+audited transaction, and with `--delete-old --yes` deletes an old object only
+once its copy holds the same bytes and nothing names it. The bot's cache is
+keyed by slug, digest and filename, never by the object key, so a move costs no
+refetch. `GENAIE_ASSET_KEY_PREFIX`, which pinned the oldest install to `ads/`,
+is no longer read.
 
 Failure falls back to the cache, not closed, because the cache only engages when
 the targeting is good and R2 is not -- and posting a valid cached ad beats
@@ -1303,7 +1317,7 @@ where their bytes are**, so the console can show them rather than name them:
  "campaigns": [{"slug": "borehole-drilling",
                 "images": ["borehole-1.jpg", "..."],
                 "assets": [{"filename": "borehole-1.jpg",
-                            "url": "https://pub-....r2.dev/ads/borehole-drilling/8afa....jpg",
+                            "url": "https://pub-....r2.dev/workspaces/wz_…/campaigns/borehole-drilling/8afa....jpg",
                             "sha256": "8afa...", "bytes": 243016,
                             "contentType": "image/jpeg", "rank": 10}]}]}
 ```

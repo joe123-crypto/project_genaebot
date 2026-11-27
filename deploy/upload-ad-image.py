@@ -22,8 +22,9 @@ bucket, or a run fetches a 404 and posts nothing. So --verify lists the bucket
 and reports an index entry with no object (which breaks a campaign) and an
 object no entry names (which only wastes space).
 
-Keys are content-addressed -- ``ads/<slug>/<sha256>.<ext>`` -- so an object is
-immutable, no CDN or edge cache can serve stale bytes, and a cached file's name
+Keys are content-addressed --
+``workspaces/<workspace>/campaigns/<slug>/<sha256>.<ext>``, the same path the
+workspace's documents have in Firestore -- so an object is immutable, no CDN or edge cache can serve stale bytes, and a cached file's name
 proves its contents. Replacing a picture writes a new object and repoints the
 index; it never overwrites one.
 
@@ -73,9 +74,9 @@ import r2_sigv4  # noqa: E402
 
 RANK_STEP = operator_writer.RANK_STEP
 # Every key this script writes lives under the workspace's prefix
-# (``ad_assets.key_prefix``: ``ads/`` without GENAIE_WORKSPACE_ID), so it is
-# also what --verify lists: an object outside it is not this workspace's
-# picture and is none of our business.
+# (``ad_assets.key_prefix``: ``workspaces/<id>/campaigns/``, and nothing at all
+# without GENAIE_WORKSPACE_ID), so it is also what --verify lists: an object
+# outside it is not this workspace's picture and is none of our business.
 # Magic bytes, because content_type decides how the gateway treats the file and
 # a mislabelled image is refused at send time, long after the upload.
 MAGIC = ((b"\xff\xd8\xff", "image/jpeg"), (b"\x89PNG\r\n\x1a\n", "image/png"))

@@ -37,7 +37,7 @@ def digest(body):
 def entry(campaign, filename, body, rank=10, enabled=True, **overrides):
     kind = "image/png" if filename.endswith(".png") else "image/jpeg"
     out = {"campaign": campaign, "filename": filename,
-           "key": "ads/%s/%s%s" % (campaign, digest(body),
+           "key": "workspaces/wk-alpha1/campaigns/%s/%s%s" % (campaign, digest(body),
                                    ".png" if kind == "image/png" else ".jpg"),
            "sha256": digest(body), "bytes": len(body), "content_type": kind,
            "rank": rank, "enabled": enabled}
@@ -124,7 +124,7 @@ class Harness(unittest.TestCase):
         for body in bodies:
             kind = ".png" if body.startswith(b"\x89PNG") else ".jpg"
             for campaign in ("cv", "borehole-drilling"):
-                self.world.objects["ads/%s/%s%s" % (campaign, digest(body), kind)] = body
+                self.world.objects["workspaces/wk-alpha1/campaigns/%s/%s%s" % (campaign, digest(body), kind)] = body
 
     def baked(self, campaign, *names, write=None):
         """Paths shaped like the real baked assets, optionally with contents."""
@@ -202,7 +202,7 @@ class IndexTest(Harness):
 
     def test_a_key_whose_digest_disagrees_with_sha256_is_refused(self):
         bad = entry("cv", "cv-ad.png", PNG)
-        bad["key"] = "ads/cv/%s.png" % ("b" * 64)
+        bad["key"] = "workspaces/wk-alpha1/campaigns/cv/%s.png" % ("b" * 64)
         with self.assertRaisesRegex(ValueError, "names digest"):
             aa._entry("cv-1", bad)
 
@@ -302,8 +302,8 @@ class CatalogueTest(Harness):
         self.assertEqual(found["source"], "firestore")
         self.assertIsNone(found["note"])
         self.assertEqual([e["url"] for e in found["campaigns"]["cv"]],
-                         ["%s/ads/cv/%s.png" % (BASE, digest(PNG)),
-                          "%s/ads/cv/%s.png" % (BASE, digest(PNG2))])
+                         ["%s/workspaces/wk-alpha1/campaigns/cv/%s.png" % (BASE, digest(PNG)),
+                          "%s/workspaces/wk-alpha1/campaigns/cv/%s.png" % (BASE, digest(PNG2))])
 
     def test_public_url_is_the_url_ensure_would_fetch(self):
         one = entry("cv", "cv-ad.png", PNG)
