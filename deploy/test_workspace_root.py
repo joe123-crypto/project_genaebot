@@ -209,24 +209,32 @@ class WriteTests(Base):
 
 
 class PictureTests(Base):
-    def test_a_workspace_bot_gets_its_own_prefix_by_default(self):
-        self.assertEqual(ad_assets.key_prefix({}), "ads/")
-        self.assertEqual(ad_assets.key_prefix({"GENAIE_WORKSPACE_ID": WID}), "w/%s/ads/" % WID)
+    def test_a_workspace_bot_keeps_pictures_under_its_own_tree(self):
+        self.assertEqual(ad_assets.key_prefix({"GENAIE_WORKSPACE_ID": WID}),
+                         "workspaces/%s/campaigns/" % WID)
 
-    def test_the_existing_install_keeps_ads_by_saying_so(self):
-        env = {"GENAIE_WORKSPACE_ID": WID, "GENAIE_ASSET_KEY_PREFIX": "ads/"}
-        self.assertEqual(ad_assets.key_prefix(env), "ads/")
+    def test_a_bot_without_a_workspace_has_nowhere_to_put_pictures(self):
+        with self.assertRaises(ad_assets.AssetsUnavailable):
+            ad_assets.key_prefix({})
+        with self.assertRaises(ad_assets.AssetsUnavailable):
+            ad_assets.key_prefix({"GENAIE_WORKSPACE_ID": "../x"})
 
-    def test_a_prefix_outside_the_two_shapes_is_refused(self):
-        for bad in ("pictures/", "w/../ads/", "/ads/", "w/%s/ads" % WID, "ads"):
-            with self.subTest(bad=bad), self.assertRaises(ad_assets.AssetsUnavailable):
-                ad_assets.key_prefix({"GENAIE_ASSET_KEY_PREFIX": bad})
+    def test_the_old_prefix_variable_is_ignored(self):
+        # It pinned the oldest install to ads/; the layout is no longer a setting.
+        for old in ("ads/", "w/%s/ads/" % WID, "pictures/"):
+            env = {"GENAIE_WORKSPACE_ID": WID, "GENAIE_ASSET_KEY_PREFIX": old}
+            self.assertEqual(ad_assets.key_prefix(env), "workspaces/%s/campaigns/" % WID)
 
-    def test_stored_keys_of_either_shape_are_pinned(self):
-        for good in ("ads/cv/%s.jpg" % SHA, "w/%s/ads/cv/%s.png" % (WID, SHA)):
+    def test_stored_keys_of_the_workspace_and_legacy_shapes_are_pinned(self):
+        for good in ("workspaces/%s/campaigns/cv/%s.jpg" % (WID, SHA),
+                     "ads/cv/%s.jpg" % SHA, "w/%s/ads/cv/%s.png" % (WID, SHA)):
             self.assertTrue(ad_assets.KEY_RE.match(good), good)
         for bad in ("w/../ads/cv/%s.jpg" % SHA, "//evil.example/ads/cv/%s.jpg" % SHA,
-                    "w/%s/x/ads/cv/%s.jpg" % (WID, SHA), "pictures/cv/%s.jpg" % SHA):
+                    "w/%s/x/ads/cv/%s.jpg" % (WID, SHA), "pictures/cv/%s.jpg" % SHA,
+                    "workspaces/../campaigns/cv/%s.jpg" % SHA,
+                    "workspaces/%s/cv/%s.jpg" % (WID, SHA),
+                    "workspaces/%s/campaigns/%s.jpg" % (WID, SHA),
+                    "workspaces/%s/ads/cv/%s.jpg" % (WID, SHA)):
             self.assertFalse(ad_assets.KEY_RE.match(bad), bad)
 
     def test_a_root_picture_index_is_never_a_workspace_fallback(self):

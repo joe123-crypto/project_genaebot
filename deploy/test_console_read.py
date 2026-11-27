@@ -205,7 +205,7 @@ class ConsoleReadTests(BridgeCase):
             self.assertEqual([a["filename"] for a in record["assets"]],
                              record["images"], record["slug"])
             for asset in record["assets"]:
-                self.assertTrue(asset["url"].startswith(BASE_URL + "/ads/"),
+                self.assertTrue(asset["url"].startswith(BASE_URL + "/workspaces/wk-alpha1/campaigns/"),
                                 asset["url"])
 
     def test_no_index_costs_the_pictures_and_nothing_else(self):
@@ -650,10 +650,10 @@ class AssetEntryTests(unittest.TestCase):
         self.console = load_console_read()
         self.entries = [
             {"id": "alpha-1", "campaign": "alpha", "filename": "one.jpg",
-             "key": "ads/alpha/%s.jpg" % ("a" * 64), "sha256": "a" * 64,
+             "key": "workspaces/wk-alpha1/campaigns/alpha/%s.jpg" % ("a" * 64), "sha256": "a" * 64,
              "bytes": 100, "content_type": "image/jpeg", "rank": 10},
             {"id": "alpha-2", "campaign": "alpha", "filename": "two.jpg",
-             "key": "ads/alpha/%s.jpg" % ("b" * 64), "sha256": "b" * 64,
+             "key": "workspaces/wk-alpha1/campaigns/alpha/%s.jpg" % ("b" * 64), "sha256": "b" * 64,
              "bytes": 200, "content_type": "image/jpeg", "rank": 20},
         ]
         self.console._CATALOGUE["value"] = {
@@ -666,7 +666,7 @@ class AssetEntryTests(unittest.TestCase):
         self.assertEqual(len(entries), 2)
         for entry in entries:
             self.assertEqual(set(entry), ASSET_KEYS)
-            self.assertTrue(entry["url"].startswith(BASE_URL + "/ads/alpha/"))
+            self.assertTrue(entry["url"].startswith(BASE_URL + "/workspaces/wk-alpha1/campaigns/alpha/"))
             self.assertIn(entry["sha256"], entry["url"])
 
     def test_the_index_order_is_kept_because_it_is_the_rotation_order(self):

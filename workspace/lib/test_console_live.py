@@ -209,7 +209,7 @@ class LiveIndexTests(Harness):
         from test_console_campaigns import payload, MemoryStore
         store = MemoryStore()
         console_campaigns.create(payload(), store,
-            env={**self.env, "GENAIE_AD_ASSETS_SOURCE": "r2",
+            env={**self.env, "GENAIE_AD_ASSETS_SOURCE": "r2", "GENAIE_WORKSPACE_ID": "wk-alpha1",
                  "GENAIE_AD_ASSETS_BASE_URL": "https://ads.example.test"},
             verify=lambda *args: None, reconcile=lambda *args: None)
         self.firestore.store = store.docs
@@ -220,7 +220,7 @@ class LiveIndexTests(Harness):
         self.assertEqual(row["imageCount"], 1)
         # The thumbnail comes from the streamed asset document, not the gallery.
         self.assertTrue(row["thumbnailUrl"].startswith(
-            self.env["GENAIE_AD_ASSETS_BASE_URL"] + "/ads/demo/"), row["thumbnailUrl"])
+            self.env["GENAIE_AD_ASSETS_BASE_URL"] + "/workspaces/wk-alpha1/campaigns/demo/"), row["thumbnailUrl"])
 
     def test_campaign_detail_uses_assets_published_after_gallery_opened(self):
         import console_campaigns
@@ -236,7 +236,8 @@ class LiveIndexTests(Harness):
         data = payload()
         data["images"].extend(console_campaigns.images_from_assets([entry("demo", "two.png", b"second")]))
         store = MemoryStore()
-        console_campaigns.create(data, store, env=self.env, verify=lambda *args: None)
+        console_campaigns.create(data, store, env={**self.env, "GENAIE_WORKSPACE_ID": "wk-alpha1"},
+                                 verify=lambda *args: None)
         asset_docs = store.docs["assets"]
         asset_docs["disabled"] = config.encode_fields(entry("demo", "disabled.png", b"disabled", enabled=False))
         asset_docs["invalid"] = config.encode_fields({"campaign": "demo", "filename": "invalid.png"})

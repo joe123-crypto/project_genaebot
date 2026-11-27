@@ -104,7 +104,7 @@ class BackupLayoutTests(unittest.TestCase):
                            r2_reader=bucket_with(objects) if objects is not None else no_bucket)
 
     def test_a_backup_holds_every_collection_with_a_matching_manifest(self):
-        manifest, directory = self.take(objects=[{"key": "ads/web-design/a.jpg",
+        manifest, directory = self.take(objects=[{"key": "workspaces/wk-alpha1/campaigns/web-design/a.jpg",
                                                   "bytes": 12, "etag": "e", "modified": "t"}])
         self.assertEqual(os.path.basename(directory), "2026-11-11")
         self.assertEqual(manifest["project"], CREDS["project_id"])

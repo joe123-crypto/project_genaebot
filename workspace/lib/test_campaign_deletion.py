@@ -15,7 +15,7 @@ import console_campaigns as campaigns
 import operator_config as config
 import operator_writer as writer
 import promo_broadcast as broadcast
-from test_console_campaigns import MemoryStore as CreationStore, ENV, payload, BODY, SHA
+from test_console_campaigns import MemoryStore as CreationStore, ENV, PREFIX, WID, payload, BODY, SHA
 from test_operator_config import JID_A, JID_B
 
 
@@ -70,6 +70,10 @@ class Retirement(unittest.TestCase):
         self.env = {**ENV, "GENAIE_CAMPAIGN_DELETION": "1", "OPENCLAW_STATE_DIR": self.tmp.name,
                     "R2_ACCOUNT_ID": "a" * 32,
                     "R2_BUCKET": "pictures", "R2_ACCESS_KEY_ID": "test-access", "R2_SECRET_ACCESS_KEY": "test-secret"}
+        # The picture prefix follows the process's own workspace.
+        env_patch = patch.dict(os.environ, {"GENAIE_WORKSPACE_ID": WID})
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
         self.store = Store()
         self.data = payload()
         campaigns.create(self.data, self.store, self.env, verify=lambda *args: None, reconcile=lambda *args: None)
@@ -154,6 +158,27 @@ class Retirement(unittest.TestCase):
         self.retire(); self.clean()
         self.assertEqual(self.objects, [])
         self.assertIsNotNone(self.store.get("assets", "other-1"))
+    def test_only_this_workspaces_picture_objects_are_deleted(self):
+        # An index row is editable from the Firebase console; one naming
+        # another workspace's object loses its document but never the object.
+        foreign = "workspaces/wk-bravo1/campaigns/demo/%s.png" % SHA
+        legacy = "w/%s/ads/demo/%s.png" % (WID, "c" * 64)
+        rows = self.store.docs.setdefault("assets", {})
+        rows["demo-2"] = config.encode_fields(dict(self.store.get("assets", "demo-1"), id="demo-2", filename="two.png", key=foreign))
+        rows["demo-3"] = config.encode_fields(dict(self.store.get("assets", "demo-1"), id="demo-3", filename="three.png",
+                                                   key=legacy, sha256="c" * 64))
+        self.retire(); self.clean()
+        self.assertEqual(sorted(self.objects), sorted([self.data["images"][0]["key"], legacy]))
+        self.assertIsNone(self.store.get("assets", "demo-2"))
+        self.assertEqual(self.store.get("campaign_deletions", "demo")["cleanup"], "complete")
+    def test_owned_keys_are_this_workspaces_tree_and_the_legacy_shapes(self):
+        own = {"GENAIE_WORKSPACE_ID": WID}
+        for key in [PREFIX + "demo/%s.png" % SHA, "ads/demo/%s.png" % SHA, "w/%s/ads/demo/%s.png" % (WID, SHA)]:
+            self.assertTrue(deletion.ad_assets.owns_key(key, own), key)
+        for key in ["workspaces/wk-bravo1/campaigns/demo/%s.png" % SHA, "w/wk-bravo1/ads/demo/%s.png" % SHA,
+                    "workspaces/%s/campaigns/../x/%s.png" % (WID, SHA), "workspaces/%s1/campaigns/demo/%s.png" % (WID, SHA)]:
+            self.assertFalse(deletion.ad_assets.owns_key(key, own), key)
+        self.assertFalse(deletion.ad_assets.owns_key(PREFIX + "demo/%s.png" % SHA, {}))
     def test_unknown_command_under_known_job_name_is_not_removed(self):
         self.retire()
         self.gateway.jobs = [{"id": "foreign", "name": "console-demo-promo", "payload": {"argv": ["python3", "/unrelated.py"]}}]
@@ -175,7 +200,7 @@ class Retirement(unittest.TestCase):
         self.gateway = Gateway(); self.clean()
         self.assertEqual(self.store.get("campaign_deletions", "demo")["cleanup"], "complete")
     def test_reserved_uploads_are_captured_and_cleanup_waits_for_expiry(self):
-        extra = dict(self.store.get("assets", "demo-1"), id="new-image", filename="new.png", key="ads/demo/%s.png" % ("b" * 64), sha256="b" * 64)
+        extra = dict(self.store.get("assets", "demo-1"), id="new-image", filename="new.png", key=PREFIX + "demo/%s.png" % ("b" * 64), sha256="b" * 64)
         self.store.docs["campaign_asset_uploads"] = {"inflight": config.encode_fields({"assets": [extra], "expiresAt": 9999999999})}
         self.retire(); self.clean()
         self.assertEqual(self.objects, [])
@@ -291,7 +316,7 @@ class Retirement(unittest.TestCase):
                           "weekdays": list(range(7))},
              "timeoutSeconds": 7200, "failureAlertTo": "", "scheduleStatus": "ready",
              "images": []})
-        key = "ads/cv/%s.png" % hashlib.sha256(body).hexdigest()
+        key = PREFIX + "cv/%s.png" % hashlib.sha256(body).hexdigest()
         with ExitStack() as stack:
             stack.enter_context(patch.object(tool, "firestore_credentials", return_value={"project_id": "test"}))
             stack.enter_context(patch.object(tool, "token_for", return_value="test-token"))

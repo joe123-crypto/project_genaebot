@@ -277,7 +277,10 @@ def cleanup(slug, store, env=None, call=None, remove_object=None):
                                                   if entry.get("campaign") == slug and entry.get("key") == asset["key"]])
                 finally:
                     store.rollback()
-                if not shared:
+                # The index is editable from the Firebase console, so a row
+                # naming another workspace's object must not make this bot
+                # delete it: only keys under this workspace's own prefix go.
+                if not shared and ad_assets.owns_key(asset["key"], env):
                     remove_object(asset["key"], env)
                 cached = Path(ad_assets.cache_path(asset, env))
                 cached.unlink(missing_ok=True)

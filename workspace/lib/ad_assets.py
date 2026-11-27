@@ -99,12 +99,20 @@ CONTENT_TYPES = {"image/jpeg": ".jpg", "image/png": ".png"}
 # than trusted: without this a row reading "//elsewhere.example/x.jpg" would
 # turn the index into a request-forgery primitive. Every key this repo writes is
 # content-addressed, so the pattern can be exact.
-# A workspace's pictures sit under ``w/<workspace>/ads/``; the single-operator
-# install's under plain ``ads/``. Both shapes are pinned; which one a bot may
-# create is :func:`key_prefix`.
-KEY_RE = re.compile(r"^(?:w/[A-Za-z0-9_-]{6,40}/)?ads/[a-z0-9][a-z0-9-]*/([0-9a-f]{64})\.(jpg|png)$")
-KEY_PREFIX_VAR = "GENAIE_ASSET_KEY_PREFIX"
-KEY_PREFIX_RE = re.compile(r"^(?:w/[A-Za-z0-9_-]{6,40}/)?ads/$")
+#
+# A workspace's pictures sit under ``workspaces/<workspace>/campaigns/<slug>/``,
+# the same path its documents have in Firestore, so one workspace's data is one
+# prefix in both stores. Two older shapes are still read, never written:
+# ``ads/<slug>/`` from the install that predates workspaces, and
+# ``w/<workspace>/ads/<slug>/`` from the first workspace bots. (That ``ads`` was
+# only ever a folder name; it has nothing to do with the WhatsApp line called
+# ``ads``.) deploy/move-pictures-to-workspace-layout.py moves them, after which
+# the legacy shapes can go. Which prefix a bot may create under is
+# :func:`key_prefix`.
+_WORKSPACE = r"[A-Za-z0-9_-]{6,40}"
+LEGACY_KEY_PREFIX_RE = re.compile(r"^(?:w/%s/)?ads/" % _WORKSPACE)
+KEY_RE = re.compile(r"^(?:workspaces/%s/campaigns/|(?:w/%s/)?ads/)[a-z0-9][a-z0-9-]*/([0-9a-f]{64})\.(jpg|png)$"
+                    % (_WORKSPACE, _WORKSPACE))
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 FILENAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.(jpg|jpeg|png)$")
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
@@ -179,22 +187,38 @@ def base_url(env=None):
 
 
 def key_prefix(env=None):
-    """Where this bot's new pictures go in the shared bucket.
+    """Where this bot's new pictures go in the shared bucket:
+    ``workspaces/<workspace>/campaigns/``, with the campaign's slug next.
 
-    A workspace bot defaults to ``w/<workspace>/ads/`` so two operators with the
-    same campaign slug can never share, or delete, each other's objects. The
-    install that predates workspaces keeps ``ads/`` by setting it explicitly."""
-    env = os.environ if env is None else env
-    explicit = (env.get(KEY_PREFIX_VAR) or "").strip()
-    if explicit:
-        if not KEY_PREFIX_RE.match(explicit):
-            raise AssetsUnavailable("%s must be ads/ or w/<workspace>/ads/" % KEY_PREFIX_VAR)
-        return explicit
+    It follows from ``GENAIE_WORKSPACE_ID`` alone, so two operators with the
+    same campaign slug can never share, or delete, each other's objects. A bot
+    with no workspace has nowhere to put a picture: the root tree is retired.
+    ``GENAIE_ASSET_KEY_PREFIX``, which once pinned the oldest install to
+    ``ads/``, is no longer read."""
     try:
         workspace = operator_config.workspace_id(env)
     except operator_config.ConfigUnavailable as ex:
         raise AssetsUnavailable(str(ex))
-    return "ads/" if workspace is None else "w/%s/ads/" % workspace
+    if workspace is None:
+        raise AssetsUnavailable("%s is not set, so there is no workspace to keep new pictures in"
+                                % operator_config.WORKSPACE_ENV)
+    return "workspaces/%s/campaigns/" % workspace
+
+
+def owns_key(key, env=None):
+    """Whether ``key`` is this workspace's to delete.
+
+    Its own ``workspaces/<workspace>/`` tree, or one of the legacy shapes that
+    a workspace's index may still name until its pictures are moved: plain
+    ``ads/`` and its own ``w/<workspace>/ads/``. Never another workspace's."""
+    try:
+        workspace = operator_config.workspace_id(env)
+    except operator_config.ConfigUnavailable:
+        return False
+    if workspace is None or not isinstance(key, str) or not KEY_RE.match(key):
+        return False
+    return (key.startswith("workspaces/%s/" % workspace) or key.startswith("ads/")
+            or key.startswith("w/%s/ads/" % workspace))
 
 
 def public_url(entry, env=None):
@@ -268,7 +292,7 @@ def _entry(doc_id, fields):
     key = need("key", str)
     matched = KEY_RE.match(key)
     if not matched:
-        raise ValueError("%s: key %r is not [w/<workspace>/]ads/<slug>/<sha256>.<ext>" % (doc_id, key))
+        raise ValueError("%s: key %r is not workspaces/<workspace>/campaigns/<slug>/<sha256>.<ext>" % (doc_id, key))
     sha256 = need("sha256", str)
     if not SHA_RE.match(sha256):
         raise ValueError("%s: sha256 %r is not 64 hex characters" % (doc_id, sha256))
