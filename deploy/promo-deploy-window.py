@@ -55,7 +55,6 @@ import json
 import sys
 import time
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -64,59 +63,16 @@ import gateway_campaigns  # noqa: E402
 UTC = dt.timezone.utc
 
 
-def run_budget_minutes(row):
-    """Worst-case minutes a campaign run may keep sending after its cron fires."""
-    return gateway_campaigns.run_budget_seconds(row) / 60.0
-
-
-def daily_starts(rows):
-    """[(name, tz, hour, minute, run_minutes)]: every time an enabled campaign fires."""
-    starts = []
-    for row in gateway_campaigns.enabled(rows):
-        hour, minute = int(row["hour"]), int(row["minute"])
-        if not (0 <= minute < 60 and 0 <= hour < 24):
-            raise ValueError("%s: bad schedule time %02d:%02d" % (row["slug"], hour, minute))
-        try:
-            ZoneInfo(row["timezone"])
-        except Exception as ex:
-            raise ValueError("%s: unusable timezone %r (%s)" % (row["slug"], row["timezone"], ex))
-        run_minutes = run_budget_minutes(row)
-        for name, zone, hour, minute in gateway_campaigns.starts(row):
-            starts.append((name, zone, hour, minute, run_minutes))
-    return starts
-
-
-def runs_near(starts, now):
-    """Concrete UTC start times from yesterday to tomorrow around `now`."""
-    out = []
-    for name, tz, hour, minute, run_minutes in starts:
-        local_day = now.astimezone(tz).date()
-        for offset in (-2, -1, 0, 1):
-            day = local_day + dt.timedelta(days=offset)
-            local = dt.datetime(day.year, day.month, day.day, hour, minute, tzinfo=tz)
-            out.append((local.astimezone(UTC), name, run_minutes))
-    return sorted(out)
-
-
-def conflicts(starts, at, lead_minutes):
-    """Campaign runs that make `at` unsafe for a restart."""
-    lead = dt.timedelta(minutes=lead_minutes)
-    return [(start, name) for start, name, run_minutes in runs_near(starts, at)
-            if at - dt.timedelta(minutes=run_minutes) < start <= at + lead]
-
-
-def next_quiet(starts, now, lead_minutes):
-    """The first whole minute at or after `now` with no conflicting run."""
-    at = now.replace(second=0, microsecond=0)
-    if at < now:
-        at += dt.timedelta(minutes=1)
-    if not conflicts(starts, now, lead_minutes):
-        return now
-    for _ in range(2 * 24 * 60):
-        if not conflicts(starts, at, lead_minutes):
-            return at
-        at += dt.timedelta(minutes=1)
-    return None
+# The arithmetic lives in release_window.py, which every bot's console API
+# also runs to answer whether it may be restarted; these names are kept here so
+# this gate and its tests read as they always have.
+from release_window import (  # noqa: E402
+    conflicts,
+    daily_starts,
+    next_quiet,
+    run_budget_minutes,
+    runs_near,
+)
 
 
 def describe(moment, tz):

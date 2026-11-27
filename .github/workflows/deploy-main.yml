@@ -219,3 +219,24 @@ jobs:
           name: railway-release
           path: ${{ runner.temp }}/railway-release.json
           if-no-files-found: ignore
+  promote-workspace-bots:
+    name: Promote this release to workspace bots
+    # The gateway is the canary: this runs only once it has released this exact
+    # commit and passed its startup check. A failed release rolls the gateway
+    # back and fails the deploy job, so a bad commit never gets this far. It
+    # deploys nothing itself -- the console rolls the image out one bot at a
+    # time, each in its own quiet window (deploy/promote-workspace-bots.py).
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: [deploy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out the released commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Wait for its bot image and tell the console
+        env:
+          CONSOLE_URL: ${{ vars.CONSOLE_URL }}
+          FLEET_RELEASE_TOKEN: ${{ secrets.FLEET_RELEASE_TOKEN }}
+        run: |
+          python3 deploy/promote-workspace-bots.py --sha "$GITHUB_SHA" \
+            --owner "$GITHUB_REPOSITORY_OWNER" --wait-minutes 25

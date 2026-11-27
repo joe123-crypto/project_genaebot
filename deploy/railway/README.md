@@ -170,13 +170,27 @@ It makes **no Railway call at all**. It only builds and pushes, so the running g
 every bot already provisioned keep serving while it runs; only `deploy-main.yml` deploys.
 Publishing an image therefore never needs a quiet promo window.
 
-Which tag new bots actually get is the console's own `BOT_IMAGE` variable, rolled forward
-deliberately rather than automatically -- publishing is continuous, adopting is a decision.
-Prefer the exact commit tag over `:main` for that, so a bot's code does not change under a
-later release. Note that the console sets a service's image only once per run: a **Try
-again** on a failed run redeploys the image already pinned on that service, so moving a
-bot that was created before a fix to a newer image means updating that service's source,
-or clearing `sourceSetAt` on `workspaces/<id>.provisioning` so the run sets it again.
+### Releases reach every workspace's bot
+
+Once a push to `main` has released **and verified** on the gateway, the deploy workflow's
+last job, `promote-workspace-bots`, waits for that commit's image to be published and
+tells the console it is the fleet's new target (`deploy/promote-workspace-bots.py`). The
+gateway is the canary: a release that fails its startup check rolls the gateway back and
+fails the deploy job, so that job never runs and no workspace bot hears of the release.
+
+The console then rolls the image out itself, **one bot at a time**, each only when that
+bot says it is quiet -- `GET /internal/console/release-window`, answered by the bot from
+its own campaigns with exactly this gate's arithmetic (`deploy/release_window.py`). After
+each restart it checks the bot answers for its workspace and that every WhatsApp account
+connected before is connected again; a bot that fails is put back on its previous image
+and the rollout pauses for everyone else until the next release. See the console's
+`docs/provision-bot.md` for the rollout and its operator commands.
+
+New bots are created from the same target, so `BOT_IMAGE` only matters until the first
+release has been promoted. Every tag is an exact commit; `:main` is never used, so a bot's
+code changes only when the rollout changes it. The job needs the repository variable
+`CONSOLE_URL` and the secret `FLEET_RELEASE_TOKEN` (the console's value); without them it
+warns and succeeds, so the gateway's release is never failed for a switched-off step.
 
 ## One-time wiring
 
@@ -893,6 +907,15 @@ literal link, also replace `{ref_link}` in its captions and clear `tracking` to
 `{}`; otherwise the reference-link renderer can append a second link. Save these
 fields together through the audited `config/campaigns/<slug>` API after deploying
 the sender support. Existing links and historical counts remain available.
+
+### Whether a bot may be restarted now
+
+`GET /internal/console/release-window` answers `{quiet, at, nextQuietAt, leadMinutes,
+busy}` from the bot's own campaign list, with the same arithmetic the release gate
+uses (`deploy/release_window.py`, shared with `promo-deploy-window.py`). The console
+asks it before rolling a new image out to a workspace's bot. It needs the workspace
+token (`CONSOLE_API_TOKEN`), not the gate token, and takes no query. A list it cannot
+read is a 503 and never a quiet answer; a bot with no campaigns yet is quiet.
 
 ### The release gates' read-scoped token
 

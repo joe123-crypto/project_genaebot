@@ -215,6 +215,14 @@ previous image and owned runtime settings, then checks its startup. Verification
 allows time for the entrypoint's 330-second stale-lease handoff before the gateway
 can begin connecting its accounts.
 
+A release that passes reaches every workspace's bot too: the deploy workflow's
+`promote-workspace-bots` job hands the published image of that commit to the
+console, which rolls it out one bot at a time in each bot's own quiet window and
+pauses on the first one that does not come back. See
+[Releases reach every workspace's bot](deploy/railway/README.md#releases-reach-every-workspaces-bot).
+The gateway's release-profile switches (transport, retirement and allocator
+trials, standby) are never copied to those bots; they run the baseline.
+
 Release and compatibility results remain attached to the workflow as artifacts.
 A normal push preserves the current runtime settings, including sender transport
 and the optional expired WhatsApp metadata cleanup. Manual workflow runs default to `preserve`; explicitly choose `baseline`

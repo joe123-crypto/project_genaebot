@@ -85,6 +85,7 @@ sessions are temporary and can be resumed through a new Link attempt.
 Std-lib only.
 """
 
+import datetime
 import hmac
 import json
 import os
@@ -101,9 +102,14 @@ from urllib.parse import parse_qs, unquote, urlsplit
 # Also works when loaded by importlib in the deployment tests.
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.append(os.path.normpath(os.path.join(os.path.dirname(__file__), "../../workspace/lib")))
+# release_window and gateway_campaigns sit beside this file in the image and one
+# directory up in the repository.
+sys.path.append(os.path.normpath(os.path.join(os.path.dirname(__file__), "..")))
 import campaign_clicks
 from console_accounts import AccountControls
 from console_customer_bot import BODY_LIMIT as CUSTOMER_BOT_BODY_LIMIT, Conflict as CustomerBotConflict, CustomerBot
+import gateway_campaigns
+import release_window
 
 PREFIX = "/internal/console/"
 DATA_ROUTES = ("overview", "groups", "campaigns", "capabilities", "settings", "navigation")
@@ -755,6 +761,31 @@ class Handler(BaseHTTPRequestHandler):
         self.send_any(302, b"", with_body, headers=(("Location", destination),
                                                    ("Referrer-Policy", "no-referrer")))
 
+    def release_window_report(self, query, with_body):
+        """Whether this bot may be restarted now without cutting a campaign off.
+
+        The operator console asks before it rolls a new image out to this bot,
+        and deploys only on ``quiet``. It is this bot's own campaigns, read
+        through the same bridge as ``campaigns``, and the same arithmetic as
+        the gateway's release gate (``release_window.py``). A list it cannot
+        read is a 503, never a quiet answer: whoever asked must not restart a
+        bot that could not see its own schedule."""
+        def respond(status, payload):
+            self.send_any(status, json.dumps(payload).encode("utf-8"), with_body)
+
+        if query:
+            return respond(400, {"error": "The release window takes no query parameters."})
+        status, body = self.server.console["bridge"].run(["campaigns"])
+        if status != 200:
+            return respond(503, {"error": "The campaign list could not be read, so a restart cannot be judged safe."})
+        try:
+            rows = gateway_campaigns.parse(body.decode("utf-8", "replace"), allow_empty=True)
+            answer = release_window.window(rows, datetime.datetime.now(datetime.timezone.utc))
+        except (gateway_campaigns.Unavailable, ValueError, KeyError) as exc:
+            log("release window: %s" % exc)
+            return respond(503, {"error": "The campaign list could not be judged, so a restart cannot be judged safe."})
+        return respond(200, answer)
+
     def campaign_click_report(self, query, with_body):
         fields = parse_qs(query, keep_blank_values=True)
         slugs = fields.get("slug", [])
@@ -815,6 +846,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if route == "live/campaign-clicks":
             self.campaign_click_report(split.query, with_body)
+            return
+
+        if route == "release-window":
+            self.release_window_report(split.query, with_body)
             return
 
         if route.startswith("live/"):

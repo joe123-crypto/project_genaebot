@@ -25,6 +25,9 @@ class ConsoleApiWiringTests(unittest.TestCase):
         self.assertIn(
             "COPY deploy/railway/console-api.py /usr/local/bin/console-api.py",
             DOCKERFILE)
+        # The release-window route imports these from beside the server.
+        self.assertIn("COPY deploy/release_window.py deploy/gateway_campaigns.py /usr/local/bin/",
+                      DOCKERFILE)
         self.assertTrue((ROOT / "workspace/bin/console-read").is_file())
         # workspace/bin ships wholesale, so the bridge needs no filter entry.
         self.assertIn("+ /bin/***", FILTER)

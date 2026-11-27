@@ -328,6 +328,57 @@ class ConsoleApiTests(unittest.TestCase):
         self.assertEqual(json.loads(body), {"error": "Invalid config change."})
         self.assertFalse(run.called)
 
+    # -- whether this bot may be restarted now ----------------------------
+
+    def campaigns_bridge(self, rows):
+        """A bridge answering ``campaigns`` with these rows, as console-read does."""
+        return self.write("campaigns.py", "import json, sys\n"
+                          "json.dump({'campaigns': %r}, sys.stdout)\n" % (rows,))
+
+    @staticmethod
+    def campaign(slug, minutes_from_now):
+        """An enabled 20-group campaign firing ``minutes_from_now`` from the real
+        clock, in Harare, which is what the route reads its time from."""
+        at = dt.datetime.now(dt.timezone(dt.timedelta(hours=2))) + dt.timedelta(minutes=minutes_from_now)
+        return {"slug": slug, "name": slug, "jobName": slug + "-promo", "enabled": True,
+                "hour": at.hour, "minute": at.minute, "timezone": "Africa/Harare",
+                "targetCount": 20, "timeoutSeconds": 7200, "source": "console"}
+
+    def test_release_window_is_quiet_for_a_bot_with_no_campaigns_yet(self):
+        base = self.serve(bridge=self.campaigns_bridge([]))
+        status, body, _ = self.fetch(base + "/release-window")
+        self.assertEqual(status, 200)
+        answer = json.loads(body)
+        self.assertTrue(answer["quiet"])
+        self.assertEqual(answer["busy"], [])
+        self.assertEqual(answer["nextQuietAt"], answer["at"])
+
+    def test_release_window_holds_a_restart_inside_a_run(self):
+        base = self.serve(bridge=self.campaigns_bridge([self.campaign("borehole", -5)]))
+        status, body, _ = self.fetch(base + "/release-window")
+        self.assertEqual(status, 200)
+        answer = json.loads(body)
+        self.assertFalse(answer["quiet"])
+        self.assertEqual([run["name"] for run in answer["busy"]], ["borehole-promo"])
+        self.assertGreater(answer["nextQuietAt"], answer["at"])
+
+    def test_release_window_is_quiet_hours_away_from_any_run(self):
+        base = self.serve(bridge=self.campaigns_bridge([self.campaign("borehole", 6 * 60)]))
+        self.assertTrue(json.loads(self.fetch(base + "/release-window")[1])["quiet"])
+
+    def test_release_window_never_answers_quiet_when_it_cannot_see(self):
+        base = self.serve(bridge=self.write("curated.py", CURATED))
+        status, body, _ = self.fetch(base + "/release-window")
+        self.assertEqual(status, 503)
+        self.assertNotIn("quiet", json.loads(body))
+
+    def test_release_window_wants_the_workspace_token_and_no_query(self):
+        base = self.serve(bridge=self.campaigns_bridge([]), gate_token=GATE)
+        self.assertEqual(self.fetch(base + "/release-window", token=None)[0], 401)
+        # CI's read-scoped token reaches campaigns only, not this.
+        self.assertEqual(self.fetch(base + "/release-window", token=GATE)[0], 401)
+        self.assertEqual(self.fetch(base + "/release-window?now=1")[0], 400)
+
     # -- the release gates' read-scoped token -----------------------------
 
     def test_gate_token_reads_campaigns_and_nothing_else(self):
