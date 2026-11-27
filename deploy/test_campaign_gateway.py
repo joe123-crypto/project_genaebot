@@ -68,6 +68,17 @@ for line in sys.stdin:
         client.close()
         self.assertIsNotNone(self.processes[0].poll())
 
+    def test_a_text_only_send_carries_no_media(self):
+        client = gc.CampaignClient("promo:2026-11-27")
+        self.addCleanup(client.close)
+        self.assertTrue(client.send("1@g.us", "hello", None)[0])
+        self.assertTrue(client.send("1@g.us", "hello", "/ad.png")[0])
+        text, picture = self.calls()
+        self.assertNotIn("mediaUrl", text["params"])
+        self.assertEqual(text["params"]["message"], "hello")
+        self.assertEqual(picture["params"]["mediaUrl"], "/ad.png")
+        self.assertNotEqual(text["params"]["idempotencyKey"], picture["params"]["idempotencyKey"])
+
     def test_retry_identity_survives_a_helper_restart(self):
         for _ in range(2):
             client = gc.CampaignClient("same-promo:same-day")

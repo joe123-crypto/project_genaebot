@@ -542,6 +542,27 @@ class AccountRoutingTests(unittest.TestCase):
         finally:
             pb.subprocess.run = saved
 
+    def test_a_text_only_send_attaches_no_media(self):
+        seen = {}
+
+        class _Done:
+            returncode = 0
+            stdout = '{"messageId":"m"}'
+            stderr = ""
+
+        saved = pb.subprocess.run
+        pb.subprocess.run = lambda cmd, **kw: (seen.__setitem__("cmd", cmd) or _Done())
+        try:
+            ok, _ = pb.send_ad("1@g.us", "hi", None)
+            self.assertTrue(ok)
+            self.assertNotIn("--media", seen["cmd"])
+            self.assertEqual(seen["cmd"][seen["cmd"].index("--message") + 1], "hi")
+            self.assertEqual(seen["cmd"][-1], "--json")
+            ok, _ = pb.send_ad("1@g.us", "hi", str(Path(os.devnull)))
+            self.assertEqual(seen["cmd"][seen["cmd"].index("--media") + 1], str(Path(os.devnull)))
+        finally:
+            pb.subprocess.run = saved
+
     def test_config_pins_the_default_account_and_seeds_no_lines(self):
         # send_ad leaves the default account implicit, so the config must say
         # which account that is: without defaultAccount the gateway picks

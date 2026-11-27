@@ -1906,6 +1906,14 @@ write token. The gateway needs no R2 write credentials. `console-campaign-create
 checks uploaded bytes before saving; `run-console-campaign` uses the shared
 broadcast engine and the runtime read key. Caption overrides are also supported.
 
+Pictures and groups are both optional (`writes.campaignCreation.picturesOptional`
+and `groupsOptional` say so to the console; a bot without them is read as
+requiring both). A campaign saved with no pictures posts each caption as a plain
+text message. That is asked of the broadcast engine explicitly (`text_only`),
+never inferred from an empty list, so a campaign whose pictures went missing
+still fails with nothing sent, as above. A campaign with no groups registers its
+schedule as usual and its runs send nothing until groups are added.
+
 Desired schedules reconcile when the console API starts and every minute.
 Stable `console-<slug>-promo` names and a volume lock recover uncertain gateway
 acknowledgements without duplicate jobs. Read-back verifies the job; pending

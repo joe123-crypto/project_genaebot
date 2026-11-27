@@ -90,7 +90,8 @@ def validate_definition(slug, data):
     except (ValueError, KeyError, TypeError):
         raise writer.WriteRefused("invalid timezone")
     images = data.get("images")
-    need(isinstance(images, list) and 0 < len(images) <= 20, "choose between 1 and 20 pictures")
+    # None is allowed: a campaign without pictures posts its caption as text.
+    need(isinstance(images, list) and len(images) <= 20, "choose at most 20 pictures")
     filenames, keys = set(), set()
     for index, image in enumerate(images):
         need(isinstance(image, dict) and set(image) == {"filename", "key", "sha256", "bytes", "contentType"}, "invalid picture metadata")
@@ -143,7 +144,9 @@ def validate(data):
     groups = data.get("groups")
     # No upper bound: a campaign's run is given as long as its groups need (see
     # sync_run_timeouts). The request size cap above still bounds one request.
-    need(isinstance(groups, list) and len(groups) > 0, "choose at least one active group")
+    # None is allowed: groups can be added from the campaign's page later, and a
+    # run with nothing to post to sends nothing.
+    need(isinstance(groups, list), "groups must be a list")
     seen = set()
     for group in groups:
         need(isinstance(group, dict) and not set(group) - {"jid", "weekdays", "paused"}, "invalid group assignment")
@@ -654,7 +657,7 @@ def run_campaign(slug, argv=None, now=None, resolve=None, broadcast=None, ensure
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return 0
-        return (broadcast or promo_broadcast.broadcast)(text=campaign["captions"], image=paths,
+        return (broadcast or promo_broadcast.broadcast)(text=campaign["captions"], image=paths, text_only=not campaign["images"],
                     state_file=str(state / "state.json"),
                     tracking=campaign.get("tracking") or None, track_clicks=campaign.get("trackClicks", True), promo_name=slug + "-promo", argv=argv or [],
                     cron_timeout=campaign["timeoutSeconds"], run_day=day, cap_day=now.astimezone(ZoneInfo("Africa/Harare")).date(), resolve_config=lambda *args, **kwargs: source)

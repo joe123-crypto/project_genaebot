@@ -181,6 +181,9 @@ class LiveIndexTests(Harness):
                 self.assertEqual(row["imageCount"], 1)
                 self.assertIsNone(row["thumbnailUrl"])
                 self.assertFalse(campaigns["context"]["writes"]["campaignCreation"]["images"])
+                # Optional either way: without picture storage a campaign is still text.
+                self.assertIs(campaigns["context"]["writes"]["campaignCreation"]["picturesOptional"], True)
+                self.assertIs(campaigns["context"]["writes"]["campaignCreation"]["groupsOptional"], True)
                 detail = view.handle("detail", "slug=cv")
                 self.assertEqual(detail["campaign"]["images"], ["cv-1.jpg"])
                 self.assertTrue(detail["campaign"]["captions"])
