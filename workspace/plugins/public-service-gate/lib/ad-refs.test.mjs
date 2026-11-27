@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { AD_REF_PREFIXES, extractAdRefs, getAdRefsPath, recordAdRefs } from "./ad-refs.js";
+import { AD_REF_PREFIXES, extractAdRefs, getAdRefsPath, hasSentAdRef, recordAdRefs } from "./ad-refs.js";
 
 function apiWithStateDir() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ad-refs-"));
@@ -72,4 +72,15 @@ test("recordAdRefs is a no-op without a ref and never throws on I/O failure", ()
   api.logger.warn = (msg) => warnings.push(msg);
   assert.deepEqual(recordAdRefs(api, "+263771111111", "ref GN-123"), ["GN-123"]);
   assert.equal(warnings.length, 1);
+});
+
+test("hasSentAdRef knows a sender who sent any ref, without storing their number", () => {
+  const { api } = apiWithStateDir();
+  assert.equal(hasSentAdRef(api, "+263771111111"), false);
+  recordAdRefs(api, "+263771111111", "ref BH-7K2");
+  assert.equal(hasSentAdRef(api, "+263771111111"), true);
+  assert.equal(hasSentAdRef(api, "+263772222222"), false);
+  assert.equal(hasSentAdRef(api, ""), false);
+  fs.writeFileSync(getAdRefsPath(api), "{");
+  assert.equal(hasSentAdRef(api, "+263771111111"), false);
 });

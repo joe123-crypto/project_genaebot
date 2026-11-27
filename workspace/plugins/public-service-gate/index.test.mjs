@@ -1714,3 +1714,83 @@ test("a group message is left to the group block, not to the takeover store", as
   assert.equal(reply.handled, true);
   assert.equal(reply.text, undefined);
 });
+
+// ---------------------------------------------------------------------------
+// Reply mode: who the bot replies to, chosen on the console's Customer Bot page.
+// ---------------------------------------------------------------------------
+
+function withReplyMode(t, mode) {
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), "reply-mode-"));
+  const previous = process.env.OPENCLAW_STATE_DIR;
+  process.env.OPENCLAW_STATE_DIR = state;
+  t.after(() => {
+    if (previous === undefined) delete process.env.OPENCLAW_STATE_DIR;
+    else process.env.OPENCLAW_STATE_DIR = previous;
+    fs.rmSync(state, { recursive: true, force: true });
+  });
+  const file = path.join(state, "runtime", "customer-bot", "replies.json");
+  const write = (value) => {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, !["off", "ref", "everyone"].includes(value) ? value : JSON.stringify({
+      version: 1, mode: value, updatedAt: "2026-11-27T10:00:00+00:00", updatedBy: "Fixture operator",
+    }));
+  };
+  if (mode) write(mode);
+  return { write };
+}
+
+const dm = (handler, text, sender = UNKNOWN, extra = {}) =>
+  handler(eventFor(text, sender), { channelId: "whatsapp", senderId: sender, ...extra });
+
+test("reply mode everyone, or no reply mode file, answers every customer as before", async (t) => {
+  const { write } = withReplyMode(t);
+  const handler = registerHandler({});
+  const baseline = await dm(handler, "do you drill boreholes?");
+  assert.notDeepEqual(baseline, { handled: true });
+  write("everyone");
+  assert.deepEqual(await dm(handler, "do you drill boreholes?"), baseline);
+});
+
+test("reply mode off holds every customer silently, even with a ref or the plugin disabled", async (t) => {
+  withReplyMode(t, "off");
+  assert.deepEqual(await dm(registerHandler({}), "hello"), { handled: true });
+  assert.deepEqual(await dm(registerHandler({}), "Hi, I saw your borehole ad (ref BH-7K2)", MEMBER), { handled: true });
+  assert.deepEqual(await dm(registerHandler({ enabled: false }), "hello"), { handled: true });
+});
+
+test("reply mode ref answers a customer from their first ref on, and holds everyone else", async (t) => {
+  withReplyMode(t, "ref");
+  const handler = registerHandler({});
+  assert.deepEqual(await dm(handler, "hello"), { handled: true });
+  const first = await dm(handler, "Hi, I saw your borehole ad (ref BH-7K2)");
+  assert.notDeepEqual(first, { handled: true });
+  const followUp = await dm(handler, "how much is it?");
+  assert.notDeepEqual(followUp, { handled: true }, "a customer who sent a ref keeps getting replies");
+  assert.deepEqual(await dm(handler, "how much is it?", MEMBER), { handled: true }, "another customer is still held");
+});
+
+test("reply mode never holds the operator, and holds a sibling line that passes as the operator", async (t) => {
+  await withAdminMode("true", async () => {
+    withReplyMode(t, "off");
+    const handler = registerHandler({ whatsappAdminUsers: [ADMIN, LINE_DEFAULT], whatsappLines: LINES });
+    assert.notDeepEqual(await dm(handler, "status?", ADMIN), { handled: true });
+    // The admin number is the default line's own: on the ads line it is a sibling.
+    assert.deepEqual(await dm(handler, "ref BH-7K2", LINE_DEFAULT, { accountId: "ads" }), { handled: true });
+  });
+});
+
+test("reply mode leaves group messages to the group hard block", async (t) => {
+  withReplyMode(t, "everyone");
+  const handler = registerHandler({});
+  const reply = await handler({ ...eventFor("ref BH-7K2", MEMBER), isGroup: true }, { channelId: "whatsapp", senderId: MEMBER });
+  assert.deepEqual(reply, { handled: true });
+});
+
+test("an unreadable or invalid reply mode file fails open to everyone", async (t) => {
+  const { write } = withReplyMode(t);
+  const handler = registerHandler({});
+  for (const bad of ["{", JSON.stringify({ version: 1, mode: "nobody" }), JSON.stringify({ version: 2, mode: "off" })]) {
+    write(bad);
+    assert.notDeepEqual(await dm(handler, "hello"), { handled: true });
+  }
+});

@@ -120,6 +120,47 @@ class CustomerBotHttpTests(unittest.TestCase):
         self.assertIn("Upgrade the console", result["error"])
         self.assertEqual(self.request()[1], current)
 
+    def replies(self, payload, token=TOKEN):
+        self.url += "/replies"
+        try:
+            return self.request(payload, token=token)
+        finally:
+            self.url = self.url[:-len("/replies")]
+
+    def test_reply_mode_defaults_to_everyone_and_saves_at_once(self):
+        base = self.request()[1]
+        self.assertEqual(base["replies"], {"mode": "everyone", "updatedAt": None, "updatedBy": None})
+        status, saved, cache = self.replies({"mode": "ref", "actor": "Fixture operator"})
+        self.assertEqual((status, cache, saved["mode"], saved["updatedBy"]), (200, "no-store", "ref", "Fixture operator"))
+        current = self.request()[1]
+        self.assertEqual(current["replies"], saved)
+        self.assertEqual(current["revision"], base["revision"])  # the instructions are untouched
+        store = API.CustomerBot(self.state)
+        self.assertEqual(json.loads(store.replies_path.read_text())["version"], 1)
+        self.assertEqual(store.replies_path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(self.replies({"mode": "off", "actor": "Operator"})[1]["mode"], "off")
+        published = self.request({"instructions": "New voice.", "expectedRevision": base["revision"], "actor": "Operator"})[1]
+        self.assertEqual(published["replies"]["mode"], "off")
+
+    def test_invalid_or_unauthorized_reply_modes_are_not_saved(self):
+        for token in (GATE, "bad"):
+            self.assertEqual(self.replies({"mode": "off", "actor": "Operator"}, token=token)[0], 401)
+        for invalid in ({"mode": "nobody", "actor": "Operator"}, {"mode": "off"}, {"mode": "off", "actor": " "},
+                        {"mode": "off", "actor": "Operator", "extra": 1}, {"mode": None, "actor": "Operator"}, []):
+            self.assertEqual(self.replies(invalid)[0], 400, invalid)
+        self.assertFalse(API.CustomerBot(self.state).replies_path.exists())
+
+    def test_unreadable_reply_mode_does_not_hide_the_instructions(self):
+        store = API.CustomerBot(self.state)
+        store.directory.mkdir(parents=True)
+        for corrupt in ("{", json.dumps({"version": 1, "mode": "nobody", "updatedAt": "2026-11-27T00:00:00+00:00", "updatedBy": "x"})):
+            store.replies_path.write_text(corrupt, encoding="utf-8")
+            status, current, _ = self.request()
+            self.assertEqual((status, current["replies"]), (200, None))
+            self.assertIn("How to reply:", current["instructions"])
+        self.assertEqual(self.replies({"mode": "everyone", "actor": "Operator"})[0], 200)
+        self.assertEqual(self.request()[1]["replies"]["mode"], "everyone")
+
     def test_corrupt_copy_is_not_mistaken_for_shipped_facts(self):
         store = API.CustomerBot(self.state)
         base = self.request()[1]

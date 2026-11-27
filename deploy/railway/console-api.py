@@ -449,7 +449,7 @@ class Handler(BaseHTTPRequestHandler):
             bridge.invalidate(config=False)
         self.send_any(status, body, with_body)
 
-    def customer_bot_request(self, query, method, with_body=True):
+    def customer_bot_request(self, query, method, with_body=True, route="customer-bot"):
         def respond(status, payload):
             self.send_any(status, json.dumps(payload, ensure_ascii=False).encode("utf-8"), with_body)
 
@@ -461,7 +461,7 @@ class Handler(BaseHTTPRequestHandler):
                 current = store.read()
             except (OSError, ValueError, AttributeError):
                 return respond(503, {"error": "The customer bot's live content is unavailable."})
-            return respond(200, current)
+            return respond(200, store.with_replies(current))
         try:
             size = int(self.headers.get("Content-Length") or "0")
             content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
@@ -473,15 +473,22 @@ class Handler(BaseHTTPRequestHandler):
             payload = json.loads(raw.decode("utf-8"))
         except (ValueError, RecursionError, TimeoutError):
             return respond(400, {"error": "Invalid customer bot request."})
+        if route == "customer-bot/replies":
+            try:
+                return respond(200, store.set_replies(payload))
+            except ValueError as error:
+                return respond(400, {"error": str(error)})
+            except OSError:
+                return respond(503, {"error": "The reply mode could not be confirmed. Check it before retrying."})
         try:
             published = store.publish(payload)
         except CustomerBotConflict as error:
-            return respond(409, {"current": error.current})
+            return respond(409, {"current": store.with_replies(error.current)})
         except ValueError as error:
             return respond(400, {"error": str(error)})
         except OSError:
             return respond(503, {"error": "The publish could not be confirmed. Check the live content before retrying."})
-        return respond(200, published)
+        return respond(200, store.with_replies(published))
 
     def config_request(self, route, query, with_body=True):
         """POST /internal/console/config/<collection>/<id>
@@ -691,12 +698,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self.group_action_request(split.path[len(PREFIX):], split.query, removal=True)
             return
-        if split.path == PREFIX + "customer-bot":
+        if split.path in (PREFIX + "customer-bot", PREFIX + "customer-bot/replies"):
             if not authorized(self.headers.get("Authorization"), self.server.console["token"]):
                 self.send_any(401, b'{"error":"unauthorized"}', True)
                 return
             # This copy is on the volume and has no effect on the Firestore index.
-            self.customer_bot_request(split.query, "POST")
+            self.customer_bot_request(split.query, "POST", route=split.path[len(PREFIX):])
             return
         live = self.server.console.get("live")
         if live is not None:

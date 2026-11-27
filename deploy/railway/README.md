@@ -74,6 +74,9 @@ edit it in this repo, open a PR, merge. That's the whole flow. Three sets of
   `runtime/customer-bot/published.json` on the state volume. Live campaign tools
   supply current facts; retired published knowledge is ignored. Prior revisions
   are archived on replacement. Restore the state volume to recover publications.
+  Who the bot replies to (everyone, ref-code customers only, or off) is
+  `runtime/customer-bot/replies.json`, read by the public-service-gate plugin on
+  every inbound DM; see "Customer Bot reply mode" in the top-level README.
 - The entrypoint pauses new WhatsApp CV orders with `GENAIE_CV_ACCEPT_NEW_ORDERS=0`.
   The CV maker continues processing saved orders on their original WhatsApp lines.
 - `deploy/railway/sync-reply-gates.py` sets the seven WhatsApp reply gates

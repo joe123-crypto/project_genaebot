@@ -19,6 +19,10 @@ SOURCES = [
     {"id": "availability", "label": "Service availability", "description": "Runtime service restrictions take precedence over advertised offers."},
 ]
 REVISION = re.compile(r"(?:default-[a-f0-9]{64}|[a-f0-9]{32})")
+# Who the bot replies to. Read on every inbound DM by the public-service-gate
+# plugin (lib/reply-mode.js), which treats a missing file as "everyone".
+REPLY_MODES = ("off", "ref", "everyone")
+REPLIES_LIMIT = 4 * 1024
 
 
 class Conflict(Exception):
@@ -49,6 +53,67 @@ class CustomerBot:
         self.docs = self.state / "workspace" / "docs"
         self.directory = self.state / "runtime" / "customer-bot"
         self.path = self.directory / "published.json"
+        self.replies_path = self.directory / "replies.json"
+
+    def replies(self):
+        """The reply mode, or None when its file cannot be read."""
+        try:
+            with self.replies_path.open("rb") as handle:
+                raw = handle.read(REPLIES_LIMIT + 1)
+        except FileNotFoundError:
+            return {"mode": "everyone", "updatedAt": None, "updatedBy": None}
+        except OSError:
+            return None
+        try:
+            data = json.loads(raw) if len(raw) <= REPLIES_LIMIT else None
+            if (isinstance(data, dict) and data.get("version") == 1 and data.get("mode") in REPLY_MODES
+                    and isinstance(data.get("updatedBy"), str) and data["updatedBy"]
+                    and isinstance(data.get("updatedAt"), str)
+                    and datetime.fromisoformat(data["updatedAt"]).utcoffset() is not None):
+                return {key: data[key] for key in ("mode", "updatedAt", "updatedBy")}
+        except (ValueError, TypeError):
+            pass
+        return None
+
+    def with_replies(self, version):
+        # An unreadable reply mode must not hide the instructions; the console
+        # shows it as unreadable and can overwrite it.
+        return {**version, "replies": self.replies()}
+
+    def set_replies(self, request):
+        if not isinstance(request, dict) or set(request) != {"mode", "actor"}:
+            raise ValueError("Invalid reply mode request.")
+        if request["mode"] not in REPLY_MODES:
+            raise ValueError("Choose who the bot replies to: off, ref or everyone.")
+        actor = clean_text(request["actor"], "Publisher name")
+        if len(actor) > 120 or not actor.isprintable():
+            raise ValueError("Invalid publisher name.")
+        stored = {"mode": request["mode"],
+                  "updatedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                  "updatedBy": actor}
+        self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        # Last write wins: it is one choice, so there is nothing to merge.
+        lock_fd = os.open(self.directory / "replies.lock", os.O_CREAT | os.O_RDWR, 0o600)
+        with os.fdopen(lock_fd, "r+") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            self._replace(self.replies_path, {"version": 1, **stored}, ".replies-")
+        return stored
+
+    def _replace(self, target, payload, prefix):
+        fd, temporary = tempfile.mkstemp(dir=self.directory, prefix=prefix)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, ensure_ascii=False)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, target)
+            dir_fd = os.open(self.directory, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
 
     def defaults(self):
         values = copy_fields({
@@ -120,18 +185,5 @@ class CustomerBot:
                         os.fsync(archive_fd)
                     finally:
                         os.close(archive_fd)
-            fd, temporary = tempfile.mkstemp(dir=self.directory, prefix=".publish-")
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                    json.dump({"version": 2, **published}, handle, ensure_ascii=False)
-                    handle.flush()
-                    os.fsync(handle.fileno())
-                os.replace(temporary, self.path)
-                dir_fd = os.open(self.directory, os.O_RDONLY | os.O_DIRECTORY)
-                try:
-                    os.fsync(dir_fd)
-                finally:
-                    os.close(dir_fd)
-            finally:
-                Path(temporary).unlink(missing_ok=True)
+            self._replace(self.path, {"version": 2, **published}, ".publish-")
             return {**published, "sources": SOURCES}
