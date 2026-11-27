@@ -318,6 +318,12 @@ class LinkAndPlaceholderTests(unittest.TestCase):
         out = pb.render_caption("Body\n", "BH-7K2", "https://x")
         self.assertEqual(out, "Body\n\n" + pb.DEFAULT_LINK_LINE.replace("{ref_link}", "https://x"))
 
+    def test_direct_ref_link_is_the_same_link_and_suppresses_the_link_line(self):
+        out = pb.render_caption("Body\nNo data? {direct_ref_link}", "BH-7K2", "https://x")
+        self.assertEqual(out, "Body\nNo data? https://x")
+        both = pb.render_caption("{ref_link} / {direct_ref_link}", "BH-7K2", "https://x")
+        self.assertEqual(both, "https://x / https://x")
+
     def test_untracked_caption_unchanged_even_with_braces(self):
         self.assertEqual(pb.render_caption("a {ref} {x}"), "a {ref} {x}")
 
@@ -446,6 +452,18 @@ class ClickLinkTests(unittest.TestCase):
             pb.tracking_for(tracking, self.JID, bot_number=BOT_NUMBER)[1], pasted,
         ])
         self.assertEqual(sent, f"*{self.BASE}/go/{links[0]}* [Call here]({self.BASE}/go/{links[1]}) {untouched}")
+
+    def test_direct_ref_link_is_never_wrapped(self):
+        tracking = {"prefix": "GN", "label": "Genaie"}
+        sent = self.broadcast(tracking, "Tap {ref_link}\nNo data? {direct_ref_link}")
+        direct = pb.tracking_for(tracking, self.JID, bot_number=BOT_NUMBER)[1]
+        links = re.findall(re.escape(self.BASE) + r"/go/([a-f0-9]{32})", sent)
+        self.assertEqual(len(links), 1)
+        self.assertEqual(sent, f"Tap {self.BASE}/go/{links[0]}\nNo data? {direct}")
+        self.assertIn("ref%20" + pb.ref_code("GN", self.JID), direct)
+        (self.root / "sent.json").unlink()
+        alone = self.broadcast(tracking, "Order: {direct_ref_link}")
+        self.assertEqual(alone, f"Order: {direct}")
 
     def test_sender_falls_back_when_store_is_unavailable(self):
         store = campaign_clicks.ClickStore(self.env)

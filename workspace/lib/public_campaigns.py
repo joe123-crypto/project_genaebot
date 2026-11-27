@@ -26,7 +26,7 @@ CV = re.compile(r"\b(?:cvs?|résumés?|resumes?|curriculum vitae)\b", re.I)
 BOREHOLE = re.compile(r"\b(?:boreholes?|drill(?:ing|ers?)|casing|pump retrieval)\b", re.I)
 # Caption template placeholders the broadcast engine fills per group. They are
 # meaningless in a customer DM, so the public projection resolves them here.
-PLACEHOLDERS = (("{bot_number}", "this WhatsApp number"), ("{ref_link}", ""), ("{ref}", ""))
+PLACEHOLDERS = (("{bot_number}", "this WhatsApp number"), ("{ref_link}", ""), ("{direct_ref_link}", ""), ("{ref}", ""))
 # Words a customer question adds that campaign copy rarely repeats ("brick
 # price"). Requiring them would turn an answerable question into a handoff.
 GENERIC_TERMS = {"a", "an", "the", "for", "of", "do", "you", "have", "how", "much", "price", "cost",

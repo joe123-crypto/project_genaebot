@@ -31,7 +31,9 @@ ad and the ref. A caption may place it with ``{ref_link}`` / ``{ref}``
 placeholders; otherwise a "tap to chat" line is appended. ``--refs`` prints the
 ref -> promo + group JID mapping so codes seen in DMs can be decoded later.
 When ``GENAIE_CAMPAIGN_CLICK_BASE_URL`` is configured, real sends wrap supported
-WhatsApp links in the rendered caption for click tracking.
+WhatsApp links in the rendered caption for click tracking. ``{direct_ref_link}``
+is the same ``wa.me`` link but is never wrapped: the redirect is a web page, and
+customers on WhatsApp-only data bundles cannot open it.
 
 Send spacing: consecutive group sends are spaced by a random gap drawn
 uniformly from [``send_delay_min``, ``send_delay_max``] seconds (default 20-60,
@@ -630,18 +632,21 @@ def tracking_for(tracking, jid, bot_number=None):
 
 
 def render_caption(caption, ref=None, link=None, link_line=DEFAULT_LINK_LINE,
-                   bot_number=None):
-    """Substitute ``{ref_link}`` / ``{ref}`` / ``{bot_number}`` in ``caption``.
+                   bot_number=None, direct=True):
+    """Substitute ``{ref_link}`` / ``{direct_ref_link}`` / ``{ref}`` /
+    ``{bot_number}`` in ``caption``.
     Uses plain ``str.replace`` (not ``str.format``), so any other braces in
     operator copy are left alone. ``{bot_number}`` renders the posting account's
     own advertised number, so each WhatsApp line advertises itself. With tracking
-    on and no ``{ref_link}`` placeholder in the caption, ``link_line`` is appended
-    after a blank line. With nothing to substitute the caption is returned
-    unchanged."""
+    on and neither link placeholder in the caption, ``link_line`` is appended
+    after a blank line. ``direct=False`` leaves ``{direct_ref_link}`` for the
+    caller to fill after click wrapping (see ``caption_for``). With nothing to
+    substitute the caption is returned unchanged."""
     if not ref and not link and not bot_number:
         return caption
-    had_link = "{ref_link}" in caption
-    out = (caption.replace("{ref_link}", link or "")
+    had_link = "{ref_link}" in caption or "{direct_ref_link}" in caption
+    out = caption.replace("{direct_ref_link}", link or "") if direct else caption
+    out = (out.replace("{ref_link}", link or "")
                   .replace("{ref}", ref or "")
                   .replace("{bot_number}", bot_number or ""))
     if link and not had_link and link_line:
@@ -657,9 +662,12 @@ def caption_for(jid, variants, day=None, allowed=None, tracking=None,
     idx = variant_index(jid, len(variants), day=day, allowed=allowed)
     ref, link = tracking_for(tracking, jid, bot_number=bot_number)
     line = (tracking or {}).get("link_line") or DEFAULT_LINK_LINE
-    caption = render_caption(variants[idx], ref, link, line, bot_number=bot_number)
+    caption = render_caption(variants[idx], ref, link, line, bot_number=bot_number,
+                             direct=False)
     if wrap_link:
         caption = campaign_clicks.wrap_caption_links(caption, wrap_link)
+    # Filled after wrapping so the redirect never touches it.
+    caption = caption.replace("{direct_ref_link}", link or "")
     return (idx, caption, ref)
 
 
