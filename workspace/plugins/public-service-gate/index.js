@@ -33,9 +33,10 @@ import {
   takeoverPeers,
   takeoversChangedAt,
 } from "./lib/takeover.js";
-import { recordAdRefs } from "./lib/ad-refs.js";
+import { extractAdRefs, hasSentAdRef, recordAdRefs } from "./lib/ad-refs.js";
+import { REPLY_MODE_PRIORITY, readReplyMode } from "./lib/reply-mode.js";
 import { BOREHOLE_SERVICES, lookupBorehole } from "./services/borehole.js";
-import { recordAndCheck as checkSiblingLine } from "./lib/sibling-lines.js";
+import { recordAndCheck as checkSiblingLine, classifySender } from "./lib/sibling-lines.js";
 import { containsDash, stripDashes } from "./lib/style.js";
 import { getReplyPacer, isReplyPacingEnabled } from "./lib/reply-pacing.js";
 import {
@@ -292,6 +293,35 @@ export default {
         return { handled: true }; // claim + no reply + no agent dispatch
       },
       { priority: FAILSAFE_STOP_PRIORITY },
+    );
+
+    // Who the bot replies to, as chosen on the console's Customer Bot page (see
+    // lib/reply-mode.js). A customer it does not reply to is held silently, as
+    // a taken-over chat is, so the operator can answer by hand. In "ref" mode a
+    // message carrying a ref passes (the main hook then records it) and so does
+    // every later message from that customer; a handoff still silences them.
+    // Intentionally NOT gated on isEnabled(api), like the takeover hook, so
+    // "off" stays off whatever the plugin config says. Inbound only: promo
+    // broadcasts are not affected.
+    api.on(
+      "before_dispatch",
+      async (event, ctx) => {
+        const channel = getEventChannel(event, ctx);
+        if (!isWhatsAppChannel(channel)) return;
+        if (isGroupEvent(event, ctx)) return; // the group hard block claims these
+        const mode = readReplyMode(api);
+        if (mode === "everyone") return;
+        const sender = getEventSender(event, ctx);
+        if (!sender) return; // the main hook handles a missing sender fail-closed
+        // Before the admin check: the admin number is the "default" line's own,
+        // so a sibling line's DM would otherwise pass as the operator's.
+        const sibling = classifySender(api, { accountId: getEventAccountId(event, ctx), sender }).sibling;
+        if (!sibling && isWhatsAppAdmin(api, sender)) return;
+        if (mode === "ref" && !sibling && (extractAdRefs(getEventText(event)).length || hasSentAdRef(api, sender))) return;
+        api.logger?.info?.(`public-service-gate: message held silently, reply mode is ${mode}`);
+        return { handled: true };
+      },
+      { priority: REPLY_MODE_PRIORITY },
     );
 
     api.registerTool(

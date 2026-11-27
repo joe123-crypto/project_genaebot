@@ -62,6 +62,17 @@ function senderKey(sender) {
   return crypto.createHash("sha256").update(String(sender)).digest("hex").slice(0, 12);
 }
 
+// Whether `sender` has ever sent an ad ref. The "ref" reply mode
+// (lib/reply-mode.js) answers only these customers, from their first ref on.
+// Unreadable store -> false, as with readAdRefs.
+export function hasSentAdRef(api, sender) {
+  if (!sender) return false;
+  const who = senderKey(sender);
+  return Object.values(readAdRefs(getAdRefsPath(api))).some(
+    (entry) => Array.isArray(entry?.senders) && entry.senders.includes(who),
+  );
+}
+
 // Record every ad ref in `text` from `sender`. Returns the refs recorded (empty
 // when none). Best-effort: any I/O error is logged and swallowed.
 export function recordAdRefs(api, sender, text, now = new Date()) {

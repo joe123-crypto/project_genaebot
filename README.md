@@ -2167,6 +2167,22 @@ Pull a backup to your own machine with `railway ssh -- tar cz -C
 /home/joseph/.openclaw/runtime/backups .` and keep at least one copy off the
 volume: a backup that only exists beside the thing it is backing up is not one.
 
+## Customer Bot reply mode
+
+The console's Customer Bot page chooses who the bot replies to on WhatsApp:
+`everyone` (the default), `ref` (only customers who have sent a campaign ref
+code such as `ref BH-7K2`, from that message on) or `off`. The console posts
+`{mode, actor}` to `/internal/console/customer-bot/replies`, which writes
+`runtime/customer-bot/replies.json`. `GET /internal/console/customer-bot` reports it
+as `replies` (`null` when unreadable). The public-service-gate plugin reads it on every inbound DM
+(`lib/reply-mode.js`) and holds a customer it does not reply to silently, as a
+taken-over chat is held, so the operator can answer by hand. The operator's own number
+is never held. A handoff still silences a `ref` customer until `resume`. A
+missing or unreadable file means `everyone`. Promo broadcasts are unaffected.
+"Ref" customers are the senders already counted in `ad-refs.json`, so nobody
+has to be backfilled. A tap on the counted click redirect is not yet told apart from
+`{direct_ref_link}`.
+
 ## Customer live lookup rollout
 
 Deploy this bot support before the companion instructions-only console. The
