@@ -504,6 +504,8 @@ def is_not_dispatched_error(out):
 
 def send_ad(target, text, image_path, account=None):
     """Send the ad (caption + image) to one group. Returns (ok, combined_output).
+    ``image_path`` None sends the caption alone, as a text message: a console
+    campaign saved without pictures (see ``broadcast``'s ``text_only``).
     ``account`` names the WhatsApp line it is sent from. A non-default account is
     passed explicitly; the default one is deliberately NOT, because the gateway
     rejects an account id it does not have in its registry ("Unknown account
@@ -518,8 +520,10 @@ def send_ad(target, text, image_path, account=None):
     if client is not None:
         return client.send(target, text, image_path, account=account)
     cmd = ["openclaw", "message", "send", "--channel", "whatsapp",
-           "--target", target, "--message", text,
-           "--media", image_path, "--json"]
+           "--target", target, "--message", text]
+    if image_path is not None:
+        cmd += ["--media", image_path]
+    cmd += ["--json"]
     if account and account != DEFAULT_ACCOUNT:
         cmd += ["--account", account]
     try:
@@ -757,7 +761,10 @@ def _print_dry_run(jids, weekly, weekday, sent_map, today, image_path, rotating,
             if variant_images and idx in variant_images:
                 extra += "  image %s" % os.path.basename(variant_images[idx])
         print("  - %s  [%s]%s" % (j, mark, extra))
-    print(("Image (today): %s" if rotating else "Image: %s") % image_path)
+    if image_path is None:
+        print("Image: none (text only)")
+    else:
+        print(("Image (today): %s" if rotating else "Image: %s") % image_path)
     for k, path in sorted((variant_images or {}).items()):
         print("Image (variant %d/%d): %s" % (k + 1, len(variants), path))
     if multi:
@@ -1083,7 +1090,7 @@ def broadcast(*, text, image, state_file, promo_name, send_delay=None, argv=None
               send_delay_min=None, send_delay_max=None, rng=None, sleep=None,
               cron_timeout=None, start_jitter=None,
               caps=_PROBE_CAPS, account_status=None,
-              resolve_config=None, run_day=None, cap_day=None):
+              resolve_config=None, run_day=None, cap_day=None, text_only=False):
     """Resolve targets, skip groups already sent today (and weekly-limited groups
     off their configured weekday), then send the advert to each pending group,
     committing state per group so a crash or retry never double-posts. Returns a
@@ -1099,6 +1106,11 @@ def broadcast(*, text, image, state_file, promo_name, send_delay=None, argv=None
     ``{variant_index: image_path}`` pins a fixed image to a caption variant (e.g. a
     themed caption that needs its matching photo); other variants keep ``image``.
     ``--refs`` prints the ref mapping and exits without sending or touching state.
+
+    ``text_only=True`` is for a campaign saved with no pictures at all: ``image``
+    is then empty and each group gets the caption as a plain text message. It is
+    asked for explicitly, never inferred from an empty ``image``, so a campaign
+    whose pictures went missing still fails with nothing sent.
 
     Consecutive send attempts are spaced by ``rng.uniform(min, max)`` seconds
     (see :func:`send_gap_bounds`; default 20-60 s), tightened if needed to fit
@@ -1142,7 +1154,10 @@ def broadcast(*, text, image, state_file, promo_name, send_delay=None, argv=None
     # turns a picture that nonetheless is not there into a failed run with
     # nothing sent, before a single group is posted to.
     image_path, rotating = _resolve_image(image, day)
-    if not image_path or not os.path.exists(image_path):
+    if text_only:
+        if image_path is not None:
+            raise ValueError("text_only campaign was given pictures")
+    elif not image_path or not os.path.exists(image_path):
         sys.stderr.write("ERROR: promo image missing: %s\n" % image_path)
         return 1
     variant_images = dict(variant_images or {})

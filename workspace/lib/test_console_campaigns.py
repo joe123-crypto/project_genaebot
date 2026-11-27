@@ -240,7 +240,8 @@ class Creation(unittest.TestCase):
         self.assertIn("demo", self.store.get("groups", JID_A)["paused_promos"])
         self.assertEqual(self.store.get("groups", JID_B)["weekly"]["demo"], ["Mon", "Wed", "Fri"])
     def test_invalid_inputs_are_refused_before_any_write(self):
-        for changes in [{"trackClicks": "false"}, {"trackClicks": None}, {"captions": [" "]}, {"images": []}, {"groups": []}, {"timeoutSeconds": True}, {"tracking": {"number": "+10000000000"}}, {"schedule": {"time": "25:00", "timezone": "Africa/Harare", "weekdays": [0]}}]:
+        too_many = [dict(payload()["images"][0], filename="p%d.png" % n) for n in range(21)]
+        for changes in [{"trackClicks": "false"}, {"trackClicks": None}, {"captions": [" "]}, {"images": too_many}, {"images": None}, {"groups": None}, {"timeoutSeconds": True}, {"tracking": {"number": "+10000000000"}}, {"schedule": {"time": "25:00", "timezone": "Africa/Harare", "weekdays": [0]}}]:
             with self.subTest(changes=changes), self.assertRaises(writer.WriteRefused): cc.validate({**payload(), **changes})
         self.assertEqual(self.store.commits, [])
     def test_saved_pending_recovers_after_lost_gateway_ack_and_restart(self):
@@ -282,7 +283,8 @@ class Creation(unittest.TestCase):
         # An older console still sends a short timeout of its own; it is no
         # reason to refuse the campaign any more.
         self.assertIs(cc.validate(dict(payload(), timeoutSeconds=600, groups=[{"jid": jid} for jid in jids])).get("slug"), "demo")
-        with self.assertRaisesRegex(writer.WriteRefused, "at least one"): cc.validate(dict(payload(), groups=[]))
+        # Nor is there a floor: groups can be added from the campaign's page later.
+        self.assertIs(cc.validate(dict(payload(), groups=[])).get("slug"), "demo")
     def test_the_run_timeout_follows_the_groups_not_the_form(self):
         self.data["timeoutSeconds"] = 600
         self.create()
@@ -333,6 +335,57 @@ class Creation(unittest.TestCase):
         cc.verify_image(image, ENV, opener=lambda *args, **kwargs: io.BytesIO(BODY))
         for body in [b"not-an-image", BODY + b"extra", b"\x89PNG\r\n\x1a\nother-content"]:
             with self.assertRaises(writer.WriteRefused): cc.verify_image(image, ENV, opener=lambda *args, **kwargs: io.BytesIO(body))
+    def engine_source(self):
+        membership, enabled, _ = config.assemble({name: self.store.list(name) for name in config.COLLECTIONS})
+        return {"mode": "firestore", "source": "firestore", "enabled": True, "switches": enabled,
+                "membership": membership, "doc": promo_membership_payload(membership)}
+
+    def real_engine(self, **kwargs):
+        return promo_broadcast.broadcast(**kwargs, caps=None, start_jitter=0, send_delay=0,
+                     sleep=lambda _: None, account_status=lambda accounts: {account: True for account in accounts})
+
+    def test_a_campaign_without_pictures_posts_its_captions_as_text(self):
+        self.data["enabled"] = True
+        self.data["images"] = []
+        self.assertEqual(self.create()["scheduling"], "ready")
+        self.assertEqual(self.store.get("campaigns", "demo")["images"], [])
+        self.assertFalse(self.store.docs.get("assets"))
+        self.store.docs["campaigns"]["demo"].update(config.encode_fields({"scheduleStatus": "ready"}))
+        source = self.engine_source()
+        row = next(row for row in cc.records(source["membership"], dt.date(2026, 11, 9), source["switches"]) if row["slug"] == "demo")
+        self.assertEqual(row["images"], [])
+        fetch = Mock(side_effect=AssertionError("a text-only campaign fetches no picture"))
+        with patch("sys.stdout", io.StringIO()), patch("promo_broadcast.send_ad", return_value=(True, "sent")) as send:
+            self.assertEqual(cc.run_campaign("demo", now=dt.datetime(2026, 11, 9, 9, tzinfo=dt.timezone.utc),
+                resolve=lambda _: source, ensure=fetch, broadcast=self.real_engine), 0)
+        self.assertEqual(send.call_count, 2)
+        self.assertEqual({call.args[2] for call in send.call_args_list}, {None})
+        self.assertTrue(all("Hello" in call.args[1] for call in send.call_args_list))
+
+    def test_only_a_campaign_saved_without_pictures_is_sent_as_text(self):
+        self.data["enabled"] = True
+        self.create()
+        self.store.docs["campaigns"]["demo"].update(config.encode_fields({"scheduleStatus": "ready"}))
+        engine = Mock(return_value=0)
+        cc.run_campaign("demo", resolve=lambda _: self.engine_source(), ensure=lambda _: "one.png", broadcast=engine)
+        self.assertIs(engine.call_args.kwargs["text_only"], False)
+        self.assertEqual(engine.call_args.kwargs["image"], ["one.png"])
+
+    def test_a_campaign_without_groups_is_saved_and_its_runs_send_nothing(self):
+        before = {jid: self.store.get("groups", jid)["promos"] for jid in (JID_A, JID_B)}
+        self.data["enabled"] = True
+        self.data["groups"] = []
+        self.assertEqual(self.create()["scheduling"], "ready")
+        self.assertEqual({jid: self.store.get("groups", jid)["promos"] for jid in (JID_A, JID_B)}, before)
+        self.store.docs["campaigns"]["demo"].update(config.encode_fields({"scheduleStatus": "ready"}))
+        source = self.engine_source()
+        path = str(Path(self.temp.name) / "one.png")
+        Path(path).write_bytes(BODY)
+        with patch("sys.stdout", io.StringIO()), patch("promo_broadcast.send_ad", return_value=(True, "sent")) as send:
+            self.assertEqual(cc.run_campaign("demo", now=dt.datetime(2026, 11, 9, 9, tzinfo=dt.timezone.utc),
+                resolve=lambda _: source, ensure=lambda _: path, broadcast=self.real_engine), 0)
+        send.assert_not_called()
+
     def test_real_engine_rotates_one_picture_and_never_resends_same_day(self):
         self.data["enabled"] = True
         self.data["captions"] = ["Offer A {bot_number}", "Offer B {bot_number}"]

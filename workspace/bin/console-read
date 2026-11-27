@@ -542,10 +542,15 @@ def write_capabilities():
         # A line is made when its WhatsApp account is linked, not typed into a
         # form, so this says only that the writer will create the document.
         "lineCreation": {"create": True},
+        # The two optional flags say a campaign may be created with no pictures
+        # (it posts its caption as text) and with no groups (added later). A bot
+        # without them is read by the console as requiring both.
         "campaignCreation": {"create": True,
                              "images": ad_assets.display_origin()[0] is not None and prefix is not None,
                              "scheduling": True,
-                             "keyPrefix": prefix},
+                             "keyPrefix": prefix,
+                             "picturesOptional": True,
+                             "groupsOptional": True},
     }
 
 

@@ -123,7 +123,10 @@ class CampaignClient:
                     pass
 
     def send(self, target, text, image, account=None):
-        params = {"channel": "whatsapp", "to": target, "message": text, "mediaUrl": image}
+        params = {"channel": "whatsapp", "to": target, "message": text}
+        # No picture: a text-only campaign, sent as a plain message.
+        if image is not None:
+            params["mediaUrl"] = image
         if account and account != "default":
             params["accountId"] = account
         identity = json.dumps([self.namespace, account or "default", target, text, image],
