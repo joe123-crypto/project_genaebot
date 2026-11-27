@@ -842,6 +842,12 @@ literal link, also replace `{ref_link}` in its captions and clear `tracking` to
 fields together through the audited `config/campaigns/<slug>` API after deploying
 the sender support. Existing links and historical counts remain available.
 
+`{direct_ref_link}` is the same `wa.me` reference link as `{ref_link}`, but it is
+never wrapped in the click redirect. The redirect is a web page, so customers on
+WhatsApp-only data bundles cannot open it; a caption can carry both links, or just
+the direct one. Taps on the direct link are not counted, but replies still carry
+the group's ref. Either placeholder stops the default link line being appended.
+
 Home shows all-time and daily clicks across campaigns. The daily count uses
 the campaign day in Africa/Harare and starts when dated counting goes live.
 Repeated taps count individually. Posts already using direct `wa.me` links

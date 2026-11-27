@@ -145,7 +145,7 @@ class PublicCampaignTests(Harness):
         self.assertNotIn("aqua", json.dumps(routed).lower())
 
     def test_caption_placeholders_never_reach_the_model(self):
-        self.put("bricks", captions=["Bricks $95 per 1000.\nCalls: {bot_number}\nChat: {ref_link} (ref {ref})"])
+        self.put("bricks", captions=["Bricks $95 per 1000.\nCalls: {bot_number}\nChat: {ref_link} (ref {ref}) {direct_ref_link}"])
         content = self.lookup(campaign_id="bricks")["campaigns"][0]["advertised_content"]
         self.assertEqual(content, ["Bricks $95 per 1000.\nCalls: this WhatsApp number\nChat:"])
 
